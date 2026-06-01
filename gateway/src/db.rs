@@ -195,6 +195,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             approver_user_id TEXT,
             reason TEXT,
             original_skill_call TEXT NOT NULL,
+            original_call_hash TEXT NOT NULL DEFAULT '',
             edited_skill_call TEXT,
             expires_at DATETIME,
             decided_at DATETIME,
@@ -205,6 +206,8 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    ensure_approval_original_call_hash_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_events (
@@ -272,6 +275,25 @@ async fn ensure_mcp_server_endpoint_column(pool: &SqlitePool) -> Result<(), sqlx
     }
 
     sqlx::query("ALTER TABLE mcp_servers ADD COLUMN endpoint TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn ensure_approval_original_call_hash_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(approvals)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "original_call_hash")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE approvals ADD COLUMN original_call_hash TEXT NOT NULL DEFAULT ''")
         .execute(pool)
         .await?;
     Ok(())
@@ -642,8 +664,8 @@ pub async fn insert_approval(
     record: &ApprovalRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, edited_skill_call, expires_at, decided_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -653,6 +675,7 @@ pub async fn insert_approval(
     .bind(&record.approver_user_id)
     .bind(&record.reason)
     .bind(&record.original_skill_call)
+    .bind(&record.original_call_hash)
     .bind(&record.edited_skill_call)
     .bind(&record.expires_at)
     .bind(&record.decided_at)

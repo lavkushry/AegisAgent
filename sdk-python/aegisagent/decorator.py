@@ -1,33 +1,70 @@
+import hashlib
 import inspect
+import json
 import logging
 import time
 from functools import wraps
-from typing import Callable, Any, Optional
+from typing import Any, Callable, Optional
+
 from opentelemetry import trace
+
 from .client import AegisClient
 
 logger = logging.getLogger("aegisagent")
 
 # Thread-local storage to pass trust level context along agent run execution
 import threading
+
 _context_store = threading.local()
+
 
 def set_context_trust_level(trust_level: str):
     """Sets the source trust level for the current thread context."""
     _context_store.trust_level = trust_level
 
+
 def get_context_trust_level() -> str:
     """Gets the source trust level for the current thread context (default: 'unknown')."""
     return getattr(_context_store, "trust_level", "unknown")
+
+
+def _hash_tool_call(
+    tool: str,
+    action: str,
+    resource: Optional[str],
+    mutates_state: bool,
+    parameters: dict,
+) -> str:
+    tool_call = {
+        "tool": tool,
+        "action": action,
+        "resource": resource,
+        "mutates_state": mutates_state,
+        "parameters": parameters,
+    }
+    canonical = json.dumps(tool_call, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _assert_matching_action_hash(source: dict, expected_hash: str, phase: str) -> None:
+    action_hash = source.get("action_hash")
+    if not action_hash:
+        raise PermissionError(
+            f"Approval {phase} did not include an action hash. Failing closed."
+        )
+    if action_hash != expected_hash:
+        raise PermissionError(f"Approval {phase} action hash mismatch. Failing closed.")
+
 
 def protect_tool(
     client: AegisClient,
     tool: str,
     action: str,
     resource_extractor: Optional[Callable[..., str]] = None,
-    default_source_trust: Optional[str] = None
+    default_source_trust: Optional[str] = None,
 ):
     """Decorator to intercept and authorize agent tool functions."""
+
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -55,6 +92,14 @@ def protect_tool(
             # 4. Resolve trust level context
             source_trust = default_source_trust or get_context_trust_level()
 
+            expected_action_hash = _hash_tool_call(
+                tool=tool,
+                action=action,
+                resource=resource,
+                mutates_state=True,
+                parameters=parameters,
+            )
+
             # 5. Call authorize endpoint
             auth_response = client.authorize(
                 tool=tool,
@@ -62,7 +107,7 @@ def protect_tool(
                 parameters=parameters,
                 resource=resource,
                 source_trust=source_trust,
-                trace_id=trace_id
+                trace_id=trace_id,
             )
 
             decision = auth_response.get("decision", "deny")
@@ -80,7 +125,11 @@ def protect_tool(
             elif decision == "require_approval":
                 approval = auth_response.get("approval")
                 if not approval:
-                    raise PermissionError(f"Action '{tool}.{action}' requires approval but no approval info was returned. Failing closed.")
+                    raise PermissionError(
+                        f"Action '{tool}.{action}' requires approval but no approval info was returned. Failing closed."
+                    )
+
+                _assert_matching_action_hash(approval, expected_action_hash, "response")
 
                 approval_id = approval.get("approval_id")
                 group = approval.get("approver_group", "default")
@@ -102,23 +151,37 @@ def protect_tool(
 
                     status = status_info.get("status")
                     if status == "APPROVED":
-                        logger.warning(f"✅ Action '{tool}.{action}' APPROVED. Resuming...")
+                        _assert_matching_action_hash(
+                            status_info, expected_action_hash, "status"
+                        )
+                        logger.warning(
+                            f"✅ Action '{tool}.{action}' APPROVED. Resuming..."
+                        )
                         return func(*args, **kwargs)
 
                     elif status == "REJECTED":
-                        reject_reason = status_info.get("reason", "No reject reason specified.")
+                        reject_reason = status_info.get(
+                            "reason", "No reject reason specified."
+                        )
                         err_msg = f"❌ Action '{tool}.{action}' REJECTED by reviewer. Reason: {reject_reason}"
                         logger.error(err_msg)
                         raise PermissionError(err_msg)
 
                     elif status == "EDITED":
+                        _assert_matching_action_hash(
+                            status_info, expected_action_hash, "status"
+                        )
                         # Reviewer edited parameters! Extract edited parameters and invoke function with them
                         edited_call = status_info.get("edited_tool_call")
                         if not edited_call:
-                            raise PermissionError("Action was EDITED but no edited parameters were returned. Failing closed.")
+                            raise PermissionError(
+                                "Action was EDITED but no edited parameters were returned. Failing closed."
+                            )
 
                         edited_params = edited_call.get("parameters", {})
-                        logger.warning(f"📝 Action '{tool}.{action}' APPROVED with EDITED parameters: {edited_params}. Resuming...")
+                        logger.warning(
+                            f"📝 Action '{tool}.{action}' APPROVED with EDITED parameters: {edited_params}. Resuming..."
+                        )
 
                         # Re-bind arguments using edited parameters
                         new_args = []
@@ -141,10 +204,15 @@ def protect_tool(
 
                         return func(*new_args, **new_kwargs)
 
-                raise TimeoutError(f"Action '{tool}.{action}' approval request timed out after 5 minutes.")
+                raise TimeoutError(
+                    f"Action '{tool}.{action}' approval request timed out after 5 minutes."
+                )
 
             else:
-                raise PermissionError(f"Unexpected authorization decision: '{decision}'. Failing closed.")
+                raise PermissionError(
+                    f"Unexpected authorization decision: '{decision}'. Failing closed."
+                )
 
         return wrapper
+
     return decorator

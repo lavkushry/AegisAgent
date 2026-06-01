@@ -136,6 +136,7 @@ pub struct ApprovalResponseInfo {
     pub status: String,
     pub approver_group: Option<String>,
     pub expires_at: DateTime<Utc>,
+    pub action_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -294,7 +295,8 @@ pub struct ApprovalRecord {
     pub approver_group: Option<String>,
     pub approver_user_id: Option<String>,
     pub reason: Option<String>,
-    pub original_skill_call: String,       // JSON
+    pub original_skill_call: String, // JSON
+    pub original_call_hash: String,
     pub edited_skill_call: Option<String>, // JSON
     pub expires_at: Option<DateTime<Utc>>,
     pub decided_at: Option<DateTime<Utc>>,

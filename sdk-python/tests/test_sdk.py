@@ -1,11 +1,13 @@
 import unittest
 from unittest.mock import MagicMock, patch
+
 from aegisagent import (
     AegisClient,
+    get_context_trust_level,
     protect_tool,
     set_context_trust_level,
-    get_context_trust_level,
 )
+from aegisagent.decorator import _hash_tool_call
 
 
 class TestAegisSDK(unittest.TestCase):
@@ -60,9 +62,53 @@ class TestAegisSDK(unittest.TestCase):
             my_test_func("hello")
         mock_post.assert_called_once()
 
+    @patch("time.sleep", return_value=None)
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_approval_hash_mismatch_fails_closed(
+        self, mock_post, mock_get, _mock_sleep
+    ):
+        mock_auth_resp = MagicMock()
+        mock_auth_resp.status_code = 200
+        mock_auth_resp.json.return_value = {
+            "decision": "require_approval",
+            "reason": "Approval required",
+            "approval": {
+                "approval_id": "89cf8b98-2103-4458-8210-344589cf8b98",
+                "status": "created",
+                "approver_group": "platform-leads",
+                "expires_at": "2026-06-01T14:18:27Z",
+                "action_hash": "0" * 64,
+            },
+        }
+        mock_post.return_value = mock_auth_resp
+
+        mock_status_resp = MagicMock()
+        mock_status_resp.status_code = 200
+        mock_status_resp.json.return_value = {
+            "status": "APPROVED",
+            "action_hash": "0" * 64,
+        }
+        mock_get.return_value = mock_status_resp
+
+        @protect_tool(self.client, tool="test_tool", action="test_action")
+        def my_test_func(param1):
+            return f"executed_{param1}"
+
+        with self.assertRaises(PermissionError):
+            my_test_func("hello")
+
     @patch("requests.get")
     @patch("requests.post")
     def test_authorize_edited_approval(self, mock_post, mock_get):
+        expected_hash = _hash_tool_call(
+            tool="test_tool",
+            action="test_action",
+            resource=None,
+            mutates_state=True,
+            parameters={"param1": "original_value"},
+        )
+
         # 1. First authorize call returns require_approval
         mock_auth_resp = MagicMock()
         mock_auth_resp.status_code = 200
@@ -74,6 +120,7 @@ class TestAegisSDK(unittest.TestCase):
                 "status": "created",
                 "approver_group": "platform-leads",
                 "expires_at": "2026-06-01T14:18:27Z",
+                "action_hash": expected_hash,
             },
         }
         mock_post.return_value = mock_auth_resp
@@ -83,6 +130,7 @@ class TestAegisSDK(unittest.TestCase):
         mock_status_resp.status_code = 200
         mock_status_resp.json.return_value = {
             "status": "EDITED",
+            "action_hash": expected_hash,
             "edited_tool_call": {"parameters": {"param1": "edited_value"}},
         }
         mock_get.return_value = mock_status_resp
@@ -97,13 +145,6 @@ class TestAegisSDK(unittest.TestCase):
         mock_post.assert_called_once()
         mock_get.assert_called_once()
 
-            return f"executed_{param1}"
-
-        # Execute, should run with 'edited_value' and return 'executed_edited_value'
-        result = my_test_func("original_value")
-        self.assertEqual(result, "executed_edited_value")
-        mock_post.assert_called_once()
-        mock_get.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

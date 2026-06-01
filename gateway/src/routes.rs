@@ -5,7 +5,8 @@ use axum::{
     Json,
 };
 use chrono::{Duration, Utc};
-use serde_json::json;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -79,6 +80,35 @@ fn risk_score_for_level(risk_level: &str) -> i32 {
 fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
     tool.strip_prefix("mcp:")
         .filter(|server_key| !server_key.is_empty())
+}
+
+fn canonicalize_json(value: Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.into_iter().map(canonicalize_json).collect()),
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, canonicalize_json(value));
+            }
+            Value::Object(sorted)
+        }
+        primitive => primitive,
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{:02x}", byte)).collect()
+}
+
+fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
+    let value = serde_json::to_value(tool_call).unwrap_or(Value::Null);
+    let canonical = canonicalize_json(value);
+    let serialized = serde_json::to_string(&canonical).unwrap_or_default();
+    sha256_hex(serialized.as_bytes())
 }
 
 async fn write_decision_and_audit(
@@ -903,6 +933,7 @@ pub async fn authorize_action(
     if decision_str == "require_approval" {
         let approval_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::minutes(30);
+        let original_call_hash = hash_tool_call(&payload.tool_call);
 
         let approval_record = ApprovalRecord {
             id: approval_id.to_string(),
@@ -913,6 +944,7 @@ pub async fn authorize_action(
             approver_user_id: None,
             reason: None,
             original_skill_call: serde_json::to_string(&payload.tool_call).unwrap_or_default(),
+            original_call_hash: original_call_hash.clone(),
             edited_skill_call: None,
             expires_at: Some(expires_at),
             decided_at: None,
@@ -942,7 +974,7 @@ pub async fn authorize_action(
             action: Some(payload.tool_call.action.clone()),
             resource: payload.tool_call.resource.clone(),
             event_json: serde_json::to_string(&approval_record).unwrap_or_default(),
-            input_hash: None,
+            input_hash: Some(original_call_hash.clone()),
             output_hash: None,
             created_at: Utc::now(),
         };
@@ -953,6 +985,7 @@ pub async fn authorize_action(
             status: "created".to_string(),
             approver_group: policy_decision.approver_group,
             expires_at,
+            action_hash: original_call_hash,
         });
     }
 
@@ -996,6 +1029,7 @@ pub async fn get_approval(
                     "approver_group": app.approver_group,
                     "approver_user_id": app.approver_user_id,
                     "reason": app.reason,
+                    "action_hash": app.original_call_hash,
                     "edited_tool_call": edited_call,
                     "expires_at": app.expires_at,
                     "decided_at": app.decided_at,
@@ -1382,6 +1416,40 @@ mod tests {
         assert!(response
             .matched_policies
             .contains(&"mcp_unknown_tool".to_string()));
+    }
+
+    #[tokio::test]
+    async fn approval_flow_binds_original_action_hash() {
+        let (state, tenant_id, agent_token) = setup_state("approval_action_hash").await;
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/42".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "require_approval");
+
+        let approval = response.approval.expect("approval info should be present");
+        assert_eq!(approval.action_hash.len(), 64);
+        assert!(approval
+            .action_hash
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit()));
+
+        let status_response = get_approval(
+            State(state),
+            agent_headers("tenant_routes", &tenant_id),
+            Path(approval.approval_id),
+        )
+        .await
+        .into_response();
+        assert_eq!(status_response.status(), StatusCode::OK);
+
+        let body = to_bytes(status_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status_json["action_hash"], approval.action_hash);
     }
 
     #[tokio::test]
