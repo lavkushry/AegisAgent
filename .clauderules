@@ -1,0 +1,52 @@
+# AegisAgent Workspace Rules & Context (Harness Generated)
+# Do NOT modify directly. Regenerate using 'bash scripts/setup_agent_harness.sh --all'
+
+## Project Overview
+AegisAgent is an Agent Action Firewall securing tools and MCP connections using Rust, SQLite, and Cedar Policy.
+
+## Active Tech Stack
+- Cedar Policy
+- Docker
+- Python
+- Rust
+
+## Workspace Directory Map
+
+
+## Agent Personas & Boundary Rules
+
+### ArchitectAgent
+- **Primary Scope:** `/docs`, `/` (root files)
+- **Responsibilities:**
+  - Standardizes repository documentation, quickstart, and architecture rules.
+  - Specifies multi-tenant database schema structures and relations.
+  - Designs JSON-RPC, HTTP API interfaces, and SDK integrations (e.g. dynamic context trust propagation).
+
+### DeveloperAgent
+- **Primary Scope:** `/gateway`, `/sdk-python`, `/sdk-typescript`, `/mcp-gateway-lite`, `/examples`
+- **Responsibilities:**
+  - Implements the Axum HTTP routing server, MCP gateway lite, and SQLite SQLx backend.
+  - Integrates the `cedar-policy` Rust SDK wrapper to evaluate requests.
+  - Enforces database multi-tenant isolation (`tenant_id` bindings) on all endpoints.
+  - Builds client-side intercept decorators (`@protect_tool`) and HTTP polling states.
+
+### SecurityAuditorAgent
+- **Primary Scope:** `/gateway/src/policy.rs`, `/gateway/policies.cedar`, `/policy-templates`, `/skills`
+- **Responsibilities:**
+  - Builds and reviews threat models for newly introduced components.
+  - Audits SQL queries to confirm absolute parameterization (preventing SQL Injection) and tenant-isolation constraints.
+  - Scans new package imports to ensure compliance and avoid vulnerabilities.
+  - Implements and verifies AWS Cedar policy rules for excessive agent autonomy, context trust levels, and prompt injections.
+
+### OpsAgent
+- **Primary Scope:** `/helm`, `/.github`, `/docker` (if created)
+- **Responsibilities:**
+  - Builds GitHub actions, workflows, and CI validation pipelines (including OpenTelemetry exporter verification).
+  - Configures dependency scans, container image signatures, and SBOM pipelines.
+  - Maintains Helm charts for Kubernetes deployments.
+
+## Core Coding Guardrails (CLAUDE.md)
+1. **Multi-Tenant Isolation:** Every SQL operation MUST bind and filter by `tenant_id` to prevent CWE-284 data leakage.
+2. **SQL Injection Prevention:** Never construct SQL queries via string formatting or concatenation. Use parameterized bindings exclusively.
+3. **Local Bindings:** Listeners must bind strictly to `127.0.0.1` for security testing.
+4. **OpenTelemetry:** Instrument all critical database and policy spans.

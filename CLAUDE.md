@@ -4,7 +4,15 @@ This guide outlines build, test, and style guidelines for working on the AegisAg
 
 ---
 
-## 1. Build and Run Commands
+## 1. Build, Run, and Harness Commands
+
+### Agent Context Harness (ECC-Style)
+- **Initialize Developer Profile:** `bash scripts/setup_agent_harness.sh --profile developer`
+- **Initialize Auditor Profile:** `bash scripts/setup_agent_harness.sh --profile auditor`
+- **Initialize Architect Profile:** `bash scripts/setup_agent_harness.sh --profile architect`
+- **Initialize Ops Profile:** `bash scripts/setup_agent_harness.sh --profile ops`
+- **Initialize All Profiles:** `bash scripts/setup_agent_harness.sh --all`
+- **Clean Harness Configuration:** `bash scripts/setup_agent_harness.sh --clean`
 
 ### Gateway (Rust + Axum + SQLx + SQLite)
 - **Check code compiles:** `cargo check --manifest-path gateway/Cargo.toml`
@@ -46,7 +54,16 @@ This guide outlines build, test, and style guidelines for working on the AegisAg
 
 ## 4. Coding Guidelines & Best Practices
 
-### Security Standards (CRITICAL)
+### Multi-Tenant Isolation (CRITICAL)
+- **Tenant Context Partitioning:** AegisAgent is a multi-tenant platform. **Every single database read, write, update, or join must be bound to a verified `tenant_id`.**
+- **No Cross-Tenant Queries:** Never write SQL queries that omit the `tenant_id` filter unless doing system-wide maintenance (which must be isolated in dedicated, privileged admin modules).
+- **SQLx Parameter Binding:** Always pass `tenant_id` as the first or second parameter to SQL queries, and enforce `UUID` validation before executing.
+
+### OpenTelemetry Instrumentation
+- **Telemetry-native Spans:** All gateway handlers, policy evaluations, and database query executions must be wrapped in `tracing::info_span!` or `tracing::span!` from the Rust `tracing` crate.
+- **Trace Context Propagation:** The Python SDK decorator must propagate the OpenTelemetry context (`traceparent` header) during authorization requests so the gateway can correlate tool execution with agent sessions.
+
+### Security Standards
 - **SQL Injection Prevention:** **NEVER** use string concatenation to build SQL queries. Always use parameterized queries via `sqlx::query` or compile-time verified queries (`sqlx::query!`).
 - **Local Network Bindings:** In all tests and gateway default configurations, bind listeners to `127.0.0.1` instead of `0.0.0.0` to avoid exposing endpoints on open ports.
 - **Dependency Safety:** Always run vulnerability checks on any library additions.
