@@ -1,0 +1,70 @@
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use std::sync::Arc;
+use tracing::info;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+mod models;
+mod db;
+mod policy;
+mod routes;
+
+use routes::AppState;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,gateway=debug,sqlx=info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    info!("Starting AegisAgent Control Plane...");
+
+    // Database setup (local SQLite file)
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://aegis.db".into());
+    info!("Initializing SQLite database pool at: {} ...", db_url);
+    let pool = db::init_db(&db_url).await?;
+
+    // Load Cedar Policy engine from file
+    let policy_path = std::env::var("CEDAR_POLICY_PATH").unwrap_or_else(|_| "policies.cedar".into());
+    info!("Loading Cedar policies from: {} ...", policy_path);
+    let policy_engine = policy::PolicyEngine::init(&policy_path).await?;
+
+    // Shared state
+    let state = Arc::new(AppState {
+        pool,
+        policy_engine,
+    });
+
+    // Construct Axum router
+    let app = Router::new()
+        // Registrations
+        .route("/v1/agents/register", post(routes::register_agent))
+        .route("/v1/tools", post(routes::register_tool))
+        .route("/v1/mcp/servers", post(routes::register_mcp_server))
+        // Policy / Interception
+        .route("/v1/authorize", post(routes::authorize_action))
+        // Approvals
+        .route("/v1/approvals/:id", get(routes::get_approval))
+        .route("/v1/approvals/:id/approve", post(routes::approve_approval))
+        .route("/v1/approvals/:id/reject", post(routes::reject_approval))
+        .route("/v1/approvals/:id/edit", post(routes::edit_approval))
+        // Audits
+        .route("/v1/runs/:id/timeline", get(routes::get_timeline))
+        .route("/v1/audit/events", get(routes::get_audit_events))
+        // Fallback or health check
+        .route("/health", get(|| async { "healthy" }))
+        .with_state(state);
+
+    // Bind strictly to 127.0.0.1 for security testing, matching rules in mandatory-secure-web-skills
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
+    info!("AegisAgent Listening on http://{}", listener.local_addr()?);
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}

@@ -1,0 +1,94 @@
+import unittest
+from unittest.mock import MagicMock, patch
+from aegisagent import AegisClient, protect_tool, set_context_trust_level, get_context_trust_level
+
+class TestAegisSDK(unittest.TestCase):
+    def setUp(self):
+        self.client = AegisClient(api_key="test_key", agent_id="test_agent", endpoint="http://127.0.0.1:8080")
+        self.client.agent_token = "mock_agent_token"
+
+    def test_trust_context_management(self):
+        set_context_trust_level("trusted_internal_signed")
+        self.assertEqual(get_context_trust_level(), "trusted_internal_signed")
+        set_context_trust_level("unknown")
+        self.assertEqual(get_context_trust_level(), "unknown")
+
+    @patch("requests.post")
+    def test_authorize_allow(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "decision": "allow",
+            "reason": "Permitted by policy"
+        }
+        mock_post.return_value = mock_response
+
+        @protect_tool(self.client, tool="test_tool", action="test_action")
+        def my_test_func(param1):
+            return f"executed_{param1}"
+
+        result = my_test_func("hello")
+        self.assertEqual(result, "executed_hello")
+        mock_post.assert_called_once()
+
+    @patch("requests.post")
+    def test_authorize_deny(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "decision": "deny",
+            "reason": "Forbidden by policy"
+        }
+        mock_post.return_value = mock_response
+
+        @protect_tool(self.client, tool="test_tool", action="test_action")
+        def my_test_func(param1):
+            return f"executed_{param1}"
+
+        with self.assertRaises(PermissionError):
+            my_test_func("hello")
+        mock_post.assert_called_once()
+        
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_authorize_edited_approval(self, mock_post, mock_get):
+        # 1. First authorize call returns require_approval
+        mock_auth_resp = MagicMock()
+        mock_auth_resp.status_code = 200
+        mock_auth_resp.json.return_value = {
+            "decision": "require_approval",
+            "reason": "Approval required",
+            "approval": {
+                "approval_id": "89cf8b98-2103-4458-8210-344589cf8b98",
+                "status": "created",
+                "approver_group": "platform-leads",
+                "expires_at": "2026-06-01T14:18:27Z"
+            }
+        }
+        mock_post.return_value = mock_auth_resp
+
+        # 2. Get approval status call returns EDITED status with modified parameters
+        mock_status_resp = MagicMock()
+        mock_status_resp.status_code = 200
+        mock_status_resp.json.return_value = {
+            "status": "EDITED",
+            "edited_tool_call": {
+                "parameters": {
+                    "param1": "edited_value"
+                }
+            }
+        }
+        mock_get.return_value = mock_status_resp
+
+        @protect_tool(self.client, tool="test_tool", action="test_action")
+        def my_test_func(param1):
+            return f"executed_{param1}"
+
+        # Execute, should run with 'edited_value' and return 'executed_edited_value'
+        result = my_test_func("original_value")
+        self.assertEqual(result, "executed_edited_value")
+        mock_post.assert_called_once()
+        mock_get.assert_called_once()
+
+if __name__ == "__main__":
+    unittest.main()

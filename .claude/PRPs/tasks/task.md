@@ -3,6 +3,6 @@
     - [x] Create `skills/tdd_workflow.md`
     - [x] Refine `skills/security_scan.md`
 - [x] Update harness script `scripts/setup_agent_harness.sh`
-- [/] Deploy and compile rules using harness
-- [ ] Verify output rules and settings files
-- [ ] Update walkthrough.md
+- [x] Deploy and compile rules using harness
+- [x] Verify output rules and settings files
+- [x] Update walkthrough.md
