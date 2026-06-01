@@ -8,7 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 use chrono::{Utc, Duration};
-use tracing::{info, warn, error};
+use tracing::{info, error};
 
 use crate::models::*;
 use crate::db;

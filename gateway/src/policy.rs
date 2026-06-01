@@ -1,6 +1,6 @@
 use std::str::FromStr;
 use cedar_policy::{Authorizer, Context, Decision, EntityUid, PolicySet, Request, Entities};
-use serde_json::Value;
+
 use std::path::Path;
 use crate::models::AuthorizeRequest;
 
@@ -84,7 +84,7 @@ impl PolicyEngine {
         let mut approver_group = None;
         let mut reason = "Policy evaluation complete.".to_string();
 
-        for policy_id in response.diagnostics().xyz() {
+        for policy_id in response.diagnostics().reason() {
 
 
 
@@ -93,24 +93,23 @@ impl PolicyEngine {
                 // If the decision is ALLOW but any of the satisfied policies annotations indicate
                 // `require_approval`, override the binary decision to `require_approval`.
                 if decision == "allow" {
-                    if let Some(dec) = policy.annotation(&"decision".parse().unwrap()) {
-                        let dec_str = dec.to_string();
+                    if let Some(dec) = policy.annotation("decision") {
                         // Strip quotes from annotation string representation
-                        let dec_clean = dec_str.trim_matches('"');
+                        let dec_clean = dec.trim_matches('"');
                         if dec_clean == "require_approval" {
                             decision = "require_approval".to_string();
                         }
                     }
                 }
-                
+
                 // Get the approver group annotation if present
-                if let Some(group) = policy.annotation(&"approver_group".parse().unwrap()) {
-                    approver_group = Some(group.to_string().trim_matches('"').to_string());
+                if let Some(group) = policy.annotation("approver_group") {
+                    approver_group = Some(group.trim_matches('"').to_string());
                 }
 
                 // Get custom reason annotation if present
-                if let Some(r) = policy.annotation(&"reason".parse().unwrap()) {
-                    reason = r.to_string().trim_matches('"').to_string();
+                if let Some(r) = policy.annotation("reason") {
+                    reason = r.trim_matches('"').to_string();
                 }
             }
         }
@@ -134,7 +133,7 @@ pub struct AuthorizeDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AuthorizeAgentContext, AuthorizeDynamicContext, AuthorizeToolCall, AuthorizeTraceContext};
+    use crate::models::{AuthorizeAgentContext, AuthorizeDynamicContext, AuthorizeToolCall};
 
     async fn setup_engine() -> PolicyEngine {
         // Look for policies.cedar in the package root
