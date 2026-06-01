@@ -52,36 +52,51 @@ This guide outlines build, test, and style guidelines for working on the AegisAg
 
 ---
 
-## 4. Coding Guidelines & Best Practices
+## 4. API Endpoints & Contract Scopes
+
+Every service component must align with the following standard API endpoint contracts:
+- `POST /v1/agents/register` - Registers agent profiles.
+- `POST /v1/tools` - Registers static tools.
+- `POST /v1/mcp/servers` - Registers MCP servers.
+- `POST /v1/authorize` - Intercepts and authorizes tool actions.
+- `GET /v1/approvals/:id` - Retrieves state for pending approval requests.
+- `POST /v1/approvals/:id/approve` - Approves a frozen action.
+- `POST /v1/approvals/:id/reject` - Rejects a frozen action.
+- `POST /v1/approvals/:id/edit` - Submits edited parameters for re-evaluation.
+- `GET /v1/runs/:id/timeline` - Retrieves chronological investigation run timelines.
+- `GET /v1/audit/events` - Retrieves system-wide audit event logs.
+
+---
+
+## 5. Performance and SLO Requirements
+
+All implementations must meet these service level objectives (SLOs) under load:
+- **Authorization API Latency:** p95 < 150 ms (Rust gateway logic must evaluate in < 1.5ms to bypass TCP/DB overhead).
+- **Policy Evaluation Latency:** p95 < 75 ms (Cedar in-process evaluation).
+- **Approval Notification Delivery:** p95 < 5 seconds.
+- **MCP Proxy Latency Overhead:** p95 < 250 ms.
+- **Audit durabilty:** 99.9% enqueue success.
+
+---
+
+## 6. Coding Guidelines & Best Practices
+
+### Secure Defaults (FAIL-CLOSED)
+- **Unidentified Requests:** Deny unknown agents, unknown tools, unknown MCP servers, and unknown MCP tools by default.
+- **Mutating Risk Actions:** Critical actions must be denied by default, and high-risk actions must require approval.
+- **Signature Verification:** Verify signature tokens on all approval callbacks (e.g. Slack/dashboard integrations).
+- **Secret Redaction:** Strip out any passwords, API keys, or JWT tokens from trace payloads and audit logs.
 
 ### Multi-Tenant Isolation (CRITICAL)
 - **Tenant Context Partitioning:** AegisAgent is a multi-tenant platform. **Every single database read, write, update, or join must be bound to a verified `tenant_id`.**
 - **No Cross-Tenant Queries:** Never write SQL queries that omit the `tenant_id` filter unless doing system-wide maintenance (which must be isolated in dedicated, privileged admin modules).
-- **SQLx Parameter Binding:** Always pass `tenant_id` as the first or second parameter to SQL queries, and enforce `UUID` validation before executing.
+- **SQLx Parameter Binding:** Always pass `tenant_id` as the parameter to SQL queries, and enforce `UUID` validation.
 
 ### OpenTelemetry Instrumentation
 - **Telemetry-native Spans:** All gateway handlers, policy evaluations, and database query executions must be wrapped in `tracing::info_span!` or `tracing::span!` from the Rust `tracing` crate.
-- **Trace Context Propagation:** The Python SDK decorator must propagate the OpenTelemetry context (`traceparent` header) during authorization requests so the gateway can correlate tool execution with agent sessions.
-
-### Security Standards
-- **SQL Injection Prevention:** **NEVER** use string concatenation to build SQL queries. Always use parameterized queries via `sqlx::query` or compile-time verified queries (`sqlx::query!`).
-- **Local Network Bindings:** In all tests and gateway default configurations, bind listeners to `127.0.0.1` instead of `0.0.0.0` to avoid exposing endpoints on open ports.
-- **Dependency Safety:** Always run vulnerability checks on any library additions.
+- **Trace Context Propagation:** The Python SDK decorator must propagate the OpenTelemetry context (`traceparent` header) during authorization requests.
 
 ### Rust Style & Idioms
 - **Async Runtime:** Use Tokio (`#[tokio::main]`) and Axum handlers.
-- **Error Handling:** Avoid `.unwrap()` and `.expect()`. Use `?` propagates, map errors to custom HTTP status codes using an implementation of `IntoResponse` for custom errors.
-- **Database Pooling:** Use `SqlitePool` from SQLx. Ensure WAL (Write-Ahead Logging) mode and busy timeout are configured on database initialization:
-  ```rust
-  let opts = SqliteConnectOptions::new()
-      .filename("db/aegisagent.db")
-      .create_if_missing(true)
-      .journal_mode(SqliteJournalMode::Wal)
-      .busy_timeout(Duration::from_secs(5));
-  let pool = SqlitePool::connect_with(opts).await?;
-  ```
-
-### Python SDK Style
-- **Type Hints:** Use type annotations for all public SDK interfaces.
-- **Decorator Interception:** The `@protect_tool` decorator must transparently intercept calls, query the gateway's `/v1/authorize` endpoint, and perform a blocking-polling loop checking `/v1/approvals/{id}` if a `require_approval` decision is returned.
-- **Exception Hierarchy:** Raise dedicated exceptions (e.g. `AegisAuthorizationDenied`, `AegisConnectionError`) rather than generic exceptions.
+- **Error Handling:** Avoid `.unwrap()` and `.expect()`. Use `?` propagates, map errors to custom HTTP status codes.
+- **Database Pooling:** Use `SqlitePool` from SQLx. Ensure WAL (Write-Ahead Logging) mode and busy timeout are configured on database initialization.

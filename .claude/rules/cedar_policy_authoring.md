@@ -6,7 +6,7 @@ This skill outlines how to write, modify, and test policies using AWS Cedar with
 
 ## 1. Cedar Policy Syntax and Structure
 
-Cedar policies define authorization rules based on a `permit` or `forbid` structure. 
+Cedar policies define authorization rules based on a `permit` or `forbid` structure.
 
 ### Key Entities:
 - **Principal:** The agent requesting action (e.g., `Agent::"agent_uuid"`).
@@ -16,20 +16,22 @@ Cedar policies define authorization rules based on a `permit` or `forbid` struct
 
 ---
 
-## 2. Context Trust Level Modeling
+## 2. Context Trust Level Modeling (FAIL-CLOSED)
 
 To mitigate indirect prompt injection vulnerabilities (where untrusted inputs hijack tool execution), AegisAgent supports dynamic context trust labeling. Policies must enforce stricter validation on actions following untrusted context.
 
-### Context Labels:
-- `trusted_internal` (e.g., trigger from organization admin)
-- `semi_trusted` (e.g., issue or comment from repository member)
-- `untrusted_external` (e.g., issue or comment from public/external contributor)
-- `suspicious` (e.g., input flagged by security heuristic)
+### The 6 Context Trust Levels:
+1. `trusted_internal_signed` (e.g., internal trigger with verified cryptographically signed payload)
+2. `trusted_internal_unsigned` (e.g., standard internal triggers without signature validation)
+3. `semi_trusted_customer` (e.g., comments or inputs originating from authenticated users/customers)
+4. `untrusted_external` (e.g., public GitHub issues, external support tickets, guest Slack messages)
+5. `malicious_suspected` (e.g., input payload flagged by heuristics, secrets leak, or anomaly scanner)
+6. `unknown` (e.g., unlabelled or unclassified ingress channels)
 
 ### Example Policy enforcing trust-level gates:
 
 ```cedar
-// Permit mutating actions ONLY when context is trusted or semi-trusted.
+// Permit mutating actions instantly ONLY when context is trusted.
 permit (
   principal,
   action == Action::"tool_call",
@@ -37,10 +39,10 @@ permit (
 )
 when {
   context.mutates_state == true &&
-  (context.trust_level == "trusted_internal" || context.trust_level == "semi_trusted")
+  (context.trust_level == "trusted_internal_signed" || context.trust_level == "trusted_internal_unsigned")
 };
 
-// Require approval for any write/mutate action following untrusted context.
+// Require approval for mutating actions following customer or unknown context.
 @decision("require_approval")
 permit (
   principal,
@@ -49,7 +51,18 @@ permit (
 )
 when {
   context.mutates_state == true &&
-  (context.trust_level == "untrusted_external" || context.trust_level == "suspicious")
+  (context.trust_level == "semi_trusted_customer" || context.trust_level == "unknown")
+};
+
+// Deny write/mutate actions outright when context is untrusted or suspected malicious.
+forbid (
+  principal,
+  action == Action::"tool_call",
+  resource
+)
+when {
+  context.mutates_state == true &&
+  (context.trust_level == "untrusted_external" || context.trust_level == "malicious_suspected")
 };
 ```
 
@@ -90,7 +103,7 @@ when {
 
 ## 4. Annotating Policies for Approvals
 
-In AWS Cedar, policy evaluations natively return a binary `Allow` or `Deny` decision. AegisAgent introduces a third state, **`require_approval`**, by using Cedar Rule Annotations. rules requiring human-in-the-loop validation carry the `@decision("require_approval")` annotation.
+In AWS Cedar, policy evaluations natively return a binary `Allow` or `Deny` decision. AegisAgent introduces a third state, **`require_approval`**, by using Cedar Rule Annotations. Rules requiring human-in-the-loop validation carry the `@decision("require_approval")` annotation.
 
 ---
 
@@ -106,7 +119,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_untrusted_context_escalation() {
+    async fn test_untrusted_context_forbidden() {
         let engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let request = AuthRequest {
             principal: "Agent::\"test_agent\"".to_string(),
@@ -119,7 +132,7 @@ mod tests {
             }),
         };
         let result = engine.authorize(request).await.unwrap();
-        assert_eq!(result.decision, "require_approval");
+        assert_eq!(result.decision, "deny");
     }
 }
 ```

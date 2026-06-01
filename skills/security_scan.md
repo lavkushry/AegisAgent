@@ -112,3 +112,11 @@ Produce a clean report detailing design boundaries and verified parameters.
    - [ ] Bound TCP listeners to `127.0.0.1` for tests.
    - [ ] Verified dependencies.
    - [ ] Ensured token generation uses cryptographically secure random number generators (e.g., `rand` in Rust, `secrets` in Python).
+   - [ ] **Secure Defaults Audit:**
+     - [ ] Unknown agent request results in a fail-closed deny.
+     - [ ] Unknown tool request results in a fail-closed deny.
+     - [ ] Unknown MCP server/tool results in a fail-closed deny.
+     - [ ] Critical risk action is forbidden/denied by default.
+     - [ ] High-risk action triggers approval by default.
+     - [ ] Approval callback endpoint verifies signature/token.
+     - [ ] Sensitive payloads (secrets, tokens, credentials) are redacted from logs and events.
