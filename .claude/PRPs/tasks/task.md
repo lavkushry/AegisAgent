@@ -1,14 +1,8 @@
-- [x] Revert product-level "skills" rename back to "tools" in docs
-- [x] Refine AI Developer Context files with PRD/Operational details
-    - [x] Refine `CLAUDE.md` (add Multi-Tenant Isolation and OpenTelemetry guidelines)
-    - [x] Refine `AGENTS.md` (update DeveloperAgent directories and role responsibilities)
-    - [x] Refine `/skills/` runbooks:
-        - [x] `/skills/security_scan.md` (tenant isolation steps)
-        - [x] `/skills/cedar_policy_authoring.md` (trust context & tool hashing)
-        - [x] `/skills/database_migration.md` (tenant_id index check)
-- [x] Create Agent Rules Harness Script
-    - [x] Create `scripts/setup_agent_harness.sh` supporting `--profile`, `--all`, and `--clean`
-- [x] Create Rules Files
-    - [x] Create root `.cursorrules`
-    - [x] Create root `.clauderules`
-- [x] Verify modifications and create a walkthrough
+- [x] Create and refine skills
+    - [x] Create `skills/token_budget_advisor.md`
+    - [x] Create `skills/tdd_workflow.md`
+    - [x] Refine `skills/security_scan.md`
+- [x] Update harness script `scripts/setup_agent_harness.sh`
+- [/] Deploy and compile rules using harness
+- [ ] Verify output rules and settings files
+- [ ] Update walkthrough.md

@@ -120,3 +120,19 @@ Produce a clean report detailing design boundaries and verified parameters.
      - [ ] High-risk action triggers approval by default.
      - [ ] Approval callback endpoint verifies signature/token.
      - [ ] Sensitive payloads (secrets, tokens, credentials) are redacted from logs and events.
+
+---
+
+## 7. Agent Harness & Configuration Security Audit (AgentShield)
+
+### Purpose
+To scan agent harness configurations, rule files, and system settings to prevent prompt injection, excessive agent permissions, or leakage of sensitive API keys through local configuration files.
+
+### Runbook Steps:
+1. **Config File Auditing:** Regularly scan the `.claude/` directory and settings files for plaintext credentials or hardcoded keys.
+2. **Scan Command:** Run configuration scanner to check for risks:
+   ```bash
+   npx ecc-agentshield scan .
+   ```
+3. **Audit Rules compliance:** Verify that `.cursorrules` and `.clauderules` are compiled without any user-overridden rules that bypass the Agent Firewall.
+4. **Context Integrity Audit:** Verify that prompt templates or policy configurations do not contain user inputs embedded without escaping (preventing prompt injection).

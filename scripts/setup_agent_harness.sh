@@ -60,11 +60,32 @@ initialize_prp_dirs() {
     fi
 }
 
+copy_common_skills() {
+    echo "Deploying project-wide common skills..."
+    cp "${SKILLS_DIR}/context_keeper.md" "${CLAUDE_RULES_DIR}/context_keeper.md"
+    cp "${SKILLS_DIR}/code_tour.md" "${CLAUDE_RULES_DIR}/code_tour.md"
+    cp "${SKILLS_DIR}/blueprint.md" "${CLAUDE_RULES_DIR}/blueprint.md"
+    cp "${SKILLS_DIR}/skill_comply.md" "${CLAUDE_RULES_DIR}/skill_comply.md"
+    
+    # Deploy tech-specific skills
+    cp "${SKILLS_DIR}/rust_standards.md" "${CLAUDE_RULES_DIR}/rust_standards.md"
+    cp "${SKILLS_DIR}/python_standards.md" "${CLAUDE_RULES_DIR}/python_standards.md"
+    cp "${SKILLS_DIR}/axum_patterns.md" "${CLAUDE_RULES_DIR}/axum_patterns.md"
+    cp "${SKILLS_DIR}/sqlite_usage.md" "${CLAUDE_RULES_DIR}/sqlite_usage.md"
+
+    # Deploy optimization and operational skills
+    cp "${SKILLS_DIR}/prompt_optimizer.md" "${CLAUDE_RULES_DIR}/prompt_optimizer.md"
+    cp "${SKILLS_DIR}/project_flow_ops.md" "${CLAUDE_RULES_DIR}/project_flow_ops.md"
+    cp "${SKILLS_DIR}/token_budget_advisor.md" "${CLAUDE_RULES_DIR}/token_budget_advisor.md"
+    cp "${SKILLS_DIR}/tdd_workflow.md" "${CLAUDE_RULES_DIR}/tdd_workflow.md"
+}
+
 setup_profile() {
     local profile=$1
     echo "Setting up profile: ${profile}..."
     mkdir -p "${CLAUDE_RULES_DIR}"
     initialize_prp_dirs
+    copy_common_skills
 
     case "${profile}" in
         architect)
@@ -84,7 +105,7 @@ EOF
 # Persona: DeveloperAgent
 # Active Scope: /gateway, /sdk-python, /sdk-typescript, /mcp-gateway-lite, /examples
 # Key Tasks: Implement gateway Axum endpoints, configure SQLx queries, test @protect_tool decorator.
-# Loaded Skills: database_migration.md, sdk_testing.md
+# Loaded Skills: database_migration.md, sdk_testing.md, tdd_workflow.md, token_budget_advisor.md
 EOF
             echo "Installed developer.md, database_migration.md, and sdk_testing.md rules."
             ;;
@@ -96,7 +117,7 @@ EOF
 # Persona: SecurityAuditorAgent
 # Active Scope: /gateway/src/policy.rs, /gateway/policies.cedar, /policy-templates, /skills
 # Key Tasks: Verify SQL query parameterization, audit multi-tenant isolation, write Cedar policies.
-# Loaded Skills: security_scan.md, cedar_policy_authoring.md
+# Loaded Skills: security_scan.md, cedar_policy_authoring.md, tdd_workflow.md, token_budget_advisor.md
 EOF
             echo "Installed auditor.md, security_scan.md, and cedar_policy_authoring.md rules."
             ;;

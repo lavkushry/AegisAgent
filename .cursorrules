@@ -9,6 +9,7 @@ AegisAgent is an Agent Action Firewall securing tools and MCP connections using 
 - Docker
 - Python
 - Rust
+- SQLite
 
 ## Workspace Directory Map
 
