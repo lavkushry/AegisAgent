@@ -139,14 +139,17 @@ Agent action authorization
 
 Example:
 
-```yaml
-agent: coding-agent-prod
-tool: github.merge_pull_request
-resource: payments-service/main
-context:
-  source_trust: untrusted_github_issue
-decision: require_approval
-approver: platform-lead
+```cedar
+@decision("require_approval")
+@approver_group("platform-lead")
+permit (
+    principal == Agent::"coding-agent-prod",
+    action == Action::"merge_pull_request",
+    resource == Repository::"payments-service/main"
+)
+when {
+    principal.source_trust == "untrusted_github_issue"
+};
 ```
 
 ***
@@ -454,7 +457,7 @@ Write practical developer/security content:
 2. “Why prompt guardrails are not enough for AI agents.”
 3. “How to add Slack approval to AI agent tool calls.”
 4. “AgentDojo-style prompt injection demo against a coding agent.”
-5. “Policy-as-code for AI agents using Rego.”
+5. “Policy-as-code for AI agents using Cedar.”
 6. “MCP security checklist for platform engineers.”
 
 This aligns with the market’s need for MCP security, runtime controls, auditability, and agent-specific governance. [\[arxiv.org\]](https://arxiv.org/abs/2503.23278), [\[coalitionf...cureai.org\]](https://www.coalitionforsecureai.org/securing-the-ai-agent-revolution-a-practical-guide-to-mcp-security/), [\[arxiv.org\]](https://arxiv.org/abs/2406.13352)

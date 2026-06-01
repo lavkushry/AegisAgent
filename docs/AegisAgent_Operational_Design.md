@@ -116,7 +116,7 @@ AegisAgent Edge/API Gateway
         +--> Risk Engine
         |
         v
-PostgreSQL / Redis or NATS / Object Storage / OTel Collector
+SQLite / Redis or NATS / Object Storage / OTel Collector
 ```
 
 OpenTelemetry should be used from day one because CNCF graduated OpenTelemetry in May 2026 and describes it as a vendor-neutral standard for metrics, logs, and traces; CNCF also reports broad project maturity and contributor/community scale. citeturn14search332turn14search337 Kubernetes should be the default production target because cloud-native infrastructure is now the standard operating environment for AI/cloud workloads and enables scalable gateway, queue, and observability deployment patterns. citeturn14search334turn14search336
@@ -125,7 +125,7 @@ OpenTelemetry should be used from day one because CNCF graduated OpenTelemetry i
 
 AegisAgent should support four operational modes:
 
-1. **Local developer mode** — Docker Compose with local Postgres, local gateway, mock Slack, and mock MCP server.
+1. **Local developer mode** — local SQLite database, local gateway, mock Slack, and mock MCP server.
 2. **Hosted SaaS mode** — multi-tenant cloud deployment for teams and startups.
 3. **Private cloud mode** — single-tenant deployment for regulated customers.
 4. **Air-gapped / restricted mode later** — for security-sensitive enterprise environments.
@@ -495,8 +495,8 @@ aegisagent/aegisagent
   /gateway
   /sdk-python
   /sdk-typescript
-  /mcp-gateway-lite
   /policy-templates
+  /mcp-gateway-lite
   /examples
   /docs
   /helm
@@ -818,12 +818,12 @@ Sunday: review metrics + plan next week
 ## 24. Recommended Operational Stack
 
 ```text
-Backend: Go
+Backend: Rust
 SDKs: Python first, TypeScript second
 Frontend: Next.js + TypeScript
-Policy: OPA/Rego
-Database: PostgreSQL
-Queue: NATS or Redis Streams
+Policy: Cedar Policy
+Database: SQLite (MVP) / PostgreSQL (Scale)
+Queue: Tokio channels or Redis Streams
 Cache: Redis
 Observability: OpenTelemetry + Prometheus/Grafana/Loki
 Deployment: Docker + Kubernetes + Helm

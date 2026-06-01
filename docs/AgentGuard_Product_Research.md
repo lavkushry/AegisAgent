@@ -166,7 +166,7 @@ Runtime guardrail research emphasizes real-time monitoring as a final layer of d
 | Prompt injection benchmark | **AgentDojo** | Provides 97 realistic tasks and 629 security test cases for agents using tools over untrusted data. citeturn3search124turn3search125 | Use AgentDojo to benchmark AgentGuard’s prompt-injection defenses. |
 | Indirect prompt injection | **InjecAgent** | Contains 1,054 test cases across 17 user tools and 62 attacker tools; ReAct GPT-4 vulnerable 24% of the time in their benchmark. citeturn3search105turn3search106 | Treat external content as untrusted and prevent it from triggering sensitive tool calls. |
 | Agent security benchmark | **Agent Security Bench (ASB)** | Benchmarks attacks/defenses across 10 scenarios, 400+ tools, 27 attack/defense methods, and reports high attack success with limited current defense effectiveness. citeturn3search148turn3search137 | Use ASB as a broad regression suite for prompt, tool, memory, and mixed attacks. |
-| Privilege escalation | **SEAgent / Mandatory Access Control Framework** | Defines privilege escalation as agent actions exceeding least privilege and proposes ABAC-based MAC with information-flow monitoring. citeturn3search117turn3search121 | Implement ABAC/Rego policies for agent-tool interactions. |
+| Privilege escalation | **SEAgent / Mandatory Access Control Framework** | Defines privilege escalation as agent actions exceeding least privilege and proposes ABAC-based MAC with information-flow monitoring. citeturn3search117turn3search121 | Implement ABAC/Cedar policies for agent-tool interactions. |
 | MCP security | **Model Context Protocol: Landscape, Security Threats, and Future Research Directions** | Defines MCP lifecycle and threat taxonomy with 16 threat scenarios across attacker types and security flaws. citeturn3search93turn3search95 | Build an MCP gateway with lifecycle-aware controls and MCP server risk scoring. |
 | Memory poisoning | **AgentPoison** | Backdoors memory/RAG-based agents without model training; reports ≥80% ASR with <0.1% poison rate in tested agents. citeturn3search99turn3search100 | Add memory provenance, memory write approval, and suspicious retrieval detection. |
 | RAG poisoning | **PoisonedRAG** | Shows a practical knowledge-corruption attack against RAG with 90% ASR after injecting five malicious texts per target question. citeturn3search86turn3search87 | Add RAG ingestion scanning, source trust labels, and retrieval-time filtering. |
@@ -216,13 +216,13 @@ AgentGuard should sit **between the agent and tools**. Prompt filtering alone is
 
 | Layer | Recommended Tech | Why |
 |---|---|---|
-| Core gateway | **Go** or **Rust** | Strong for security-sensitive proxying, concurrency, static binaries, low overhead. |
+| Core gateway | **Rust** | Strong for security-sensitive proxying, memory safety, and sub-millisecond execution. |
 | SDK | **Python + TypeScript** | Most agent frameworks are Python/TS-first; easy adoption. |
-| Policy engine | **Open Policy Agent (OPA/Rego)** or **Cedar** | Mature policy-as-code model for ABAC-style decisions. |
-| API service | **FastAPI** initially or **Go Fiber/Gin** | Fast MVP with Python; Go for production gateway. |
+| Policy engine | **Cedar** | Purpose-built fine-grained authorization engine; natively integrated for microsecond checks. |
+| API service | **Axum (Rust)** | High-performance, async, memory-safe API router. |
 | Frontend | **Next.js + TypeScript + Tailwind** | Fast SaaS dashboard development. |
-| Database | **PostgreSQL** | Reliable relational store for orgs, agents, policies, approvals. |
-| Event/audit store | **ClickHouse** or **Postgres partitioning first** | ClickHouse later for high-volume event analytics. |
+| Database | **SQLite** (MVP) / **PostgreSQL** | In-process DB for MVP to eliminate socket lag; Postgres for SaaS scaling. |
+| Event/audit store | **SQLite** / **ClickHouse** | Async in-process SQLite writes for MVP; ClickHouse later for high volume. |
 | Queue | **Redis Streams** or **NATS** | Lightweight event flow for approvals, scans, async jobs. |
 | Auth | **Auth0 / Clerk / WorkOS** | Enterprise SSO later; WorkOS is strong for B2B SaaS. |
 | Secrets | **HashiCorp Vault** or cloud KMS | Secure storage for tokens and integrations. |
@@ -231,9 +231,7 @@ AgentGuard should sit **between the agent and tools**. Prompt filtering alone is
 | LLM layer | **OpenAI / Azure OpenAI / Anthropic / local models** | Use model-agnostic adapters. |
 | Vector/RAG integrations | **pgvector, Pinecone, Weaviate, Qdrant** | Cover common RAG deployments. |
 
-### 6.2 Why Go/Rust for Gateway?
-
-The gateway is security-critical because it mediates tool execution, MCP calls, approvals, and audit logging. Use Go if you want faster development and easier hiring; use Rust if you want maximum memory safety and a stronger security story. For a solo founder, **Go is the recommended MVP choice**.
+The gateway is security-critical because it mediates tool execution, MCP calls, approvals, and audit logging. Rust is the recommended choice to guarantee compile-time memory safety, eliminate garbage collection latency spikes, and deliver sub-millisecond policy decisions natively.
 
 ### 6.3 Policy Format Example
 
@@ -280,7 +278,7 @@ Build a developer-first product that can protect one real agent workflow end-to-
 
 1. Agent registry.
 2. SDK/proxy for tool calls.
-3. YAML/Rego policy engine.
+3. YAML/Cedar policy engine.
 4. GitHub integration.
 5. Slack approval workflow.
 6. MCP server proxy.
@@ -357,7 +355,7 @@ Build:
 - Agent registry.
 - Tool-call proxy.
 - GitHub and Slack integration.
-- Rego/YAML policy engine.
+- Cedar/YAML policy engine.
 - MCP proxy for one or two MCP servers.
 - Audit log table and dashboard.
 

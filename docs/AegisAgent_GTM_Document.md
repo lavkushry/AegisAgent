@@ -585,7 +585,7 @@ Topics:
 2. “How to build an Agent Action Firewall.”
 3. “MCP security: what breaks when agents get tool access.”
 4. “GitHub issue prompt injection against coding agents.”
-5. “Policy-as-code for AI agents with Rego.”
+5. “Policy-as-code for AI agents with Cedar.”
 6. “Human approval patterns for AI agents.”
 7. “How OWASP Agentic Top 10 maps to agent runtime controls.”
 8. “Agent audit trails: what security teams need to see.”

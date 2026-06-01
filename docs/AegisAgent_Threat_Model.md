@@ -189,7 +189,7 @@ An attacker compromises:
 - container image
 - GitHub Action
 - dependency
-- OPA policy bundle
+- Cedar policy bundle
 - MCP server package
 - CI/CD pipeline
 
@@ -364,7 +364,7 @@ A bug allows Tenant A to access Tenant B’s agents, policies, approvals, or aud
 
 - Enforce tenant ID in every query.
 - Add service-layer tenant middleware.
-- Consider PostgreSQL Row-Level Security.
+- Consider PostgreSQL Row-Level Security (for SaaS) or SQLite file isolation per tenant.
 - Add automated tenant-isolation tests.
 - Use per-tenant encryption keys for enterprise tiers.
 - Never expose sequential IDs across tenants.

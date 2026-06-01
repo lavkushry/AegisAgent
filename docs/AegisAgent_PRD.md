@@ -246,19 +246,22 @@ then AegisAgent must return require_approval by default.
 
 AegisAgent must support policy-as-code for action decisions.
 
-**MVP policy language:** YAML policy templates compiled into internal rules or OPA/Rego later.
+**MVP policy language:** Cedar Policy compiled and evaluated natively.
 
 **Example policy:**
 
-```yaml
-id: github-main-merge-approval
-when:
-  tool: github
-  action: merge_pull_request
-  branch: main
-then:
-  decision: require_approval
-  approver_group: platform-leads
+```cedar
+@decision("require_approval")
+@approver_group("platform-leads")
+permit (
+    principal,
+    action == Action::"merge_pull_request",
+    resource
+)
+when {
+    resource.base_branch == "main" &&
+    principal.environment == "production"
+};
 ```
 
 **Acceptance Criteria:**
@@ -881,7 +884,7 @@ Audit logs may capture sensitive payloads.
 
 ## 19. Open Questions
 
-1. Should OPA/Rego be included in MVP, or should MVP start with simpler YAML policies?
+1. Should Cedar Policy be the exclusive language for MVP, or should we support YAML translation wrappers?
 2. Should the first public launch focus on GitHub only or GitHub + MCP together?
 3. Should AegisAgent store raw payloads by default, or only hashes and metadata?
 4. Should the OSS gateway include Slack approvals, or should approvals be hosted-only?

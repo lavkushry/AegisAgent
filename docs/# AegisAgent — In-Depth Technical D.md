@@ -11,7 +11,7 @@
 
 ## 0. Research Foundation
 
-This TDD is based on patterns from the strongest public agent-security and agent-framework work available right now: **Microsoft MCP Gateway**, **LlamaFirewall**, **AgentDojo**, **OpenAI Agents SDK**, **LangGraph human-in-the-loop**, **OPA/Rego**, **Cedar**, and **OpenTelemetry**. Microsoft’s MCP Gateway is a reverse proxy and management layer for MCP servers with session-aware routing, authorization, lifecycle management, telemetry, access control, and observability.  LlamaFirewall provides a modular runtime guardrail framework for AI agents with scanners for prompt injection, alignment checks, and insecure code risks.  AgentDojo is a benchmark for tool-using agents executing over untrusted data, with 97 realistic tasks and 629 security test cases.  LangGraph provides human-in-the-loop middleware that can pause tool calls, persist state, and resume after approve/edit/reject/respond decisions.  OpenAI Agents SDK includes agents, tools, handoffs, guardrails, MCP server tool calling, sessions, human-in-the-loop, and tracing.  OPA is a CNCF-graduated general-purpose policy engine that decouples policy decisions from enforcement using Rego and structured JSON input.  Cedar is an open-source policy language and authorization engine designed for fine-grained RBAC/ABAC-style permissions and formal analysis.  OpenTelemetry is the vendor-neutral standard for traces, metrics, logs, context propagation, and collector-based telemetry pipelines. [\[github.com\]](https://github.com/microsoft/mcp-gateway), [\[microsoft.github.io\]](https://microsoft.github.io/mcp-gateway/) [\[github.com\]](https://github.com/meta-llama/PurpleLlama/tree/main/LlamaFirewall), [\[arxiv.org\]](https://arxiv.org/pdf/2505.03574) [\[github.com\]](https://github.com/ethz-spylab/agentdojo), [\[arxiv.org\]](https://arxiv.org/abs/2406.13352) [\[docs.langchain.com\]](https://docs.langchain.com/oss/python/langchain/human-in-the-loop) [\[openai.github.io\]](https://openai.github.io/openai-agents-python/), [\[developers...openai.com\]](https://developers.openai.com/api/docs/guides/agents/guardrails-approvals) [\[github.com\]](https://github.com/open-policy-agent/opa), [\[openpolicyagent.org\]](https://www.openpolicyagent.org/docs) [\[github.com\]](https://github.com/cedar-policy), [\[cedarpolicy.com\]](https://cedarpolicy.com/) [\[opentelemetry.io\]](https://opentelemetry.io/)
+This TDD is based on patterns from the strongest public agent-security and agent-framework work available right now: **Microsoft MCP Gateway**, **LlamaFirewall**, **AgentDojo**, **OpenAI Agents SDK**, **LangGraph human-in-the-loop**, **Cedar Policy**, and **OpenTelemetry**. Microsoft’s MCP Gateway is a reverse proxy and management layer for MCP servers with session-aware routing, authorization, lifecycle management, telemetry, access control, and observability.  LlamaFirewall provides a modular runtime guardrail framework for AI agents with scanners for prompt injection, alignment checks, and insecure code risks.  AgentDojo is a benchmark for tool-using agents executing over untrusted data, with 97 realistic tasks and 629 security test cases.  LangGraph provides human-in-the-loop middleware that can pause tool calls, persist state, and resume after approve/edit/reject/respond decisions.  OpenAI Agents SDK includes agents, tools, handoffs, guardrails, MCP server tool calling, sessions, human-in-the-loop, and tracing.  Cedar is an open-source policy language and authorization engine designed for fine-grained RBAC/ABAC-style permissions and formal analysis, natively written in Rust.  OpenTelemetry is the vendor-neutral standard for traces, metrics, logs, context propagation, and collector-based telemetry pipelines. [\[github.com\]](https://github.com/microsoft/mcp-gateway), [\[microsoft.github.io\]](https://microsoft.github.io/mcp-gateway/) [\[github.com\]](https://github.com/meta-llama/PurpleLlama/tree/main/LlamaFirewall), [\[arxiv.org\]](https://arxiv.org/pdf/2505.03574) [\[github.com\]](https://github.com/ethz-spylab/agentdojo), [\[arxiv.org\]](https://arxiv.org/abs/2406.13352) [\[docs.langchain.com\]](https://docs.langchain.com/oss/python/langchain/human-in-the-loop) [\[openai.github.io\]](https://openai.github.io/openai-agents-python/), [\[developers...openai.com\]](https://developers.openai.com/api/docs/guides/agents/guardrails-approvals) [\[github.com\]](https://github.com/cedar-policy), [\[cedarpolicy.com\]](https://cedarpolicy.com/) [\[opentelemetry.io\]](https://opentelemetry.io/)
 
 ***
 
@@ -34,7 +34,7 @@ AegisAgent must:
 1. **Intercept every agent tool call** before execution.
 2. **Resolve agent identity** and ownership.
 3. **Classify action risk** using tool, resource, environment, source trust, and data sensitivity.
-4. **Evaluate policy** using OPA/Rego initially, with optional Cedar later.
+4. **Evaluate policy** using Cedar Policy natively, with optional OPA/Rego later.
 5. **Allow, deny, redact, quarantine, or require approval**.
 6. **Support MCP-native routing and governance**.
 7. **Persist audit-grade evidence** for every decision and execution.
@@ -90,7 +90,7 @@ AegisAgent must:
 +---------------------------------------------------+
 ```
 
-This architecture intentionally separates **policy decision** from **policy enforcement**, which follows the OPA model: applications query the policy engine with structured JSON input and receive structured decisions.  It also follows MCP Gateway’s separation between a **data plane** for routing MCP traffic and a **control plane** for managing adapters/tools/lifecycle. [\[openpolicyagent.org\]](https://www.openpolicyagent.org/docs), [\[github.com\]](https://github.com/open-policy-agent/opa) [\[microsoft.github.io\]](https://microsoft.github.io/mcp-gateway/), [\[github.com\]](https://github.com/microsoft/mcp-gateway/blob/main/README.md)
+This architecture intentionally separates **policy decision** from **policy enforcement**, which follows the Cedar model: applications query the policy engine with structured JSON input and receive structured decisions.  It also follows MCP Gateway’s separation between a **data plane** for routing MCP traffic and a **control plane** for managing adapters/tools/lifecycle. [\[cedarpolicy.com\]](https://cedarpolicy.com/), [\[github.com\]](https://github.com/cedar-policy) [\[microsoft.github.io\]](https://microsoft.github.io/mcp-gateway/), [\[github.com\]](https://github.com/microsoft/mcp-gateway/blob/main/README.md)
 
 ***
 
@@ -244,15 +244,15 @@ Return decision
 ### Recommended Implementation
 
 ```text
-Language: Go
-Framework: net/http, Chi, Gin, or Fiber
-Policy: OPA embedded or OPA sidecar
-Database: PostgreSQL
-Queue: NATS or Redis Streams
+Language: Rust
+Framework: Axum / Tokio
+Policy: Cedar Policy (embedded crate)
+Database: SQLite (via SQLx)
+Queue: Tokio channels or background async tasks
 Telemetry: OpenTelemetry
 ```
 
-Go is a good fit because gateway workloads require concurrency, low latency, predictable deployment, and static binaries. Microsoft’s MCP Gateway is implemented as an enterprise-style reverse proxy/control plane for MCP routing, authorization, telemetry, and lifecycle management, which validates the gateway pattern for this product. [\[github.com\]](https://github.com/microsoft/mcp-gateway), [\[microsoft.github.io\]](https://microsoft.github.io/mcp-gateway/)
+Rust is selected because gateway workloads require concurrency, maximum performance, low memory overhead, no garbage collection pauses, and compile-time memory safety. Microsoft’s MCP Gateway is implemented as a reverse proxy/control plane for MCP routing, authorization, telemetry, and lifecycle management, which validates the gateway pattern for this product. [\[github.com\]](https://github.com/microsoft/mcp-gateway), [\[microsoft.github.io\]](https://microsoft.github.io/mcp-gateway/)
 
 ***
 
@@ -264,21 +264,21 @@ The Policy Engine decides whether an action is allowed, denied, or requires appr
 
 ### Recommendation
 
-Use **OPA/Rego for MVP**.
+Use **Cedar Policy natively for MVP**.
 
-Why OPA first:
+Why Cedar first:
 
-* mature and CNCF-graduated
-* designed for policy-as-code
-* accepts arbitrary structured JSON input
-* supports sidecar, embedded, or service mode
-* widely used in Kubernetes, microservices, CI/CD, and API gateways
+* designed specifically for fast, fine-grained RBAC/ABAC authorization
+* natively written in Rust, offering microsecond-level local execution (<100 microseconds)
+* supports rule annotations for attaching custom decisions like `require_approval`
+* formally verified for correctness and safety
+* simpler to read and write compared to OPA/Rego
 
-OPA decouples policy decision-making from enforcement and lets services query decisions using structured JSON input.  OPA is also production-proven across microservices, Kubernetes, CI/CD, API gateways, and cloud-native environments. [\[openpolicyagent.org\]](https://www.openpolicyagent.org/docs) [\[github.com\]](https://github.com/open-policy-agent/opa), [\[openpolicyagent.org\]](https://www.openpolicyagent.org/docs)
+Cedar decouples policy decisions from enforcement and lets services query decisions using structured JSON input. It is purpose-built for fine-grained authorization and formal reasoning. [\[cedarpolicy.com\]](https://cedarpolicy.com/), [\[github.com\]](https://github.com/cedar-policy)
 
-### Cedar Later
+### OPA Later
 
-Cedar can be evaluated later for customer-facing fine-grained authorization because it is purpose-built for RBAC/ABAC-style permissions and formal reasoning.  Cedar may be especially useful if AegisAgent builds a user-facing policy authoring layer for enterprise authorization teams. [\[github.com\]](https://github.com/cedar-policy), [\[cedarpolicy.com\]](https://cedarpolicy.com/)
+OPA/Rego can be evaluated later as a secondary general-purpose policy adapter if customers explicitly request Kubernetes/OPA ecosystem compatibility. [\[github.com\]](https://github.com/open-policy-agent/opa), [\[openpolicyagent.org\]](https://www.openpolicyagent.org/docs)
 
 ### Policy Input Example
 
@@ -316,43 +316,47 @@ Cedar can be evaluated later for customer-facing fine-grained authorization beca
 }
 ```
 
-### Rego Policy Example
+### Cedar Policy Example
 
-```rego
-package aegis.authz
+```cedar
+// Permit read-only actions
+permit (
+    principal,
+    action,
+    resource
+)
+when {
+    resource.mutates_state == false
+};
 
-default decision := {
-  "effect": "deny",
-  "reason": "default deny"
-}
+// Production GitHub merges require approval
+@decision("require_approval")
+@approver_group("platform-leads")
+@reason("Production GitHub merges require approval")
+permit (
+    principal,
+    action == Action::"merge_pull_request",
+    resource
+)
+when {
+    resource.base_branch == "main" &&
+    principal.environment == "production"
+};
 
-decision := {
-  "effect": "require_approval",
-  "approver_group": "platform-leads",
-  "reason": "Production GitHub merges require approval"
-} {
-  input.tool_call.tool == "github"
-  input.tool_call.action == "merge_pull_request"
-  input.tool_call.parameters.base_branch == "main"
-  input.agent.environment == "production"
-}
-
-decision := {
-  "effect": "require_approval",
-  "approver_group": "security-reviewers",
-  "reason": "High-risk action after untrusted context"
-} {
-  input.context.source_trust == "untrusted_external"
-  input.tool_call.mutates_state == true
-  input.tool_call.risk == "high"
-}
-
-decision := {
-  "effect": "allow",
-  "reason": "Read-only action allowed"
-} {
-  input.tool_call.mutates_state == false
-}
+// High-risk mutating action after untrusted context requires approval
+@decision("require_approval")
+@approver_group("security-reviewers")
+@reason("High-risk action after untrusted context")
+permit (
+    principal,
+    action,
+    resource
+)
+when {
+    principal.source_trust == "untrusted_external" &&
+    resource.mutates_state == true &&
+    resource.risk == "high"
+};
 ```
 
 ***
@@ -652,20 +656,20 @@ security_alert_created
 ### MVP
 
 ```text
-PostgreSQL → transactional data, policies, approvals, audit events
-Redis/NATS → async approval/event queues
+SQLite (in-process) → transactional data, policies, approvals, audit events
+Tokio channels / Async tasks → async background audit writing
 Object storage → long-term trace/event archive
 ```
 
 ### Scale Phase
 
 ```text
-ClickHouse → high-volume audit analytics
+PostgreSQL / ClickHouse → high-volume audit analytics and transactional scaling
 OpenSearch → search and investigation
 S3/GCS/Azure Blob → immutable archive
 ```
 
-PostgreSQL is enough for MVP because early workloads are dominated by metadata, approvals, and modest audit volumes. ClickHouse or OpenSearch can be added when customers need large-scale event analytics and fast search.
+SQLite is selected for the MVP because it runs in-process, bypassing all TCP socket overhead, and requires zero local setup. PostgreSQL and ClickHouse can be added in the Scale Phase when multi-node scalability and heavy event indexing are required.
 
 ***
 
@@ -705,29 +709,29 @@ CREATE TABLE agents (
 );
 ```
 
-### tools
+### skills
 
 ```sql
-CREATE TABLE tools (
+CREATE TABLE skills (
   id UUID PRIMARY KEY,
   tenant_id UUID NOT NULL REFERENCES tenants(id),
-  tool_key TEXT NOT NULL,
+  skill_key TEXT NOT NULL,
   name TEXT NOT NULL,
   type TEXT NOT NULL,
   auth_type TEXT,
   owner_team TEXT,
   default_risk TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, tool_key)
+  UNIQUE (tenant_id, skill_key)
 );
 ```
 
-### tool\_actions
+### skill\_actions
 
 ```sql
-CREATE TABLE tool_actions (
+CREATE TABLE skill_actions (
   id UUID PRIMARY KEY,
-  tool_id UUID NOT NULL REFERENCES tools(id),
+  skill_id UUID NOT NULL REFERENCES skills(id),
   action_key TEXT NOT NULL,
   description TEXT,
   risk TEXT NOT NULL,
@@ -736,7 +740,7 @@ CREATE TABLE tool_actions (
   approval_required BOOLEAN NOT NULL DEFAULT false,
   default_decision TEXT NOT NULL DEFAULT 'policy',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (tool_id, action_key)
+  UNIQUE (skill_id, action_key)
 );
 ```
 
@@ -787,7 +791,7 @@ CREATE TABLE decisions (
   user_id TEXT,
   run_id TEXT,
   trace_id TEXT,
-  tool TEXT NOT NULL,
+  skill TEXT NOT NULL,
   action TEXT NOT NULL,
   resource TEXT,
   input_json JSONB NOT NULL,
@@ -810,8 +814,8 @@ CREATE TABLE approvals (
   approver_group TEXT,
   approver_user_id TEXT,
   reason TEXT,
-  original_tool_call JSONB NOT NULL,
-  edited_tool_call JSONB,
+  original_skill_call JSONB NOT NULL,
+  edited_skill_call JSONB,
   expires_at TIMESTAMPTZ,
   decided_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -830,7 +834,7 @@ CREATE TABLE audit_events (
   run_id TEXT,
   trace_id TEXT,
   span_id TEXT,
-  tool TEXT,
+  skill TEXT,
   action TEXT,
   resource TEXT,
   event_json JSONB NOT NULL,
@@ -1253,8 +1257,8 @@ Read-through cache for policies/tools/agents
 ### Policy Engine
 
 ```text
-Embedded OPA for low latency in MVP
-OPA sidecar or central service for enterprise
+Embedded Cedar Engine for low latency in MVP
+Cedar sidecar or central service for enterprise
 Policy bundle cache
 Versioned policy rollout
 ```
@@ -1290,10 +1294,10 @@ Microsoft’s MCP Gateway explicitly uses session-aware stateful routing and can
 Cloud: AWS / Azure / GCP
 Runtime: Kubernetes
 Ingress: NGINX / Envoy / Cloud LB
-API: Go Runtime Gateway
+API: Rust Runtime Gateway
 App: Next.js Dashboard
-DB: PostgreSQL
-Queue: Redis Streams or NATS
+DB: SQLite / PostgreSQL
+Queue: In-memory channels or Redis Streams
 Secrets: Cloud KMS + Secret Manager
 Telemetry: OpenTelemetry Collector
 Logs: Loki/OpenSearch
@@ -1316,9 +1320,9 @@ Air-gapped mode later
 
 ```text
 Docker Compose
-Postgres
-Aegis Runtime Gateway
-OPA
+SQLite
+Aegis Runtime Gateway (Rust)
+Cedar
 Dashboard
 Mock GitHub tool
 Mock MCP server
@@ -1569,7 +1573,8 @@ aegisagent
   /sdk-python
   /sdk-typescript
   /dashboard
-  /policy-templates
+  /agents
+  /skills
   /helm
   /examples
   /docs
@@ -1610,8 +1615,8 @@ Backward-compatible API versions
 Agent registry
 Tool registry
 Authorize API
-OPA policy engine
-Postgres schema
+Cedar policy engine
+SQLite schema
 Audit writer
 Python SDK
 ```
@@ -1654,10 +1659,10 @@ LlamaFirewall’s modular scanner architecture is a good future integration poin
 ## 18.1 Backend
 
 ```text
-Go
-PostgreSQL
-Redis Streams or NATS
-OPA/Rego
+Rust
+SQLite
+In-memory channels (Tokio)
+Cedar Policy
 OpenTelemetry
 Docker
 Kubernetes
@@ -1697,9 +1702,9 @@ Sigstore/Cosign
 
 # 19. Key Technical Decisions
 
-## Decision 1: Use OPA/Rego first
+## Decision 1: Use Cedar Policy natively
 
-**Reason:** OPA is mature, general-purpose, CNCF-graduated, and designed to decouple policy decisions from services. [\[github.com\]](https://github.com/open-policy-agent/opa), [\[openpolicyagent.org\]](https://www.openpolicyagent.org/docs)
+**Reason:** Cedar is purpose-built for application permissions, written in Rust, and runs locally with sub-millisecond latency. [\[cedarpolicy.com\]](https://cedarpolicy.com/)
 
 ## Decision 2: Build a gateway, not only an SDK
 
@@ -1730,7 +1735,7 @@ Sigstore/Cosign
                                     v
 +----------------+        +----------------------+       +------------------+
 | Agent Runtime  | -----> | Aegis Runtime API    | ----> | Policy Engine    |
-| LangGraph etc. |        | Go / REST / gRPC     |       | OPA/Rego         |
+| LangGraph etc. |        | Rust / REST / gRPC   |       | Cedar Policy     |
 +-------+--------+        +----------+-----------+       +------------------+
         |                            |
         |                            v
@@ -1754,7 +1759,7 @@ Sigstore/Cosign
                                     v
                          +----------------------+
                          | Audit + Tracing      |
-                         | Postgres + OTel      |
+                         | SQLite + OTel        |
                          +----------------------+
 ```
 
@@ -1778,7 +1783,7 @@ Agent proposes action
 → Audit event written
 ```
 
-This is the correct architecture because agent-security risk is concentrated at the point where reasoning becomes action. AgentDojo proves that tool-using agents can be hijacked through untrusted data, LlamaFirewall validates real-time guardrail monitoring for autonomous agents, LangGraph and OpenAI validate pause/resume human approval patterns, Microsoft MCP Gateway validates MCP routing/control-plane architecture, and OPA/OpenTelemetry provide production-grade policy and observability foundations. [\[arxiv.org\]](https://arxiv.org/abs/2406.13352), [\[arxiv.org\]](https://arxiv.org/pdf/2505.03574), [\[docs.langchain.com\]](https://docs.langchain.com/oss/python/langchain/human-in-the-loop), [\[developers...openai.com\]](https://developers.openai.com/api/docs/guides/agents/guardrails-approvals), [\[github.com\]](https://github.com/microsoft/mcp-gateway), [\[openpolicyagent.org\]](https://www.openpolicyagent.org/docs), [\[opentelemetry.io\]](https://opentelemetry.io/)
+This is the correct architecture because agent-security risk is concentrated at the point where reasoning becomes action. AgentDojo proves that tool-using agents can be hijacked through untrusted data, LlamaFirewall validates real-time guardrail monitoring for autonomous agents, LangGraph and OpenAI validate pause/resume human approval patterns, Microsoft MCP Gateway validates MCP routing/control-plane architecture, and Cedar/OpenTelemetry provide production-grade policy and observability foundations. [\[arxiv.org\]](https://arxiv.org/abs/2406.13352), [\[arxiv.org\]](https://arxiv.org/pdf/2505.03574), [\[docs.langchain.com\]](https://docs.langchain.com/oss/python/langchain/human-in-the-loop), [\[developers...openai.com\]](https://developers.openai.com/api/docs/guides/agents/guardrails-approvals), [\[github.com\]](https://github.com/microsoft/mcp-gateway), [\[cedarpolicy.com\]](https://cedarpolicy.com/), [\[opentelemetry.io\]](https://opentelemetry.io/)
 
 ***
 
