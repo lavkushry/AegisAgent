@@ -6,8 +6,8 @@ use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod models;
 mod db;
+mod models;
 mod policy;
 mod routes;
 
@@ -31,7 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::init_db(&db_url).await?;
 
     // Load Cedar Policy engine from file
-    let policy_path = std::env::var("CEDAR_POLICY_PATH").unwrap_or_else(|_| "policies.cedar".into());
+    let policy_path =
+        std::env::var("CEDAR_POLICY_PATH").unwrap_or_else(|_| "policies.cedar".into());
     info!("Loading Cedar policies from: {} ...", policy_path);
     let policy_engine = policy::PolicyEngine::init(&policy_path).await?;
 
@@ -47,6 +48,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/agents/register", post(routes::register_agent))
         .route("/v1/tools", post(routes::register_tool))
         .route("/v1/mcp/servers", post(routes::register_mcp_server))
+        .route(
+            "/v1/mcp/servers/:server_key/tools",
+            get(routes::get_mcp_tool_manifest).post(routes::discover_mcp_tools),
+        )
+        .route(
+            "/v1/mcp/servers/:server_key/tools/:tool_key/approve",
+            post(routes::approve_mcp_tool),
+        )
+        .route(
+            "/v1/mcp/servers/:server_key/tools/:tool_key/disable",
+            post(routes::disable_mcp_tool),
+        )
         // Policy / Interception
         .route("/v1/authorize", post(routes::authorize_action))
         // Approvals

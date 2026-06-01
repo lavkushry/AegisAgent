@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 // --- API Request and Response Structures ---
 
@@ -57,6 +57,35 @@ pub struct RegisterMcpServerRequest {
     pub endpoint: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterMcpServerResponse {
+    pub server_id: String,
+    pub server_key: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpToolManifestItem {
+    pub tool_key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub input_schema: Option<serde_json::Value>,
+    pub risk: String,
+    pub mutates_state: bool,
+    pub approval_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoverMcpToolsRequest {
+    pub tools: Vec<McpToolManifestItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpToolStatusResponse {
+    pub server_key: String,
+    pub tool_key: String,
+    pub status: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizeAgentContext {
@@ -190,7 +219,7 @@ pub struct SkillActionRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct McpServerRecord {
     pub id: String,
     pub tenant_id: String,
@@ -200,9 +229,27 @@ pub struct McpServerRecord {
     pub transport: String,
     pub source: Option<String>,
     pub trust_level: String,
+    pub endpoint: String,
     pub version: Option<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct McpToolRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub server_id: String,
+    pub tool_key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub input_schema: Option<String>,
+    pub risk: String,
+    pub mutates_state: bool,
+    pub approval_required: bool,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -247,7 +294,7 @@ pub struct ApprovalRecord {
     pub approver_group: Option<String>,
     pub approver_user_id: Option<String>,
     pub reason: Option<String>,
-    pub original_skill_call: String, // JSON
+    pub original_skill_call: String,       // JSON
     pub edited_skill_call: Option<String>, // JSON
     pub expires_at: Option<DateTime<Utc>>,
     pub decided_at: Option<DateTime<Utc>>,

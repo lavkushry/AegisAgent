@@ -1,7 +1,7 @@
+use crate::models::*;
+use chrono::Utc;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::str::FromStr;
-use chrono::Utc;
-use crate::models::*;
 
 pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     // Enforce WAL mode and busy timeout on pool initialization
@@ -28,8 +28,10 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             name TEXT NOT NULL,
             plan TEXT NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agents (
@@ -52,8 +54,10 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             UNIQUE (tenant_id, agent_key),
             UNIQUE (tenant_id, agent_token)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS skills (
@@ -68,8 +72,10 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             UNIQUE (tenant_id, skill_key)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS skill_actions (
@@ -85,8 +91,10 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (skill_id) REFERENCES skills(id),
             UNIQUE (skill_id, action_key)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -98,13 +106,41 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             transport TEXT NOT NULL,
             source TEXT,
             trust_level TEXT NOT NULL,
+            endpoint TEXT NOT NULL DEFAULT '',
             version TEXT,
             status TEXT NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             UNIQUE (tenant_id, server_key)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    ensure_mcp_server_endpoint_column(pool).await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mcp_tools (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            server_id TEXT NOT NULL,
+            tool_key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            input_schema TEXT,
+            risk TEXT NOT NULL,
+            mutates_state BOOLEAN NOT NULL DEFAULT 0,
+            approval_required BOOLEAN NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+            FOREIGN KEY (server_id) REFERENCES mcp_servers(id),
+            UNIQUE (tenant_id, server_id, tool_key)
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS policies (
@@ -120,8 +156,10 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             UNIQUE (tenant_id, policy_key, version)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS decisions (
@@ -142,8 +180,10 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             FOREIGN KEY (agent_id) REFERENCES agents(id)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS approvals (
@@ -161,8 +201,10 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             FOREIGN KEY (decision_id) REFERENCES decisions(id)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_events (
@@ -182,31 +224,77 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             output_hash TEXT,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id)
-        );"
-    ).execute(pool).await?;
+        );",
+    )
+    .execute(pool)
+    .await?;
 
     // Create indexes for tenant_id to guarantee sub-millisecond query performance
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents (tenant_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_skills_tenant ON skills (tenant_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mcp_servers_tenant ON mcp_servers (tenant_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies (tenant_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_decisions_tenant ON decisions (tenant_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_approvals_tenant ON approvals (tenant_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events (tenant_id);").execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents (tenant_id);")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_skills_tenant ON skills (tenant_id);")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mcp_servers_tenant ON mcp_servers (tenant_id);")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mcp_tools_tenant_server ON mcp_tools (tenant_id, server_id);")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies (tenant_id);")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_decisions_tenant ON decisions (tenant_id);")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_approvals_tenant ON approvals (tenant_id);")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events (tenant_id);")
+        .execute(pool)
+        .await?;
 
+    Ok(())
+}
+
+async fn ensure_mcp_server_endpoint_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(mcp_servers)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "endpoint")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE mcp_servers ADD COLUMN endpoint TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
 // --- Multi-Tenant CRUD Operations ---
 
-pub async fn get_tenant_by_id(pool: &SqlitePool, tenant_id: &str) -> Result<Option<TenantRecord>, sqlx::Error> {
+pub async fn get_tenant_by_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Option<TenantRecord>, sqlx::Error> {
     sqlx::query_as::<_, TenantRecord>("SELECT * FROM tenants WHERE id = ?")
         .bind(tenant_id)
         .fetch_optional(pool)
         .await
 }
 
-pub async fn register_tenant(pool: &SqlitePool, id: &str, name: &str, plan: &str) -> Result<(), sqlx::Error> {
+pub async fn register_tenant(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    plan: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO tenants (id, name, plan) VALUES (?, ?, ?)")
         .bind(id)
         .bind(name)
@@ -216,14 +304,25 @@ pub async fn register_tenant(pool: &SqlitePool, id: &str, name: &str, plan: &str
     Ok(())
 }
 
-pub async fn get_agent_by_token(pool: &SqlitePool, token: &str) -> Result<Option<AgentRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRecord>("SELECT * FROM agents WHERE agent_token = ? AND status != 'quarantined'")
-        .bind(token)
-        .fetch_optional(pool)
-        .await
+pub async fn get_agent_by_token(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    token: &str,
+) -> Result<Option<AgentRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRecord>(
+        "SELECT * FROM agents WHERE tenant_id = ? AND agent_token = ? AND status != 'quarantined'",
+    )
+    .bind(tenant_id)
+    .bind(token)
+    .fetch_optional(pool)
+    .await
 }
 
-pub async fn get_agent_by_key(pool: &SqlitePool, tenant_id: &str, agent_key: &str) -> Result<Option<AgentRecord>, sqlx::Error> {
+pub async fn get_agent_by_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_key: &str,
+) -> Result<Option<AgentRecord>, sqlx::Error> {
     sqlx::query_as::<_, AgentRecord>("SELECT * FROM agents WHERE tenant_id = ? AND agent_key = ?")
         .bind(tenant_id)
         .bind(agent_key)
@@ -282,11 +381,12 @@ pub async fn insert_skill(
     .execute(pool)
     .await?;
 
-    let row: (String,) = sqlx::query_as("SELECT id FROM skills WHERE tenant_id = ? AND skill_key = ?")
-        .bind(tenant_id)
-        .bind(skill_key)
-        .fetch_one(pool)
-        .await?;
+    let row: (String,) =
+        sqlx::query_as("SELECT id FROM skills WHERE tenant_id = ? AND skill_key = ?")
+            .bind(tenant_id)
+            .bind(skill_key)
+            .fetch_one(pool)
+            .await?;
 
     Ok(row.0)
 }
@@ -329,10 +429,10 @@ pub async fn get_skill_action(
     action_key: &str,
 ) -> Result<Option<(String, bool, bool, String)>, sqlx::Error> {
     sqlx::query_as::<_, (String, bool, bool, String)>(
-        "SELECT sa.risk, sa.mutates_state, sa.approval_required, sa.default_decision 
-         FROM skill_actions sa 
-         JOIN skills s ON sa.skill_id = s.id 
-         WHERE s.tenant_id = ? AND s.skill_key = ? AND sa.action_key = ?"
+        "SELECT sa.risk, sa.mutates_state, sa.approval_required, sa.default_decision
+         FROM skill_actions sa
+         JOIN skills s ON sa.skill_id = s.id
+         WHERE s.tenant_id = ? AND s.skill_key = ? AND sa.action_key = ?",
     )
     .bind(tenant_id)
     .bind(skill_key)
@@ -341,7 +441,179 @@ pub async fn get_skill_action(
     .await
 }
 
-pub async fn insert_decision(pool: &SqlitePool, record: &DecisionRecord) -> Result<(), sqlx::Error> {
+pub async fn upsert_mcp_server(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    name: &str,
+    owner_team: Option<&str>,
+    transport: &str,
+    source: Option<&str>,
+    trust_level: &str,
+    endpoint: &str,
+) -> Result<String, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO mcp_servers (id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+         ON CONFLICT(tenant_id, server_key) DO UPDATE SET
+            name=excluded.name,
+            owner_team=excluded.owner_team,
+            transport=excluded.transport,
+            source=excluded.source,
+            trust_level=excluded.trust_level,
+            endpoint=excluded.endpoint,
+            status='active'",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(server_key)
+    .bind(name)
+    .bind(owner_team)
+    .bind(transport)
+    .bind(source)
+    .bind(trust_level)
+    .bind(endpoint)
+    .execute(pool)
+    .await?;
+
+    let row: (String,) =
+        sqlx::query_as("SELECT id FROM mcp_servers WHERE tenant_id = ? AND server_key = ?")
+            .bind(tenant_id)
+            .bind(server_key)
+            .fetch_one(pool)
+            .await?;
+
+    Ok(row.0)
+}
+
+pub async fn get_mcp_server_by_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+) -> Result<Option<McpServerRecord>, sqlx::Error> {
+    sqlx::query_as::<_, McpServerRecord>(
+        "SELECT * FROM mcp_servers WHERE tenant_id = ? AND server_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(server_key)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn upsert_mcp_tool(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_id: &str,
+    tool: &McpToolManifestItem,
+) -> Result<String, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let input_schema = tool.input_schema.as_ref().map(|schema| schema.to_string());
+
+    sqlx::query(
+        "INSERT INTO mcp_tools (id, tenant_id, server_id, tool_key, name, description, input_schema, risk, mutates_state, approval_required, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+         ON CONFLICT(tenant_id, server_id, tool_key) DO UPDATE SET
+            name=excluded.name,
+            description=excluded.description,
+            input_schema=excluded.input_schema,
+            risk=excluded.risk,
+            mutates_state=excluded.mutates_state,
+            approval_required=excluded.approval_required,
+            status='pending',
+            updated_at=CURRENT_TIMESTAMP",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(server_id)
+    .bind(&tool.tool_key)
+    .bind(&tool.name)
+    .bind(&tool.description)
+    .bind(&input_schema)
+    .bind(&tool.risk)
+    .bind(tool.mutates_state)
+    .bind(tool.approval_required)
+    .execute(pool)
+    .await?;
+
+    let row: (String,) = sqlx::query_as(
+        "SELECT id FROM mcp_tools WHERE tenant_id = ? AND server_id = ? AND tool_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(server_id)
+    .bind(&tool.tool_key)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row.0)
+}
+
+pub async fn list_mcp_tools(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+) -> Result<Vec<McpToolRecord>, sqlx::Error> {
+    sqlx::query_as::<_, McpToolRecord>(
+        "SELECT mt.*
+         FROM mcp_tools mt
+         JOIN mcp_servers ms ON mt.server_id = ms.id AND mt.tenant_id = ms.tenant_id
+         WHERE mt.tenant_id = ? AND ms.server_key = ?
+         ORDER BY mt.tool_key ASC",
+    )
+    .bind(tenant_id)
+    .bind(server_key)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_mcp_tool_by_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    tool_key: &str,
+) -> Result<Option<McpToolRecord>, sqlx::Error> {
+    sqlx::query_as::<_, McpToolRecord>(
+        "SELECT mt.*
+         FROM mcp_tools mt
+         JOIN mcp_servers ms ON mt.server_id = ms.id AND mt.tenant_id = ms.tenant_id
+         WHERE mt.tenant_id = ? AND ms.server_key = ? AND mt.tool_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(server_key)
+    .bind(tool_key)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn set_mcp_tool_status(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    tool_key: &str,
+    status: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE mcp_tools
+         SET status = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ?
+           AND tool_key = ?
+           AND server_id = (SELECT id FROM mcp_servers WHERE tenant_id = ? AND server_key = ?)",
+    )
+    .bind(status)
+    .bind(tenant_id)
+    .bind(tool_key)
+    .bind(tenant_id)
+    .bind(server_key)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn insert_decision(
+    pool: &SqlitePool,
+    record: &DecisionRecord,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -365,7 +637,10 @@ pub async fn insert_decision(pool: &SqlitePool, record: &DecisionRecord) -> Resu
     Ok(())
 }
 
-pub async fn insert_approval(pool: &SqlitePool, record: &ApprovalRecord) -> Result<(), sqlx::Error> {
+pub async fn insert_approval(
+    pool: &SqlitePool,
+    record: &ApprovalRecord,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, edited_skill_call, expires_at, decided_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -386,7 +661,11 @@ pub async fn insert_approval(pool: &SqlitePool, record: &ApprovalRecord) -> Resu
     Ok(())
 }
 
-pub async fn get_approval_by_id(pool: &SqlitePool, tenant_id: &str, approval_id: &str) -> Result<Option<ApprovalRecord>, sqlx::Error> {
+pub async fn get_approval_by_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    approval_id: &str,
+) -> Result<Option<ApprovalRecord>, sqlx::Error> {
     sqlx::query_as::<_, ApprovalRecord>("SELECT * FROM approvals WHERE tenant_id = ? AND id = ?")
         .bind(tenant_id)
         .bind(approval_id)
@@ -405,9 +684,9 @@ pub async fn update_approval_status(
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now();
     sqlx::query(
-        "UPDATE approvals 
-         SET status = ?, approver_user_id = ?, reason = ?, edited_skill_call = ?, decided_at = ? 
-         WHERE tenant_id = ? AND id = ?"
+        "UPDATE approvals
+         SET status = ?, approver_user_id = ?, reason = ?, edited_skill_call = ?, decided_at = ?
+         WHERE tenant_id = ? AND id = ?",
     )
     .bind(status)
     .bind(user_id)
@@ -421,7 +700,10 @@ pub async fn update_approval_status(
     Ok(())
 }
 
-pub async fn insert_audit_event(pool: &SqlitePool, record: &AuditEventRecord) -> Result<(), sqlx::Error> {
+pub async fn insert_audit_event(
+    pool: &SqlitePool,
+    record: &AuditEventRecord,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -445,17 +727,162 @@ pub async fn insert_audit_event(pool: &SqlitePool, record: &AuditEventRecord) ->
     Ok(())
 }
 
-pub async fn get_audit_events_by_run(pool: &SqlitePool, tenant_id: &str, run_id: &str) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AuditEventRecord>("SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC")
-        .bind(tenant_id)
-        .bind(run_id)
-        .fetch_all(pool)
-        .await
+pub async fn get_audit_events_by_run(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    run_id: &str,
+) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AuditEventRecord>(
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
 }
 
-pub async fn get_all_audit_events(pool: &SqlitePool, tenant_id: &str) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AuditEventRecord>("SELECT * FROM audit_events WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 100")
-        .bind(tenant_id)
-        .fetch_all(pool)
+pub async fn get_all_audit_events(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AuditEventRecord>(
+        "SELECT * FROM audit_events WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 100",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    async fn setup_pool(test_name: &str) -> SqlitePool {
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/{}_{}.db",
+            test_name,
+            Uuid::new_v4().simple()
+        );
+        init_db(&db_url).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn mcp_tool_manifest_defaults_to_pending_and_is_tenant_scoped() {
+        let pool = setup_pool("mcp_manifest").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        let server_id = upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
         .await
+        .unwrap();
+
+        let tool = McpToolManifestItem {
+            tool_key: "create_issue".to_string(),
+            name: "Create issue".to_string(),
+            description: Some("Create a GitHub issue".to_string()),
+            input_schema: Some(serde_json::json!({"type": "object"})),
+            risk: "medium".to_string(),
+            mutates_state: true,
+            approval_required: false,
+        };
+        upsert_mcp_tool(&pool, "tenant_a", &server_id, &tool)
+            .await
+            .unwrap();
+
+        let tools = list_mcp_tools(&pool, "tenant_a", "github-mcp")
+            .await
+            .unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].tool_key, "create_issue");
+        assert_eq!(tools[0].status, "pending");
+        assert_eq!(tools[0].risk, "medium");
+        assert!(tools[0].mutates_state);
+
+        let other_tenant_tools = list_mcp_tools(&pool, "tenant_b", "github-mcp")
+            .await
+            .unwrap();
+        assert!(other_tenant_tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_tool_status_updates_are_tenant_scoped() {
+        let pool = setup_pool("mcp_status").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        let server_id = upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        let tool = McpToolManifestItem {
+            tool_key: "merge_pull_request".to_string(),
+            name: "Merge pull request".to_string(),
+            description: None,
+            input_schema: None,
+            risk: "critical".to_string(),
+            mutates_state: true,
+            approval_required: true,
+        };
+        upsert_mcp_tool(&pool, "tenant_a", &server_id, &tool)
+            .await
+            .unwrap();
+
+        let missing = set_mcp_tool_status(
+            &pool,
+            "tenant_b",
+            "github-mcp",
+            "merge_pull_request",
+            "approved",
+        )
+        .await
+        .unwrap();
+        assert!(!missing);
+
+        let updated = set_mcp_tool_status(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "merge_pull_request",
+            "approved",
+        )
+        .await
+        .unwrap();
+        assert!(updated);
+
+        let tool = get_mcp_tool_by_key(&pool, "tenant_a", "github-mcp", "merge_pull_request")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(tool.status, "approved");
+    }
 }

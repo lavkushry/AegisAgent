@@ -1,10 +1,18 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from aegisagent import AegisClient, protect_tool, set_context_trust_level, get_context_trust_level
+from aegisagent import (
+    AegisClient,
+    protect_tool,
+    set_context_trust_level,
+    get_context_trust_level,
+)
+
 
 class TestAegisSDK(unittest.TestCase):
     def setUp(self):
-        self.client = AegisClient(api_key="test_key", agent_id="test_agent", endpoint="http://127.0.0.1:8080")
+        self.client = AegisClient(
+            api_key="test_key", agent_id="test_agent", endpoint="http://127.0.0.1:8080"
+        )
         self.client.agent_token = "mock_agent_token"
 
     def test_trust_context_management(self):
@@ -19,7 +27,7 @@ class TestAegisSDK(unittest.TestCase):
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "decision": "allow",
-            "reason": "Permitted by policy"
+            "reason": "Permitted by policy",
         }
         mock_post.return_value = mock_response
 
@@ -30,6 +38,9 @@ class TestAegisSDK(unittest.TestCase):
         result = my_test_func("hello")
         self.assertEqual(result, "executed_hello")
         mock_post.assert_called_once()
+        self.assertEqual(
+            mock_post.call_args.kwargs["headers"]["X-Aegis-Tenant-ID"], "tenant_123"
+        )
 
     @patch("requests.post")
     def test_authorize_deny(self, mock_post):
@@ -37,7 +48,7 @@ class TestAegisSDK(unittest.TestCase):
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "decision": "deny",
-            "reason": "Forbidden by policy"
+            "reason": "Forbidden by policy",
         }
         mock_post.return_value = mock_response
 
@@ -48,7 +59,7 @@ class TestAegisSDK(unittest.TestCase):
         with self.assertRaises(PermissionError):
             my_test_func("hello")
         mock_post.assert_called_once()
-        
+
     @patch("requests.get")
     @patch("requests.post")
     def test_authorize_edited_approval(self, mock_post, mock_get):
@@ -62,8 +73,8 @@ class TestAegisSDK(unittest.TestCase):
                 "approval_id": "89cf8b98-2103-4458-8210-344589cf8b98",
                 "status": "created",
                 "approver_group": "platform-leads",
-                "expires_at": "2026-06-01T14:18:27Z"
-            }
+                "expires_at": "2026-06-01T14:18:27Z",
+            },
         }
         mock_post.return_value = mock_auth_resp
 
@@ -72,16 +83,20 @@ class TestAegisSDK(unittest.TestCase):
         mock_status_resp.status_code = 200
         mock_status_resp.json.return_value = {
             "status": "EDITED",
-            "edited_tool_call": {
-                "parameters": {
-                    "param1": "edited_value"
-                }
-            }
+            "edited_tool_call": {"parameters": {"param1": "edited_value"}},
         }
         mock_get.return_value = mock_status_resp
 
         @protect_tool(self.client, tool="test_tool", action="test_action")
         def my_test_func(param1):
+            return f"executed_{param1}"
+
+        # Execute, should run with 'edited_value' and return 'executed_edited_value'
+        result = my_test_func("original_value")
+        self.assertEqual(result, "executed_edited_value")
+        mock_post.assert_called_once()
+        mock_get.assert_called_once()
+
             return f"executed_{param1}"
 
         # Execute, should run with 'edited_value' and return 'executed_edited_value'
