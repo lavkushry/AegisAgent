@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AegisAgent Audit Timeline Mock</title>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 24px 32px; background: #111827; border-bottom: 1px solid #334155; }
+    main { padding: 32px; display: grid; gap: 20px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
+    .card, .event { background: #111827; border: 1px solid #334155; border-radius: 14px; padding: 18px; }
+    .value { font-size: 30px; font-weight: 800; }
+    .allow { color: #22c55e; }
+    .deny { color: #ef4444; }
+    .approval { color: #f59e0b; }
+    .timeline { display: grid; gap: 12px; }
+    .event { display: grid; grid-template-columns: 170px 1fr auto; gap: 16px; align-items: center; }
+    code { color: #93c5fd; }
+    small { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AegisAgent Audit Timeline</h1>
+    <small>Static mock for MVP README/demo context. Not connected to the gateway.</small>
+  </header>
+  <main>
+    <section class="cards">
+      <div class="card"><small>Protected actions</small><div class="value">128</div></div>
+      <div class="card"><small>Denied</small><div class="value deny">7</div></div>
+      <div class="card"><small>Pending approvals</small><div class="value approval">3</div></div>
+      <div class="card"><small>MCP tools reviewed</small><div class="value">24</div></div>
+    </section>
+    <section class="timeline">
+      <div class="event"><small>12:04:11</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> after untrusted issue context</div><small>policy: untrusted-mutation-deny</small></div>
+      <div class="event"><small>12:03:58</small><div><strong class="approval">Approval created</strong> for <code>github.merge_pull_request</code> into <code>main</code></div><small>group: platform-leads</small></div>
+      <div class="event"><small>12:03:40</small><div><strong class="allow">Allowed</strong> <code>github.read_issue</code> from public repository</div><small>risk: low</small></div>
+      <div class="event"><small>12:03:01</small><div><strong>MCP discovered</strong> <code>github-mcp-demo.create_issue</code></div><small>status: pending</small></div>
+    </section>
+  </main>
+</body>
+</html>

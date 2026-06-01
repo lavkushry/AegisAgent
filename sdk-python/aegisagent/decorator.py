@@ -2,6 +2,7 @@ import hashlib
 import inspect
 import json
 import logging
+import threading
 import time
 from functools import wraps
 from typing import Any, Callable, Optional
@@ -13,8 +14,6 @@ from .client import AegisClient
 logger = logging.getLogger("aegisagent")
 
 # Thread-local storage to pass trust level context along agent run execution
-import threading
-
 _context_store = threading.local()
 
 

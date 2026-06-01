@@ -1,64 +1,90 @@
-# Implementation Plan: Integrate TDD Workflow, Token Budget Advisor, and Security Scan Refinements
+# Implementation Plan: MVP Launch Readiness and Project Context Refresh
 
-This plan outlines the integration of three specialized developer skill runbooks (modeled after the `affaan-m/ECC` framework) into the AegisAgent workspace:
-1. **Token Budget Advisor** (`skills/token_budget_advisor.md`): Formulates complexity assessments, token cost estimations, and chunking guidelines.
-2. **TDD Workflow** (`skills/tdd_workflow.md`): Implements Red-Green-Refactor cycles and coverage standards.
-3. **Security Scan Refinement** (`skills/security_scan.md`): Enhances existing security audits with AgentShield/fail-closed controls.
+This plan supersedes the earlier skill-only integration plan. The skill runbooks and harness updates are complete; the active focus is MVP launch readiness for the AegisAgent gateway, Python SDK, policies, local demo, and repository trust assets.
 
 ---
 
-## User Review Required
+## Current Implemented Baseline
 
-> [!IMPORTANT]
-> **Enforced TDD Cycle & Coverage:**
-> - Enforcing Red-Green-Refactor will mandate that all future implementations of Rust Axum handlers, SQLx database operations, and Python SDK decorators must begin with writing a failing unit test first.
-> - Git commit checkpoints will be recommended after each state transition (Red, Green, Refactor).
-> - Target test coverage is set at 80%+.
-
----
-
-## Open Questions
-
-- None at this moment.
+- Rust Axum gateway with SQLite/SQLx migrations and Cedar Policy evaluation.
+- Tenant-scoped agent, tool, MCP server/tool, decision, approval, and audit records.
+- Python SDK with `AegisClient` and `@protect_tool`.
+- Approval polling with SHA-256 action-hash integrity checks.
+- MCP Gateway Lite controls: server registration, tool discovery, manifest display, approve/disable, unknown-tool denial, and audit logging.
+- Default Cedar policy pack in both `policies.cedar` and `gateway/policies.cedar`.
+- Local Docker Compose startup, seed script, and GitHub prompt-injection attack demo.
+- Repository trust assets: `SECURITY.md`, `CONTRIBUTING.md`, `ROADMAP.md`, CI workflow, and dashboard mock.
 
 ---
 
-## Proposed Changes
+## P0 MVP Launch Tasks
 
-### Developer Skills
+1. **Default policy pack**
+   - Root `policies.cedar` exists.
+   - Gateway package policy file is synchronized.
+   - Starter controls: implicit deny baseline, allow read-only, require approval for main merge, require approval for semi-trusted mutation, deny untrusted mutation.
 
-#### [NEW] [token_budget_advisor.md](file:///home/ems/AegisAgent/skills/token_budget_advisor.md)
-Create a runbook detailing:
-- Assessment of task complexity (Prose, Code, SQL, logs).
-- Estimation rules for input/output tokens.
-- Context chunking rules (e.g. splitting database migration files or logs analysis into smaller tasks).
-- Preferred response depth choices (Essential, Moderate, Detailed, Exhaustive).
+2. **Docker Compose quickstart**
+   - `docker-compose.yml` builds/runs the gateway.
+   - `gateway/Dockerfile` provides release container and curl healthcheck.
+   - Gateway uses `CEDAR_POLICY_PATH=/app/policies.cedar` and SQLite at `/data/aegis.db`.
 
-#### [NEW] [tdd_workflow.md](file:///home/ems/AegisAgent/skills/tdd_workflow.md)
-Create a runbook detailing:
-- The RED-GREEN-REFACTOR cycle rules.
-- Test coverage requirements (80%+ target).
-- Mandating failing test cases for Rust (`cargo test`) and Python (`unittest`).
-- Commit messages / checkpoint rules for TDD phases.
+3. **Python SDK decorator**
+   - `@protect_tool` calls `/v1/authorize`.
+   - Deny and unexpected decisions fail closed.
+   - Approval responses and approval-status polls verify `action_hash`.
 
-#### [MODIFY] [security_scan.md](file:///home/ems/AegisAgent/skills/security_scan.md)
-Enhance with additional audit checks:
-- Verify fail-closed defaults for all resource evaluations.
-- Signature checking verification.
-- Audit for context propagation risks and token leaks in diagnostics logs.
+4. **Attack demo**
+   - `examples/github-attack-demo.py` simulates malicious public issue content followed by a blocked merge.
+   - Prints the audit endpoint URL and recent audit event summary.
+
+5. **Seed script**
+   - `scripts/seed-demo.sh` is idempotent and registers demo agent, GitHub tool actions, and demo MCP manifest.
+
+6. **README quickstart**
+   - Five-step copy-paste flow: clone, compose up, seed, run demo, inspect audit.
 
 ---
 
-### Agent Harness Configuration
+## P1 Credibility Tasks
 
-#### [MODIFY] [setup_agent_harness.sh](file:///home/ems/AegisAgent/scripts/setup_agent_harness.sh)
-- Add `token_budget_advisor.md` and `tdd_workflow.md` to `copy_common_skills` to deploy them to `.claude/rules/`.
-- Associate them with the `developer` and `auditor` profiles.
+- `SECURITY.md`: responsible disclosure policy and secure-development expectations.
+- `CONTRIBUTING.md`: test/lint commands and policy contribution rules.
+- `.github/workflows/ci.yml`: Rust format/clippy/tests and Python SDK tests.
+- `ROADMAP.md`: Q3/Q4/post-MVP plan.
+- `docs/dashboard-mock.html`: static audit timeline dashboard mock.
+- Demo video remains pending outside code changes.
+
+---
+
+## Remaining Engineering Priorities
+
+1. Slack approval callback signature verification and approver-group authorization.
+2. TypeScript SDK parity with Python SDK.
+3. MCP manifest signing and drift detection.
+4. Runtime MCP proxy execution path.
+5. OpenTelemetry traceparent propagation in Python SDK requests.
+6. Audit payload redaction and configurable capture levels.
+7. GitHub App/PR comment integration.
 
 ---
 
 ## Verification Plan
 
-### Manual Verification
-- Execute `bash scripts/setup_agent_harness.sh --all` and verify that the files are properly generated/copied under `.claude/rules/`.
-- Run `git status` to ensure everything is staged correctly.
+Run before handing off changes:
+
+```bash
+cargo test --manifest-path gateway/Cargo.toml
+python3 -m unittest discover -s sdk-python/tests
+python3 -m py_compile examples/github-attack-demo.py examples/mock_server.py
+bash -n scripts/seed-demo.sh
+docker compose config
+```
+
+Optional when Docker daemon is available:
+
+```bash
+docker compose up --build
+bash scripts/seed-demo.sh
+python3 examples/github-attack-demo.py
+```

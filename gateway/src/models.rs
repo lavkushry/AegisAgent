@@ -193,6 +193,7 @@ pub struct AgentRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SkillRecord {
     pub id: String,
@@ -206,6 +207,7 @@ pub struct SkillRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SkillActionRecord {
     pub id: String,
@@ -253,6 +255,7 @@ pub struct McpToolRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PolicyRecord {
     pub id: String,

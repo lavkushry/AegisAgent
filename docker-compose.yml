@@ -1,0 +1,20 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: aegisagent-gateway:local
+    network_mode: host
+    environment:
+      DATABASE_URL: sqlite:///data/aegis.db
+      CEDAR_POLICY_PATH: /app/policies.cedar
+      RUST_LOG: info,gateway=debug,sqlx=info
+    volumes:
+      - ./data:/data
+      - ./policies.cedar:/app/policies.cedar:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
