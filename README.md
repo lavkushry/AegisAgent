@@ -2,14 +2,23 @@
 
 [![CI configured](https://img.shields.io/badge/CI-configured-blue)](.github/workflows/ci.yml)
 
-AegisAgent is an **Agent Action Firewall** for AI agents and MCP tools. It sits between an agent runtime and external actions, evaluates Cedar policies, pauses risky actions for approval, denies untrusted mutations, and writes audit events.
+AegisAgent is the **integrity layer for AI agent actions** — open, self-hostable, and framework-neutral. It sits between an agent runtime and external actions and does two things that the now-commodity gateway market decides but does **not prove**:
+
+1. **Provable approvals.** Every high-risk action is frozen and SHA-256 hashed; the human approval is bound to that exact action, and the SDK **fails closed** if a different action is about to execute. *An approval is valid for exactly one action* — defeating approve-then-swap, replay, and render-vs-bytes ("approval manipulation," OWASP Agentic Top 10).
+2. **Deterministic trust-provenance gating.** Authorization is gated on *where the triggering content came from* (six trust levels), not a probabilistic text score. A mutating action triggered by untrusted external content is denied/escalated regardless of how benign the text looks — the confused-deputy defense at the policy layer.
+
+Every protected action emits a verifiable, hash-chained **action receipt** suitable as SOC 2 / EU AI Act Article 14 evidence. AegisAgent runs standalone **or layers onto** an existing gateway (e.g. Microsoft Agent Governance Toolkit, MintMCP, Pipelock).
+
+> **Make the approval trustworthy. Trust the source, not the text.**
+
+> ℹ️ **Positioning context (June 2026):** the generic "intercept → policy → allow/deny → audit → approval" loop is now commodity, including free OSS. AegisAgent deliberately competes only on *integrity + provenance + verifiable evidence*. See [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md) for the full competitor analysis and rationale.
 
 ## Current MVP Status
 
 | Area | Status |
 | --- | --- |
 | Rust gateway | Implemented with Axum, SQLite/SQLx, Cedar policy loading, healthcheck, audit and approval endpoints |
-| Python SDK | Implemented `AegisClient` and `@protect_tool` with fail-closed deny/approval handling and approval action-hash verification |
+| Python SDK | Implemented `AegisClient` and `@protect_tool` with **fail-closed** deny/approval handling and **approval action-hash verification** (the core integrity primitive) |
 | Default policy pack | Implemented at `policies.cedar` and `gateway/policies.cedar` |
 | MCP Gateway Lite | Implemented server registration, tool discovery/manifest, approve/disable controls, unknown-tool deny, and MCP audit events |
 | Local demo | Implemented `scripts/seed-demo.sh` and `examples/github-attack-demo.py` |
@@ -128,6 +137,14 @@ cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 
 ## Project Docs
 
+> 📌 The strategy docs in `docs/` were re-anchored on 2026-06-02 from the original "Agent Action Firewall" framing to the **integrity-layer** positioning above. Start with the reassessment doc.
+
+- [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md) — **source of truth**: June-2026 competitor matrix, the real gap, and repositioning.
+- `docs/AegisAgent_PRD.md` — product requirements (integrity primitives as headline features).
+- `docs/AegisAgent_GTM_Document.md` — positioning, ICP, pricing, competitive landscape.
+- `docs/# AegisAgent — In-Depth Technical D.md` — architecture (Approval Integrity Engine, Trust-Provenance Gate, Verifiable Receipts).
+- `docs/AegisAgent_Threat_Model.md` — foregrounds approval manipulation, confused-deputy, and evidence tampering.
+- `docs/# AegisAgent — Deep Agent Workflow.md`, `docs/# AegisAgent — Depth Vision Document.md`, `docs/# AegisAgent — Deep Market Gap Anal.md`, `docs/# AegisAgent — In-Depth Problem Def.md`, `docs/AegisAgent_Operational_Design.md`, `docs/AgentGuard_Product_Research.md`.
 - `CLAUDE.md` — agent/developer commands, security rules, and API contracts.
 - `AGENTS.md` — persona boundaries for Architect, Developer, SecurityAuditor, and Ops agents.
 - `SECURITY.md` — vulnerability disclosure and secure development expectations.

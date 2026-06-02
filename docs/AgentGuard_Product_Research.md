@@ -1,400 +1,182 @@
-# AgentGuard: Agentic Security Control Plane
+# AegisAgent (fka AgentGuard): Agent Action Integrity Layer — Product Research
 
-**Author:** Lavkush Kumar  
-**Date:** 2026-05-29  
-**Working title:** AgentGuard / MCP Firewall / Runtime Security Gateway for AI Agents
+**Author:** Lavkush Kumar
+**Original draft:** 2026-05-29 · **Reset:** 2026-06-02
+**Working title:** AegisAgent — Integrity Layer for AI Agent Actions
+**Read first:** [`AegisAgent_Gap_Reassessment_2026-06.md`](AegisAgent_Gap_Reassessment_2026-06.md)
 
----
-
-## 1. Executive Summary
-
-AgentGuard is a **runtime security control plane for AI agents**. It protects tool-using and MCP-connected agents by enforcing **agent identity, least-privilege tool access, runtime policy checks, human approval, memory/RAG protection, and audit trails**. The core thesis is that AI agents are moving from passive chat to autonomous systems with planning, tool use, memory, and external actions, which creates risks beyond traditional chatbot safety and conventional application security. Recent survey work defines agentic AI systems as LLM-powered systems with planning, tool use, memory, and autonomy, and highlights amplified risks when agents act across software, web, and physical environments. citeturn3search80
-
-The best initial wedge is **not generic AI security**. The sharper wedge is: **MCP and tool-use firewall for AI agents**. MCP is an emerging open standard for bi-directional communication and dynamic discovery between AI models and external tools/resources; research already identifies MCP lifecycle risks, malicious developers, external attackers, malicious users, implementation flaws, and the need for fine-grained safeguards. citeturn3search93turn3search95
+> ⚠️ **Reset note.** The original draft positioned this as an "MCP and tool-use firewall" and recommended building agent inventory + runtime authorization + approval + audit as the wedge. By June 2026 that wedge is occupied (free Microsoft Agent Governance Toolkit + OSS Pipelock + funded SaaS). This version re-anchors on the **integrity + provenance** gap that survives. The research matrix in §4 remains valid and unchanged in substance.
 
 ---
 
-## 2. Product Idea
+## 1. Executive summary
 
-### 2.1 Product Name
+AegisAgent is the **integrity layer for AI agent actions.** The baseline runtime-authorization loop (intercept → policy → allow/deny → audit → approval) is now commodity. AegisAgent's reason to exist is the two things that loop does *not* guarantee:
 
-**AgentGuard**
+1. **Approval integrity** — the human "yes" is cryptographically bound to a frozen, hashed representation of the exact action, and the SDK fails closed if a different action is about to execute (defends approve-then-swap, replay, render-vs-bytes).
+2. **Trust-provenance gating** — authorization is gated deterministically on *where the triggering content came from* (six trust levels), not on a probabilistic text score (defends the confused-deputy / indirect-prompt-injection path).
 
-Alternative names:
-
-- **MCPGuard** — best if you focus only on MCP first.
-- **AgentFirewall** — best for developer-friendly positioning.
-- **AgentShield** — broader enterprise security name.
-
-### 2.2 One-Line Positioning
-
-> **AgentGuard is a runtime security gateway for AI agents and MCP tools. It gives engineering and security teams agent inventory, least-privilege tool access, prompt-injection-aware policy enforcement, human approval flows, and tamper-evident audit logs.**
-
-This is aligned with OWASP’s AI Agent Security guidance, which lists direct/indirect prompt injection, tool abuse, privilege escalation, data exfiltration, memory poisoning, goal hijacking, excessive autonomy, high-impact action abuse, approval manipulation, cascading failures, sensitive data exposure, and supply-chain attacks as key agent risks. citeturn3search111
-
-### 2.3 Target Users
-
-**Primary buyer:** CTO, VP Engineering, Head of Security, AI Platform Lead, DevOps/Platform Lead, or Security Engineer responsible for AI governance.
-
-**Initial ICP:**
-
-- AI startups deploying production agents.
-- SaaS companies using coding/support/sales agents.
-- Fintech or healthcare SaaS teams needing auditability.
-- Companies adopting MCP servers and tool-using LLM workflows.
-- DevTool companies embedding agents in developer workflows.
-
-### 2.4 Core Pain Points
-
-Companies want agents that can use GitHub, Slack, Jira, AWS, databases, Stripe, Zendesk, email, files, vector databases, and MCP tools. But when an agent can act, security teams need answers to:
-
-1. Which agents exist?
-2. Which tools and credentials can each agent use?
-3. Can untrusted content hijack the agent?
-4. Can the agent perform destructive or high-impact actions?
-5. Is there a complete audit trail?
-6. Can risky actions require human approval?
-7. Can memory/RAG stores be poisoned?
-8. Are MCP servers trustworthy and policy-controlled?
-
-Research shows these questions are real production risks. AgentDojo demonstrates that agents executing tools over untrusted data are vulnerable to prompt injection and provides 97 realistic tasks plus 629 security test cases. citeturn3search124turn3search125 InjecAgent evaluates tool-integrated LLM agents against indirect prompt injection with 1,054 test cases across 17 user tools and 62 attacker tools, and reports that ReAct-prompted GPT-4 was vulnerable 24% of the time under its benchmark. citeturn3search105turn3search106
+Plus the adoption properties: **open, self-hostable, framework-neutral, layerable onto any existing gateway.**
 
 ---
 
-## 3. Product Modules
+## 2. Product idea
 
-### 3.1 Agent Inventory
+### 2.1 Name & one-liner
 
-Track every AI agent like a non-human identity:
+**AegisAgent.**
 
-```yaml
-agent_id: coding-agent-prod
-owner: platform-team
-runtime: langgraph
-model: gpt-4.1
-connected_tools:
-  - github
-  - slack
-  - postgres-readonly
-  - mcp-filesystem
-risk_level: high
-allowed_actions:
-  - read_repo
-  - comment_pr
-  - create_branch
-approval_required:
-  - merge_pr
-  - delete_branch
-  - run_prod_deploy
+> The open, neutral integrity layer for AI agent actions: provably-correct human approvals and deterministic trust-provenance gating, with verifiable action receipts.
+
+### 2.2 Target users
+
+**Buyer:** Head of Security / AI Platform Lead / VP Eng at teams shipping mutating agents, especially under SOC 2 or EU AI Act Article 14.
+
+**ICP:** teams that *already run or plan* a gateway and need the integrity + evidence the gateway doesn't provide; regulated SaaS; security-conscious AI-native startups.
+
+### 2.3 The questions AegisAgent uniquely answers
+
+```text
+Did the agent execute the exact action a human approved? (prove it)
+Can an old approval be replayed, or a benign one swapped for a dangerous one?
+Did this privileged action originate from untrusted content?
+Can we hand an auditor a tamper-evident receipt binding approver + action + source trust?
 ```
 
-### 3.2 Runtime Tool Authorization
-
-Every tool call goes through a policy decision point before execution. This is supported by SEAgent research, which frames agent misuse as privilege escalation and proposes a mandatory access-control framework using ABAC and information-flow monitoring for agent-tool interactions. citeturn3search117turn3search121
-
-### 3.3 MCP Gateway
-
-AgentGuard should proxy MCP calls and enforce:
-
-- MCP server allowlist/blocklist.
-- Tool discovery review.
-- Tool description trust scoring.
-- Per-tool authorization.
-- Human approval for dangerous tools.
-- Complete MCP request/response audit.
-
-MCP security research defines a full MCP server lifecycle and a threat taxonomy across malicious developers, external attackers, malicious users, and security flaws; this directly supports building a gateway around MCP server creation, deployment, operation, and maintenance. citeturn3search93turn3search95
-
-### 3.4 Prompt-Injection-Aware Guardrail
-
-AgentGuard should tag data as **trusted** or **untrusted**. If a tool result comes from email, webpage, ticket, document, issue comment, or external website, it should not be allowed to cause high-impact tool calls without policy checks. AgentDojo and InjecAgent both show that external tool-returned content can hijack agents through indirect prompt injection. citeturn3search124turn3search105
-
-### 3.5 Human Approval Workflow
-
-High-impact actions should require approval:
-
-- GitHub: merge PR, delete branch, change CODEOWNERS.
-- AWS: mutate IAM, delete S3 bucket, rotate production secrets.
-- Database: export customer table, run destructive query.
-- Stripe: refund above threshold, change billing plan.
-- Slack/email: send external message with sensitive data.
-
-OWASP recommends least-privilege tool access, explicit authorization for sensitive operations, and oversight for high-impact actions. citeturn3search111
-
-### 3.6 Memory and RAG Protection
-
-AgentGuard should protect memory writes and RAG ingestion:
-
-- Require provenance for new memory.
-- Label memory as trusted/untrusted.
-- Block memory writes from untrusted sources unless approved.
-- Scan retrieved chunks for suspicious instructions.
-- Maintain document lineage and ingestion audit.
-
-AgentPoison shows that poisoning long-term memory or RAG knowledge bases can backdoor LLM agents with over 80% average attack success and less than 0.1% poison rate in tested agents. citeturn3search99turn3search100 PoisonedRAG shows that injecting only five malicious texts per target question into a large knowledge database can reach 90% attack success, and existing defenses were insufficient in their evaluation. citeturn3search86turn3search87
-
-### 3.7 Audit Trail and Compliance Evidence
-
-Every action should produce an immutable event:
-
-```json
-{
-  "event_id": "evt_01HX...",
-  "timestamp": "2026-05-29T11:01:03Z",
-  "agent_id": "coding-agent-prod",
-  "user_id": "lavkush",
-  "tool": "github.merge_pull_request",
-  "resource": "repo/payment-service#PR-482",
-  "risk": "high",
-  "decision": "approval_required",
-  "approver": "platform-lead",
-  "input_hash": "sha256:...",
-  "output_hash": "sha256:..."
-}
-```
-
-Runtime guardrail research emphasizes real-time monitoring as a final layer of defense for AI agents taking actions based on untrusted inputs; LlamaFirewall specifically argues that model fine-tuning and chatbot-focused guardrails do not fully address autonomous-agent risks. citeturn3search142
+Gateways answer "is it allowed?" AegisAgent answers "is the decision provably honored, and provenance-aware?"
 
 ---
 
-## 4. Research Matrix
+## 3. Product modules (re-prioritized)
 
-| Area | Paper / Source | Key Finding | Product Implication |
+### 3.1 Approval Integrity Engine — **headline**
+- Freeze the exact tool call (canonical serialization) and compute `action_hash = SHA-256(canonical_action)`.
+- Bind the approval record to `action_hash` + approver identity + decision + timestamp.
+- Re-evaluate on any edit (edited params → new hash → fresh decision).
+- SDK **fails closed** if the about-to-execute hash ≠ approved hash; reject replayed/expired approvals.
+
+### 3.2 Trust-Provenance Gate — **headline**
+- Six deterministic trust levels: `trusted_internal_signed`, `trusted_internal_unsigned`, `semi_trusted_customer`, `untrusted_external`, `malicious_suspected`, `unknown`.
+- First-class Cedar context input. Mutating action + untrusted/suspected source → deny or escalate, independent of text content.
+- Optional classifier *feeds* the label but never relaxes a stricter deterministic rule.
+
+### 3.3 Verifiable Action Receipts — **headline**
+- Tamper-evident record: agent, user, tool, action, resource, `source_trust`, risk, decision, approver, `action_hash`, input/output hashes, timestamp.
+- Open, documented format; designed as SOC 2 / EU AI Act Article 14 evidence; exportable to SIEM via OpenTelemetry.
+
+### 3.4 Cedar policy-as-code (table stakes) — with `action_hash` + `source_trust` as native context.
+### 3.5 MCP + non-MCP authorization (table stakes) — manifest pinning/drift as a provenance signal.
+### 3.6 Layer-on adapters — run standalone OR in front of / alongside an existing gateway (incl. Microsoft toolkit).
+### 3.7 Agent registry / inventory (table stakes).
+
+---
+
+## 4. Research matrix (validated — unchanged)
+
+| Area | Source | Key finding | Implication for the integrity wedge |
 |---|---|---|---|
-| Landscape | **Agentic AI Security: Threats, Defenses, Evaluation, and Open Challenges** | Agentic systems combine planning, tool use, memory, and autonomy, creating new risks beyond traditional AI safety and software security. citeturn3search80 | Build a multi-layer security control plane, not only a prompt filter. |
-| Curated research | **Awesome Agentic Security Papers** | Curates 150+ papers and organizes the field into applications, threats, and defenses. citeturn3search81 | Use it as the ongoing paper tracker for product research. |
-| Prompt injection benchmark | **AgentDojo** | Provides 97 realistic tasks and 629 security test cases for agents using tools over untrusted data. citeturn3search124turn3search125 | Use AgentDojo to benchmark AgentGuard’s prompt-injection defenses. |
-| Indirect prompt injection | **InjecAgent** | Contains 1,054 test cases across 17 user tools and 62 attacker tools; ReAct GPT-4 vulnerable 24% of the time in their benchmark. citeturn3search105turn3search106 | Treat external content as untrusted and prevent it from triggering sensitive tool calls. |
-| Agent security benchmark | **Agent Security Bench (ASB)** | Benchmarks attacks/defenses across 10 scenarios, 400+ tools, 27 attack/defense methods, and reports high attack success with limited current defense effectiveness. citeturn3search148turn3search137 | Use ASB as a broad regression suite for prompt, tool, memory, and mixed attacks. |
-| Privilege escalation | **SEAgent / Mandatory Access Control Framework** | Defines privilege escalation as agent actions exceeding least privilege and proposes ABAC-based MAC with information-flow monitoring. citeturn3search117turn3search121 | Implement ABAC/Cedar policies for agent-tool interactions. |
-| MCP security | **Model Context Protocol: Landscape, Security Threats, and Future Research Directions** | Defines MCP lifecycle and threat taxonomy with 16 threat scenarios across attacker types and security flaws. citeturn3search93turn3search95 | Build an MCP gateway with lifecycle-aware controls and MCP server risk scoring. |
-| Memory poisoning | **AgentPoison** | Backdoors memory/RAG-based agents without model training; reports ≥80% ASR with <0.1% poison rate in tested agents. citeturn3search99turn3search100 | Add memory provenance, memory write approval, and suspicious retrieval detection. |
-| RAG poisoning | **PoisonedRAG** | Shows a practical knowledge-corruption attack against RAG with 90% ASR after injecting five malicious texts per target question. citeturn3search86turn3search87 | Add RAG ingestion scanning, source trust labels, and retrieval-time filtering. |
-| Backdoored agents | **BadAgent** | Shows that LLM agents fine-tuned on poisoned data can execute harmful operations when triggers appear in input/environment. citeturn3search130turn3search131 | Add model/source provenance and runtime behavior monitoring; do not trust model alignment alone. |
-| Runtime guardrails | **LlamaFirewall** | Proposes an open-source guardrail system for agents, arguing real-time guardrail monitoring is needed because agents take higher-stakes actions from untrusted inputs. citeturn3search142 | Product should operate on the execution path, not only at prompt/output layer. |
-| Tool-use evaluation | **ToolSandbox** | Evaluates stateful tool execution, implicit state dependencies, on-policy conversational evaluation, and dynamic evaluation over trajectories. citeturn3search136 | Test AgentGuard on multi-step workflows, not only single tool calls. |
-| Standards / best practices | **OWASP AI Agent Security Cheat Sheet** | Recommends least privilege, per-tool scoping, explicit authorization, memory protection, and audit trails. citeturn3search111 | Use OWASP language in sales, docs, and control mapping. |
+| Landscape | *Agentic AI Security: Threats, Defenses, Evaluation, Open Challenges* | Planning + tool use + memory + autonomy create new risk classes | Multi-layer control needed; integrity is the under-served layer |
+| Prompt injection | **AgentDojo** (97 tasks, 629 tests) | Tool output hijacks tool-using agents | Benchmark the trust-provenance gate against it |
+| Indirect injection | **InjecAgent** (1,054 cases; ReAct GPT-4 vulnerable ~24%) | External content triggers sensitive calls | Provenance gating, not text scoring, is the deterministic defense |
+| Access control | **SEAgent / MAC framework** | Privilege escalation = action beyond least privilege; ABAC + info-flow | ABAC/Cedar with source-trust as an attribute |
+| MCP security | *MCP: Landscape, Threats, Future* | Lifecycle + 16 threat scenarios | Manifest pinning as provenance; drift → escalate |
+| Memory/RAG | **AgentPoison**, **PoisonedRAG** | ≥80% / 90% ASR with tiny poison rates | Provenance + receipts extend to memory/RAG writes (later) |
+| Runtime guardrails | **LlamaFirewall** | Guardrails belong on the execution path | AegisAgent enforces at the tool-call boundary, fail-closed |
+| Standards | **OWASP AI Agent Security** | Least privilege, explicit authz, **approval integrity**, audit | "Approval manipulation" is the named gap AegisAgent closes |
+| Authz boundary | **arXiv:2603.20953** *Before the Tool Call* (2026) | No security-grade authz standard at the tool boundary | Verifiable receipts/approval binding can become that standard |
 
 ---
 
 ## 5. Architecture
 
-### 5.1 High-Level Architecture
-
 ```text
 User / App
-   |
    v
-AI Agent Runtime
-(LangGraph / CrewAI / AutoGen / OpenAI Agents SDK / custom)
-   |
+AI Agent Runtime (LangGraph / CrewAI / AutoGen / OpenAI Agents SDK / custom)
    v
-AgentGuard SDK / Proxy
-   |
-   +--> Agent Identity Registry
-   +--> Policy Engine
-   +--> Prompt Injection / Untrusted Data Classifier
-   +--> MCP Gateway
-   +--> Human Approval Service
-   +--> Audit Log Pipeline
-   +--> Risk Scoring Engine
-   |
+AegisAgent SDK  ── computes canonical action, enforces fail-closed on hash mismatch
    v
-Tools / APIs / MCP Servers
-(GitHub, Slack, AWS, DB, Stripe, Jira, Files, Vector DB)
+AegisAgent Gateway (Rust + Axum + Cedar + SQLite/Postgres)   [standalone OR layered on an existing gateway]
+   ├─ Trust-Provenance Gate     (6-level source classification -> Cedar context)
+   ├─ Policy Engine (Cedar)     (action_hash + source_trust as native inputs)
+   ├─ Approval Integrity Engine (freeze -> SHA-256 -> bind -> re-eval on edit)
+   ├─ Approval Delivery         (Slack / Teams / dashboard, signature-verified)
+   ├─ Verifiable Receipt + Audit pipeline (OTel export)
+   v
+Tools / APIs / MCP servers (GitHub, Slack, AWS, DB, Stripe, Jira, files, vector DB)
 ```
 
-### 5.2 Key Design Decision
-
-AgentGuard should sit **between the agent and tools**. Prompt filtering alone is not enough because multiple papers show attacks can occur through external tool results, memory retrieval, tool metadata, and multi-step trajectories. AgentDojo focuses on agents executing tools over untrusted data, ASB evaluates vulnerabilities across system prompt, user prompt handling, tool usage, and memory retrieval, and LlamaFirewall argues for real-time guardrails as a final layer of defense. citeturn3search124turn3search148turn3search142
+**Key design decision:** the SDK is part of the trust boundary. The gateway can be bypassed by a compromised agent process, so the *SDK itself* refuses to execute an action whose hash isn't the approved one — integrity is enforced at the last possible step, not just decided upstream.
 
 ---
 
-## 6. Technology Stack
+## 6. Technology stack (unchanged, still correct)
 
-### 6.1 MVP Stack Recommendation
+Rust + Axum gateway (memory-safe, sub-ms policy decisions); Cedar policy engine (native `action_hash`/`source_trust` context); Python + TypeScript SDKs; SQLite (MVP) → Postgres (SaaS); ClickHouse later for receipt volume; OpenTelemetry + Grafana; WorkOS/Clerk for enterprise SSO later; Vault/KMS for secrets. Single self-hostable binary is a first-class requirement (neutrality wedge).
 
-| Layer | Recommended Tech | Why |
-|---|---|---|
-| Core gateway | **Rust** | Strong for security-sensitive proxying, memory safety, and sub-millisecond execution. |
-| SDK | **Python + TypeScript** | Most agent frameworks are Python/TS-first; easy adoption. |
-| Policy engine | **Cedar** | Purpose-built fine-grained authorization engine; natively integrated for microsecond checks. |
-| API service | **Axum (Rust)** | High-performance, async, memory-safe API router. |
-| Frontend | **Next.js + TypeScript + Tailwind** | Fast SaaS dashboard development. |
-| Database | **SQLite** (MVP) / **PostgreSQL** | In-process DB for MVP to eliminate socket lag; Postgres for SaaS scaling. |
-| Event/audit store | **SQLite** / **ClickHouse** | Async in-process SQLite writes for MVP; ClickHouse later for high volume. |
-| Queue | **Redis Streams** or **NATS** | Lightweight event flow for approvals, scans, async jobs. |
-| Auth | **Auth0 / Clerk / WorkOS** | Enterprise SSO later; WorkOS is strong for B2B SaaS. |
-| Secrets | **HashiCorp Vault** or cloud KMS | Secure storage for tokens and integrations. |
-| Deployment | **Docker + Kubernetes** | Enterprise-friendly and cloud portable. |
-| Observability | **OpenTelemetry + Grafana/Prometheus** | Make security events observable and exportable. |
-| LLM layer | **OpenAI / Azure OpenAI / Anthropic / local models** | Use model-agnostic adapters. |
-| Vector/RAG integrations | **pgvector, Pinecone, Weaviate, Qdrant** | Cover common RAG deployments. |
-
-The gateway is security-critical because it mediates tool execution, MCP calls, approvals, and audit logging. Rust is the recommended choice to guarantee compile-time memory safety, eliminate garbage collection latency spikes, and deliver sub-millisecond policy decisions natively.
-
-### 6.3 Policy Format Example
-
-```yaml
-id: github-prod-merge-control
-scope:
-  agent: coding-agent-prod
-  tool: github.merge_pull_request
-conditions:
-  repo_sensitivity: production
-  branch: main
-action: require_approval
-approval:
-  approvers:
-    - platform-lead
-    - security-oncall
-  timeout_minutes: 30
-audit:
-  retain_days: 365
-```
-
-### 6.4 API Decision Example
-
+### 6.1 Decision example
 ```json
 {
   "decision": "deny",
-  "reason": "Untrusted webpage content attempted to trigger external email with sensitive data",
-  "risk_score": 91,
-  "matched_policy": "block-untrusted-to-external-exfiltration"
+  "reason": "Mutating action triggered by untrusted_external content; deterministic provenance gate",
+  "source_trust": "untrusted_external",
+  "matched_policy": "forbid-mutate-from-untrusted",
+  "action_hash": "sha256:..."
 }
 ```
 
 ---
 
-## 7. MVP Scope
+## 7. MVP scope (re-anchored)
 
-### 7.1 MVP Goal
+**Goal:** protect one mutating workflow end-to-end *with provable integrity* — a coding/support agent on GitHub + Slack + one MCP server.
 
-Build a developer-first product that can protect one real agent workflow end-to-end:
+**MVP features:**
+1. Cedar policy engine with `action_hash` + `source_trust` context. ✅ (built)
+2. Approval Integrity Engine: freeze + SHA-256 + bind + re-eval; SDK fail-closed. ✅ (built)
+3. Trust-Provenance Gate: 6 levels as policy input. ✅ (built)
+4. Verifiable action-receipt format + audit pipeline.
+5. Slack approval with signature verification + approver role lookup. *(gap)*
+6. MCP manifest pinning/drift as provenance signal. ✅ (governance built; runtime proxy pending)
+7. One layer-on adapter (sit in front of an existing gateway).
 
-> **A coding/support agent connected to GitHub, Slack, and one MCP server.**
-
-### 7.2 MVP Features
-
-1. Agent registry.
-2. SDK/proxy for tool calls.
-3. YAML/Cedar policy engine.
-4. GitHub integration.
-5. Slack approval workflow.
-6. MCP server proxy.
-7. Audit log dashboard.
-8. Basic prompt-injection/untrusted-content tagging.
-9. Risk scoring for high-impact tool calls.
-
-### 7.3 MVP Non-Goals
-
-Do not build all enterprise integrations initially. Avoid becoming a full SIEM, full CASB, full DSPM, full CNAPP, or generic LLM red-teaming platform. Focus on **runtime control of agent tool calls**.
+**Non-goals:** SIEM, DLP, network egress firewall, model scanning, red-team platform, identity lifecycle.
 
 ---
 
-## 8. Paper Reading Roadmap
+## 8. Competitive differentiation (honest)
 
-### Phase 1 — Understand the Landscape
+Against the June-2026 field (full matrix in reassessment doc): the baseline loop is matched everywhere, including free OSS. AegisAgent differentiates **only** on:
+1. **Frozen-action approval binding + fail-closed SDK** (TOCTOU-resistant) — not found in the surveyed field.
+2. **Deterministic trust-provenance gating** — vs probabilistic text scoring.
+3. **Open verifiable action-receipt format** — interoperable evidence standard.
+4. **Vendor-neutral, self-hostable, layerable.**
 
-1. **Agentic AI Security: Threats, Defenses, Evaluation, and Open Challenges** — broad taxonomy and secure-by-design framing. citeturn3search80
-2. **Awesome Agentic Security Papers** — continuously updated paper list. citeturn3search81
-3. **OWASP AI Agent Security Cheat Sheet** — practical customer-facing language and controls. citeturn3search111
-
-### Phase 2 — Prompt Injection and Tool Hijacking
-
-4. **AgentDojo** — benchmark for prompt injection attacks and defenses in tool-using agents. citeturn3search124turn3search125
-5. **InjecAgent** — indirect prompt injection benchmark for tool-integrated agents. citeturn3search105turn3search106
-6. **Agent Security Bench** — broad agent attack/defense benchmark. citeturn3search148turn3search137
-
-### Phase 3 — Access Control and Runtime Enforcement
-
-7. **SEAgent / Mandatory Access Control Framework** — ABAC/MAC policy model for privilege escalation. citeturn3search117turn3search121
-8. **LlamaFirewall** — runtime guardrails and final-layer defense for secure AI agents. citeturn3search142
-9. **ToolSandbox** — stateful tool-use benchmark for complex multi-step evaluation. citeturn3search136
-
-### Phase 4 — MCP Security
-
-10. **Model Context Protocol: Landscape, Security Threats, and Future Research Directions** — must-read for MCP gateway design. citeturn3search93turn3search95
-
-### Phase 5 — Memory/RAG Poisoning
-
-11. **AgentPoison** — memory/RAG poisoning for LLM agents. citeturn3search99turn3search100
-12. **PoisonedRAG** — knowledge database corruption attacks against RAG. citeturn3search86turn3search87
-13. **BadAgent** — backdoored LLM agents from poisoned fine-tuning data. citeturn3search130turn3search131
+This is a *feature-grade* edge defended by being first, correct, open, and neutral — not a category moat. (See reassessment §7 risk assessment.)
 
 ---
 
-## 9. Competitive Differentiation
+## 9. 90-day execution plan
 
-Many AI security products focus on prompt filtering, output filtering, data loss prevention, or red teaming. AgentGuard should differentiate through:
-
-1. **Execution-path enforcement** — sits between agents and tools.
-2. **MCP-native security** — gateway for MCP discovery, authorization, and audit.
-3. **ABAC policy model** — agent, user, tool, action, resource, sensitivity, trust level.
-4. **Human approval workflow** — practical control for high-impact actions.
-5. **Tamper-evident audit trail** — compliance and incident response evidence.
-6. **Memory/RAG trust controls** — provenance, poisoning resistance, retrieval-time checks.
-
-The research supports this differentiation because attacks appear across prompt handling, tool usage, memory retrieval, and MCP/tool lifecycle boundaries; current defenses remain limited in benchmark results. citeturn3search148turn3search93turn3search99
+- **Days 1–15 — validate the integrity gap.** Show 15–20 teams an approve-then-swap / confused-deputy bypass of a stock gateway; confirm they'd pay to close it. Publish: *"Your AI agent approval gate is lying to you: TOCTOU on human-in-the-loop."*
+- **Days 16–45 — harden primitives.** Canonical serialization + `action_hash` binding; SDK fail-closed; 6-level provenance gate; receipt format v0; one layer-on adapter.
+- **Days 46–70 — benchmark + demo.** AgentDojo/InjecAgent for the provenance gate; build the GitHub-issue → provenance-deny → approve-then-swap-blocked → verifiable-receipt demo.
+- **Days 71–90 — design partners.** 3–5 teams under SOC 2 / Art.14 pressure; publish the open receipt spec for community feedback.
 
 ---
 
-## 10. 90-Day Execution Plan
+## 10. Pricing hypothesis (reframed by free OSS)
 
-### Days 1–15: Validation
-
-- Interview 20 AI startup CTOs / platform engineers.
-- Ask what agents they run, which tools they connect, and how they approve/audit actions.
-- Validate the MCP-specific wedge.
-- Publish one technical blog: **“How indirect prompt injection turns AI agents into confused deputies.”**
-
-### Days 16–45: Build MVP
-
-Build:
-
-- Agent registry.
-- Tool-call proxy.
-- GitHub and Slack integration.
-- Cedar/YAML policy engine.
-- MCP proxy for one or two MCP servers.
-- Audit log table and dashboard.
-
-### Days 46–70: Benchmark and Demo
-
-- Run AgentDojo and InjecAgent-inspired test cases.
-- Create a demo where a malicious GitHub issue tries to make a coding agent leak secrets or merge unsafe code.
-- Show AgentGuard blocking or requiring approval.
-
-### Days 71–90: Private Beta
-
-- Onboard 3–5 companies.
-- Charge $299/month for early design partners.
-- Convert the best use cases into case studies.
-
----
-
-## 11. Pricing Hypothesis
-
-| Plan | Price | Target |
+| Plan | Price | Value |
 |---|---:|---|
-| Open Source Core | Free | Developers and adoption |
-| Startup | $299/month | Small teams with 1–5 agents |
-| Growth | $999/month | SaaS teams with multiple agents/tools |
-| Enterprise | $3K–$10K/month | Regulated teams needing SSO, retention, SIEM export, approvals |
+| OSS Core | Free | Self-hosted gateway, frozen-action approvals, provenance gate, local receipts |
+| Startup | $299–$999/mo | Hosted approvals, SSO, SIEM/OTel export, receipt retention |
+| Enterprise | $3K–$10K+/mo | Self-hosted/air-gapped support, Art.14/SOC 2 evidence reporting, retention, SLAs |
 
-Target first milestone: **$25K–$40K MRR**. This is achievable with 25–40 Growth customers or a mix of Growth and Enterprise customers.
+First milestone: $25K–$40K MRR via design partners under compliance pressure.
 
 ---
 
-## 12. Final Recommendation
+## 11. Final recommendation
 
-Build **AgentGuard as an MCP-first runtime security gateway for AI agents**.
-
-The product should start with four things:
-
-1. **Agent inventory**
-2. **Runtime tool/MCP authorization**
-3. **Human approval for risky actions**
-4. **Audit logs**
-
-Then expand into prompt-injection-aware untrusted-data controls and memory/RAG protection. This roadmap is strongly backed by research on AgentDojo, InjecAgent, ASB, SEAgent, MCP security, AgentPoison, PoisonedRAG, BadAgent, LlamaFirewall, and OWASP AI Agent Security guidance. citeturn3search124turn3search105turn3search148turn3search117turn3search93turn3search99turn3search86turn3search130turn3search142turn3search111
+Build AegisAgent as the **open, neutral integrity layer** — provable approvals + provenance gating + verifiable receipts — that *layers onto* the now-commodity gateway market rather than competing to be the gateway. Lead every conversation with the approve-then-swap demo and the Article 14 evidence story.
