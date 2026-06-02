@@ -122,6 +122,13 @@ fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
     sha256_hex(canonical_action_string(tool_call).as_bytes())
 }
 
+/// True if the approval window has passed. Defense-in-depth alongside the SDK's
+/// client-side expiry check: the gateway must not hand out, or grant, an approval
+/// whose `expires_at` is in the past.
+fn approval_is_expired(app: &ApprovalRecord) -> bool {
+    app.expires_at.map(|e| e < Utc::now()).unwrap_or(false)
+}
+
 async fn write_decision_and_audit(
     pool: &sqlx::SqlitePool,
     tenant_id: &str,
@@ -1032,11 +1039,18 @@ pub async fn get_approval(
                 .edited_skill_call
                 .as_ref()
                 .and_then(|s| serde_json::from_str(s).ok());
+            // A still-pending approval past its window is dead: report EXPIRED so
+            // any client (even a forked SDK) fails closed instead of waiting.
+            let effective_status = if app.status == "created" && approval_is_expired(&app) {
+                "EXPIRED".to_string()
+            } else {
+                app.status.clone()
+            };
             (
                 StatusCode::OK,
                 Json(json!({
                     "approval_id": app.id,
-                    "status": app.status,
+                    "status": effective_status,
                     "approver_group": app.approver_group,
                     "approver_user_id": app.approver_user_id,
                     "reason": app.reason,
@@ -1075,6 +1089,53 @@ pub async fn approve_approval(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
+
+    // Load the approval first so we can fail closed on stale or already-decided
+    // requests instead of blindly transitioning to APPROVED.
+    let approval =
+        match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
+            Ok(Some(app)) => app,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "Approval request not found"})),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Database lookup error: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    // Only a pending approval may be approved (no re-deciding an APPROVED/REJECTED/EDITED one).
+    if approval.status != "created" {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Approval already decided",
+                "status": approval.status,
+                "approval_id": approval_id,
+            })),
+        )
+            .into_response();
+    }
+
+    // Fail closed if the approval window has already passed.
+    if approval_is_expired(&approval) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Approval has expired",
+                "approval_id": approval_id,
+            })),
+        )
+            .into_response();
+    }
 
     // Update approval status to APPROVED
     if let Err(e) = db::update_approval_status(
@@ -1449,6 +1510,89 @@ mod tests {
                 "vector {name}: action_hash mismatch"
             );
         }
+    }
+
+    fn make_test_approval(
+        expires_at: Option<chrono::DateTime<Utc>>,
+        status: &str,
+    ) -> ApprovalRecord {
+        ApprovalRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: "t".to_string(),
+            decision_id: Uuid::new_v4().to_string(),
+            status: status.to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: "{}".to_string(),
+            original_call_hash: "x".to_string(),
+            edited_skill_call: None,
+            expires_at,
+            decided_at: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn approval_is_expired_detects_past_window() {
+        assert!(approval_is_expired(&make_test_approval(
+            Some(Utc::now() - Duration::minutes(1)),
+            "created"
+        )));
+        assert!(!approval_is_expired(&make_test_approval(
+            Some(Utc::now() + Duration::minutes(30)),
+            "created"
+        )));
+        // No expiry set -> never expired.
+        assert!(!approval_is_expired(&make_test_approval(None, "created")));
+    }
+
+    #[tokio::test]
+    async fn expired_approval_is_reported_and_cannot_be_approved() {
+        let (state, tenant_id, agent_token) = setup_state("approve_expired").await;
+
+        // Create a real require_approval via authorize (merge to main).
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/7".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        // Force the approval past its window.
+        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
+            .bind(Utc::now() - Duration::minutes(5))
+            .bind(tenant_id.as_str())
+            .bind(approval_id.to_string())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        // get_approval reports EXPIRED for the still-pending, past-window approval.
+        let get_resp = get_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "EXPIRED");
+
+        // approve_approval refuses to grant an expired approval.
+        let approve_resp = approve_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve_resp.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
