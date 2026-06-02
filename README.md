@@ -87,6 +87,16 @@ curl -H "Authorization: Bearer tenant_123" \
   http://127.0.0.1:8080/v1/audit/events
 ```
 
+## No-setup integrity demo
+
+To see the three integrity guarantees without running the gateway (pure Python, no network):
+
+```bash
+python3 examples/integrity_demo.py
+```
+
+It demonstrates: (1) a deterministic **provenance gate** denying an untrusted-triggered mutation, (2) **approve-then-swap** failing closed on an `action_hash` mismatch, and (3) **verifiable receipts** detecting tampering. Auditors can verify receipts independently with `aegis-verify-receipts <receipts.json>`.
+
 ## Default Policy Pack
 
 The default Cedar policy pack lives in both:
