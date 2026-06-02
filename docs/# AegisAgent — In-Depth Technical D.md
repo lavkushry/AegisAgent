@@ -144,7 +144,9 @@ when {
 
 **Receipt fields:** `event_id, tenant_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, risk, decision, matched_policy_ids, approver, action_hash, input_hash, output_hash, prev_receipt_hash, receipt_hash`.
 
-**Tamper evidence.** Receipts form a per-tenant hash chain (`receipt_hash = SHA-256(receipt_body || prev_receipt_hash)`); optional Sigstore-style transparency-log / signing in enterprise mode. The format is **open and documented** (the standards play — see Vision §7 Phase 2). Exportable via OTel/webhook to SIEM.
+**Tamper evidence.** Receipts form a per-tenant hash chain: `receipt_hash = SHA-256(canonicalize(body))` where `body` is every field except `receipt_hash` and *includes* `prev_receipt_hash` (so field edits and re-linking are both detectable). Optional Sigstore-style transparency-log / signing in enterprise mode. The format is **open and documented** ([`docs/action-receipt-spec.md`](action-receipt-spec.md) — the standards play, see Vision §7 Phase 2). Exportable via OTel/webhook to SIEM.
+
+> **Implementation status (2026-06-02).** *Done & verified (Python):* open format spec + hash-chain **reference verifier** (`aegisagent/receipts.py`: `seal_receipt`/`seal_chain`/`verify_receipt`/`verify_chain`; 8/8 tests incl. tamper, broken-link, reorder, non-ASCII). Canonicalization centralized in `aegisagent/canon.py`. *Next (Rust gateway):* emit a receipt per decision into an `action_receipts` table + `GET /v1/receipts/:id/verify`, byte-matching the spec.
 
 ```json
 {

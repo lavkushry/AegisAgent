@@ -13,7 +13,7 @@
 
 - **Canonicalization spec v1** (target RFC 8785 JCS) shared across SDK + gateway, with a CI byte-equality gate (the fail-closed guarantee depends on it).
 - **Approval Integrity Engine hardening:** expiry enforced fail-closed at the SDK ✅ and (pending `cargo` verify) at the gateway ✅; **still TODO:** single-use nonce + replay rejection, edit→re-hash→re-evaluate confirmation, tamper-attempt receipts.
-- **Verifiable action-receipt format v0** (per-tenant hash chain) + `/v1/receipts/:id/verify`; publish as an **open spec**.
+- **Verifiable action-receipt format v0** (per-tenant hash chain): open spec ✅ ([`docs/action-receipt-spec.md`](docs/action-receipt-spec.md)) + Python reference verifier ✅ (`aegisagent/receipts.py`, 8/8 tests). **Next:** gateway emission into `action_receipts` + `GET /v1/receipts/:id/verify`.
 - **Trust-Provenance Gate:** deterministic 6-level model finalized; classifier integration that can only *tighten*, never loosen.
 - Slack approval callback signature verification + approver role lookup.
 - The "approve-then-swap blocked" demo as the flagship.
