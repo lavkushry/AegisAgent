@@ -6,6 +6,18 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: ["dependencies", "rust"]
+    groups:
+      # Batch safe minor/patch crate updates into a single PR.
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Major (breaking) crate bumps are handled manually via a deliberate
+      # upgrade PR, not auto-proposed. sqlx, axum, cedar-policy, and sha2 all
+      # break the build across a major, and cedar-policy/sha2 changes can affect
+      # the canonicalization/receipt hashing the fail-closed guarantee depends
+      # on. Remove this entry (or scope it to a crate) when ready to upgrade.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: pip
     directory: /sdk-python
@@ -13,12 +25,18 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: ["dependencies", "python"]
+    groups:
+      pip-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     labels: ["dependencies", "ci"]
+    groups:
+      github-actions:
+        patterns: ["*"]
 
   - package-ecosystem: docker
     directory: /gateway
