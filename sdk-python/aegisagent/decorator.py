@@ -27,7 +27,16 @@ def get_context_trust_level() -> str:
     return getattr(_context_store, "trust_level", "unknown")
 
 
-def _hash_tool_call(
+# Canonicalization scheme version. MUST stay byte-identical across the Python/TS/Go
+# SDKs and the Rust gateway, or the fail-closed approval guarantee (approved
+# action_hash == executed action_hash) breaks. Shared test vectors live in
+# tests/canonical_action_vectors.json. Scheme "aegis-jcs-1": keys sorted by Unicode
+# code point, compact separators, raw UTF-8 (ensure_ascii=False), non-finite floats
+# rejected (allow_nan=False), null for absent resource.
+CANON_VERSION = "aegis-jcs-1"
+
+
+def _canonical_action(
     tool: str,
     action: str,
     resource: Optional[str],
@@ -41,7 +50,26 @@ def _hash_tool_call(
         "mutates_state": mutates_state,
         "parameters": parameters,
     }
-    canonical = json.dumps(tool_call, sort_keys=True, separators=(",", ":"))
+    # ensure_ascii=False -> emit raw UTF-8 to match the gateway's serde_json output.
+    # allow_nan=False -> reject NaN/Infinity (invalid JSON; serde rejects them too),
+    # failing closed instead of producing a non-portable token.
+    return json.dumps(
+        tool_call,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def _hash_tool_call(
+    tool: str,
+    action: str,
+    resource: Optional[str],
+    mutates_state: bool,
+    parameters: dict,
+) -> str:
+    canonical = _canonical_action(tool, action, resource, mutates_state, parameters)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

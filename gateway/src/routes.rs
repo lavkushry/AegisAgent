@@ -104,11 +104,22 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{:02x}", byte)).collect()
 }
 
-fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
+/// Canonicalization scheme version. MUST stay byte-identical with the SDKs
+/// (see `tests/canonical_action_vectors.json` and `aegisagent.decorator.CANON_VERSION`).
+/// Scheme "aegis-jcs-1": keys sorted by Unicode code point, compact separators,
+/// raw UTF-8 (serde_json does not escape non-ASCII), null for absent resource.
+pub const CANON_VERSION: &str = "aegis-jcs-1";
+
+/// Deterministic canonical string for a tool call. The SDK hashes the exact same
+/// string; byte-equality here is the foundation of the fail-closed approval guarantee.
+fn canonical_action_string(tool_call: &AuthorizeToolCall) -> String {
     let value = serde_json::to_value(tool_call).unwrap_or(Value::Null);
     let canonical = canonicalize_json(value);
-    let serialized = serde_json::to_string(&canonical).unwrap_or_default();
-    sha256_hex(serialized.as_bytes())
+    serde_json::to_string(&canonical).unwrap_or_default()
+}
+
+fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
+    sha256_hex(canonical_action_string(tool_call).as_bytes())
 }
 
 async fn write_decision_and_audit(
@@ -1397,6 +1408,47 @@ mod tests {
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    #[test]
+    fn canonical_action_matches_shared_corpus() {
+        // Locks the gateway side of the cross-language canonicalization contract to
+        // the same corpus the Python SDK test pins. If both sides match the corpus
+        // string, their SHA-256 action hashes are equal by construction, which is
+        // what makes the fail-closed approval guarantee sound across languages.
+        let corpus_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/canonical_action_vectors.json"
+        );
+        let raw = std::fs::read_to_string(corpus_path)
+            .expect("shared canonical corpus must exist at tests/canonical_action_vectors.json");
+        let corpus: Value = serde_json::from_str(&raw).expect("corpus must be valid JSON");
+
+        assert_eq!(
+            corpus["canon_version"].as_str(),
+            Some(CANON_VERSION),
+            "corpus canon_version must match gateway CANON_VERSION"
+        );
+
+        let vectors = corpus["vectors"].as_array().expect("vectors array");
+        for vector in vectors {
+            let name = vector["name"].as_str().unwrap_or("<unnamed>");
+            let tool_call: AuthorizeToolCall =
+                serde_json::from_value(vector["tool_call"].clone())
+                    .unwrap_or_else(|e| panic!("vector {name}: tool_call must deserialize: {e}"));
+
+            let produced = canonical_action_string(&tool_call);
+            let expected = vector["canonical"].as_str().unwrap();
+            assert_eq!(produced, expected, "vector {name}: canonical string mismatch");
+
+            // Hash must equal SHA-256 of the corpus canonical string.
+            let expected_hash = sha256_hex(expected.as_bytes());
+            assert_eq!(
+                hash_tool_call(&tool_call),
+                expected_hash,
+                "vector {name}: action_hash mismatch"
+            );
+        }
     }
 
     #[tokio::test]

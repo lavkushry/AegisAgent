@@ -87,7 +87,9 @@ Authenticates SDK requests; resolves tenant/agent/user/session; normalizes the t
 
 **Goal:** an approval is valid for exactly one action — the one that was shown to the human — and nothing else.
 
-**Canonical action.** The action is `{tool, action, resource, parameters}` serialized with a deterministic scheme (target: RFC 8785 JCS so the Python/TS/Go SDKs and the Rust gateway all produce identical bytes). `action_hash = SHA-256(canonical_action)`.
+**Canonical action.** The action is `{tool, action, resource, mutates_state, parameters}` serialized with a deterministic scheme so the Python/TS/Go SDKs and the Rust gateway all produce identical bytes. `action_hash = SHA-256(canonical_action)`.
+
+> **Implemented (scheme `aegis-jcs-1`):** keys sorted by Unicode code point, compact separators, **raw UTF-8 (no `\uXXXX` escaping)**, `null` for absent resource. Locked by a shared corpus at [`tests/canonical_action_vectors.json`](../tests/canonical_action_vectors.json) that both a Python test (`sdk-python/tests/test_canonical_action.py`) and a Rust test (`gateway/src/routes.rs::canonical_action_matches_shared_corpus`) assert against — byte-equality across languages is guaranteed transitively. This closed a real divergence: the SDK previously used Python's default `ensure_ascii=True`, escaping non-ASCII and mismatching the gateway's raw UTF-8 → fail-closed on any legitimate non-ASCII action. Full RFC 8785 number-formatting compliance (float edge cases) is a follow-up; current vectors cover strings/unicode/int/bool/null/nested.
 
 **Binding.** When policy returns `require_approval`, the gateway persists an approval row bound to `action_hash`, the canonical action, approver group, and an expiry. The Slack/dashboard card renders the canonical action so the human approves *that*.
 
