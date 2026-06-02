@@ -1,5 +1,5 @@
-use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request};
 use crate::models::AuthorizeRequest;
+use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -25,8 +25,8 @@ impl PolicyEngine {
             .await
             .map_err(|e| PolicyError::File(e.to_string()))?;
 
-        let policy_set = PolicySet::from_str(&policy_str)
-            .map_err(|e| PolicyError::Parse(e.to_string()))?;
+        let policy_set =
+            PolicySet::from_str(&policy_str).map_err(|e| PolicyError::Parse(e.to_string()))?;
 
         Ok(Self { policy_set })
     }
@@ -67,7 +67,8 @@ impl PolicyEngine {
             Some(resource_uid),
             context,
             None,
-        ).map_err(|e| PolicyError::Context(e.to_string()))?;
+        )
+        .map_err(|e| PolicyError::Context(e.to_string()))?;
 
         // We use empty entities for now as we evaluate policies based on request context attributes
         let entities = Entities::empty();
@@ -249,7 +250,9 @@ mod tests {
 
         let result = engine.authorize(&request).unwrap();
         assert_eq!(result.decision, "require_approval");
-        assert_eq!(result.approver_group, Some("security-reviewers".to_string()));
+        assert_eq!(
+            result.approver_group,
+            Some("security-reviewers".to_string())
+        );
     }
 }
-

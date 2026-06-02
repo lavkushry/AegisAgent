@@ -1691,13 +1691,15 @@ mod tests {
         let vectors = corpus["vectors"].as_array().expect("vectors array");
         for vector in vectors {
             let name = vector["name"].as_str().unwrap_or("<unnamed>");
-            let tool_call: AuthorizeToolCall =
-                serde_json::from_value(vector["tool_call"].clone())
-                    .unwrap_or_else(|e| panic!("vector {name}: tool_call must deserialize: {e}"));
+            let tool_call: AuthorizeToolCall = serde_json::from_value(vector["tool_call"].clone())
+                .unwrap_or_else(|e| panic!("vector {name}: tool_call must deserialize: {e}"));
 
             let produced = canonical_action_string(&tool_call);
             let expected = vector["canonical"].as_str().unwrap();
-            assert_eq!(produced, expected, "vector {name}: canonical string mismatch");
+            assert_eq!(
+                produced, expected,
+                "vector {name}: canonical string mismatch"
+            );
 
             // Hash must equal SHA-256 of the corpus canonical string.
             let expected_hash = sha256_hex(expected.as_bytes());
@@ -1751,8 +1753,10 @@ mod tests {
         // every field except receipt_hash (incl. prev_receipt_hash). This is the
         // cross-language guarantee that lets the Python verifier / aegis-verify-receipts
         // validate gateway-emitted receipts. See docs/action-receipt-spec.md.
-        let corpus_path =
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/receipt_chain_vectors.json");
+        let corpus_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/receipt_chain_vectors.json"
+        );
         let raw = std::fs::read_to_string(corpus_path)
             .expect("shared receipt corpus must exist at tests/receipt_chain_vectors.json");
         let corpus: Value = serde_json::from_str(&raw).expect("corpus must be valid JSON");
