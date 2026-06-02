@@ -91,5 +91,8 @@ Any mismatch ⇒ **invalid** (fail closed). Reference: `verify_chain()` / `verif
 ## 6. Implementation status (2026-06-02)
 
 - **Done & verified (Python):** format + hash chain + reference verifier (`seal_receipt`, `seal_chain`, `verify_receipt`, `verify_chain`); CLI `aegis-verify-receipts` / `python -m aegisagent.verify_receipts`; shared corpus `tests/receipt_chain_vectors.json` (pins exact `receipt_hash` values). 25/25 SDK tests incl. tamper/broken-link/reorder/non-ASCII/CLI. Canonicalization centralized in `aegisagent/canon.py`.
-- **Done, pending `cargo` verification (Rust gateway):** cross-language **parity lock** — `gateway/src/routes.rs::receipt_chain_matches_shared_corpus` reproduces every `receipt_hash` in `tests/receipt_chain_vectors.json` from the gateway's canonicalization (`canonical_value_string` = `aegis-jcs-1`). The Rust test logic was confirmed to reproduce the corpus in Python; serde↔Python canonicalization equivalence is already locked by the action-hash corpus.
-- **Next (Rust gateway):** emit a receipt for every decision into an `action_receipts` table (hash-chained per tenant) and expose `GET /v1/receipts/:id/verify`. Enterprise: KMS-backed signing / transparency-log anchoring.
+- **Done, pending `cargo` verification (Rust gateway):**
+  - cross-language **parity lock** — `routes.rs::receipt_chain_matches_shared_corpus` reproduces every `receipt_hash` in `tests/receipt_chain_vectors.json` (`canonical_value_string` = `aegis-jcs-1`).
+  - **gateway emission** — every `/v1/authorize` decision writes a hash-chained receipt into the `action_receipts` table (`emit_action_receipt`, chained per tenant via `rowid` head); body fields per `routes.rs::receipt_body_value` (excludes `receipt_hash` + volatile `created_at`).
+  - **`GET /v1/receipts/:id/verify`** — recomputes the hash and returns `{verified, receipt_hash, recomputed_hash, prev_receipt_hash}`. Test: `authorize_emits_verifiable_receipt`.
+- **Next (Rust):** single-use `nonce` + consume step for full replay defense (T-A3). Enterprise: KMS-backed signing / transparency-log anchoring; chain-head selection should move into a transaction to be race-safe under concurrency.

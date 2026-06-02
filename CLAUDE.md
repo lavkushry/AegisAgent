@@ -22,8 +22,9 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
 - Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409): `expired_approval_is_reported_and_cannot_be_approved`.
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
+- **Receipt emission**: `action_receipts` table + `emit_action_receipt` on every decision + `GET /v1/receipts/:id/verify` (`authorize_emits_verifiable_receipt`).
 
-**Next (Rust):** emit `action_receipts` (hash-chained per tenant) on every decision + `GET /v1/receipts/:id/verify`; then single-use `nonce` (replay T-A3). **Build the Rust + run `cargo test` before stacking more Rust.**
+**Next (Rust):** single-use `nonce` + consume step (replay T-A3); make chain-head selection race-safe (transaction). **Build the Rust + run `cargo test` before stacking more Rust.**
 
 Baseline still present: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, Python `@protect_tool`.
 
@@ -49,7 +50,7 @@ docker compose up --build && bash scripts/seed-demo.sh && python3 examples/githu
 
 ## API endpoints (contract)
 
-`GET /health` · `POST /v1/agents/register` · `POST /v1/tools` · `POST /v1/mcp/servers` · `GET|POST /v1/mcp/servers/:server_key/tools` · `POST .../tools/:tool_key/approve|disable` · `POST /v1/authorize` (returns `decision`, `action_hash`, approval info) · `GET /v1/approvals/:id` (returns `status`, bound `action_hash`; `EXPIRED` for stale pending) · `POST /v1/approvals/:id/approve|reject|edit` · `GET /v1/runs/:id/timeline` · `GET /v1/audit/events` · **planned:** `GET /v1/receipts/:id/verify`.
+`GET /health` · `POST /v1/agents/register` · `POST /v1/tools` · `POST /v1/mcp/servers` · `GET|POST /v1/mcp/servers/:server_key/tools` · `POST .../tools/:tool_key/approve|disable` · `POST /v1/authorize` (returns `decision`, `action_hash`, approval info) · `GET /v1/approvals/:id` (returns `status`, bound `action_hash`; `EXPIRED` for stale pending) · `POST /v1/approvals/:id/approve|reject|edit` · `GET /v1/runs/:id/timeline` · `GET /v1/audit/events` · `GET /v1/receipts/:id/verify` (recomputes receipt hash; returns `verified`).
 
 ## Critical invariants (do not weaken)
 

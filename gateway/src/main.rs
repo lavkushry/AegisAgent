@@ -70,6 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Audits
         .route("/v1/runs/:id/timeline", get(routes::get_timeline))
         .route("/v1/audit/events", get(routes::get_audit_events))
+        // Verifiable action receipts
+        .route("/v1/receipts/:id/verify", get(routes::verify_receipt))
         // Fallback or health check
         .route("/health", get(|| async { "healthy" }))
         .with_state(state);
