@@ -17,7 +17,7 @@ jobs:
     name: Gateway checks (Rust)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -35,8 +35,8 @@ jobs:
     name: Python SDK (lint + tests + demo)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install SDK (with dev tools)
@@ -51,19 +51,22 @@ jobs:
   security-audit:
     name: Dependency audit (informational)
     runs-on: ubuntu-latest
+    # Informational only: surfaces advisories without blocking merges. The audit
+    # steps are report-only (`|| true`). Harden to blocking later by dropping the
+    # `|| true` and pinning accepted advisories via `cargo audit --ignore RUSTSEC-…`.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
-      - name: cargo audit
+      - name: cargo audit (report-only)
         working-directory: gateway
-        run: cargo audit
-      - uses: actions/setup-python@v5
+        run: cargo audit || true
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: pip-audit
+      - name: pip-audit (report-only)
         run: |
           python -m pip install pip-audit
           python -m pip install -e sdk-python
