@@ -1,32 +1,61 @@
 # Security Policy
 
-AegisAgent is an agent action firewall and should be treated as security-critical infrastructure.
+AegisAgent is an integrity and enforcement layer for AI agent actions and should
+be treated as security-critical infrastructure. We take vulnerabilities seriously.
 
 ## Supported Versions
 
-The project is pre-1.0. Security fixes target the `main` branch until versioned releases begin.
+The project is pre-1.0. Security fixes target the `main` branch until versioned
+releases begin. Once releases begin, the latest minor release will receive
+security fixes.
 
 ## Reporting a Vulnerability
 
-Please report suspected vulnerabilities privately by email:
+**Please report vulnerabilities privately — do not open a public issue for an
+exploitable flaw.**
 
-- Security contact: `security@example.com`
+Use GitHub's private vulnerability reporting:
 
-Do not open public GitHub issues for exploitable vulnerabilities. Include:
+1. Go to the repository's **Security** tab.
+2. Click **Report a vulnerability** (Security Advisories).
+3. Provide the details below.
+
+This routes the report privately to the maintainers and supports coordinated
+disclosure and CVE issuance.
+
+Please include:
 
 - Affected component and version/commit.
 - Reproduction steps or proof of concept.
 - Impact assessment and any known mitigations.
 
-We aim to acknowledge reports within 3 business days and provide remediation status updates as fixes progress.
+We aim to acknowledge reports within **3 business days** and to provide
+remediation status updates as fixes progress. We support coordinated disclosure
+and will credit reporters who wish to be named.
 
-## Security.txt
+## Scope
 
-When hosted, publish `/.well-known/security.txt` pointing to this policy and the disclosure contact above.
+In scope: the Rust gateway, the Python SDK, the default Cedar policy pack, the
+canonicalization scheme, and the action-receipt format/verifier.
+
+Particularly sensitive areas (a flaw here can break the product's core
+guarantee):
+
+- **Canonicalization (`aegis-jcs-1`)** — any cross-language divergence can break
+  the fail-closed approval guarantee.
+- **Approval integrity** — action-hash binding, expiry, single-use consumption.
+- **Trust-provenance gating** — anything that lets a classifier *loosen* a label.
+- **Multi-tenant isolation** — cross-tenant data access.
+- **Receipt hash chain** — tampering that is not detected by `/verify`.
 
 ## Secure Development Expectations
 
 - Unknown agents, tools, MCP servers, and MCP tools fail closed.
-- Approval decisions must bind to the original action hash.
-- Every database operation must be tenant-scoped with parameterized SQL.
-- Secrets must not be logged in audit events, traces, or demo output.
+- Critical actions are denied by default; high-risk actions require approval.
+- Approval decisions bind to the original `action_hash`; edits re-hash and
+  re-evaluate; approvals expire and are single-use.
+- The canonicalization scheme stays byte-identical across SDK and gateway,
+  locked by shared corpora and a CI byte-equality gate.
+- Every database operation is tenant-scoped with parameterized SQL only.
+- Secrets are never logged in audit events, traces, receipts, or demo output;
+  receipts store hashes, not raw payloads.

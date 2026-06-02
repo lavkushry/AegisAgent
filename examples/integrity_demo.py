@@ -34,6 +34,7 @@ class DemoGateway:
         # that was granted for one specific, human-reviewed action.
         self._pinned = pinned_action_hash
         self._issued = {}
+        self._consumed = set()
 
     def authorize(
         self,
@@ -82,6 +83,17 @@ class DemoGateway:
             "expires_at": FUTURE,
         }
 
+    def consume_approval(self, approval_id):
+        # Single-use: an approval may be consumed exactly once. A replayed
+        # attempt returns nothing, so the SDK fails closed (no double-execution).
+        if approval_id in self._consumed:
+            return None
+        bound_hash = self._issued.get(approval_id)
+        if not bound_hash:
+            return None
+        self._consumed.add(approval_id)
+        return {"status": "consumed", "action_hash": bound_hash}
+
 
 def hr(title):
     print("\n" + "=" * 68 + f"\n {title}\n" + "=" * 68)
@@ -91,8 +103,9 @@ def scenario_provenance():
     hr("1. Trust the source, not the text")
     gw = DemoGateway()
 
-    @protect_tool(gw, "github", "merge_pull_request",
-                  default_source_trust="untrusted_external")
+    @protect_tool(
+        gw, "github", "merge_pull_request", default_source_trust="untrusted_external"
+    )
     def merge(pr_number, base_branch):
         return f"merged #{pr_number}"
 
@@ -109,8 +122,12 @@ def scenario_legit_approval():
     hr("2a. A real approval executes the EXACT approved action")
     gw = DemoGateway()
 
-    @protect_tool(gw, "github", "merge_pull_request",
-                  default_source_trust="trusted_internal_signed")
+    @protect_tool(
+        gw,
+        "github",
+        "merge_pull_request",
+        default_source_trust="trusted_internal_signed",
+    )
     def merge(pr_number, base_branch):
         return f"merged #{pr_number}"
 
@@ -125,15 +142,21 @@ def scenario_approve_then_swap():
     # A human reviewed and approved a benign comment. The approval is bound to
     # THAT action's hash.
     benign_hash = _hash_tool_call(
-        tool="github", action="comment_on_pr",
-        resource="payments-service#482", mutates_state=True,
+        tool="github",
+        action="comment_on_pr",
+        resource="payments-service#482",
+        mutates_state=True,
         parameters={"body": "LGTM, looks safe"},
     )
     gw = DemoGateway(pinned_action_hash=benign_hash)
 
     # The hijacked agent tries to execute a *merge* under that benign approval.
-    @protect_tool(gw, "github", "merge_pull_request",
-                  default_source_trust="trusted_internal_signed")
+    @protect_tool(
+        gw,
+        "github",
+        "merge_pull_request",
+        default_source_trust="trusted_internal_signed",
+    )
     def merge(pr_number, base_branch):
         return f"merged #{pr_number}"
 
@@ -148,15 +171,29 @@ def scenario_approve_then_swap():
 
 def scenario_receipts():
     hr("3. Prove it: verifiable, tamper-evident receipts")
-    chain = seal_chain([
-        {"event_id": "r1", "ts": "2026-06-02T12:00:00Z", "tool": "github",
-         "action": "merge_pull_request", "resource": "payments-service#482",
-         "source_trust": "untrusted_external", "decision": "deny"},
-        {"event_id": "r2", "ts": "2026-06-02T12:01:00Z", "tool": "github",
-         "action": "merge_pull_request", "resource": "payments-service#482",
-         "source_trust": "trusted_internal_signed", "decision": "rejected_on_swap",
-         "approver": "platform-lead"},
-    ])
+    chain = seal_chain(
+        [
+            {
+                "event_id": "r1",
+                "ts": "2026-06-02T12:00:00Z",
+                "tool": "github",
+                "action": "merge_pull_request",
+                "resource": "payments-service#482",
+                "source_trust": "untrusted_external",
+                "decision": "deny",
+            },
+            {
+                "event_id": "r2",
+                "ts": "2026-06-02T12:01:00Z",
+                "tool": "github",
+                "action": "merge_pull_request",
+                "resource": "payments-service#482",
+                "source_trust": "trusted_internal_signed",
+                "decision": "rejected_on_swap",
+                "approver": "platform-lead",
+            },
+        ]
+    )
     print(f"Sealed a {len(chain)}-receipt chain. verify_chain -> {verify_chain(chain)}")
     assert verify_chain(chain)
 

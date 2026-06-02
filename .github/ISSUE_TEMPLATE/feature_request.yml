@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose an enhancement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        AegisAgent deliberately competes only on **integrity + provenance +
+        verifiable evidence**, not on the commodity gateway loop. Proposals that
+        sharpen those differentiators are most likely to be accepted — see
+        `docs/AegisAgent_Gap_Reassessment_2026-06.md` and `ROADMAP.md`.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem does this solve? Who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

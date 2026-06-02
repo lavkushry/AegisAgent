@@ -113,7 +113,9 @@ class TestApprovalExpiry(unittest.TestCase):
     @patch("time.sleep", return_value=None)
     @patch("requests.get")
     @patch("requests.post")
-    def test_approved_but_not_consumable_fails_closed(self, mock_post, mock_get, _sleep):
+    def test_approved_but_not_consumable_fails_closed(
+        self, mock_post, mock_get, _sleep
+    ):
         # Single-use: if the approval is APPROVED with a matching hash but the
         # gateway refuses to consume it (already used / expired -> 409), the SDK
         # must fail closed instead of executing.

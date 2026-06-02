@@ -1,6 +1,8 @@
 # AegisAgent
 
-[![CI configured](https://img.shields.io/badge/CI-configured-blue)](.github/workflows/ci.yml)
+[![CI](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](sdk-python/pyproject.toml)
 
 AegisAgent is the **integrity layer for AI agent actions** — open, self-hostable, and framework-neutral. It sits between an agent runtime and external actions and does two things that the now-commodity gateway market decides but does **not prove**:
 
@@ -13,16 +15,23 @@ Every protected action emits a verifiable, hash-chained **action receipt** suita
 
 > ℹ️ **Positioning context (June 2026):** the generic "intercept → policy → allow/deny → audit → approval" loop is now commodity, including free OSS. AegisAgent deliberately competes only on *integrity + provenance + verifiable evidence*. See [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md) for the full competitor analysis and rationale.
 
-## Current MVP Status
+## Current Status
 
-| Area | Status |
+| Capability | State |
 | --- | --- |
-| Rust gateway | Implemented with Axum, SQLite/SQLx, Cedar policy loading, healthcheck, audit and approval endpoints |
-| Python SDK | Implemented `AegisClient` and `@protect_tool` with **fail-closed** deny/approval handling and **approval action-hash verification** (the core integrity primitive) |
-| Default policy pack | Implemented at `policies.cedar` and `gateway/policies.cedar` |
-| MCP Gateway Lite | Implemented server registration, tool discovery/manifest, approve/disable controls, unknown-tool deny, and MCP audit events |
-| Local demo | Implemented `scripts/seed-demo.sh` and `examples/github-attack-demo.py` |
-| Launch docs | Added quickstart, security policy, contribution guide, roadmap, CI, and dashboard mock |
+| **Canonicalization `aegis-jcs-1`** (byte-identical SDK + gateway) | SDK verified · gateway locked by shared corpus, verified in CI |
+| **Approval integrity** — action-hash binding, expiry, single-use consume | SDK fail-closed verified · gateway enforcement verified in CI |
+| **Trust-provenance gate** (deterministic 6-level, classifiers may only tighten) | Cedar policy pack + demo |
+| **Verifiable action receipts** (per-tenant hash chain) | Format + reference verifier + `aegis-verify-receipts` CLI verified; gateway emission + `GET /v1/receipts/:id/verify` verified in CI |
+| Python SDK (`AegisClient`, `@protect_tool`) | 26/26 unit tests + runnable demos |
+| Rust gateway (Axum, SQLite/SQLx tenant-scoped, Cedar) | `cargo test/fmt/clippy` gated in CI |
+| MCP Gateway Lite | Server registration, manifest discovery, approve/disable, unknown-tool deny, MCP audit events |
+| Docs | Quickstart, security policy, contribution guide, roadmap, dashboard mock, open receipt spec |
+
+> **Verification note.** The Python SDK is fully unit-tested locally. The Rust gateway's tests
+> (`canonical_action_matches_shared_corpus`, `expired_approval_is_reported_and_cannot_be_approved`,
+> `receipt_chain_matches_shared_corpus`, `authorize_emits_verifiable_receipt`, `consume_is_single_use`)
+> run in CI on every push and pull request — CI is the source of truth for gateway green.
 
 ## 5-Step Quickstart
 
@@ -33,7 +42,7 @@ Every protected action emits a verifiable, hash-chained **action receipt** suita
 ### 1. Clone and enter the repository
 
 ```bash
-git clone https://github.com/example/aegisagent.git
+git clone https://github.com/lavkushry/AegisAgent.git
 cd AegisAgent
 ```
 
@@ -127,7 +136,9 @@ Starter behavior:
 | `GET /v1/approvals/:id` | Poll approval status |
 | `POST /v1/approvals/:id/approve` | Approve a paused action |
 | `POST /v1/approvals/:id/reject` | Reject a paused action |
-| `POST /v1/approvals/:id/edit` | Approve with edited parameters |
+| `POST /v1/approvals/:id/edit` | Approve with edited parameters (re-hash + re-evaluate) |
+| `POST /v1/approvals/:id/consume` | Single-use consume before execution (409 if already used/expired) |
+| `GET /v1/receipts/:id/verify` | Recompute a receipt's hash and report `verified` |
 | `GET /v1/audit/events` | View recent audit events |
 | `GET /v1/runs/:id/timeline` | View run-specific audit timeline |
 
@@ -152,12 +163,31 @@ cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 - [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md) — **source of truth**: June-2026 competitor matrix, the real gap, and repositioning.
 - `docs/AegisAgent_PRD.md` — product requirements (integrity primitives as headline features).
 - `docs/AegisAgent_GTM_Document.md` — positioning, ICP, pricing, competitive landscape.
-- `docs/# AegisAgent — In-Depth Technical D.md` — architecture (Approval Integrity Engine, Trust-Provenance Gate, Verifiable Receipts).
-- `docs/AegisAgent_Threat_Model.md` — foregrounds approval manipulation, confused-deputy, and evidence tampering.
-- `docs/# AegisAgent — Deep Agent Workflow.md`, `docs/# AegisAgent — Depth Vision Document.md`, `docs/# AegisAgent — Deep Market Gap Anal.md`, `docs/# AegisAgent — In-Depth Problem Def.md`, `docs/AegisAgent_Operational_Design.md`, `docs/AgentGuard_Product_Research.md`.
+- [`docs/AegisAgent_Technical_Design.md`](docs/AegisAgent_Technical_Design.md) — architecture (Approval Integrity Engine, Trust-Provenance Gate, Verifiable Receipts).
+- [`docs/AegisAgent_Threat_Model.md`](docs/AegisAgent_Threat_Model.md) — foregrounds approval manipulation, confused-deputy, and evidence tampering.
+- [`docs/action-receipt-spec.md`](docs/action-receipt-spec.md) — the open, hash-chained action-receipt format.
+- Background & strategy: [`docs/AegisAgent_Agent_Workflow.md`](docs/AegisAgent_Agent_Workflow.md), [`docs/AegisAgent_Vision.md`](docs/AegisAgent_Vision.md), [`docs/AegisAgent_Market_Gap_Analysis.md`](docs/AegisAgent_Market_Gap_Analysis.md), [`docs/AegisAgent_Problem_Definition.md`](docs/AegisAgent_Problem_Definition.md), [`docs/AegisAgent_Operational_Design.md`](docs/AegisAgent_Operational_Design.md), [`docs/AegisAgent_Product_Research.md`](docs/AegisAgent_Product_Research.md).
 - `CLAUDE.md` — agent/developer commands, security rules, and API contracts.
 - `AGENTS.md` — persona boundaries for Architect, Developer, SecurityAuditor, and Ops agents.
 - `SECURITY.md` — vulnerability disclosure and secure development expectations.
 - `CONTRIBUTING.md` — local development and contribution rules.
 - `ROADMAP.md` — MVP and post-MVP roadmap.
 - `docs/dashboard-mock.html` — static audit timeline/dashboard mock.
+
+## Contributing
+
+Contributions are welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+development flow, the fail-closed/canonicalization invariants you must not weaken,
+and the multi-tenant security rules. By contributing you agree to license your work
+under the MIT License. See also our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
+## Security
+
+Found a vulnerability? Please **do not** open a public issue — see
+[`SECURITY.md`](SECURITY.md) for private disclosure via GitHub Security Advisories.
+
+## License
+
+[MIT](LICENSE) © Lavkush Kumar. The open action-receipt format is documented in
+[`docs/action-receipt-spec.md`](docs/action-receipt-spec.md) and is intended for
+free, interoperable implementation.
