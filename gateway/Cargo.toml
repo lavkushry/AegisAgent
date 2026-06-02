@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 axum = { version = "0.8.9", features = ["macros"] }
 tokio = { version = "1.38", features = ["full"] }
-sqlx = { version = "0.7.4", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "json"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "json"] }
 cedar-policy = "4.11.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
