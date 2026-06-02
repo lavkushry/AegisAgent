@@ -9,7 +9,7 @@ readme = "../README.md"
 publish = false
 
 [dependencies]
-axum = { version = "0.7.5", features = ["macros"] }
+axum = { version = "0.8.9", features = ["macros"] }
 tokio = { version = "1.38", features = ["full"] }
 sqlx = { version = "0.7.4", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "json"] }
 cedar-policy = "4.11.0"
