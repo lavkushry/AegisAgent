@@ -1,192 +1,71 @@
-# AegisAgent Developer Context (`CLAUDE.md`)
+# AegisAgent — Coding-Agent Context (`CLAUDE.md`)
 
-This guide is the active coding-agent context for AegisAgent. It captures current project status, launch commands, endpoint contracts, and security rules.
+Minimal, current context to work in this repo. For *why* the product is shaped this way, read **[`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md)** (source of truth) — don't re-derive it.
 
----
+## What AegisAgent is (June 2026)
 
-## 0. Current Project Status
+The **integrity layer for AI agent actions** — open, self-hostable, framework-neutral. The generic gateway loop (intercept → policy → allow/deny → audit → approval) is commodity (free Microsoft toolkit + OSS + SaaS), so it is **table stakes here**. The two defensible differentiators are:
 
-AegisAgent MVP is now past basic skeleton stage and has the following implemented pieces:
+1. **Approval integrity** — the human approval is bound to a SHA-256 hash of the *frozen exact action*; the SDK **fails closed** if a different/edited/expired action would execute (defeats approve-then-swap, replay, render-vs-bytes).
+2. **Deterministic trust-provenance gating** — authorization is gated on the *source trust level* of the triggering content (6 levels), not a text score (confused-deputy defense). Plus **verifiable, hash-chained action receipts** as compliance evidence (SOC 2 / EU AI Act Art. 14).
 
-- Rust Axum gateway with SQLite/SQLx persistence and Cedar policy evaluation.
-- Tenant-scoped agent registry, tool registry, approval records, audit events, MCP server/tool records, and decision records.
-- Default Cedar policy pack in `policies.cedar` and `gateway/policies.cedar`.
-- MCP Gateway Lite: register server, discover manifest, approve/disable tools, deny unknown/unapproved MCP tools, and log MCP calls.
-- Python SDK with `AegisClient` and `@protect_tool` decorator.
-- Approval action-hash integrity: approvals return and persist `action_hash`; SDK fails closed if approval/status hashes mismatch.
-- Docker Compose local gateway startup, seed script, GitHub attack demo, CI workflow, security policy, contribution guide, roadmap, and dashboard mock.
+> Motto: **Make the approval trustworthy. Trust the source, not the text.**
 
-Remaining high-priority gaps after this update:
+## Current status (work-in-progress on branch `feat/approval-integrity`)
 
-- Real Slack callback signature verification and approver role lookup.
-- TypeScript SDK.
-- Runtime MCP proxy execution path beyond authorization/manifest governance.
-- Policy bundle versioning/dry-run and dashboard implementation.
-- Demo video/hosted sandbox.
+**Verified here (Python, 25/25 + runnable demo + CLI):**
+- `action_hash` canonicalization unified as scheme **`aegis-jcs-1`** in `sdk-python/aegisagent/canon.py`; SDK fails closed on hash mismatch **and on approval expiry**.
+- Verifiable receipts: format + reference verifier (`aegisagent/receipts.py`), CLI (`aegis-verify-receipts`), shared corpus (`tests/receipt_chain_vectors.json`).
+- End-to-end demo `examples/integrity_demo.py`.
 
----
+**Written but NOT yet compiled (Rust gateway — no toolchain in some envs):**
+- Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
+- Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409): `expired_approval_is_reported_and_cannot_be_approved`.
+- Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
 
-## 1. Build, Run, and Harness Commands
+**Next (Rust):** emit `action_receipts` (hash-chained per tenant) on every decision + `GET /v1/receipts/:id/verify`; then single-use `nonce` (replay T-A3). **Build the Rust + run `cargo test` before stacking more Rust.**
 
-### Local Docker Quickstart
+Baseline still present: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, Python `@protect_tool`.
 
-```bash
-docker compose up --build
-bash scripts/seed-demo.sh
-python3 examples/github-attack-demo.py
-```
-
-Healthcheck:
+## Commands
 
 ```bash
-curl http://127.0.0.1:8080/health
+# Gateway (Rust)
+cargo check  --manifest-path gateway/Cargo.toml
+cargo test   --manifest-path gateway/Cargo.toml        # incl. the 3 tests above
+cargo fmt    --manifest-path gateway/Cargo.toml -- --check
+cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
+CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080
+
+# SDK + demos (Python)
+python3 -m pip install -e sdk-python/
+python3 -m unittest discover -s sdk-python/tests       # 25/25
+python3 examples/integrity_demo.py                     # zero-setup wedge demo
+aegis-verify-receipts <receipts.json>                  # or: python3 -m aegisagent.verify_receipts <f>
+
+# Local stack
+docker compose up --build && bash scripts/seed-demo.sh && python3 examples/github-attack-demo.py
 ```
 
-### Agent Context Harness (ECC-Style)
+## API endpoints (contract)
 
-- **Initialize Developer Profile:** `bash scripts/setup_agent_harness.sh --profile developer`
-- **Initialize Auditor Profile:** `bash scripts/setup_agent_harness.sh --profile auditor`
-- **Initialize Architect Profile:** `bash scripts/setup_agent_harness.sh --profile architect`
-- **Initialize Ops Profile:** `bash scripts/setup_agent_harness.sh --profile ops`
-- **Initialize All Profiles:** `bash scripts/setup_agent_harness.sh --all`
-- **Clean Harness Configuration:** `bash scripts/setup_agent_harness.sh --clean`
+`GET /health` · `POST /v1/agents/register` · `POST /v1/tools` · `POST /v1/mcp/servers` · `GET|POST /v1/mcp/servers/:server_key/tools` · `POST .../tools/:tool_key/approve|disable` · `POST /v1/authorize` (returns `decision`, `action_hash`, approval info) · `GET /v1/approvals/:id` (returns `status`, bound `action_hash`; `EXPIRED` for stale pending) · `POST /v1/approvals/:id/approve|reject|edit` · `GET /v1/runs/:id/timeline` · `GET /v1/audit/events` · **planned:** `GET /v1/receipts/:id/verify`.
 
-### Gateway (Rust + Axum + SQLx + SQLite)
+## Critical invariants (do not weaken)
 
-- **Check code compiles:** `cargo check --manifest-path gateway/Cargo.toml`
-- **Build debug binary:** `cargo build --manifest-path gateway/Cargo.toml`
-- **Build production release:** `cargo build --release --manifest-path gateway/Cargo.toml`
-- **Run the local gateway from repo root:** `CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml`
-- **Run package-local tests:** `cargo test --manifest-path gateway/Cargo.toml`
+- **Canonicalization `aegis-jcs-1` MUST stay byte-identical across SDK and gateway** (keys sorted by Unicode code point, compact separators, **raw UTF-8 / no `\uXXXX`**, reject non-finite floats). Locked by `tests/canonical_action_vectors.json` + `tests/receipt_chain_vectors.json`. A divergence silently breaks the fail-closed guarantee — never change hashing without bumping the scheme + CI byte-equality.
+- **Fail closed:** unknown agent/tool/MCP server/MCP tool → deny; critical → deny; high-risk → require approval. SDK refuses to execute on hash mismatch, expired approval, or unreachable gateway (mutating/high-risk).
+- **Approval integrity:** every approval binds to the original `action_hash`; edits re-hash + re-evaluate; expiry enforced (SDK + gateway); never re-decide a decided approval.
+- **Trust-provenance is deterministic:** classifiers may only *tighten* a label, never loosen it. Mutating action + `untrusted_external`/`malicious_suspected` → deny.
+- **Multi-tenant isolation:** every tenant-owned query binds/filters `tenant_id`; parameterized SQLx only (no string interpolation).
+- **Local binding** `127.0.0.1` for dev/test; **redact** secrets from logs/receipts (store hashes, not payloads); no `.unwrap()`/`.expect()` in production paths.
 
-### SDK (Python)
+## Where things live
 
-- **Install in developer mode:** `python3 -m pip install -e sdk-python/`
-- **Run SDK tests:** `python3 -m unittest discover -s sdk-python/tests`
-- **Run attack demo:** `python3 examples/github-attack-demo.py`
+- `gateway/src/`: `routes.rs` (handlers, canonicalization, approval integrity, receipt helpers), `db.rs` (tenant-scoped SQLx), `policy.rs` (Cedar), `models.rs`, `main.rs`. `gateway/policies.cedar` (keep ≡ root `policies.cedar`).
+- `sdk-python/aegisagent/`: `canon.py` (scheme), `decorator.py` (`@protect_tool`, fail-closed + expiry), `receipts.py` (verifier), `verify_receipts.py` (CLI), `client.py`.
+- Strategy docs in `docs/` were re-anchored 2026-06-02 on the integrity wedge; `docs/action-receipt-spec.md` is the open receipt format.
 
----
+## How to continue
 
-## 2. Test Execution Commands
-
-### Gateway Tests (Rust)
-
-- **Run all tests:** `cargo test --manifest-path gateway/Cargo.toml`
-- **Run specific test:** `cargo test --manifest-path gateway/Cargo.toml -- <test_name>`
-
-### SDK & Demo Tests (Python)
-
-- **Run all tests:** `python3 -m unittest discover -s sdk-python/tests`
-- **Syntax check examples/scripts:** `python3 -m py_compile examples/github-attack-demo.py examples/mock_server.py`
-- **Demo seed script syntax:** `bash -n scripts/seed-demo.sh`
-
----
-
-## 3. Formatting and Linting
-
-### Rust (Gateway)
-
-- **Check formatting:** `cargo fmt --manifest-path gateway/Cargo.toml -- --check`
-- **Apply formatting:** `cargo fmt --manifest-path gateway/Cargo.toml`
-- **Run linter:** `cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings`
-
-### Python (SDK & Examples)
-
-- **Check formatting:** `black --check sdk-python/ examples/`
-- **Apply formatting:** `black sdk-python/ examples/`
-- **Run linter:** `flake8 sdk-python/ examples/`
-
----
-
-## 4. API Endpoints & Contract Scopes
-
-Every service component must align with these API endpoint contracts:
-
-- `GET /health` - Gateway healthcheck.
-- `POST /v1/agents/register` - Registers agent profiles and returns agent tokens.
-- `POST /v1/tools` - Registers static tools and action metadata.
-- `POST /v1/mcp/servers` - Registers MCP servers.
-- `GET /v1/mcp/servers/:server_key/tools` - Shows MCP tool manifest.
-- `POST /v1/mcp/servers/:server_key/tools` - Discovers/upserts MCP tool manifest entries.
-- `POST /v1/mcp/servers/:server_key/tools/:tool_key/approve` - Approves an MCP tool.
-- `POST /v1/mcp/servers/:server_key/tools/:tool_key/disable` - Disables an MCP tool.
-- `POST /v1/authorize` - Intercepts and authorizes tool actions.
-- `GET /v1/approvals/:id` - Retrieves pending approval status and `action_hash`.
-- `POST /v1/approvals/:id/approve` - Approves a frozen action.
-- `POST /v1/approvals/:id/reject` - Rejects a frozen action.
-- `POST /v1/approvals/:id/edit` - Submits edited parameters for re-evaluation/execution.
-- `GET /v1/runs/:id/timeline` - Retrieves chronological investigation run timelines.
-- `GET /v1/audit/events` - Retrieves recent audit event logs.
-
----
-
-## 5. Performance and SLO Requirements
-
-All implementations should target these service level objectives:
-
-- **Authorization API Latency:** p95 < 150 ms.
-- **Policy Evaluation Latency:** p95 < 75 ms.
-- **Approval Notification Delivery:** p95 < 5 seconds.
-- **MCP Proxy Latency Overhead:** p95 < 250 ms.
-- **Audit durability:** 99.9% enqueue success.
-
----
-
-## 6. Coding Guidelines & Best Practices
-
-### Secure Defaults (FAIL-CLOSED)
-
-- **Unidentified Requests:** Deny unknown agents, unknown tools, unknown MCP servers, and unknown MCP tools by default.
-- **Mutating Risk Actions:** Critical actions require approval unless explicit policy denies them; untrusted context mutations are denied.
-- **Approval Integrity:** Every approval must bind to the original SHA-256 action hash. SDKs must fail closed on missing/mismatched hashes.
-- **Signature Verification:** Verify signature tokens on all external approval callbacks (Slack/Teams/dashboard integrations).
-- **Secret Redaction:** Strip passwords, API keys, and JWT tokens from traces, demo output, and audit logs.
-
-### Multi-Tenant Isolation (CRITICAL)
-
-- **Tenant Context Partitioning:** Every database read, write, update, and join over tenant-owned data must bind/filter by verified `tenant_id`.
-- **No Cross-Tenant Queries:** Avoid SQL that omits `tenant_id` unless it is dedicated privileged maintenance code.
-- **SQLx Parameter Binding:** Use parameterized SQL only; never interpolate user input into SQL strings.
-
-### Policy Pack Rules
-
-- Keep root `policies.cedar` and `gateway/policies.cedar` synchronized.
-- Cedar implicit deny is the deny-all baseline.
-- Avoid broad `permit(principal, action, resource)` rules unless constrained by context/resource checks.
-- Add tests for every new allow, deny, and require_approval path.
-
-### OpenTelemetry Instrumentation
-
-- Wrap critical gateway handlers, policy evaluations, and DB operations in Rust `tracing` spans where practical.
-- Python SDK should propagate trace context in authorization requests as SDK support matures.
-
-### Rust Style & Idioms
-
-- Use Tokio (`#[tokio::main]`) and Axum handlers.
-- Avoid `.unwrap()`/`.expect()` in production paths; map errors to HTTP status codes.
-- Use `SqlitePool` with WAL mode and busy timeout.
-
----
-
-## 7. MVP Launch Checklist Snapshot
-
-### P0 Complete
-
-- Root `policies.cedar` default pack.
-- Docker Compose local gateway startup.
-- Python SDK `@protect_tool` decorator.
-- GitHub attack demo script.
-- Idempotent seed script.
-- README quickstart.
-
-### P1 Mostly Complete
-
-- `SECURITY.md`.
-- `CONTRIBUTING.md`.
-- GitHub Actions CI.
-- `ROADMAP.md`.
-- `docs/dashboard-mock.html`.
-
-### P1 Pending
-
-- 90-second recorded demo video/link.
+Use TDD (RED → GREEN). Spend effort on the **two integrity primitives + receipts** (the moat); don't reinvent the commodity gateway loop. After Rust edits, run `cargo test/fmt/clippy`; **don't stack unverified Rust** — get the branch green first. `.clauderules`/`.cursorrules` are harness-generated (regenerate via `scripts/setup_agent_harness.sh`, don't hand-edit). Persona scopes: `AGENTS.md`.

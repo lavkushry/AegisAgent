@@ -4,19 +4,11 @@ AegisAgent uses path-scoped AI developer personas so automated agents can work s
 
 ---
 
-## Current MVP Context
+## Current Context (June 2026)
 
-AegisAgent is an Agent Action Firewall built with Rust, SQLite, Python, and Cedar Policy. The current MVP includes:
+AegisAgent is the **integrity layer for AI agent actions** (Rust + SQLite + Python + Cedar). The generic gateway loop is commodity and treated as table stakes; the defensible work is **approval integrity** (frozen-action `action_hash` + fail-closed SDK + expiry), **deterministic trust-provenance gating**, and **verifiable hash-chained receipts**. See `docs/AegisAgent_Gap_Reassessment_2026-06.md` for the positioning and `CLAUDE.md` for current status, commands, contracts, and the canonicalization invariant (`aegis-jcs-1`).
 
-- Runtime authorization API.
-- Agent and tool registries.
-- MCP Gateway Lite governance.
-- Approval records with SHA-256 action-hash integrity.
-- Audit event timelines.
-- Python SDK `@protect_tool` decorator.
-- Docker Compose quickstart, seed script, attack demo, CI, and launch docs.
-
-Use `CLAUDE.md` for commands and current API contracts. Use `.claude/PRPs/tasks/task.md` for launch-readiness task status.
+Active work is on branch `feat/approval-integrity`: Python is verified (25/25 + demo + CLI); several Rust gateway changes are written but await `cargo` verification. **Run `cargo test/fmt/clippy` before stacking more Rust.** Motto: *make the approval trustworthy; trust the source, not the text.*
 
 ---
 
@@ -79,7 +71,8 @@ Threat-models and audits policy, SQL, approval integrity, and MCP governance.
   - Verify approval action-hash integrity and callback/signature expectations.
   - Review MCP manifest trust, unknown-tool denial, and drift/signing roadmap.
 - **Rules of Conduct:**
-  - Do not weaken approval hash checks or fail-closed policy behavior.
+  - Do not weaken approval hash checks, expiry enforcement, or fail-closed policy behavior.
+  - Preserve canonicalization byte-equality (`aegis-jcs-1`) across SDK and gateway, and the deterministic trust-provenance rule (classifiers may only tighten). Verify receipt hash-chain integrity.
   - Do not introduce unauthenticated administrative routes.
   - Flag hardcoded secrets and unsafe logging.
 
