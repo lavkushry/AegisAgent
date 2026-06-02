@@ -1805,7 +1805,7 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
+            agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
@@ -1819,7 +1819,7 @@ mod tests {
         // First consume succeeds.
         let first = consume_approval(
             State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
+            agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
         )
         .await
@@ -1829,7 +1829,7 @@ mod tests {
         // Second consume is rejected — single-use.
         let second = consume_approval(
             State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
+            agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
         )
         .await
@@ -1857,7 +1857,7 @@ mod tests {
         // The /verify endpoint recomputes the hash and confirms integrity.
         let response = verify_receipt(
             State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
+            agent_headers(&tenant_id, &tenant_id),
             Path(receipt_id.clone()),
         )
         .await
@@ -1894,7 +1894,7 @@ mod tests {
         // get_approval reports EXPIRED for the still-pending, past-window approval.
         let get_resp = get_approval(
             State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
+            agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
         )
         .await
@@ -1906,7 +1906,7 @@ mod tests {
         // approve_approval refuses to grant an expired approval.
         let approve_resp = approve_approval(
             State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
+            agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
