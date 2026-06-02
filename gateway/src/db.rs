@@ -453,6 +453,7 @@ pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(),
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_skill(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -490,6 +491,7 @@ pub async fn insert_skill(
     Ok(row.0)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_skill_action(
     pool: &SqlitePool,
     skill_id: &str,
@@ -540,6 +542,7 @@ pub async fn get_skill_action(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn upsert_mcp_server(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -728,7 +731,7 @@ pub async fn insert_decision(
     .bind(&record.resource)
     .bind(&record.input_json)
     .bind(&record.decision)
-    .bind(&record.risk_score)
+    .bind(record.risk_score)
     .bind(&record.reason)
     .bind(&record.matched_policy_ids)
     .execute(pool)
@@ -754,8 +757,8 @@ pub async fn insert_approval(
     .bind(&record.original_skill_call)
     .bind(&record.original_call_hash)
     .bind(&record.edited_skill_call)
-    .bind(&record.expires_at)
-    .bind(&record.decided_at)
+    .bind(record.expires_at)
+    .bind(record.decided_at)
     .execute(pool)
     .await?;
     Ok(())

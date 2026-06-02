@@ -108,6 +108,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// (see `tests/canonical_action_vectors.json` and `aegisagent.decorator.CANON_VERSION`).
 /// Scheme "aegis-jcs-1": keys sorted by Unicode code point, compact separators,
 /// raw UTF-8 (serde_json does not escape non-ASCII), null for absent resource.
+// Referenced by the cross-language corpus tests; unused in the non-test binary build.
+#[allow(dead_code)]
 pub const CANON_VERSION: &str = "aegis-jcs-1";
 
 /// Deterministic canonical string for a tool call. The SDK hashes the exact same
@@ -206,6 +208,7 @@ fn approval_is_expired(app: &ApprovalRecord) -> bool {
     app.expires_at.map(|e| e < Utc::now()).unwrap_or(false)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_decision_and_audit(
     pool: &sqlx::SqlitePool,
     tenant_id: &str,
