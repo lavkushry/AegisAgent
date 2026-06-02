@@ -199,6 +199,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             edited_skill_call TEXT,
             expires_at DATETIME,
             decided_at DATETIME,
+            consumed_at DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             FOREIGN KEY (decision_id) REFERENCES decisions(id)
@@ -208,6 +209,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     ensure_approval_original_call_hash_column(pool).await?;
+    ensure_approval_consumed_at_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_events (
@@ -225,6 +227,32 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             event_json TEXT NOT NULL,
             input_hash TEXT,
             output_hash TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS action_receipts (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            decision_id TEXT,
+            ts TEXT NOT NULL,
+            agent_id TEXT,
+            user_id TEXT,
+            run_id TEXT,
+            trace_id TEXT,
+            tool TEXT,
+            action TEXT,
+            resource TEXT,
+            source_trust TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            approver TEXT,
+            action_hash TEXT,
+            prev_receipt_hash TEXT NOT NULL,
+            receipt_hash TEXT NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id)
         );",
@@ -257,6 +285,11 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events (tenant_id);")
         .execute(pool)
         .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_action_receipts_tenant ON action_receipts (tenant_id);",
+    )
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
@@ -297,6 +330,50 @@ async fn ensure_approval_original_call_hash_column(pool: &SqlitePool) -> Result<
         .execute(pool)
         .await?;
     Ok(())
+}
+
+async fn ensure_approval_consumed_at_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(approvals)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "consumed_at")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE approvals ADD COLUMN consumed_at DATETIME")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Atomically consume an APPROVED approval (single-use). Returns `true` only if
+/// THIS call consumed it (one row updated); `false` if it was already consumed,
+/// expired, not approved, or not found. The `consumed_at IS NULL` guard makes
+/// concurrent double-consume safe — at most one UPDATE matches.
+pub async fn consume_approval(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    approval_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let now = Utc::now();
+    let result = sqlx::query(
+        "UPDATE approvals
+         SET consumed_at = ?
+         WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
+           AND (expires_at IS NULL OR expires_at > ?)",
+    )
+    .bind(now)
+    .bind(tenant_id)
+    .bind(approval_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 // --- Multi-Tenant CRUD Operations ---
@@ -748,6 +825,64 @@ pub async fn insert_audit_event(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn insert_action_receipt(
+    pool: &SqlitePool,
+    record: &ActionReceiptRecord,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.decision_id)
+    .bind(&record.ts)
+    .bind(&record.agent_id)
+    .bind(&record.user_id)
+    .bind(&record.run_id)
+    .bind(&record.trace_id)
+    .bind(&record.tool)
+    .bind(&record.action)
+    .bind(&record.resource)
+    .bind(&record.source_trust)
+    .bind(&record.decision)
+    .bind(&record.approver)
+    .bind(&record.action_hash)
+    .bind(&record.prev_receipt_hash)
+    .bind(&record.receipt_hash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Latest receipt hash for a tenant (chain head). Uses rowid for insertion order.
+pub async fn get_latest_receipt_hash(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT receipt_hash FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(hash,)| hash))
+}
+
+pub async fn get_action_receipt_by_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    receipt_id: &str,
+) -> Result<Option<ActionReceiptRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ActionReceiptRecord>(
+        "SELECT * FROM action_receipts WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(receipt_id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn get_audit_events_by_run(

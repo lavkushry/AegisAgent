@@ -12,8 +12,8 @@
 ## Q3 2026 — harden the integrity primitives (the moat)
 
 - **Canonicalization spec v1** (target RFC 8785 JCS) shared across SDK + gateway, with a CI byte-equality gate (the fail-closed guarantee depends on it).
-- **Approval Integrity Engine hardening:** expiry enforced fail-closed at the SDK ✅ and (pending `cargo` verify) at the gateway ✅; **still TODO:** single-use nonce + replay rejection, edit→re-hash→re-evaluate confirmation, tamper-attempt receipts.
-- **Verifiable action-receipt format v0** (per-tenant hash chain) + `/v1/receipts/:id/verify`; publish as an **open spec**.
+- **Approval Integrity Engine hardening:** expiry enforced fail-closed at the SDK ✅ and gateway ✅; **single-use** atomic consume (replay T-A3) ✅ (SDK verified; gateway pending `cargo`); **still TODO:** edit→re-hash→re-evaluate confirmation, tamper-attempt receipts.
+- **Verifiable action-receipt format v0** (per-tenant hash chain): open spec ✅ ([`docs/action-receipt-spec.md`](docs/action-receipt-spec.md)) + Python reference verifier ✅ (`aegisagent/receipts.py`, 8/8) + CLI ✅ + gateway emission into `action_receipts` + `GET /v1/receipts/:id/verify` ✅ (written, pending `cargo`). **Next:** race-safe chain head (transaction); enterprise signing.
 - **Trust-Provenance Gate:** deterministic 6-level model finalized; classifier integration that can only *tighten*, never loosen.
 - Slack approval callback signature verification + approver role lookup.
 - The "approve-then-swap blocked" demo as the flagship.

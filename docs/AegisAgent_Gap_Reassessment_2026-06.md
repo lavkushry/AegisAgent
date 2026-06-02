@@ -3,7 +3,7 @@
 **Document type:** Strategy reset / source of truth
 **Author:** Lavkush Kumar
 **Date:** 2026-06-02
-**Supersedes the market-positioning claims in:** `# AegisAgent — Deep Market Gap Anal.md`, `AgentGuard_Product_Research.md`, and the positioning sections of the PRD/GTM/Vision.
+**Supersedes the market-positioning claims in:** `AegisAgent_Market_Gap_Analysis.md`, `AegisAgent_Product_Research.md`, and the positioning sections of the PRD/GTM/Vision.
 **Status:** Authoritative. All other docs are re-anchored on this one.
 
 ---

@@ -2,6 +2,11 @@
 name = "gateway"
 version = "0.1.0"
 edition = "2021"
+description = "AegisAgent gateway — fail-closed approval integrity, deterministic trust-provenance gating, and verifiable action receipts for AI agent actions"
+license = "MIT"
+repository = "https://github.com/lavkushry/AegisAgent"
+readme = "../README.md"
+publish = false
 
 [dependencies]
 axum = { version = "0.7.5", features = ["macros"] }

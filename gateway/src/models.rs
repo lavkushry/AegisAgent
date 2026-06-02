@@ -324,3 +324,28 @@ pub struct AuditEventRecord {
     pub output_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+/// Tamper-evident, hash-chained action receipt. The hashed body is every field
+/// here EXCEPT `receipt_hash` and `created_at` (see routes::receipt_body_value),
+/// with the previous link (`prev_receipt_hash`) inside the body. Scheme aegis-jcs-1.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct ActionReceiptRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub decision_id: Option<String>,
+    pub ts: String,
+    pub agent_id: Option<String>,
+    pub user_id: Option<String>,
+    pub run_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub tool: Option<String>,
+    pub action: Option<String>,
+    pub resource: Option<String>,
+    pub source_trust: String,
+    pub decision: String,
+    pub approver: Option<String>,
+    pub action_hash: Option<String>,
+    pub prev_receipt_hash: String,
+    pub receipt_hash: String,
+    pub created_at: DateTime<Utc>,
+}

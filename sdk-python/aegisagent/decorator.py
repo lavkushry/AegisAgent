@@ -1,6 +1,4 @@
-import hashlib
 import inspect
-import json
 import logging
 import re
 import threading
@@ -11,6 +9,7 @@ from typing import Any, Callable, Optional
 
 from opentelemetry import trace
 
+from .canon import canonicalize, sha256_hex
 from .client import AegisClient
 
 logger = logging.getLogger("aegisagent")
@@ -29,15 +28,6 @@ def get_context_trust_level() -> str:
     return getattr(_context_store, "trust_level", "unknown")
 
 
-# Canonicalization scheme version. MUST stay byte-identical across the Python/TS/Go
-# SDKs and the Rust gateway, or the fail-closed approval guarantee (approved
-# action_hash == executed action_hash) breaks. Shared test vectors live in
-# tests/canonical_action_vectors.json. Scheme "aegis-jcs-1": keys sorted by Unicode
-# code point, compact separators, raw UTF-8 (ensure_ascii=False), non-finite floats
-# rejected (allow_nan=False), null for absent resource.
-CANON_VERSION = "aegis-jcs-1"
-
-
 def _canonical_action(
     tool: str,
     action: str,
@@ -45,22 +35,17 @@ def _canonical_action(
     mutates_state: bool,
     parameters: dict,
 ) -> str:
-    tool_call = {
-        "tool": tool,
-        "action": action,
-        "resource": resource,
-        "mutates_state": mutates_state,
-        "parameters": parameters,
-    }
-    # ensure_ascii=False -> emit raw UTF-8 to match the gateway's serde_json output.
-    # allow_nan=False -> reject NaN/Infinity (invalid JSON; serde rejects them too),
-    # failing closed instead of producing a non-portable token.
-    return json.dumps(
-        tool_call,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
+    # Canonicalization (scheme aegis-jcs-1) MUST stay byte-identical with the
+    # gateway, or the fail-closed approval guarantee breaks. See canon.py and
+    # tests/canonical_action_vectors.json.
+    return canonicalize(
+        {
+            "tool": tool,
+            "action": action,
+            "resource": resource,
+            "mutates_state": mutates_state,
+            "parameters": parameters,
+        }
     )
 
 
@@ -71,8 +56,9 @@ def _hash_tool_call(
     mutates_state: bool,
     parameters: dict,
 ) -> str:
-    canonical = _canonical_action(tool, action, resource, mutates_state, parameters)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return sha256_hex(
+        _canonical_action(tool, action, resource, mutates_state, parameters)
+    )
 
 
 def _assert_matching_action_hash(source: dict, expected_hash: str, phase: str) -> None:
@@ -230,6 +216,18 @@ def protect_tool(
                     if status == "APPROVED":
                         _assert_matching_action_hash(
                             status_info, expected_action_hash, "status"
+                        )
+                        # Single-use: atomically consume the approval before
+                        # executing, so it cannot be replayed/reused. Fail closed
+                        # if the gateway will not hand out the consumption.
+                        consumed = client.consume_approval(approval_id)
+                        if not consumed:
+                            raise PermissionError(
+                                f"Action '{tool}.{action}' approval could not be "
+                                "consumed (already used/expired). Failing closed."
+                            )
+                        _assert_matching_action_hash(
+                            consumed, expected_action_hash, "consume"
                         )
                         logger.warning(
                             f"✅ Action '{tool}.{action}' APPROVED. Resuming..."

@@ -122,6 +122,83 @@ fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
     sha256_hex(canonical_action_string(tool_call).as_bytes())
 }
 
+/// Canonical (scheme `aegis-jcs-1`) string for an arbitrary JSON value. Used for
+/// action-receipt hashing; MUST match the SDK's `canonicalize()` byte-for-byte
+/// (see `docs/action-receipt-spec.md` and `tests/receipt_chain_vectors.json`).
+fn canonical_value_string(value: &Value) -> String {
+    serde_json::to_string(&canonicalize_json(value.clone())).unwrap_or_default()
+}
+
+/// The hashed body of an action receipt: every semantic field plus the chain
+/// link, excluding `receipt_hash` and the volatile DB `created_at`. Built
+/// identically at emit time and verify time so the hash is reproducible. All
+/// fields are strings/null (no round-trip drift). Scheme aegis-jcs-1.
+fn receipt_body_value(rec: &ActionReceiptRecord) -> Value {
+    json!({
+        "event_id": rec.id,
+        "ts": rec.ts,
+        "agent_id": rec.agent_id,
+        "user_id": rec.user_id,
+        "run_id": rec.run_id,
+        "trace_id": rec.trace_id,
+        "tool": rec.tool,
+        "action": rec.action,
+        "resource": rec.resource,
+        "source_trust": rec.source_trust,
+        "decision": rec.decision,
+        "approver": rec.approver,
+        "action_hash": rec.action_hash,
+        "prev_receipt_hash": rec.prev_receipt_hash,
+    })
+}
+
+fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
+    sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
+}
+
+/// Emit a hash-chained, verifiable receipt for a finalized decision. Non-fatal:
+/// a receipt write failure is logged but does not change the authorization result.
+async fn emit_action_receipt(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    payload: &AuthorizeRequest,
+    decision_id: Uuid,
+    decision: &str,
+) {
+    let prev_receipt_hash = db::get_latest_receipt_hash(pool, tenant_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let mut receipt = ActionReceiptRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.to_string(),
+        decision_id: Some(decision_id.to_string()),
+        ts: Utc::now().to_rfc3339(),
+        agent_id: Some(agent_id.to_string()),
+        user_id: payload.user.as_ref().map(|u| u.id.clone()),
+        run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
+        trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
+        tool: Some(payload.tool_call.tool.clone()),
+        action: Some(payload.tool_call.action.clone()),
+        resource: payload.tool_call.resource.clone(),
+        source_trust: payload.context.source_trust.clone(),
+        decision: decision.to_string(),
+        approver: None,
+        action_hash: Some(hash_tool_call(&payload.tool_call)),
+        prev_receipt_hash,
+        receipt_hash: String::new(),
+        created_at: Utc::now(),
+    };
+    receipt.receipt_hash = compute_receipt_hash(&receipt);
+
+    if let Err(e) = db::insert_action_receipt(pool, &receipt).await {
+        error!("Failed to write action receipt: {:?}", e);
+    }
+}
+
 /// True if the approval window has passed. Defense-in-depth alongside the SDK's
 /// client-side expiry check: the gateway must not hand out, or grant, an approval
 /// whose `expires_at` is in the past.
@@ -946,6 +1023,17 @@ pub async fn authorize_action(
             .into_response();
     }
 
+    // Emit a verifiable, hash-chained receipt for this decision (non-fatal).
+    emit_action_receipt(
+        &state.pool,
+        &tenant_id,
+        &agent_id,
+        &payload,
+        decision_id,
+        &decision_str,
+    )
+    .await;
+
     let mut approval_info = None;
 
     if decision_str == "require_approval" {
@@ -1065,6 +1153,104 @@ pub async fn get_approval(
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "Approval request not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+// Consume Handler: single-use, atomic consumption of an APPROVED approval.
+// The SDK calls this before executing so an approval cannot be replayed/reused.
+pub async fn consume_approval(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(approval_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    let consumed =
+        match db::consume_approval(&state.pool, &tenant_id, &approval_id.to_string()).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to consume approval: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    if !consumed {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Approval not consumable (already used, expired, or not approved)",
+                "approval_id": approval_id,
+            })),
+        )
+            .into_response();
+    }
+
+    // Return the bound action hash so the SDK can re-verify before executing.
+    let action_hash = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.original_call_hash)
+        .unwrap_or_default();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "consumed",
+            "approval_id": approval_id,
+            "action_hash": action_hash,
+        })),
+    )
+        .into_response()
+}
+
+// Verify a stored action receipt by recomputing its hash from the canonical body.
+pub async fn verify_receipt(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(receipt_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    match db::get_action_receipt_by_id(&state.pool, &tenant_id, &receipt_id).await {
+        Ok(Some(rec)) => {
+            let recomputed = compute_receipt_hash(&rec);
+            let verified = recomputed == rec.receipt_hash;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "receipt_id": rec.id,
+                    "verified": verified,
+                    "receipt_hash": rec.receipt_hash,
+                    "recomputed_hash": recomputed,
+                    "prev_receipt_hash": rec.prev_receipt_hash,
+                })),
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Receipt not found"})),
         )
             .into_response(),
         Err(e) => {
@@ -1545,6 +1731,125 @@ mod tests {
         )));
         // No expiry set -> never expired.
         assert!(!approval_is_expired(&make_test_approval(None, "created")));
+    }
+
+    #[test]
+    fn receipt_chain_matches_shared_corpus() {
+        // Proves the gateway reproduces the Python-generated receipt_hash values
+        // byte-for-byte: receipt_hash = SHA-256(canonical(body)) where body is
+        // every field except receipt_hash (incl. prev_receipt_hash). This is the
+        // cross-language guarantee that lets the Python verifier / aegis-verify-receipts
+        // validate gateway-emitted receipts. See docs/action-receipt-spec.md.
+        let corpus_path =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/receipt_chain_vectors.json");
+        let raw = std::fs::read_to_string(corpus_path)
+            .expect("shared receipt corpus must exist at tests/receipt_chain_vectors.json");
+        let corpus: Value = serde_json::from_str(&raw).expect("corpus must be valid JSON");
+
+        assert_eq!(corpus["canon_version"].as_str(), Some(CANON_VERSION));
+
+        let receipts = corpus["receipts"].as_array().expect("receipts array");
+        let mut prev = String::new();
+        for receipt in receipts {
+            let obj = receipt.as_object().expect("receipt object");
+            let stored = obj
+                .get("receipt_hash")
+                .and_then(|v| v.as_str())
+                .expect("receipt_hash present");
+
+            // body = all fields except receipt_hash (prev_receipt_hash stays in).
+            let mut body = obj.clone();
+            body.remove("receipt_hash");
+            let recomputed = sha256_hex(canonical_value_string(&Value::Object(body)).as_bytes());
+            assert_eq!(recomputed, stored, "receipt hash mismatch vs corpus");
+
+            // Chain linkage: each receipt references the previous receipt's hash.
+            let prev_in_receipt = obj
+                .get("prev_receipt_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            assert_eq!(prev_in_receipt, prev, "broken chain link");
+            prev = stored.to_string();
+        }
+    }
+
+    #[tokio::test]
+    async fn consume_is_single_use() {
+        let (state, tenant_id, agent_token) = setup_state("consume_single_use").await;
+
+        // Create an approval (merge to main) and approve it.
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/9".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        // First consume succeeds.
+        let first = consume_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        // Second consume is rejected — single-use.
+        let second = consume_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn authorize_emits_verifiable_receipt() {
+        let (state, tenant_id, agent_token) = setup_state("emit_receipt").await;
+
+        // Any decision (here a read-only allow) must emit a receipt.
+        let mut request = mcp_authorize_request("github", "read_issue");
+        request.tool_call.mutates_state = false;
+        let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        let (receipt_id,): (String,) = sqlx::query_as(
+            "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(tenant_id.as_str())
+        .fetch_one(&state.pool)
+        .await
+        .expect("a receipt should have been emitted for the decision");
+
+        // The /verify endpoint recomputes the hash and confirms integrity.
+        let response = verify_receipt(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(receipt_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["verified"].as_bool(), Some(true));
+        assert_eq!(json["receipt_id"].as_str(), Some(receipt_id.as_str()));
     }
 
     #[tokio::test]

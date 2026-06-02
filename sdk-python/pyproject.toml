@@ -1,17 +1,36 @@
 [build-system]
-requires = ["setuptools>=61.0.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "aegisagent"
 version = "0.1.0"
-description = "AegisAgent Python SDK for secure tool interception and governance"
+description = "AegisAgent Python SDK — fail-closed approval integrity and trust-provenance for AI agent actions"
+readme = "README.md"
 requires-python = ">=3.8"
+license = "MIT"
+authors = [{ name = "Lavkush Kumar" }]
+keywords = ["ai-agents", "security", "authorization", "approval-integrity", "mcp", "cedar"]
 dependencies = [
     "requests>=2.25.0",
     "opentelemetry-api>=1.15.0",
 ]
 
+[project.optional-dependencies]
+dev = ["black==26.5.1"]
+
+[project.urls]
+Homepage = "https://github.com/lavkushry/AegisAgent"
+Repository = "https://github.com/lavkushry/AegisAgent"
+Issues = "https://github.com/lavkushry/AegisAgent/issues"
+
+[project.scripts]
+aegis-verify-receipts = "aegisagent.verify_receipts:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["aegisagent*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]

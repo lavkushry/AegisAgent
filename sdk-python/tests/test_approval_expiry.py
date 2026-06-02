@@ -90,7 +90,11 @@ class TestApprovalExpiry(unittest.TestCase):
         auth = MagicMock()
         auth.status_code = 200
         auth.json.return_value = _approval_response(correct_hash, _FUTURE)
-        mock_post.return_value = auth
+        consume = MagicMock()
+        consume.status_code = 200
+        consume.json.return_value = {"status": "consumed", "action_hash": correct_hash}
+        # POST calls happen in order: authorize, then consume.
+        mock_post.side_effect = [auth, consume]
         status = MagicMock()
         status.status_code = 200
         status.json.return_value = {
@@ -105,6 +109,48 @@ class TestApprovalExpiry(unittest.TestCase):
             return f"executed_{param1}"
 
         self.assertEqual(my_test_func("hello"), "executed_hello")
+
+    @patch("time.sleep", return_value=None)
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_approved_but_not_consumable_fails_closed(
+        self, mock_post, mock_get, _sleep
+    ):
+        # Single-use: if the approval is APPROVED with a matching hash but the
+        # gateway refuses to consume it (already used / expired -> 409), the SDK
+        # must fail closed instead of executing.
+        correct_hash = _hash_tool_call(
+            tool="test_tool",
+            action="test_action",
+            resource=None,
+            mutates_state=True,
+            parameters={"param1": "hello"},
+        )
+        auth = MagicMock()
+        auth.status_code = 200
+        auth.json.return_value = _approval_response(correct_hash, _FUTURE)
+        consume = MagicMock()
+        consume.status_code = 409  # already consumed / not consumable
+        mock_post.side_effect = [auth, consume]
+        status = MagicMock()
+        status.status_code = 200
+        status.json.return_value = {
+            "status": "APPROVED",
+            "action_hash": correct_hash,
+            "expires_at": _FUTURE,
+        }
+        mock_get.return_value = status
+
+        executed = {"ran": False}
+
+        @protect_tool(self.client, tool="test_tool", action="test_action")
+        def my_test_func(param1):
+            executed["ran"] = True
+            return f"executed_{param1}"
+
+        with self.assertRaises(PermissionError):
+            my_test_func("hello")
+        self.assertFalse(executed["ran"], "unconsumable approval must not execute")
 
     def test_expiry_helpers(self):
         from aegisagent.decorator import _approval_expired, _parse_rfc3339
