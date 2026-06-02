@@ -297,10 +297,21 @@ pub async fn register_agent(
     match db::get_agent_by_key(&state.pool, &tenant_id, &payload.agent_key).await {
         Ok(Some(agent)) => {
             info!("Agent already registered: {}", payload.agent_key);
+            let id = match Uuid::parse_str(&agent.id) {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("Stored agent id is not a valid UUID: {:?}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "Database error"})),
+                    )
+                        .into_response();
+                }
+            };
             return (
                 StatusCode::OK,
                 Json(RegisterAgentResponse {
-                    id: Uuid::parse_str(&agent.id).unwrap(),
+                    id,
                     agent_key: agent.agent_key,
                     agent_token: agent.agent_token,
                 }),

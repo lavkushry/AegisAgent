@@ -1,8 +1,7 @@
-use std::str::FromStr;
-use cedar_policy::{Authorizer, Context, Decision, EntityUid, PolicySet, Request, Entities};
-
-use std::path::Path;
+use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request};
 use crate::models::AuthorizeRequest;
+use std::path::Path;
+use std::str::FromStr;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
@@ -25,7 +24,7 @@ impl PolicyEngine {
         let policy_str = tokio::fs::read_to_string(policy_path)
             .await
             .map_err(|e| PolicyError::File(e.to_string()))?;
-        
+
         let policy_set = PolicySet::from_str(&policy_str)
             .map_err(|e| PolicyError::Parse(e.to_string()))?;
 
@@ -85,9 +84,6 @@ impl PolicyEngine {
         let mut reason = "Policy evaluation complete.".to_string();
 
         for policy_id in response.diagnostics().reason() {
-
-
-
             matched_policies.push(policy_id.to_string());
             if let Some(policy) = self.policy_set.policy(policy_id) {
                 // If the decision is ALLOW but any of the satisfied policies annotations indicate
