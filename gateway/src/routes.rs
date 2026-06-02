@@ -122,6 +122,13 @@ fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
     sha256_hex(canonical_action_string(tool_call).as_bytes())
 }
 
+/// Canonical (scheme `aegis-jcs-1`) string for an arbitrary JSON value. Used for
+/// action-receipt hashing; MUST match the SDK's `canonicalize()` byte-for-byte
+/// (see `docs/action-receipt-spec.md` and `tests/receipt_chain_vectors.json`).
+fn canonical_value_string(value: &Value) -> String {
+    serde_json::to_string(&canonicalize_json(value.clone())).unwrap_or_default()
+}
+
 /// True if the approval window has passed. Defense-in-depth alongside the SDK's
 /// client-side expiry check: the gateway must not hand out, or grant, an approval
 /// whose `expires_at` is in the past.
@@ -1545,6 +1552,46 @@ mod tests {
         )));
         // No expiry set -> never expired.
         assert!(!approval_is_expired(&make_test_approval(None, "created")));
+    }
+
+    #[test]
+    fn receipt_chain_matches_shared_corpus() {
+        // Proves the gateway reproduces the Python-generated receipt_hash values
+        // byte-for-byte: receipt_hash = SHA-256(canonical(body)) where body is
+        // every field except receipt_hash (incl. prev_receipt_hash). This is the
+        // cross-language guarantee that lets the Python verifier / aegis-verify-receipts
+        // validate gateway-emitted receipts. See docs/action-receipt-spec.md.
+        let corpus_path =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/receipt_chain_vectors.json");
+        let raw = std::fs::read_to_string(corpus_path)
+            .expect("shared receipt corpus must exist at tests/receipt_chain_vectors.json");
+        let corpus: Value = serde_json::from_str(&raw).expect("corpus must be valid JSON");
+
+        assert_eq!(corpus["canon_version"].as_str(), Some(CANON_VERSION));
+
+        let receipts = corpus["receipts"].as_array().expect("receipts array");
+        let mut prev = String::new();
+        for receipt in receipts {
+            let obj = receipt.as_object().expect("receipt object");
+            let stored = obj
+                .get("receipt_hash")
+                .and_then(|v| v.as_str())
+                .expect("receipt_hash present");
+
+            // body = all fields except receipt_hash (prev_receipt_hash stays in).
+            let mut body = obj.clone();
+            body.remove("receipt_hash");
+            let recomputed = sha256_hex(canonical_value_string(&Value::Object(body)).as_bytes());
+            assert_eq!(recomputed, stored, "receipt hash mismatch vs corpus");
+
+            // Chain linkage: each receipt references the previous receipt's hash.
+            let prev_in_receipt = obj
+                .get("prev_receipt_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            assert_eq!(prev_in_receipt, prev, "broken chain link");
+            prev = stored.to_string();
+        }
     }
 
     #[tokio::test]
