@@ -217,6 +217,18 @@ def protect_tool(
                         _assert_matching_action_hash(
                             status_info, expected_action_hash, "status"
                         )
+                        # Single-use: atomically consume the approval before
+                        # executing, so it cannot be replayed/reused. Fail closed
+                        # if the gateway will not hand out the consumption.
+                        consumed = client.consume_approval(approval_id)
+                        if not consumed:
+                            raise PermissionError(
+                                f"Action '{tool}.{action}' approval could not be "
+                                "consumed (already used/expired). Failing closed."
+                            )
+                        _assert_matching_action_hash(
+                            consumed, expected_action_hash, "consume"
+                        )
                         logger.warning(
                             f"✅ Action '{tool}.{action}' APPROVED. Resuming..."
                         )

@@ -67,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/approvals/:id/approve", post(routes::approve_approval))
         .route("/v1/approvals/:id/reject", post(routes::reject_approval))
         .route("/v1/approvals/:id/edit", post(routes::edit_approval))
+        .route("/v1/approvals/:id/consume", post(routes::consume_approval))
         // Audits
         .route("/v1/runs/:id/timeline", get(routes::get_timeline))
         .route("/v1/audit/events", get(routes::get_audit_events))

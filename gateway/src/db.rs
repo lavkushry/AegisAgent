@@ -199,6 +199,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             edited_skill_call TEXT,
             expires_at DATETIME,
             decided_at DATETIME,
+            consumed_at DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             FOREIGN KEY (decision_id) REFERENCES decisions(id)
@@ -208,6 +209,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     ensure_approval_original_call_hash_column(pool).await?;
+    ensure_approval_consumed_at_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_events (
@@ -328,6 +330,50 @@ async fn ensure_approval_original_call_hash_column(pool: &SqlitePool) -> Result<
         .execute(pool)
         .await?;
     Ok(())
+}
+
+async fn ensure_approval_consumed_at_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(approvals)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "consumed_at")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE approvals ADD COLUMN consumed_at DATETIME")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Atomically consume an APPROVED approval (single-use). Returns `true` only if
+/// THIS call consumed it (one row updated); `false` if it was already consumed,
+/// expired, not approved, or not found. The `consumed_at IS NULL` guard makes
+/// concurrent double-consume safe — at most one UPDATE matches.
+pub async fn consume_approval(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    approval_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let now = Utc::now();
+    let result = sqlx::query(
+        "UPDATE approvals
+         SET consumed_at = ?
+         WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
+           AND (expires_at IS NULL OR expires_at > ?)",
+    )
+    .bind(now)
+    .bind(tenant_id)
+    .bind(approval_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 // --- Multi-Tenant CRUD Operations ---

@@ -97,7 +97,7 @@ Authenticates SDK requests; resolves tenant/agent/user/session; normalizes the t
 
 **Fail-closed enforcement.** `GET /v1/approvals/:id` returns the bound `action_hash`. The SDK recomputes the hash of the action it is about to execute and refuses on mismatch. Approvals are single-use, expiring, and replay-checked (nonce + `decided_at` + `expires_at`).
 
-> **Implementation status (2026-06-02).** *Done & verified (Python):* `action_hash` binding on approvals; SDK fails closed on hash mismatch and on expiry — it refuses to execute an approval whose `expires_at` has passed even if `APPROVED` with a matching hash (`sdk-python/tests/test_approval_expiry.py`, `test_sdk.py`; 11/11). *Done, pending `cargo` verification (Rust gateway):* **gateway-side expiry enforcement** as defense-in-depth — `get_approval` reports `EXPIRED` for a pending past-window approval, and `approve_approval` returns `409` for an expired or already-decided approval (`approval_is_expired`; tests `approval_is_expired_detects_past_window`, `expired_approval_is_reported_and_cannot_be_approved`). *Pending:* **single-use `nonce`** column + consume-on-use to fully close replay (T-A3); **verifiable hash-chained receipts** (T-C).
+> **Implementation status (2026-06-02).** *Done & verified (Python):* `action_hash` binding on approvals; SDK fails closed on hash mismatch and on expiry — it refuses to execute an approval whose `expires_at` has passed even if `APPROVED` with a matching hash (`sdk-python/tests/test_approval_expiry.py`, `test_sdk.py`; 11/11). *Done, pending `cargo` verification (Rust gateway):* **gateway-side expiry enforcement** as defense-in-depth — `get_approval` reports `EXPIRED` for a pending past-window approval, and `approve_approval` returns `409` for an expired or already-decided approval (`approval_is_expired`; tests `approval_is_expired_detects_past_window`, `expired_approval_is_reported_and_cannot_be_approved`); **single-use approvals** — `consumed_at` column + atomic `db::consume_approval` + `POST /v1/approvals/:id/consume`; the SDK consumes before executing and fails closed if it cannot (`consume_is_single_use`, SDK `test_approved_but_not_consumable_fails_closed`). *Pending:* race-safe chain head (transaction); enterprise receipt signing.
 
 **Threats closed:** approve-then-swap, parameter tampering post-approval, replay/reuse, render-vs-bytes mismatch (OWASP "approval manipulation").
 
@@ -146,7 +146,7 @@ when {
 
 **Tamper evidence.** Receipts form a per-tenant hash chain: `receipt_hash = SHA-256(canonicalize(body))` where `body` is every field except `receipt_hash` and *includes* `prev_receipt_hash` (so field edits and re-linking are both detectable). Optional Sigstore-style transparency-log / signing in enterprise mode. The format is **open and documented** ([`docs/action-receipt-spec.md`](action-receipt-spec.md) — the standards play, see Vision §7 Phase 2). Exportable via OTel/webhook to SIEM.
 
-> **Implementation status (2026-06-02).** *Done & verified (Python):* open format spec + hash-chain **reference verifier** (`aegisagent/receipts.py`; 8/8) + CLI (`aegis-verify-receipts`) + shared corpus. Canonicalization centralized in `aegisagent/canon.py`. *Done, pending `cargo` (Rust gateway):* parity lock (`receipt_chain_matches_shared_corpus`); **emission** of a hash-chained receipt per decision into `action_receipts` (`emit_action_receipt`); **`GET /v1/receipts/:id/verify`** (`authorize_emits_verifiable_receipt`). *Next:* single-use `nonce` (T-A3); race-safe chain head (transaction); enterprise signing.
+> **Implementation status (2026-06-02).** *Done & verified (Python):* open format spec + hash-chain **reference verifier** (`aegisagent/receipts.py`; 8/8) + CLI (`aegis-verify-receipts`) + shared corpus. Canonicalization centralized in `aegisagent/canon.py`. *Done, pending `cargo` (Rust gateway):* parity lock (`receipt_chain_matches_shared_corpus`); **emission** of a hash-chained receipt per decision into `action_receipts` (`emit_action_receipt`); **`GET /v1/receipts/:id/verify`** (`authorize_emits_verifiable_receipt`). *Next:* race-safe chain head (transaction); enterprise signing.
 
 ```json
 {
@@ -186,7 +186,7 @@ Core tables (unchanged, tenant-isolated, parameterized): `tenants, users, agents
 -- approvals: bind to the frozen action
 ALTER TABLE approvals ADD COLUMN action_hash TEXT NOT NULL;        -- SHA-256 of canonical action
 ALTER TABLE approvals ADD COLUMN canonical_action JSONB NOT NULL;  -- exact bytes shown to approver
-ALTER TABLE approvals ADD COLUMN nonce TEXT NOT NULL;              -- single-use / replay defense
+ALTER TABLE approvals ADD COLUMN consumed_at DATETIME;            -- single-use / replay defense (atomic consume)
 ALTER TABLE approvals ADD COLUMN expires_at TIMESTAMPTZ;
 
 -- action_receipts: verifiable, hash-chained evidence

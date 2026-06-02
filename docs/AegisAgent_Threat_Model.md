@@ -61,7 +61,7 @@ Key assumption: the agent process **may be hijacked** (indirect prompt injection
 |---|---|---|---|
 | T-A1 | **Approve-then-swap** | Get benign action A approved, execute different action B under it | SDK recomputes hash(B) ≠ approved `action_hash(A)` → **fail closed** |
 | T-A2 | **Post-approval parameter tampering** | Mutate params after approval | New canonical action → new hash → mismatch → fail closed; `edit` forces re-evaluation |
-| T-A3 | **Replay / reuse** | Reuse an old/expired approval for a new action | Single-use nonce + `expires_at`; replay rejected |
+| T-A3 | **Replay / reuse** | Reuse an old/expired approval, or execute an approved action twice | Bound `action_hash` (no reuse for a different action) + `expires_at` + **single-use**: atomic `consume` (`consumed_at` guard) before execution; the SDK fails closed if consume is refused (409) |
 | T-A4 | **Render-vs-bytes** | Approver sees friendly text; different bytes run | Approval card renders the *canonical action that is hashed*; approval binds to that hash |
 | T-A5 | **Approval-callback forgery** | Spoof a Slack/Teams "approve" | Verify callback signature; bind approver identity + role; reject unsigned |
 | T-A6 | **Approver-role abuse** | Unauthorized user approves | Approver group/role lookup via SSO/OIDC; policy-scoped approver groups |

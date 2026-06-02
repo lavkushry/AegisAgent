@@ -1166,6 +1166,61 @@ pub async fn get_approval(
     }
 }
 
+// Consume Handler: single-use, atomic consumption of an APPROVED approval.
+// The SDK calls this before executing so an approval cannot be replayed/reused.
+pub async fn consume_approval(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(approval_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    let consumed =
+        match db::consume_approval(&state.pool, &tenant_id, &approval_id.to_string()).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to consume approval: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    if !consumed {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Approval not consumable (already used, expired, or not approved)",
+                "approval_id": approval_id,
+            })),
+        )
+            .into_response();
+    }
+
+    // Return the bound action hash so the SDK can re-verify before executing.
+    let action_hash = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.original_call_hash)
+        .unwrap_or_default();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "consumed",
+            "approval_id": approval_id,
+            "action_hash": action_hash,
+        })),
+    )
+        .into_response()
+}
+
 // Verify a stored action receipt by recomputing its hash from the canonical body.
 pub async fn verify_receipt(
     State(state): State<Arc<AppState>>,
@@ -1716,6 +1771,52 @@ mod tests {
             assert_eq!(prev_in_receipt, prev, "broken chain link");
             prev = stored.to_string();
         }
+    }
+
+    #[tokio::test]
+    async fn consume_is_single_use() {
+        let (state, tenant_id, agent_token) = setup_state("consume_single_use").await;
+
+        // Create an approval (merge to main) and approve it.
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/9".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        // First consume succeeds.
+        let first = consume_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        // Second consume is rejected — single-use.
+        let second = consume_approval(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

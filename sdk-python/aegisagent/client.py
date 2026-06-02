@@ -146,3 +146,25 @@ class AegisClient:
         except Exception as e:
             logger.error(f"Failed to query approval: {e}")
             return None
+
+    def consume_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """Atomically consume an APPROVED approval so it cannot be reused.
+
+        Returns the gateway response (which includes the bound ``action_hash``)
+        on success, or ``None`` if the approval was already consumed, expired, or
+        is not approvable. The caller MUST fail closed on ``None``.
+        """
+        url = f"{self.endpoint}/v1/approvals/{approval_id}/consume"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            response = requests.post(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                return response.json()
+            logger.error(f"Approval consume rejected: {response.status_code}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to consume approval: {e}")
+            return None
