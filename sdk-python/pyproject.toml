@@ -12,6 +12,9 @@ dependencies = [
     "opentelemetry-api>=1.15.0",
 ]
 
+[project.scripts]
+aegis-verify-receipts = "aegisagent.verify_receipts:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["aegisagent*"]

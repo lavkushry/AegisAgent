@@ -90,5 +90,5 @@ Any mismatch ⇒ **invalid** (fail closed). Reference: `verify_chain()` / `verif
 
 ## 6. Implementation status (2026-06-02)
 
-- **Done & verified (Python):** format + hash chain + reference verifier (`seal_receipt`, `seal_chain`, `verify_receipt`, `verify_chain`); 8/8 tests incl. tamper/broken-link/reorder/non-ASCII. Canonicalization centralized in `aegisagent/canon.py`.
-- **Next (Rust gateway):** emit a receipt for every decision into an `action_receipts` table (hash-chained per tenant) and expose `GET /v1/receipts/:id/verify`. MUST match this spec byte-for-byte (shared vectors to be added). Enterprise: KMS-backed signing / transparency-log anchoring.
+- **Done & verified (Python):** format + hash chain + reference verifier (`seal_receipt`, `seal_chain`, `verify_receipt`, `verify_chain`); CLI `aegis-verify-receipts` / `python -m aegisagent.verify_receipts`; shared corpus `tests/receipt_chain_vectors.json` (pins exact `receipt_hash` values). 25/25 SDK tests incl. tamper/broken-link/reorder/non-ASCII/CLI. Canonicalization centralized in `aegisagent/canon.py`.
+- **Next (Rust gateway):** emit a receipt for every decision into an `action_receipts` table (hash-chained per tenant) and expose `GET /v1/receipts/:id/verify`. MUST reproduce the `receipt_hash` values in `tests/receipt_chain_vectors.json` byte-for-byte. Enterprise: KMS-backed signing / transparency-log anchoring.

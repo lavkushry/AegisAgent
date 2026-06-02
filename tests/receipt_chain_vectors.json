@@ -1,0 +1,53 @@
+{
+  "canon_version": "aegis-jcs-1",
+  "description": "Shared action-receipt chain vectors. The Rust gateway emitter MUST produce byte-identical receipt_hash values for these bodies. Verifier: aegisagent.receipts.verify_chain / aegis-verify-receipts.",
+  "receipts": [
+    {
+      "event_id": "rcpt_0001",
+      "ts": "2026-06-02T12:00:00Z",
+      "agent_id": "coding-agent-prod",
+      "user_id": "lavkush",
+      "tool": "github",
+      "action": "merge_pull_request",
+      "resource": "payments-service#482",
+      "source_trust": "untrusted_external",
+      "decision": "require_approval",
+      "approver": null,
+      "action_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "prev_receipt_hash": "",
+      "receipt_hash": "a84bcc5881e29fe1da822f50fe7458e7e942f2dd3c6df2b9ce1ca85d716dc603"
+    },
+    {
+      "event_id": "rcpt_0002",
+      "ts": "2026-06-02T12:00:05Z",
+      "agent_id": "coding-agent-prod",
+      "user_id": "lavkush",
+      "tool": "github",
+      "action": "merge_pull_request",
+      "resource": "payments-service#482",
+      "source_trust": "untrusted_external",
+      "decision": "rejected_on_swap",
+      "approver": "platform-lead",
+      "action_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "executed_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "note": "approve-then-swap blocked: déjà vu ☕",
+      "prev_receipt_hash": "a84bcc5881e29fe1da822f50fe7458e7e942f2dd3c6df2b9ce1ca85d716dc603",
+      "receipt_hash": "58816579f5ac87778eb9a07998a9dbe1936504f9da9b76c17c5ef8d039493a58"
+    },
+    {
+      "event_id": "rcpt_0003",
+      "ts": "2026-06-02T12:01:00Z",
+      "agent_id": "coding-agent-prod",
+      "user_id": "lavkush",
+      "tool": "github",
+      "action": "comment_on_pr",
+      "resource": "payments-service#482",
+      "source_trust": "trusted_internal_signed",
+      "decision": "allow",
+      "approver": null,
+      "action_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "prev_receipt_hash": "58816579f5ac87778eb9a07998a9dbe1936504f9da9b76c17c5ef8d039493a58",
+      "receipt_hash": "31d22b32c6440e68f50e1bdd925c63b53d57592d4ae088af5436a003a45021e4"
+    }
+  ]
+}
