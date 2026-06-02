@@ -77,7 +77,7 @@ class TestAegisSDK(unittest.TestCase):
                 "approval_id": "89cf8b98-2103-4458-8210-344589cf8b98",
                 "status": "created",
                 "approver_group": "platform-leads",
-                "expires_at": "2026-06-01T14:18:27Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "action_hash": "0" * 64,
             },
         }
@@ -119,7 +119,7 @@ class TestAegisSDK(unittest.TestCase):
                 "approval_id": "89cf8b98-2103-4458-8210-344589cf8b98",
                 "status": "created",
                 "approver_group": "platform-leads",
-                "expires_at": "2026-06-01T14:18:27Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "action_hash": expected_hash,
             },
         }

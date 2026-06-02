@@ -2,8 +2,10 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 import time
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, Optional
 
@@ -83,6 +85,37 @@ def _assert_matching_action_hash(source: dict, expected_hash: str, phase: str) -
         raise PermissionError(f"Approval {phase} action hash mismatch. Failing closed.")
 
 
+def _parse_rfc3339(value: Any) -> Optional[datetime]:
+    """Parse an RFC 3339 / ISO 8601 timestamp (as emitted by the gateway's
+    chrono DateTime<Utc>) into an aware UTC datetime. Returns None if it cannot
+    be parsed, so callers can degrade gracefully rather than crash a legit flow.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    # chrono may emit up to 9 fractional digits; datetime.fromisoformat accepts
+    # at most 6 before Python 3.11, so truncate the extras.
+    text = re.sub(r"(\.\d{6})\d+", r"\1", text)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _approval_expired(expires_at: Any) -> bool:
+    """True if the approval window has passed. Unparseable/missing timestamps
+    return False (do not break a legitimate flow; the poll timeout still bounds it)."""
+    deadline = _parse_rfc3339(expires_at)
+    if deadline is None:
+        return False
+    return datetime.now(timezone.utc) >= deadline
+
+
 def protect_tool(
     client: AegisClient,
     tool: str,
@@ -159,7 +192,15 @@ def protect_tool(
                 _assert_matching_action_hash(approval, expected_action_hash, "response")
 
                 approval_id = approval.get("approval_id")
+                expires_at_value = approval.get("expires_at")
                 group = approval.get("approver_group", "default")
+
+                # Fail closed if the approval window has already passed.
+                if _approval_expired(expires_at_value):
+                    raise PermissionError(
+                        f"Action '{tool}.{action}' approval already expired "
+                        f"(expires_at={expires_at_value}). Failing closed."
+                    )
                 logger.warning(
                     f"⚠️ Action '{tool}.{action}' PAUSED. Requires approval from group '{group}'.\n"
                     f"Approval ID: {approval_id}\n"
@@ -175,6 +216,15 @@ def protect_tool(
                     status_info = client.get_approval_status(approval_id)
                     if not status_info:
                         continue
+
+                    # Refresh expiry from the latest status and fail closed if the
+                    # window has passed, before acting on any decision.
+                    expires_at_value = status_info.get("expires_at") or expires_at_value
+                    if _approval_expired(expires_at_value):
+                        raise PermissionError(
+                            f"Action '{tool}.{action}' approval expired before "
+                            f"completion (expires_at={expires_at_value}). Failing closed."
+                        )
 
                     status = status_info.get("status")
                     if status == "APPROVED":

@@ -97,6 +97,8 @@ Authenticates SDK requests; resolves tenant/agent/user/session; normalizes the t
 
 **Fail-closed enforcement.** `GET /v1/approvals/:id` returns the bound `action_hash`. The SDK recomputes the hash of the action it is about to execute and refuses on mismatch. Approvals are single-use, expiring, and replay-checked (nonce + `decided_at` + `expires_at`).
 
+> **Implementation status (2026-06-02).** *Done:* `action_hash` binding on approvals; SDK fails closed on hash mismatch (`sdk-python/tests/test_approval_expiry.py`, `test_sdk.py`); **SDK-side expiry enforcement** — the SDK refuses to execute an approval whose `expires_at` has passed, even if `APPROVED` with a matching hash (the SDK is in the trust boundary, so this is a last-step guarantee). *Pending:* **gateway-side expiry enforcement** (defense-in-depth: `get_approval`/`approve_approval` should reject expired approvals — needs `cargo` verification); **single-use `nonce`** column + consume-on-use to fully close replay (T-A3). Until the gateway enforces expiry, a bypassed/forked SDK could still act on a stale approval.
+
 **Threats closed:** approve-then-swap, parameter tampering post-approval, replay/reuse, render-vs-bytes mismatch (OWASP "approval manipulation").
 
 ```text
