@@ -1,0 +1,16 @@
+{
+  "name": "@aegisagent/sdk",
+  "version": "0.1.0",
+  "description": "AegisAgent TypeScript SDK — fail-closed agent action integrity client (canonicalization aegis-jcs-1)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test test/canon.test.ts"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "license": "MIT"
+}
