@@ -2,6 +2,10 @@
 /gateway/target/
 /target/
 
+# MkDocs documentation site build output
+/site/
+.cache/
+
 # Python caches and build artifacts
 __pycache__/
 *.py[cod]
