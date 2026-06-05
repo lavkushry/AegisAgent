@@ -1,0 +1,41 @@
+# .pre-commit-config.yaml — AegisAgent
+# Run: pip install pre-commit && pre-commit install
+# Manual scan: pre-commit run --all-files
+
+repos:
+  # Secret scanning
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        name: Detect secrets (gitleaks)
+
+  # General hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+
+  # Python formatting
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+        files: ^(sdk-python|examples)/
+
+  # Rust formatting (requires cargo fmt on PATH)
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --manifest-path gateway/Cargo.toml --
+        language: system
+        types: [rust]
+        pass_filenames: false

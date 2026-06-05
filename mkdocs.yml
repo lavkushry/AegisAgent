@@ -74,6 +74,8 @@ nav:
   - Getting started:
       - Overview: getting-started.md
   - Installation: installation.md
+  - Demos:
+      - Approve-then-swap blocked: approve-then-swap-demo.md
   - Integration & connectivity: AegisAgent_Integration_Connectivity.md
   - User manual:
       - The Agent SOC: AegisAgent_Agent_SOC_Design.md

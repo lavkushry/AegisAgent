@@ -81,6 +81,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/audit/events", get(routes::get_audit_events))
         // Verifiable action receipts
         .route("/v1/receipts/:id/verify", get(routes::verify_receipt))
+        // SOC Phase 4: Response API — agent freeze/revoke, MCP quarantine
+        .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
+        .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))
+        .route("/v1/agents/:id/revoke", post(routes::revoke_agent))
+        .route(
+            "/v1/mcp/servers/:server_key/quarantine",
+            post(routes::quarantine_mcp_server),
+        )
+        .route(
+            "/v1/mcp/servers/:server_key/restore",
+            post(routes::restore_mcp_server),
+        )
         // Fallback or health check
         .route("/health", get(|| async { "healthy" }))
         .with_state(state);

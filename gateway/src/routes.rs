@@ -1593,6 +1593,171 @@ pub async fn get_audit_events(
     }
 }
 
+// ── SOC Phase 4: Response API ─────────────────────────────────────────────────
+
+/// Freeze an agent: all subsequent /v1/authorize calls for this agent will be
+/// denied immediately without Cedar evaluation. Reversible via /unfreeze.
+pub async fn freeze_agent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    set_agent_operational_status(state, headers, agent_id, "frozen").await
+}
+
+/// Restore a frozen agent to active status.
+pub async fn unfreeze_agent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    set_agent_operational_status(state, headers, agent_id, "active").await
+}
+
+/// Permanently revoke an agent — not reversible via API.
+pub async fn revoke_agent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    set_agent_operational_status(state, headers, agent_id, "revoked").await
+}
+
+async fn set_agent_operational_status(
+    state: Arc<AppState>,
+    headers: HeaderMap,
+    agent_id: String,
+    status: &str,
+) -> axum::response::Response {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    match db::set_agent_status(&state.pool, &tenant_id, &agent_id, status).await {
+        Ok(true) => {
+            let audit = AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                event_type: format!("agent_{}", status),
+                agent_id: Some(agent_id.clone()),
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: None,
+                resource: None,
+                event_json: serde_json::to_string(&json!({
+                    "agent_id": agent_id,
+                    "new_status": status,
+                }))
+                .unwrap_or_default(),
+                input_hash: None,
+                output_hash: None,
+                created_at: Utc::now(),
+            };
+            let _ = db::insert_audit_event(&state.pool, &audit).await;
+            info!(agent_id = %agent_id, status = %status, "Agent status changed");
+            (
+                StatusCode::OK,
+                Json(json!({ "agent_id": agent_id, "status": status })),
+            )
+                .into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Agent not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to update agent status: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Database error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Quarantine an MCP server — the gateway will deny all tool calls from this
+/// server until it is restored. Tenant-scoped, parameterized, fail-closed.
+pub async fn quarantine_mcp_server(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(server_key): Path<String>,
+) -> impl IntoResponse {
+    update_mcp_server_quarantine(state, headers, server_key, "quarantined").await
+}
+
+/// Restore a quarantined MCP server to active status.
+pub async fn restore_mcp_server(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(server_key): Path<String>,
+) -> impl IntoResponse {
+    update_mcp_server_quarantine(state, headers, server_key, "active").await
+}
+
+async fn update_mcp_server_quarantine(
+    state: Arc<AppState>,
+    headers: HeaderMap,
+    server_key: String,
+    status: &str,
+) -> axum::response::Response {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    match db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, status).await {
+        Ok(true) => {
+            let audit = AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                event_type: format!("mcp_server_{}", status),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                span_id: None,
+                skill: Some(format!("mcp:{}", server_key)),
+                action: None,
+                resource: Some(server_key.clone()),
+                event_json: serde_json::to_string(&json!({
+                    "server_key": server_key,
+                    "new_status": status,
+                }))
+                .unwrap_or_default(),
+                input_hash: None,
+                output_hash: None,
+                created_at: Utc::now(),
+            };
+            let _ = db::insert_audit_event(&state.pool, &audit).await;
+            info!(server_key = %server_key, status = %status, "MCP server status changed");
+            (
+                StatusCode::OK,
+                Json(json!({ "server_key": server_key, "status": status })),
+            )
+                .into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "MCP server not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to update MCP server status: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Database error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

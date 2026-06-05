@@ -914,6 +914,67 @@ pub async fn get_all_audit_events(
     .await
 }
 
+/// --- SOC Phase 4: Response API ---
+///
+/// Set an agent's operational status (active | frozen | revoked).
+/// Frozen agents are denied on the next authorize call automatically (the
+/// authorize handler re-reads `agents.status` on every request).
+/// Parameterized and tenant-scoped — never touches another tenant's row.
+pub async fn set_agent_status(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    status: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(status)
+    .bind(tenant_id)
+    .bind(agent_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Check whether an agent is currently active (not frozen or revoked).
+/// Called by the authorize hot path — must be fast (indexed on tenant_id).
+#[allow(dead_code)] // Reserved for authorize hot-path status check (PR-043 follow-up)
+pub async fn is_agent_active(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM agents WHERE tenant_id = ? AND id = ?")
+            .bind(tenant_id)
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(s,)| s == "active").unwrap_or(false))
+}
+
+/// Quarantine an MCP server — all its tools become deny-by-default.
+/// Sets `status = 'quarantined'` on the server; the authorize path checks this.
+pub async fn set_mcp_server_status(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    status: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE mcp_servers SET status = ?
+         WHERE tenant_id = ? AND server_key = ?",
+    )
+    .bind(status)
+    .bind(tenant_id)
+    .bind(server_key)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
