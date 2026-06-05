@@ -176,7 +176,7 @@ The inline plane already decides correctly today. The async plane turns those de
 ## 6. Core components
 
 ### 6.1 Agent Sensor / SDK (= Wazuh Agent)
-The collection point. Today: Python `@protect_tool` ([`sdk-python/aegisagent/decorator.py`](../sdk-python/aegisagent/decorator.py))
+The collection point. Today: Python `@protect_tool` ([`sdk-python/aegisagent/decorator.py`](https://github.com/lavkushry/AegisAgent/blob/main/sdk-python/aegisagent/decorator.py))
 wraps a tool function, computes the `action_hash` (`aegis-jcs-1`), calls `/v1/authorize`, and fails closed
 on hash mismatch / expiry / unreachable gateway / un-consumable approval.
 

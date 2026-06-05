@@ -3,6 +3,7 @@
 [![CI](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](sdk-python/pyproject.toml)
+[![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://lavkushry.github.io/AegisAgent/)
 
 AegisAgent is the **integrity layer for AI agent actions** — open, self-hostable, and framework-neutral. It sits between an agent runtime and external actions and does two things that the now-commodity gateway market decides but does **not prove**:
 
@@ -157,6 +158,8 @@ cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 ```
 
 ## Project Docs
+
+> 📖 **Full documentation site:** <https://lavkushry.github.io/AegisAgent/> — published from this `docs/` folder with MkDocs Material. Browse the index in [`docs/README.md`](docs/README.md). Product + architecture docs are public; strategy/PM docs stay internal.
 
 > 📌 The strategy docs in `docs/` were re-anchored on 2026-06-02 from the original "Agent Action Firewall" framing to the **integrity-layer** positioning above. Start with the reassessment doc.
 
