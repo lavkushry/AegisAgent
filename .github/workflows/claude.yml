@@ -1,0 +1,59 @@
+# Claude Code — dogfooded GitHub automation (how Anthropic engineers run Claude on their own repos).
+#
+# Mention-gated: this workflow ONLY runs when someone types "@claude" in an issue,
+# a PR comment, or a review. On every normal push/PR it does not trigger at all, so
+# CI stays green until you finish the 2-minute setup below.
+#
+# ── Setup (one time) ──────────────────────────────────────────────────────────
+#   1. Install the Claude GitHub App on lavkushry/AegisAgent:  https://github.com/apps/claude
+#      (or run `/install-github-app` from Claude Code, which does both steps for you).
+#   2. Add a repo secret  ANTHROPIC_API_KEY  (Settings → Secrets and variables → Actions).
+#      Prefer Claude subscription OAuth? swap to `claude_code_oauth_token` (see below).
+#
+# Then on any issue/PR, comment:  @claude implement X  /  @claude review this diff
+# Claude reads CLAUDE.md (your invariants) automatically and acts within the permissions below.
+
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude:
+    # Only fire on an explicit @claude mention — keeps this inert until invoked.
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # let Claude push fix branches
+      pull-requests: write   # …open/update PRs
+      issues: write          # …comment back
+      id-token: write        # OIDC for the action
+      actions: read          # read CI results to babysit
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        # Supply-chain hardening (matches skills/security_scan.md): pin to a commit SHA
+        # instead of the @v1 tag once you've vetted a release.
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Using a Claude subscription instead of an API key? comment the line above and use:
+          # claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          #
+          # Optional — pin the model / cap turns (defaults are fine to start):
+          # claude_args: "--model claude-opus-4-8 --max-turns 20"
