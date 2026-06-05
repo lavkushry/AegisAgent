@@ -3,40 +3,91 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AegisAgent Audit Timeline Mock</title>
+  <title>AegisAgent SOC Console Mock</title>
   <style>
     body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
     header { padding: 24px 32px; background: #111827; border-bottom: 1px solid #334155; }
-    main { padding: 32px; display: grid; gap: 20px; }
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
-    .card, .event { background: #111827; border: 1px solid #334155; border-radius: 14px; padding: 18px; }
+    header h1 { margin: 0 0 4px; }
+    main { padding: 32px; display: grid; gap: 24px; }
+    h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: #94a3b8; margin: 0 0 12px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+    .card, .event, .incident { background: #111827; border: 1px solid #334155; border-radius: 14px; padding: 18px; }
     .value { font-size: 30px; font-weight: 800; }
     .allow { color: #22c55e; }
     .deny { color: #ef4444; }
     .approval { color: #f59e0b; }
+    .crit { color: #f43f5e; }
+    .verified { color: #22c55e; }
     .timeline { display: grid; gap: 12px; }
-    .event { display: grid; grid-template-columns: 170px 1fr auto; gap: 16px; align-items: center; }
+    .event { display: grid; grid-template-columns: 150px 1fr auto; gap: 16px; align-items: center; }
+    .incident { border-left: 3px solid #f43f5e; }
+    .row { display: grid; grid-template-columns: 110px 1fr auto; gap: 14px; align-items: center; padding: 6px 0; border-top: 1px solid #1e293b; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid #334155; }
+    .badge.ok { color: #22c55e; border-color: #14532d; background: #052e16; }
+    .badge.atlas { color: #93c5fd; border-color: #1e3a8a; background: #0b1e44; }
     code { color: #93c5fd; }
     small { color: #94a3b8; }
+    .hash { color: #64748b; font-family: ui-monospace, monospace; font-size: 12px; }
   </style>
 </head>
 <body>
   <header>
-    <h1>AegisAgent Audit Timeline</h1>
-    <small>Static mock for MVP README/demo context. Not connected to the gateway.</small>
+    <h1>AegisAgent — SOC Console</h1>
+    <small>Static mock for MVP README/demo context. The integrity-anchored Agent SOC: detect, contain, and <em>prove</em> every agent action. Not connected to the gateway.</small>
   </header>
   <main>
-    <section class="cards">
-      <div class="card"><small>Protected actions</small><div class="value">128</div></div>
-      <div class="card"><small>Denied</small><div class="value deny">7</div></div>
-      <div class="card"><small>Pending approvals</small><div class="value approval">3</div></div>
-      <div class="card"><small>MCP tools reviewed</small><div class="value">24</div></div>
+    <!-- Overview tiles -->
+    <section>
+      <h2>Overview (last 24h)</h2>
+      <div class="cards">
+        <div class="card"><small>Protected actions</small><div class="value">128</div></div>
+        <div class="card"><small>Blocked (deny)</small><div class="value deny">7</div></div>
+        <div class="card"><small>Pending approvals</small><div class="value approval">3</div></div>
+        <div class="card"><small>Open incidents</small><div class="value crit">1</div></div>
+        <div class="card"><small>Detections</small><div class="value">12</div></div>
+        <div class="card"><small>Receipt chain</small><div class="value verified">✓ verified</div></div>
+        <div class="card"><small>Mean time to contain</small><div class="value">8s</div></div>
+      </div>
     </section>
-    <section class="timeline">
-      <div class="event"><small>12:04:11</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> after untrusted issue context</div><small>policy: untrusted-mutation-deny</small></div>
-      <div class="event"><small>12:03:58</small><div><strong class="approval">Approval created</strong> for <code>github.merge_pull_request</code> into <code>main</code></div><small>group: platform-leads</small></div>
-      <div class="event"><small>12:03:40</small><div><strong class="allow">Allowed</strong> <code>github.read_issue</code> from public repository</div><small>risk: low</small></div>
-      <div class="event"><small>12:03:01</small><div><strong>MCP discovered</strong> <code>github-mcp-demo.create_issue</code></div><small>status: pending</small></div>
+
+    <!-- Correlated, PROVABLE incident -->
+    <section>
+      <h2>Incident — provable timeline</h2>
+      <div class="incident">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+          <div>
+            <strong class="crit">inc_01J — Prompt injection → high-risk GitHub action</strong>
+            <div><small>agent <code>coding-agent-prod</code> · run <code>run_991</code> · severity critical · status: contained (frozen)</small></div>
+          </div>
+          <div style="text-align:right;">
+            <span class="badge atlas">ATLAS AML.T0051</span>
+            <span class="badge atlas">OWASP LLM01</span>
+            <div style="margin-top:6px;"><span class="badge ok">✓ timeline verified (receipt chain)</span></div>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <div class="row"><small>10:02:31</small><div><strong class="allow">Allowed</strong> <code>github.read_issue</code> — public issue #391</div><span class="hash">rcpt …a1b2</span></div>
+          <div class="row"><small>10:02:31</small><div>context labelled <code>untrusted_external</code> (deterministic)</div><span class="hash">rcpt …a1b2</span></div>
+          <div class="row"><small>10:03:04</small><div><strong class="crit">Detection AEG-1002</strong> confused-deputy-mutation (level 12)</div><span class="badge atlas">AML.T0051</span></div>
+          <div class="row"><small>10:05:10</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> → <code>main</code> · policy <code>forbid-untrusted-mutation</code></div><span class="hash">rcpt …c3d4</span></div>
+          <div class="row"><small>10:05:11</small><div>approve-then-swap attempt → <strong class="deny">SDK fail-closed</strong> (action_hash mismatch · T-A1)</div><span class="hash">rcpt …c3d4</span></div>
+          <div class="row"><small>10:05:12</small><div><strong class="approval">Active Response</strong> — agent <code>frozen</code>; Slack alert → #agent-security</div><span class="badge ok">contained</span></div>
+          <div class="row"><small>10:06:00</small><div>RCA drafted (sandboxed narrator) — root cause: untrusted issue carried hijack instructions</div><span class="badge">RCA</span></div>
+        </div>
+        <div style="margin-top:10px;"><small>Evidence: receipt chain …a1b2 → …c3d4 (one-click verify) · approver: rejected · executed: nothing</small></div>
+      </div>
+    </section>
+
+    <!-- Live decision feed -->
+    <section>
+      <h2>Live decision feed</h2>
+      <div class="timeline">
+        <div class="event"><small>12:04:11</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> after untrusted issue context · <small>trust: untrusted_external</small></div><span class="hash">action …9af1</span></div>
+        <div class="event"><small>12:03:58</small><div><strong class="approval">Approval created</strong> <code>github.merge_pull_request</code> → <code>main</code> · bound to action_hash</div><small>group: platform-leads</small></div>
+        <div class="event"><small>12:03:40</small><div><strong class="allow">Allowed</strong> <code>github.read_issue</code> from public repository</div><small>risk: low</small></div>
+        <div class="event"><small>12:03:22</small><div><strong class="deny">Drift</strong> MCP <code>github-mcp-demo</code> manifest hash ≠ pinned (AEG-4002)</div><span class="badge atlas">AML.T0010</span></div>
+        <div class="event"><small>12:03:01</small><div><strong>MCP discovered</strong> <code>github-mcp-demo.create_issue</code></div><small>status: pending</small></div>
+      </div>
     </section>
   </main>
 </body>

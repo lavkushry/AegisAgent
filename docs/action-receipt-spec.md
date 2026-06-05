@@ -1,9 +1,10 @@
 # AegisAgent Action Receipt — Open Format Spec v0
 
-**Status:** draft v0 · **Date:** 2026-06-02 · **Canon scheme:** `aegis-jcs-1`
+**Status:** draft v0 · **Date:** 2026-06-02 · **Extended:** 2026-06-05 (§7, SOC evidence spine) · **Canon scheme:** `aegis-jcs-1`
 **Reference implementation:** `sdk-python/aegisagent/receipts.py` (verifier) · tests: `sdk-python/tests/test_receipts.py`
+**SOC architecture:** [`AegisAgent_Agent_SOC_Design.md`](AegisAgent_Agent_SOC_Design.md)
 
-An **action receipt** is a tamper-evident record of one AI-agent action decision. Receipts are the verifiable evidence layer behind AegisAgent's compliance story (SOC 2 / EU AI Act Article 14) and are designed as an **open format** any gateway can emit and any third party can verify — independently of the runtime that produced them.
+An **action receipt** is a tamper-evident record of one AI-agent action decision. Receipts are the verifiable evidence layer behind AegisAgent's compliance story (SOC 2 / EU AI Act Article 14) and are designed as an **open format** any gateway can emit and any third party can verify — independently of the runtime that produced them. They are also the **evidence spine of the integrity-anchored Agent SOC**: every SOC alert and incident references the `receipt_hash` chain covering its events, which is what makes a SOC incident timeline *provable* rather than merely logged (§7). The format below is **locked and byte-exact** — do not change it without bumping the canon scheme and re-pinning the cross-language corpus, or both the fail-closed guarantee and the SOC's evidence integrity break.
 
 ---
 
@@ -96,3 +97,35 @@ Any mismatch ⇒ **invalid** (fail closed). Reference: `verify_chain()` / `verif
   - **gateway emission** — every `/v1/authorize` decision writes a hash-chained receipt into the `action_receipts` table (`emit_action_receipt`, chained per tenant via `rowid` head); body fields per `routes.rs::receipt_body_value` (excludes `receipt_hash` + volatile `created_at`).
   - **`GET /v1/receipts/:id/verify`** — recomputes the hash and returns `{verified, receipt_hash, recomputed_hash, prev_receipt_hash}`. Test: `authorize_emits_verifiable_receipt`.
 - **Next (Rust):** single-use `nonce` + consume step for full replay defense (T-A3). Enterprise: KMS-backed signing / transparency-log anchoring; chain-head selection should move into a transaction to be race-safe under concurrency.
+
+---
+
+## 7. The receipt as the SOC evidence spine
+
+The same hash chain that proves human oversight for compliance is what makes the **integrity-anchored Agent SOC** (see [`AegisAgent_Agent_SOC_Design.md`](AegisAgent_Agent_SOC_Design.md)) different from a generic SIEM: its incident timelines are *provable*, not just recorded.
+
+### 7.1 Receipt ↔ Agent Security Event (ASE)
+When the gateway decides, it (1) writes a receipt to the chain and (2) emits an **ASE** onto the async SOC bus. The ASE carries the decision *and* the integrity linkage:
+
+```jsonc
+// fields the ASE copies from the receipt for tamper-evident correlation
+"integrity": {
+  "action_hash":        "sha256:...",   // frozen action (approval binding)
+  "decision_id":        "uuid",
+  "receipt_hash":       "sha256:...",   // this event's chain link
+  "prev_receipt_hash":  "sha256:..."    // previous link
+}
+```
+
+The SOC never re-hashes payloads or trusts raw logs; it correlates on `receipt_hash`/`prev_receipt_hash`, so a forged or replayed event (T-D5) fails to chain.
+
+### 7.2 Provable incident timelines
+A correlated incident stores `evidence_receipts: [receipt_hash, ...]` — the ordered chain links covering its events. An investigator (or auditor) runs the §4 verification over those links; if every `recompute(r_i) == r_i.receipt_hash` and `r_i.prev_receipt_hash == prev`, the timeline is proven untampered. This is the SOC Console's one-click "verify incident."
+
+### 7.3 Chain integrity as a detection
+A break in the chain (`tampered` from `/verify`, a missing link, or a re-linking) is itself a **P1 SOC detection** (`receipt-chain-broken`) — evidence tampering (Threat Model T-C1) surfaces as an alert, not just a failed audit.
+
+### 7.4 Redaction (unchanged, reaffirmed for the SOC)
+Because the SOC consumes receipts/ASEs, the §2 rule is doubly important: **secrets MUST NOT appear** — store `input_hash`/`output_hash`, never raw payloads. The SOC, its indexer, and the sandboxed RCA narrator therefore never hold plaintext secrets (closes T-D7 exfiltration via the RCA LLM).
+
+> **Invariant:** the receipt chain is simultaneously the compliance evidence *and* the SOC evidence. One tamper-evident structure serves both. Keep it byte-exact (§1) and append-only; it is the single most load-bearing data structure in AegisAgent.

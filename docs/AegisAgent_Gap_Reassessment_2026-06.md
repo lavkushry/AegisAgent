@@ -2,9 +2,10 @@
 
 **Document type:** Strategy reset / source of truth
 **Author:** Lavkush Kumar
-**Date:** 2026-06-02
+**Date:** 2026-06-02 · **Extended:** 2026-06-05 (§9, the integrity-anchored Agent SOC)
 **Supersedes the market-positioning claims in:** `AegisAgent_Market_Gap_Analysis.md`, `AegisAgent_Product_Research.md`, and the positioning sections of the PRD/GTM/Vision.
-**Status:** Authoritative. All other docs are re-anchored on this one.
+**Architecture for the SOC surface:** [`AegisAgent_Agent_SOC_Design.md`](AegisAgent_Agent_SOC_Design.md)
+**Status:** Authoritative. All other docs are re-anchored on this one. The June-2026 competitive analysis (§1–§8) is unchanged; §9 adds *how the wedge is delivered as a product* without widening the moat.
 
 ---
 
@@ -14,7 +15,7 @@ The original AegisAgent research (written ~2026-05-29) concluded that the market
 
 A fresh competitive scan in **June 2026** shows that conclusion no longer holds. The baseline category closed in roughly the four weeks after the original research was written. The **problem** AegisAgent targets is real, validated, and growing. The **specific gap as originally framed is gone.** This document resets the thesis around the gap that *is* still defensible.
 
-> **Bottom line:** The pain is real. The "own the action-firewall category" wedge is occupied — including by a free, MIT-licensed Microsoft toolkit that made the same Cedar + Rust + MCP bets. The remaining defensible gap is narrower and sharper: **the integrity and provenance of the control itself.**
+> **Bottom line:** The pain is real. The "own the action-firewall category" wedge is occupied — including by a free, MIT-licensed Microsoft toolkit that made the same Cedar + Rust + MCP bets. The remaining defensible gap is narrower and sharper: **the integrity and provenance of the control itself.** The *product surface* that delivers this gap to a buyer is an **integrity-anchored Agent SOC** — a monitor/detect/respond plane whose detections ride the verifiable receipt + provenance spine, not a generic log SIEM (see §9).
 
 ---
 
@@ -163,7 +164,53 @@ If these cannot be sustained, the honest fallback (see option in the planning th
 
 - **PRD / Technical Design:** elevate `action_hash` approval binding and the 6-level trust model from "features" to **the two headline capabilities**; everything else is supporting/commodity.
 - **GTM:** stop selling "AI security platform" or "the action firewall"; sell "provably-correct approvals + injection-resistant authorization, open and self-hostable." Lead with interop, not displacement.
-- **Threat Model:** foreground approve-then-swap / replay / render-vs-bytes and confused-deputy-via-untrusted-provenance as the primary threats AegisAgent uniquely closes.
-- **Roadmap:** prioritize (1) hardening the integrity primitives, (2) a verifiable open *action-receipt* format, (3) adapters so AegisAgent layers onto existing gateways.
+- **Threat Model:** foreground approve-then-swap / replay / render-vs-bytes and confused-deputy-via-untrusted-provenance as the primary threats AegisAgent uniquely closes; add the SOC's second-order risks (LLM-in-the-loop injection, score-gating) and how the design laws close them.
+- **Product surface (SOC):** package the wedge as an **integrity-anchored Agent SOC** — see §9 and [`AegisAgent_Agent_SOC_Design.md`](AegisAgent_Agent_SOC_Design.md). The SOC is the GTM/operational surface; it does **not** widen the moat — its defensibility is still the two integrity primitives.
+- **Roadmap:** prioritize (1) hardening the integrity primitives, (2) a verifiable open *action-receipt* format, (3) adapters so AegisAgent layers onto existing gateways, (4) the async SOC pipeline that consumes the receipt/provenance stream (detection → correlation → response) — keystone first (event emitter), per the design doc's phased order.
 
 **Sources (June 2026 scan):** Microsoft Agent Governance Toolkit (GitHub + opensource.microsoft.com, Apr 2026); Microsoft "Authorization and Governance for AI Agents — Runtime Authorization Beyond Identity"; Integrate.io *Best MCP Gateways and AI Agent Security Tools (2026)*; PipeLab *Best AI Agent Security Tools 2026*; Pipelock (GitHub; Help Net Security, May 2026); Operant AI Endpoint Protector (Help Net Security, May 2026); arXiv:2603.20953 *Before the Tool Call*; MarketsandMarkets Agentic AI Security Market; VentureBeat RSAC 2026 agent-identity coverage; Strata *Human-in-the-Loop 2026 Guide*.
+
+---
+
+## 9. The integrity-anchored Agent SOC (2026-06-05 extension)
+
+§1–§8 establish *what is defensible* (the two integrity primitives + the open receipt). This section answers a separate question raised in product planning: **what do we ship and operate so a buyer experiences that defensibility daily?** The answer is an **integrity-anchored Agent SOC** — and the point of this section is to show it **does not reopen the commodity trap** §2 warned about.
+
+### 9.1 The tension, stated honestly
+
+"Agent SOC = Wazuh for AI agents" (collect → detect → correlate → alert → respond) is *structurally* a SIEM/XDR. §2 argues the generic loop is commodity, and the Vision's "what we should NOT become" list names a SIEM explicitly. Taken naively, "become a SOC" contradicts the thesis. So we do **not** take it naively.
+
+### 9.2 The resolution: the SOC rides the moat, it is not the moat
+
+A generic SOC differentiates on connectors, dashboards, and text-scoring detections — all commodity, all things a free toolkit or incumbent already does. AegisAgent's SOC differentiates on the **two things no one else has**:
+
+| Generic SOC/SIEM (commodity — we do **not** compete here) | Integrity-anchored Agent SOC (our surface) |
+|---|---|
+| Ingests arbitrary logs | Consumes **verifiable, hash-chained receipts** as the evidence spine — incident timelines are *provable*, not just recorded |
+| Scores text to decide (evadable) | Gates on **deterministic 6-level provenance**; scores are advisory display metadata only |
+| LLM agents reason over raw (attacker-controlled) content | **Deterministic** detection; a single sandboxed LLM only *narrates* closed incidents (no second-order injection) |
+| "We detected something suspicious" | "We can **prove** exactly what the agent did, what was approved, and which untrusted input tried to hijack it" |
+
+> Positioning primitive: **"The SOC that can *prove* what your agents did."** Detection and response are the *delivery*; the receipt chain and provenance gate are the *defensibility*.
+
+### 9.3 The four design laws that keep it from drifting into commodity
+
+Enforced in [`AegisAgent_Agent_SOC_Design.md`](AegisAgent_Agent_SOC_Design.md) §2; restated here because they are *strategy*, not just architecture:
+
+1. **Deterministic policy decides; scores never gate.** (Preserves Gap B — the provenance differentiator.)
+2. **The LLM investigates; it never decides, enforces, or reads instructions.** (Stops the SOC from recreating the very prompt-injection threat the product sells against.)
+3. **The inline action path stays <75 ms; detection is asynchronous.** (Keeps the gateway commodity-but-fast; the SOC is value-add, never a tax.)
+4. **Every moat primitive is preserved end-to-end.** (The SOC consumes `action_hash` / `receipt_hash`; it never weakens them.)
+
+A feature that violates a law would make us a *better generic SIEM* — and therefore a *worse* AegisAgent. Those features are out of scope.
+
+### 9.4 Why this is still narrow (and still honest about risk)
+
+The SOC does **not** broaden the moat — §7's risk assessment stands: this remains a *feature-grade* differentiation that a funded incumbent could copy. What the SOC adds is **surface area for adoption and revenue** (a daily-use console, evidence packs, Active Response) sitting on the same narrow, defensible core. The new strategic risk it introduces — *scope creep into a generic SIEM* — is mitigated by §9.3's laws and by refusing any headline capability that doesn't ride the receipt/provenance spine.
+
+### 9.5 What §9 changes downstream
+
+- **Vision (v0.3):** adds the integrity-anchored SOC as the Phase-3 product surface and rewrites "should NOT become" to distinguish *generic SIEM* (no) from *integrity-anchored SOC* (yes). **Done.**
+- **Technical Design / PRD:** add the async two-plane architecture, the Agent Security Event schema, the deterministic detection/correlation engine, and Active-Response control endpoints — all as consumers of the receipt stream.
+- **Threat Model:** add second-order SOC threats (LLM-in-the-loop injection, score-gating, receipt-chain tampering) and the laws that close them.
+- **GTM:** lead position becomes "the integrity-anchored Agent SOC — detect, contain, and *prove* every agent action," still sold as layer-on, still open and self-hostable.

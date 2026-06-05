@@ -18,7 +18,7 @@ from typing import Any, Dict
 
 import requests
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
 SDK_PATH = REPO_ROOT / "sdk-python"
 if str(SDK_PATH) not in sys.path:
     sys.path.insert(0, str(SDK_PATH))
