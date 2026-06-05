@@ -137,6 +137,91 @@ mod tests {
         PolicyEngine::init("policies.cedar").await.unwrap()
     }
 
+    /// Build a request for a generic *mutating* tool call (a github branch
+    /// creation, which is NOT matched by the `github_merge` rule) triggered by
+    /// content at the given source trust level. Used to exercise the
+    /// deterministic anti-confused-deputy trust-provenance gate across all 6
+    /// trust levels.
+    fn mutating_request_at_trust(trust_level: &str) -> AuthorizeRequest {
+        AuthorizeRequest {
+            request_id: None,
+            agent: AuthorizeAgentContext {
+                id: "test-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "github".to_string(),
+                action: "create_branch".to_string(),
+                resource: Some("repo/branch/1".to_string()),
+                mutates_state: true,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: trust_level.to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        }
+    }
+
+    // --- Anti-confused-deputy trust-provenance gate: all 6 trust levels ---
+    // For a mutating action, the source trust level deterministically gates the
+    // decision (defeats the confused-deputy / indirect-prompt-injection class,
+    // e.g. a malicious public GitHub issue hijacking an agent into a privileged
+    // write). Classifiers may only TIGHTEN a label, never loosen it.
+
+    #[tokio::test]
+    async fn test_trusted_internal_signed_mutation_allowed() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("trusted_internal_signed");
+        let result = engine.authorize(&request).unwrap();
+        assert_eq!(result.decision, "allow");
+    }
+
+    #[tokio::test]
+    async fn test_trusted_internal_unsigned_mutation_allowed() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("trusted_internal_unsigned");
+        let result = engine.authorize(&request).unwrap();
+        assert_eq!(result.decision, "allow");
+    }
+
+    #[tokio::test]
+    async fn test_semi_trusted_customer_mutation_requires_approval() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("semi_trusted_customer");
+        let result = engine.authorize(&request).unwrap();
+        assert_eq!(result.decision, "require_approval");
+    }
+
+    #[tokio::test]
+    async fn test_untrusted_external_mutation_denied() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("untrusted_external");
+        let result = engine.authorize(&request).unwrap();
+        assert_eq!(result.decision, "deny");
+    }
+
+    #[tokio::test]
+    async fn test_malicious_suspected_mutation_denied() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("malicious_suspected");
+        let result = engine.authorize(&request).unwrap();
+        assert_eq!(result.decision, "deny");
+    }
+
+    #[tokio::test]
+    async fn test_unknown_mutation_denied() {
+        // Fail-closed on unclassified ingress: an unknown/unlabelled trigger
+        // must NOT be allowed to drive a mutation, and must NOT merely soft-pause
+        // for approval. Provenance is deterministic and fail-closed -> deny.
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("unknown");
+        let result = engine.authorize(&request).unwrap();
+        assert_eq!(result.decision, "deny");
+    }
+
     #[tokio::test]
     async fn test_readonly_allowed() {
         let engine = setup_engine().await;
