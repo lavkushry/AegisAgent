@@ -12,13 +12,16 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::db;
+use crate::events::{AseEvent, EventSink};
 use crate::models::*;
 use crate::policy::PolicyEngine;
 
-// Shared app state containing DB pool and Cedar policy engine
+// Shared app state containing DB pool, Cedar policy engine, and the async SOC
+// event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub policy_engine: PolicyEngine,
+    pub events: EventSink,
 }
 
 // Extractor helper to get tenant_id from Bearer token
@@ -211,6 +214,7 @@ fn approval_is_expired(app: &ApprovalRecord) -> bool {
 #[allow(clippy::too_many_arguments)]
 async fn write_decision_and_audit(
     pool: &sqlx::SqlitePool,
+    events: &EventSink,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -259,6 +263,25 @@ async fn write_decision_and_audit(
         created_at: Utc::now(),
     };
     db::insert_audit_event(pool, &audit_record).await?;
+
+    // Phase 0 keystone: feed the async SOC stream. Non-blocking — the inline
+    // decision has already been recorded above; emission never delays the caller.
+    events.emit(AseEvent {
+        event_id: Uuid::new_v4().to_string(),
+        occurred_at: Utc::now().to_rfc3339(),
+        tenant_id: tenant_id.to_string(),
+        kind: "authorize_decision".to_string(),
+        agent_id: agent_id.to_string(),
+        decision: decision.to_string(),
+        tool: payload.tool_call.tool.clone(),
+        action: payload.tool_call.action.clone(),
+        resource: payload.tool_call.resource.clone(),
+        risk_score,
+        reason: reason.to_string(),
+        run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
+        trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
+        matched_policies: matched_policies.to_vec(),
+    });
 
     Ok(())
 }
@@ -879,6 +902,7 @@ pub async fn authorize_action(
 
                     if let Err(e) = write_decision_and_audit(
                         &state.pool,
+                        &state.events,
                         &tenant_id,
                         &agent_id,
                         &payload,
@@ -926,6 +950,7 @@ pub async fn authorize_action(
 
                 if let Err(e) = write_decision_and_audit(
                     &state.pool,
+                    &state.events,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -1017,6 +1042,7 @@ pub async fn authorize_action(
 
     if let Err(e) = write_decision_and_audit(
         &state.pool,
+        &state.events,
         &tenant_id,
         &agent_id,
         &payload,
@@ -1570,9 +1596,20 @@ pub async fn get_audit_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events;
     use axum::body::to_bytes;
+    use tokio::sync::mpsc;
 
     async fn setup_state(test_name: &str) -> (Arc<AppState>, String, String) {
+        let (state, tenant_id, agent_token, events_rx) = setup_state_with_events(test_name).await;
+        // Drain in the background so existing tests are unaffected by the stream.
+        tokio::spawn(events::drain(events_rx));
+        (state, tenant_id, agent_token)
+    }
+
+    async fn setup_state_with_events(
+        test_name: &str,
+    ) -> (Arc<AppState>, String, String, mpsc::Receiver<AseEvent>) {
         std::fs::create_dir_all("target").unwrap();
         let db_url = format!(
             "sqlite://target/routes_{}_{}.db",
@@ -1608,12 +1645,14 @@ mod tests {
         db::insert_agent(&pool, &agent).await.unwrap();
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let (events, events_rx) = EventSink::channel(events::DEFAULT_CAPACITY);
         let state = Arc::new(AppState {
             pool,
             policy_engine,
+            events,
         });
 
-        (state, tenant_id, agent_token)
+        (state, tenant_id, agent_token, events_rx)
     }
 
     fn agent_headers(agent_token: &str, tenant_id: &str) -> HeaderMap {
@@ -1669,6 +1708,29 @@ mod tests {
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn authorize_emits_security_event() {
+        // Phase 0 keystone: every authorize decision must feed the async SOC
+        // stream, non-blocking. We keep the receiver and assert the decision
+        // surfaces as exactly one AseEvent — the spine every later SOC phase
+        // (detection, correlation, response, indexing) consumes.
+        let (state, tenant_id, agent_token, mut events_rx) =
+            setup_state_with_events("emits_security_event").await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        let event = events_rx
+            .try_recv()
+            .expect("authorize must emit exactly one ASE event onto the SOC stream");
+        assert_eq!(event.kind, "authorize_decision");
+        assert_eq!(event.tenant_id, tenant_id);
+        assert_eq!(event.decision, response.decision);
+        assert_eq!(event.tool, "filesystem");
+        assert_eq!(event.action, "read_file");
+        assert_eq!(event.run_id.as_deref(), Some("run_routes"));
     }
 
     #[test]
