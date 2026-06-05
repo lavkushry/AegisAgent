@@ -7,6 +7,7 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod db;
+mod events;
 mod models;
 mod policy;
 mod routes;
@@ -36,10 +37,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Loading Cedar policies from: {} ...", policy_path);
     let policy_engine = policy::PolicyEngine::init(&policy_path).await?;
 
+    // Async SOC event stream (Phase 0 keystone): the authorize hot path emits
+    // non-blocking onto this channel; a background task drains it. Every later
+    // SOC phase consumes this one stream and never touches the inline path.
+    let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
+    tokio::spawn(events::drain(events_rx));
+
     // Shared state
     let state = Arc::new(AppState {
         pool,
         policy_engine,
+        events,
     });
 
     // Construct Axum router

@@ -1,4 +1,16 @@
-# MVP Launch Readiness Tasks
+# Active tasks — SOC delivery
+
+Backlog + owners: [`plans/soc_delivery_plan.md`](../plans/soc_delivery_plan.md). One PR at a time, green before next.
+
+- [/] **A0 — Phase 0: async event emitter** (`feat/soc-phase0-event-emitter`) — keystone. `gateway-dev`.
+- [ ] A1 detection · [ ] A2 notify · [ ] A3 correlation · [ ] A4 response control · [ ] A5 indexer · [ ] A6 console · [ ] A7 RCA narrator · [ ] A8 agentless _(gateway-dev)_
+- [ ] B1 Go client · [ ] B2 TS client · [ ] B3 CI canon parity gate · [ ] B4 float/RFC8785 _(sdk-dev)_
+- [ ] C1 anti-confused-deputy pack · [ ] C2 T-D hardening · [ ] C3 MCP manifest signing _(security-auditor)_
+- [ ] D1 reconcile ROADMAP · [ ] D2 OTel+metrics · [ ] D3 Helm/prod _(docs-agent/ops)_
+
+---
+
+# MVP Launch Readiness Tasks _(shipped — historical)_
 
 ## P0: Must-Have for MVP Launch
 
