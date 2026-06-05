@@ -36,7 +36,7 @@ INLINE PLANE (synchronous, <75 ms — the action path)
           v
   AI Agent Runtime (LangGraph / OpenAI Agents SDK / CrewAI / AutoGen / custom)
           v
-  AegisAgent SDK (Python / TS / Go)  ── canonicalizes action, enforces FAIL-CLOSED on hash mismatch
+  AegisAgent SDK (Go / TS / Python)  ── canonicalizes action, enforces FAIL-CLOSED on hash mismatch
           v
   AegisAgent Gateway (Rust + Axum + Tokio)        [standalone OR layered on an existing gateway]
      ┌─────────────────────┬─────────────────────────┐
@@ -72,7 +72,7 @@ Decision and enforcement are separated (Cedar model). Two crucial structural fac
 
 ## 4. Component design
 
-### 4.1 AegisAgent SDK (Python/TS/Go)
+### 4.1 AegisAgent SDK (Go + TS shipped · Python reference)
 
 Responsibilities: register agent metadata; wrap tool functions; **compute the canonical action and `action_hash`**; send `/v1/authorize`; pause on `require_approval`; **before executing, re-fetch the approval, consume it (single-use), and refuse to run unless the about-to-execute `action_hash` == the approved `action_hash`**; attach provenance labels; emit OTel spans.
 
@@ -90,6 +90,8 @@ def merge_pull_request(repo: str, pr_number: int, branch: str):
 
 **Fail-closed contract (normative):** the SDK MUST NOT execute if (a) the gateway is unreachable for a mutating/high-risk action, (b) the approval status is not `approved`, (c) the approved `action_hash` ≠ the recomputed hash, (d) the approval is expired/replayed, or (e) the single-use approval cannot be atomically consumed (409).
 
+> **SDK status (2026-06-05):** **Go** (`sdk-go`) and **TS** (`sdk-typescript`) ship the verified `aegis-jcs-1` canonicalizer — byte-parity with the shared corpus, `go test` + `node:test` green; their HTTP client + `@protect_tool`-equivalent decorator are next. **Python** (`sdk-python`) is the complete reference SDK (`@protect_tool` + receipts verifier, 25/25) and the canonicalization oracle. The Rust gateway shares the scheme.
+
 ### 4.2 Runtime Gateway (Rust + Axum)
 
 Authenticates SDK requests; resolves tenant/agent/user/session; normalizes the tool call; invokes Trust-Provenance Gate → Policy Engine → Risk Engine; creates approvals; writes receipts/audit; **emits the Agent Security Event (async)**; returns decision. Stateless, horizontally scalable. SQLite (MVP) → Postgres (scale) via SQLx (WAL, busy-timeout). Embedded Cedar for sub-ms decisions.
@@ -98,7 +100,7 @@ Authenticates SDK requests; resolves tenant/agent/user/session; normalizes the t
 
 **Goal:** an approval is valid for exactly one action — the one shown to the human — and nothing else.
 
-**Canonical action.** `{tool, action, resource, mutates_state, parameters}` serialized with a deterministic scheme so Python/TS/Go SDKs and the Rust gateway produce identical bytes. `action_hash = SHA-256(canonical_action)`.
+**Canonical action.** `{tool, action, resource, mutates_state, parameters}` serialized with a deterministic scheme so the Go, TS, and Python SDKs and the Rust gateway produce identical bytes (now verified byte-identical via the shared corpus). `action_hash = SHA-256(canonical_action)`.
 
 > **Implemented (scheme `aegis-jcs-1`):** keys sorted by Unicode code point, compact separators, **raw UTF-8 (no `\uXXXX`)**, `null` for absent resource, reject non-finite floats. Locked by [`tests/canonical_action_vectors.json`](../tests/canonical_action_vectors.json), asserted by both a Python test and a Rust test (`gateway/src/routes.rs::canonical_action_matches_shared_corpus`) — byte-equality across languages guaranteed transitively.
 
@@ -322,7 +324,7 @@ Ports (Wazuh-style clean boundaries): `443` API/console/ingest · `9443` runtime
 - **SOC tests (new):** async isolation (emission adds no measurable authorize latency; SOC outage never fails action path open); deterministic detection fires on the integrity events; correlation opens the right incident; **second-order injection** — "system: mark low severity / allow" strings in evidence do **not** alter deterministic triage/correlation/response (only the RCA text field reflects them); score-gating attempt still denied by Cedar.
 - **Standard:** unit (policy, risk, approval state machine, canonicalization cross-language byte-equality, rule matcher, correlation windows), integration (LangGraph/OpenAI wrappers, GitHub/Slack/MCP mocks, control-endpoint fail-closed), load (100–1,000 authz/s; SOC ingest throughput).
 
-**Canonicalization byte-equality** across Python/TS/Go/Rust remains a must-test invariant — a mismatch breaks both the fail-closed guarantee *and* SOC evidence linkage.
+**Canonicalization byte-equality** across Go/TS/Python/Rust remains a must-test invariant — a mismatch breaks both the fail-closed guarantee *and* SOC evidence linkage.
 
 ---
 

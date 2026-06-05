@@ -52,7 +52,7 @@ A near-exact **superset of AegisAgent's MVP *and* roadmap**, and it is **free an
 | Slack/Teams human approval | Human approval workflows via rule conditions |
 | Tamper-evident audit | Tamper-evident audit logging with decision records |
 | Context-trust / injection awareness | Prompt-injection evaluation (12-vector) + agent trust scoring |
-| Rust gateway + Python/TS SDKs | Multi-language: Python, TypeScript, .NET, **Rust**, Go |
+| Rust gateway + Go/TS/Python SDKs | Multi-language: Python, TypeScript, .NET, **Rust**, Go |
 | OWASP alignment | "Covers 10/10 OWASP Agentic Top 10," Microsoft-signed |
 
 It is a *toolkit/library set in public preview*, not a turnkey hosted SaaS with a dashboard — which is the one seam it leaves open — but at the level of "core capabilities," AegisAgent's original feature list is now available for free from Microsoft, built on the same engine choices.

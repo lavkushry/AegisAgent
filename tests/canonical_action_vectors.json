@@ -1,6 +1,6 @@
 {
   "canon_version": "aegis-jcs-1",
-  "description": "Shared canonical-action test vectors for AegisAgent approval-integrity hashing. The SDK (Python/TS/Go) and the Rust gateway MUST all serialize a tool call to the EXACT 'canonical' string below, then SHA-256 it. Byte-equality across languages is the foundation of the fail-closed approval guarantee (approved action_hash == executed action_hash). Scheme aegis-jcs-1: object keys sorted by Unicode code point, compact separators (no spaces), raw UTF-8 (no \\uXXXX escaping of non-ASCII), null for absent resource, JSON numbers as produced by the encoder. The tool_call object always has keys {tool, action, resource, mutates_state, parameters}.",
+  "description": "Shared canonical-action test vectors for AegisAgent approval-integrity hashing. The SDKs (Go/TS/Python) and the Rust gateway MUST all serialize a tool call to the EXACT 'canonical' string below, then SHA-256 it. Byte-equality across languages is the foundation of the fail-closed approval guarantee (approved action_hash == executed action_hash). Scheme aegis-jcs-1: object keys sorted by Unicode code point, compact separators (no spaces), raw UTF-8 (no \\uXXXX escaping of non-ASCII), null for absent resource, JSON numbers as produced by the encoder. The tool_call object always has keys {tool, action, resource, mutates_state, parameters}.",
   "vectors": [
     {
       "name": "ascii_merge",

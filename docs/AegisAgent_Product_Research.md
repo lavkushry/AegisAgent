@@ -117,7 +117,7 @@ Tools / APIs / MCP servers              → SOC Console (provable incident timel
 
 ## 6. Technology stack (unchanged core, SOC additions)
 
-Rust + Axum gateway (memory-safe, sub-ms decisions); Cedar (native `action_hash`/`source_trust`); Python + TypeScript SDKs; SQLite (MVP) → Postgres (SaaS); **`tokio::mpsc` event bus → Redis Streams → Kafka/NATS at scale; ClickHouse for the SOC event tier; deterministic YAML rule engine; one sandboxed LLM (RCA only)**; OpenTelemetry + Grafana; WorkOS/Clerk SSO later; Vault/KMS for secrets. Single self-hostable binary (gateway + in-proc SOC) is a first-class requirement.
+Rust + Axum gateway (memory-safe, sub-ms decisions); Cedar (native `action_hash`/`source_trust`); Go + TypeScript SDKs (Python reference oracle); SQLite (MVP) → Postgres (SaaS); **`tokio::mpsc` event bus → Redis Streams → Kafka/NATS at scale; ClickHouse for the SOC event tier; deterministic YAML rule engine; one sandboxed LLM (RCA only)**; OpenTelemetry + Grafana; WorkOS/Clerk SSO later; Vault/KMS for secrets. Single self-hostable binary (gateway + in-proc SOC) is a first-class requirement.
 
 ### 6.1 Decision example
 ```json

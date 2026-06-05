@@ -50,7 +50,7 @@ Helm chart; external Postgres/Redis; OIDC/SAML; SIEM export; **transparency-log 
 ## 4. Operating the integrity primitives + the SOC (the parts that need new runbooks)
 
 ### 4.1 Canonicalization versioning (critical)
-The fail-closed guarantee depends on Python/TS/Go SDKs and the Rust gateway producing **byte-identical** canonical actions. Pin the scheme (`aegis-jcs-1`); a change is a **breaking change** (bump scheme, support old+new during migration, never silently alter hashing); CI gate: cross-language byte-equality on a fixed corpus must pass before release.
+The fail-closed guarantee depends on the Go, TS, and Python SDKs and the Rust gateway producing **byte-identical** canonical actions (now verified across all three via the shared corpus). Pin the scheme (`aegis-jcs-1`); a change is a **breaking change** (bump scheme, support old+new during migration, never silently alter hashing); CI gate: cross-language byte-equality on a fixed corpus must pass before release.
 
 ### 4.2 Receipt-chain integrity & key management
 Per-tenant hash chain; periodic checkpoint (anchor to an append-only/transparency log in enterprise); signing keys (enterprise) in KMS/Vault with a rotation runbook (key ID in receipt); `GET /v1/receipts/:id/verify` monitored — a `tampered` result pages security. **The chain is also the SOC's evidence spine; a chain break is a P1 SOC detection.**

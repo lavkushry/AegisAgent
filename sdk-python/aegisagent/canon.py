@@ -1,6 +1,6 @@
 """Shared canonicalization (scheme ``aegis-jcs-1``).
 
-Byte-identical output is required across the Python/TS/Go SDKs and the Rust
+Byte-identical output is required across the Go, TS, and Python SDKs and the Rust
 gateway, because both ``action_hash`` (approval integrity) and ``receipt_hash``
 (verifiable receipts) are SHA-256 over a canonical string. A divergence here
 silently breaks the fail-closed guarantees.
