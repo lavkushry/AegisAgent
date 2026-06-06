@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod correlate;
 mod db;
 mod detect;
 mod events;
