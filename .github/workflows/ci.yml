@@ -85,11 +85,37 @@ jobs:
         working-directory: sdk-typescript
         continue-on-error: true  # Remove when test suite is complete (PR-023)
 
+  # ── B3: Go SDK canon corpus gate ─────────────────────────────────────────────
+  go-sdk:
+    name: Go SDK canon byte-parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Go canon corpus tests (TestCanonicalActionVectors + TestReceiptChainVectors)
+        run: go test ./...
+        working-directory: sdk-go
+
+  # ── B3: TypeScript SDK canon corpus gate (Node 24, required) ─────────────────
+  ts-canon:
+    name: TS SDK canon byte-parity (Node 24)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: TS canon corpus tests (node --test, no deps required)
+        run: node --test test/canon.test.ts
+        working-directory: sdk-typescript
+
   # ── PR-052: Cross-language byte-equality corpus gate ──────────────────────────
   corpus-check:
-    name: Corpus byte-equality gate (Rust + Python)
+    name: Corpus byte-equality gate (Rust + Python + Go + TS)
     runs-on: ubuntu-latest
-    needs: [gateway, python-sdk]
+    needs: [gateway, python-sdk, go-sdk, ts-canon]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
