@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::events::{AseEvent, EventSink};
+use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
 
@@ -22,6 +23,8 @@ pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub policy_engine: PolicyEngine,
     pub events: EventSink,
+    /// Process-wide security counters exposed on GET /metrics.
+    pub metrics: SecurityMetrics,
 }
 
 // Extractor helper to get tenant_id from Bearer token
@@ -1097,6 +1100,15 @@ pub async fn authorize_action(
     let mut reason = policy_decision.reason.clone();
     let mut matched_policies = policy_decision.matched_policies.clone();
 
+    // Security metric: provenance_denials_total — count Cedar-level denials driven by
+    // untrusted/malicious/unknown provenance on a mutating action (anti-confused-deputy).
+    if decision_str == "deny"
+        && payload.tool_call.mutates_state
+        && is_untrusted_provenance(&payload.context.source_trust)
+    {
+        state.metrics.inc_provenance_denial();
+    }
+
     if decision_str == "allow" {
         if action_default_decision == "deny" {
             decision_str = "deny".to_string();
@@ -1289,12 +1301,22 @@ pub async fn get_approval(
     }
 }
 
+/// Optional body for the consume endpoint. If `claimed_action_hash` is supplied,
+/// the gateway validates it against the bound hash and increments
+/// `approval_hash_mismatch_total` on a discrepancy (approve-then-swap defence).
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct ConsumeApprovalBody {
+    pub claimed_action_hash: Option<String>,
+}
+
 // Consume Handler: single-use, atomic consumption of an APPROVED approval.
 // The SDK calls this before executing so an approval cannot be replayed/reused.
 pub async fn consume_approval(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(approval_id): Path<Uuid>,
+    // JSON body is optional; old callers that POST with no body still work.
+    body: Option<Json<ConsumeApprovalBody>>,
 ) -> impl IntoResponse {
     let tenant_id = match get_tenant_from_headers(&headers) {
         Ok(t) => t,
@@ -1348,6 +1370,28 @@ pub async fn consume_approval(
         .flatten()
         .map(|a| a.original_call_hash)
         .unwrap_or_default();
+
+    // Security metric: if the caller supplied a claimed_action_hash, compare it
+    // against the bound hash. A mismatch means an approve-then-swap was attempted.
+    if let Some(Json(ref b)) = body {
+        if let Some(ref claimed) = b.claimed_action_hash {
+            if *claimed != action_hash {
+                state.metrics.inc_hash_mismatch();
+                error!(
+                    approval_id = %approval_id,
+                    "approval_hash_mismatch: claimed hash does not match bound hash"
+                );
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "Action hash mismatch: the action to be executed differs from the approved action",
+                        "approval_id": approval_id,
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
 
     (
         StatusCode::OK,
@@ -1924,6 +1968,7 @@ mod tests {
             pool,
             policy_engine,
             events,
+            metrics: crate::metrics::SecurityMetrics::new(),
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -2157,6 +2202,7 @@ mod tests {
             State(state.clone()),
             agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
+            None,
         )
         .await
         .into_response();
@@ -2167,6 +2213,7 @@ mod tests {
             State(state.clone()),
             agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
+            None,
         )
         .await
         .into_response();
@@ -2417,7 +2464,6 @@ mod tests {
             h.await.unwrap().expect("atomic append must succeed");
         }
 
-        // Read the chain back in insertion order.
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT prev_receipt_hash, receipt_hash FROM action_receipts
              WHERE tenant_id = ? ORDER BY rowid ASC",
@@ -2428,8 +2474,6 @@ mod tests {
         .unwrap();
         assert_eq!(rows.len(), TASKS, "every append must commit exactly once");
 
-        // The chain is linear iff: genesis links to "", each subsequent prev equals
-        // the previous receipt_hash, and no prev-hash (or receipt-hash) repeats.
         let mut seen_prev = std::collections::HashSet::new();
         let mut seen_receipt = std::collections::HashSet::new();
         let mut expected_prev = String::new();
@@ -2459,7 +2503,6 @@ mod tests {
     async fn replay_consume_emits_tamper_receipt() {
         let (state, tenant_id, agent_token) = setup_state("tamper_consume").await;
 
-        // Create + approve + consume an approval once (legitimately).
         let mut request = mcp_authorize_request("github", "merge_pull_request");
         request.tool_call.mutates_state = true;
         request.tool_call.resource = Some("repo/example/pull/11".to_string());
@@ -2484,12 +2527,12 @@ mod tests {
             State(state.clone()),
             agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
+            None,
         )
         .await
         .into_response();
         assert_eq!(first.status(), StatusCode::OK);
 
-        // No tamper record yet from the legitimate flow.
         let (before,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ? AND decision = ?",
         )
@@ -2500,18 +2543,16 @@ mod tests {
         .unwrap();
         assert_eq!(before, 0);
 
-        // Replay the consume — single-use guard rejects it (409) and records tamper.
         let replay = consume_approval(
             State(state.clone()),
             agent_headers(&tenant_id, &tenant_id),
             Path(approval_id),
+            None,
         )
         .await
         .into_response();
         assert_eq!(replay.status(), StatusCode::CONFLICT);
 
-        // Exactly one tamper-attempt receipt now exists, and it is hash-verifiable
-        // and chains onto the live chain (its prev is the prior chain head).
         let recs: Vec<ActionReceiptRecord> = sqlx::query_as(
             "SELECT * FROM action_receipts WHERE tenant_id = ? AND decision = ? ORDER BY rowid ASC",
         )
@@ -2524,14 +2565,12 @@ mod tests {
         let tamper = &recs[0];
         assert_eq!(tamper.receipt_hash, compute_receipt_hash(tamper));
         assert!(!tamper.prev_receipt_hash.is_empty(), "must chain onto head");
-        // Redaction: only the violation tag / approval id / bound hash are stored.
         assert_eq!(tamper.tool.as_deref(), Some("consume_not_consumable"));
         assert_eq!(
             tamper.resource.as_deref(),
             Some(format!("approval:{}", approval_id).as_str())
         );
 
-        // The violation is also mirrored to the audit log (hashes only).
         let (audit_count,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND event_type = 'tamper_attempt'",
         )
@@ -2555,7 +2594,6 @@ mod tests {
         let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
         let approval_id = response.approval.expect("approval created").approval_id;
 
-        // Force the approval past its window.
         sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
             .bind(Utc::now() - Duration::minutes(5))
             .bind(tenant_id.as_str())
@@ -2588,6 +2626,167 @@ mod tests {
         assert_eq!(
             count, 1,
             "an expired-approval grant attempt must be recorded"
+        );
+    }
+
+    // ── Security metrics tests ────────────────────────────────────────────────
+
+    /// A mutating action from an untrusted-external source is denied by Cedar's
+    /// "untrusted-mutation-forbid" rule AND increments `provenance_denials_total`.
+    #[tokio::test]
+    async fn provenance_denial_increments_counter() {
+        use std::sync::atomic::Ordering;
+
+        let (state, tenant_id, agent_token) = setup_state("provenance_denial_counter").await;
+
+        let mut request = mcp_authorize_request("github", "push_commit");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "untrusted_external".to_string();
+
+        assert_eq!(
+            state
+                .metrics
+                .provenance_denials_total
+                .load(Ordering::Relaxed),
+            0,
+            "counter must start at zero"
+        );
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(
+            response.decision, "deny",
+            "untrusted mutating action must be denied"
+        );
+
+        assert_eq!(
+            state
+                .metrics
+                .provenance_denials_total
+                .load(Ordering::Relaxed),
+            1,
+            "provenance_denials_total must be 1 after one denied provenance"
+        );
+
+        let metrics_text = state.metrics.render_prometheus();
+        assert!(
+            metrics_text.contains("provenance_denials_total 1\n"),
+            "metrics text must include updated counter value"
+        );
+        assert!(
+            metrics_text.contains("# TYPE provenance_denials_total counter"),
+            "metrics text must include TYPE declaration"
+        );
+    }
+
+    /// All three untrusted levels increment the same counter.
+    #[tokio::test]
+    async fn provenance_denial_counter_accumulates() {
+        use std::sync::atomic::Ordering;
+
+        let (state, tenant_id, agent_token) = setup_state("provenance_denial_accumulates").await;
+
+        for trust in &["untrusted_external", "malicious_suspected", "unknown"] {
+            let mut req = mcp_authorize_request("github", "delete_branch");
+            req.tool_call.mutates_state = true;
+            req.context.source_trust = (*trust).to_string();
+            let resp = call_authorize(state.clone(), &tenant_id, &agent_token, req).await;
+            assert_eq!(resp.decision, "deny");
+        }
+
+        assert_eq!(
+            state
+                .metrics
+                .provenance_denials_total
+                .load(Ordering::Relaxed),
+            3,
+            "all three untrusted trust levels must increment the counter"
+        );
+    }
+
+    /// A trusted-internal mutating action that is ALLOWED must NOT increment the counter.
+    #[tokio::test]
+    async fn trusted_mutating_action_does_not_increment_provenance_counter() {
+        use std::sync::atomic::Ordering;
+
+        let (state, tenant_id, agent_token) = setup_state("provenance_no_increment").await;
+
+        let mut req = mcp_authorize_request("github", "push_commit");
+        req.tool_call.mutates_state = true;
+        req.context.source_trust = "trusted_internal_signed".to_string();
+        let resp = call_authorize(state.clone(), &tenant_id, &agent_token, req).await;
+        assert_ne!(resp.decision, "deny");
+
+        assert_eq!(
+            state
+                .metrics
+                .provenance_denials_total
+                .load(Ordering::Relaxed),
+            0,
+            "trusted mutating actions must not touch the provenance counter"
+        );
+    }
+
+    /// Hash mismatch on consume_approval increments approval_hash_mismatch_total
+    /// and returns 409 CONFLICT, blocking execution (approve-then-swap defence).
+    #[tokio::test]
+    async fn hash_mismatch_on_consume_increments_counter() {
+        use std::sync::atomic::Ordering;
+
+        let (state, tenant_id, agent_token) = setup_state("hash_mismatch_counter").await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/99".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        assert_eq!(
+            state
+                .metrics
+                .approval_hash_mismatch_total
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        let mismatch_resp = consume_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some(
+                    "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                ),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            mismatch_resp.status(),
+            StatusCode::CONFLICT,
+            "hash mismatch must return 409"
+        );
+
+        assert_eq!(
+            state
+                .metrics
+                .approval_hash_mismatch_total
+                .load(Ordering::Relaxed),
+            1,
+            "approval_hash_mismatch_total must be 1 after one swap attempt"
         );
     }
 }
