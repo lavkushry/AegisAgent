@@ -1809,7 +1809,9 @@ pub async fn list_alerts(
 
 /// GET /v1/incidents — list SOC correlation incidents for the authenticated tenant.
 ///
-/// Query params: `limit` (default 50, max 200), `offset` (default 0).
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `status` — optional filter: `"open"` or `"closed"` (omit for all).
 /// Returns a JSON array of [`SocIncidentRecord`]s ordered newest-first.
 /// Every result row is tenant-scoped via parameterized SQL — never leaks
 /// another tenant's data.
@@ -1825,7 +1827,26 @@ pub async fn list_incidents(
 
     let (limit, offset) = parse_pagination(raw_query.as_deref());
 
-    match db::list_soc_incidents(&state.pool, &tenant_id, limit, offset).await {
+    // Parse optional ?status=open|closed filter from raw query string.
+    let status_filter: Option<String> = raw_query.as_deref().and_then(|q| {
+        q.split('&').find_map(|pair| {
+            let mut kv = pair.splitn(2, '=');
+            match (kv.next(), kv.next()) {
+                (Some("status"), Some(v)) if v == "open" || v == "closed" => Some(v.to_string()),
+                _ => None,
+            }
+        })
+    });
+
+    match db::list_soc_incidents(
+        &state.pool,
+        &tenant_id,
+        limit,
+        offset,
+        status_filter.as_deref(),
+    )
+    .await
+    {
         Ok(incidents) => (StatusCode::OK, Json(incidents)).into_response(),
         Err(e) => {
             error!("Failed to list SOC incidents: {:?}", e);
@@ -1836,6 +1857,150 @@ pub async fn list_incidents(
                 .into_response()
         }
     }
+}
+
+// ── SOC Phase 6: Incident lifecycle ──────────────────────────────────────────
+
+/// `POST /v1/incidents/:id/close` — close an open SOC incident.
+///
+/// Transitions the incident from `"open"` to `"closed"`, stamps `closed_at`,
+/// and writes an `"incident_closed"` audit event. Tenant-scoped: 404 if the
+/// incident does not exist for this tenant. Idempotent on a second call: a
+/// 200 response is returned with `"already_closed": true` so callers can
+/// distinguish the first close from a repeat without erroring.
+///
+/// # Security invariants
+/// * Two parameterized binds on every DB call (`tenant_id` + `id`).
+/// * No payload fields in the audit event — only the incident id and new status.
+/// * `close_soc_incident` uses `AND status != 'closed'` to make the UPDATE
+///   idempotent at the DB level; concurrent closes are safe.
+pub async fn close_incident(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    // First verify the incident exists for this tenant (provides a meaningful 404
+    // rather than a silent no-op when the id is simply wrong or belongs to another
+    // tenant — CWE-284 isolation).
+    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Incident not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch incident for close: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    // If already closed, return a clear idempotent response (200 with a flag).
+    if incident.status == "closed" {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "incident_id": incident.id,
+                "status": "closed",
+                "closed_at": incident.closed_at,
+                "already_closed": true,
+            })),
+        )
+            .into_response();
+    }
+
+    // Atomically flip status → 'closed' and stamp closed_at.
+    let did_close = match db::close_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(b) => b,
+        Err(e) => {
+            error!("Failed to close incident {}: {:?}", incident_id, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !did_close {
+        // Race: incident was closed between the get and the update. Treat as
+        // idempotent — re-fetch to return the correct closed_at.
+        return match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+            Ok(Some(inc)) => (
+                StatusCode::OK,
+                Json(json!({
+                    "incident_id": inc.id,
+                    "status": "closed",
+                    "closed_at": inc.closed_at,
+                    "already_closed": true,
+                })),
+            )
+                .into_response(),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response(),
+        };
+    }
+
+    // Re-fetch to pick up the DB-stamped `closed_at` timestamp.
+    let closed_at = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc.closed_at,
+        Ok(None) => None,
+        Err(e) => {
+            error!("Failed to re-fetch incident after close: {:?}", e);
+            None
+        }
+    };
+
+    // Write audit event (hashes / ids only — no payloads, no raw evidence).
+    let audit = AuditEventRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.clone(),
+        event_type: "incident_closed".to_string(),
+        agent_id: None,
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        span_id: None,
+        skill: None,
+        action: None,
+        resource: Some(incident_id.clone()),
+        event_json: serde_json::to_string(&json!({
+            "incident_id": incident_id,
+            "new_status": "closed",
+        }))
+        .unwrap_or_default(),
+        input_hash: None,
+        output_hash: None,
+        created_at: Utc::now(),
+    };
+    let _ = db::insert_audit_event(&state.pool, &audit).await;
+
+    info!(incident_id = %incident_id, "SOC incident closed");
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "incident_id": incident_id,
+            "status": "closed",
+            "closed_at": closed_at,
+            "already_closed": false,
+        })),
+    )
+        .into_response()
 }
 
 // ── SOC Phase 6: RCA Narrator ────────────────────────────────────────────────
@@ -3034,6 +3199,8 @@ mod tests {
             summary: "Route test incident".to_string(),
             source_event_ids: source_ids.clone(),
             opened_at: "2026-06-06T10:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
         };
         db::insert_soc_incident(&state.pool, &incident)
             .await
@@ -3101,6 +3268,8 @@ mod tests {
             summary: "Test incident for narration".to_string(),
             source_event_ids: serde_json::json!(["evt_a", "evt_b"]).to_string(),
             opened_at: "2026-06-06T12:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
         };
         db::insert_soc_incident(pool, &record).await.unwrap();
     }
@@ -3162,6 +3331,93 @@ mod tests {
             response.status(),
             StatusCode::NOT_FOUND,
             "must not expose another tenant's incident"
+        );
+    }
+
+    // ── close_incident route tests ────────────────────────────────────────────
+
+    /// Helper: close an incident via the route handler and parse the JSON body.
+    async fn do_close(
+        state: Arc<AppState>,
+        tenant_id: &str,
+        incident_id: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", tenant_id).parse().unwrap(),
+        );
+        let response = close_incident(State(state), headers, Path(incident_id.to_string()))
+            .await
+            .into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        (status, json)
+    }
+
+    /// `POST /v1/incidents/:id/close` returns 200 with `status: "closed"` and a
+    /// non-null `closed_at` for a persisted open incident owned by the tenant.
+    #[tokio::test]
+    async fn close_incident_returns_closed_for_own_incident() {
+        let (state, tenant_id, _) = setup_state("close_own").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_close_route_1", "deny_storm").await;
+
+        let (status, json) = do_close(state, &tenant_id, "inc_close_route_1").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "closed");
+        assert_eq!(json["incident_id"], "inc_close_route_1");
+        assert!(
+            !json["closed_at"].is_null(),
+            "closed_at must be set after close"
+        );
+        assert_eq!(json["already_closed"], false);
+    }
+
+    /// `POST /v1/incidents/:id/close` returns 404 when the incident id belongs
+    /// to a different tenant — tenant-isolation (CWE-284).
+    #[tokio::test]
+    async fn close_incident_returns_404_for_other_tenants_incident() {
+        let (state, tenant_id, _) = setup_state("close_iso").await;
+
+        let other_tenant = "tenant_other_close_iso";
+        db::register_tenant(&state.pool, other_tenant, "Other", "developer")
+            .await
+            .unwrap();
+        insert_test_incident(&state.pool, other_tenant, "inc_other_close", "deny_storm").await;
+
+        let (status, json) = do_close(state, &tenant_id, "inc_other_close").await;
+
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "must not expose another tenant's incident"
+        );
+        assert!(json["error"].as_str().is_some());
+    }
+
+    /// A second `POST /v1/incidents/:id/close` is idempotent — returns 200 with
+    /// `already_closed: true` and the original `closed_at` unchanged.
+    #[tokio::test]
+    async fn close_incident_is_idempotent() {
+        let (state, tenant_id, _) = setup_state("close_idempotent_route").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_idem_route", "replay_attempt").await;
+
+        let (s1, j1) = do_close(state.clone(), &tenant_id, "inc_idem_route").await;
+        assert_eq!(s1, StatusCode::OK);
+        assert_eq!(j1["already_closed"], false);
+        let first_closed_at = j1["closed_at"].as_str().unwrap().to_string();
+
+        let (s2, j2) = do_close(state, &tenant_id, "inc_idem_route").await;
+        assert_eq!(s2, StatusCode::OK, "second close must still be 200");
+        assert_eq!(j2["already_closed"], true);
+        assert_eq!(
+            j2["closed_at"].as_str().unwrap(),
+            first_closed_at,
+            "closed_at must not change on second close"
         );
     }
 }

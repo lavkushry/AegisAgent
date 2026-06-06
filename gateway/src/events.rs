@@ -250,6 +250,10 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) {
                 summary: incident.summary.clone(),
                 source_event_ids: source_ids_json,
                 opened_at: incident.opened_at.clone(),
+                // Lifecycle defaults — the DB INSERT always writes 'open'/NULL regardless
+                // of these struct fields; they exist to satisfy the type.
+                status: "open".to_string(),
+                closed_at: None,
             };
             if let Err(e) = db::insert_soc_incident(&pool, &incident_record).await {
                 error!(
