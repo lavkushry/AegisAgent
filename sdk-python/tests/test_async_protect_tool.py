@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from aegisagent import AegisClient
 from aegisagent.decorator import _hash_tool_call
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -59,7 +58,7 @@ def _require_approval_response(expected_hash: str, approval_id: str = "test-appr
     return m
 
 
-def _status_response(status: str, action_hash: str, extra: dict | None = None):
+def _status_response(status: str, action_hash: str, extra=None):
     payload: dict = {"status": status, "action_hash": action_hash}
     if extra:
         payload.update(extra)
