@@ -15,6 +15,7 @@ mod detect;
 mod events;
 mod metrics;
 mod models;
+mod narrate;
 mod notify;
 mod policy;
 mod routes;
@@ -109,6 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // SOC Phase 5: Indexer Query API — paginated, tenant-scoped SOC views
         .route("/v1/alerts", get(routes::list_alerts))
         .route("/v1/incidents", get(routes::list_incidents))
+        // SOC Phase 6: RCA Narrator — on-demand, human-triggered, LAW-2 compliant
+        .route("/v1/incidents/:id/narrate", get(routes::narrate_incident))
         // SOC Phase 4: Response API — agent freeze/revoke, MCP quarantine
         .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
         .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))

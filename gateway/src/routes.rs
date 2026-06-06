@@ -1838,6 +1838,63 @@ pub async fn list_incidents(
     }
 }
 
+// ── SOC Phase 6: RCA Narrator ────────────────────────────────────────────────
+
+/// GET /v1/incidents/:id/narrate — on-demand RCA narrative for a closed incident.
+///
+/// # LAW-2 compliance
+/// * On-demand only — never called from the authorize / drain hot paths.
+/// * Tenant-scoped db fetch (two parameterized binds: tenant_id + id).
+/// * 404 if the incident does not exist **or** belongs to a different tenant.
+/// * The [`crate::narrate`] module builds the narrative from structured,
+///   already-redacted fields only — never raw evidence or live telemetry.
+/// * The narrator is constructed inside the handler (no AppState mutation).
+pub async fn narrate_incident(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Incident not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch incident for narration: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Construct narrator from env — hermetic template by default, optional Claude.
+    // Never touches AppState; no network call in the default path.
+    let narrator = crate::narrate::from_env();
+    let narrative = narrator.narrate(&incident);
+
+    info!(incident_id = %incident_id, "RCA narrative generated");
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "incident_id": incident.id,
+            "narrative": narrative,
+        })),
+    )
+        .into_response()
+}
+
 // ── SOC Phase 4: Response API ─────────────────────────────────────────────────
 
 /// Freeze an agent: all subsequent /v1/authorize calls for this agent will be
@@ -3024,5 +3081,87 @@ mod tests {
         // Negative offset → clamped to 0
         let (_, offset) = parse_pagination(Some("offset=-5"));
         assert_eq!(offset, 0);
+    }
+
+    // ── SOC Phase 6: narrate_incident route tests ─────────────────────────────
+
+    /// Helper: insert a bare-minimum incident row for a tenant (no agent required).
+    async fn insert_test_incident(
+        pool: &sqlx::SqlitePool,
+        tenant_id: &str,
+        incident_id: &str,
+        kind: &str,
+    ) {
+        let record = SocIncidentRecord {
+            id: incident_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: kind.to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent-test".to_string(),
+            summary: "Test incident for narration".to_string(),
+            source_event_ids: serde_json::json!(["evt_a", "evt_b"]).to_string(),
+            opened_at: "2026-06-06T12:00:00Z".to_string(),
+        };
+        db::insert_soc_incident(pool, &record).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn narrate_incident_returns_narrative_for_own_incident() {
+        let (state, tenant_id, _agent_token) = setup_state("narrate_own").await;
+
+        insert_test_incident(&state.pool, &tenant_id, "inc_narrate_1", "deny_storm").await;
+
+        // Call the handler directly — same pattern used by all other route tests.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", tenant_id).parse().unwrap(),
+        );
+
+        let response = narrate_incident(State(state), headers, Path("inc_narrate_1".to_string()))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["incident_id"], "inc_narrate_1");
+        let narrative = json["narrative"].as_str().unwrap();
+        // Default template must include the incident kind.
+        assert!(
+            narrative.contains("deny_storm"),
+            "narrative must contain kind"
+        );
+    }
+
+    #[tokio::test]
+    async fn narrate_incident_returns_404_for_other_tenants_incident() {
+        let (state, tenant_id, _agent_token) = setup_state("narrate_isolation").await;
+
+        // Register a second tenant and insert the incident under it.
+        let other_tenant = "tenant_other_narrator";
+        db::register_tenant(&state.pool, other_tenant, "Other", "developer")
+            .await
+            .unwrap();
+        insert_test_incident(&state.pool, other_tenant, "inc_other", "deny_storm").await;
+
+        // Authenticate as our tenant and try to fetch the other tenant's incident.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", tenant_id).parse().unwrap(),
+        );
+
+        let response = narrate_incident(State(state), headers, Path("inc_other".to_string()))
+            .await
+            .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "must not expose another tenant's incident"
+        );
     }
 }
