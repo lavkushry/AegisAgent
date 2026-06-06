@@ -104,11 +104,11 @@ class TestAegisSDK(unittest.TestCase):
     def test_approval_timeout_raises_timeout_error(
         self, mock_post, mock_get, _mock_sleep
     ):
-        """Exhausting max_polls must raise TimeoutError (TASK-0204).
+        """Exhausting the poll_timeout must raise TimeoutError (TASK-0204).
 
-        The decorator polls up to 150 times then raises TimeoutError. We mock
-        every poll to return 'PENDING' so the loop exhausts and the guard at
-        the end of the polling block fires.
+        Every poll returns PENDING; with poll_timeout=0.001 the wall-clock
+        deadline expires after one spin (time.sleep is mocked instant) and
+        the guard at the end of the polling block fires.
         """
         correct_hash = _hash_tool_call(
             tool="test_tool",
@@ -144,7 +144,15 @@ class TestAegisSDK(unittest.TestCase):
 
         executed = {"ran": False}
 
-        @protect_tool(self.client, tool="test_tool", action="test_action")
+        # poll_timeout=0.001 makes the wall-clock deadline expire immediately.
+        # time.sleep is mocked (instant), time.monotonic is real, so 1 ms is
+        # enough for the deadline to fall past the very first iteration.
+        @protect_tool(
+            self.client,
+            tool="test_tool",
+            action="test_action",
+            poll_timeout=0.001,
+        )
         def my_test_func(param1):
             executed["ran"] = True
             return f"executed_{param1}"
