@@ -150,6 +150,31 @@ pub fn critical_deny(event: &AseEvent) -> Option<Alert> {
     None
 }
 
+/// Rule (d) `replay_attempt` — HIGH.
+///
+/// An approval-integrity violation surfaced off the inline authorize path: a
+/// consume of an already-used / expired approval (replay, T-A3 / T-D), or an
+/// attempt to grant an expired approval. The gateway's tamper path
+/// (`routes::emit_tamper_attempt_receipt`) records a tamper-evident receipt and
+/// also emits an `AseEvent` with `kind == "replay_attempt"`. This rule closes the
+/// integrity→SOC loop: every such attempt becomes a HIGH SOC alert visible in
+/// `GET /v1/alerts`, not only in the receipt chain. Deterministic field match on
+/// the event kind only (Laws 1–2); carries ids + violation tag, no payloads.
+pub fn replay_attempt(event: &AseEvent) -> Option<Alert> {
+    if event.kind != "replay_attempt" {
+        return None;
+    }
+    Some(Alert::from_event(
+        event,
+        "replay_attempt",
+        "high",
+        format!(
+            "Approval-integrity violation ({}/{}) — replay/tamper attempt: {}",
+            event.tool, event.action, event.reason
+        ),
+    ))
+}
+
 /// The deterministic detection engine. Holds the ordered list of atomic rules and
 /// runs every one over each event.
 pub struct Detector {
@@ -163,6 +188,7 @@ impl Default for Detector {
                 confused_deputy_block,
                 approval_required_surface,
                 critical_deny,
+                replay_attempt,
             ],
         }
     }
@@ -348,6 +374,49 @@ mod tests {
         assert!(alerts
             .iter()
             .any(|a| a.rule == "critical_deny" && a.severity == "high"));
+    }
+
+    // --- Rule (d): replay_attempt ---
+
+    #[test]
+    fn replay_attempt_event_fires_high_alert() {
+        let mut ev = base_event();
+        ev.kind = "replay_attempt".to_string();
+        ev.decision = "deny".to_string();
+        ev.tool = "consume_not_consumable".to_string();
+        ev.action = "tamper_attempt".to_string();
+        let alert = replay_attempt(&ev).expect("rule should fire");
+        assert_eq!(alert.rule, "replay_attempt");
+        assert_eq!(alert.severity, "high");
+        assert_eq!(alert.tenant_id, "tenant_123");
+        assert_eq!(alert.source_event_id, "evt_test_1");
+    }
+
+    #[test]
+    fn authorize_decision_does_not_fire_replay_attempt() {
+        let ev = base_event(); // kind == "authorize_decision"
+        assert!(replay_attempt(&ev).is_none());
+    }
+
+    #[test]
+    fn evaluate_replay_attempt_produces_single_high_alert() {
+        let det = Detector::default();
+        let mut ev = base_event();
+        ev.kind = "replay_attempt".to_string();
+        ev.decision = "deny".to_string();
+        ev.tool = "consume_not_consumable".to_string();
+        ev.action = "tamper_attempt".to_string();
+        let alerts = det.evaluate(&ev);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule, "replay_attempt");
+        assert_eq!(alerts[0].severity, "high");
+    }
+
+    #[test]
+    fn evaluate_normal_authorize_decision_does_not_fire_replay_attempt() {
+        let det = Detector::default();
+        let ev = base_event(); // kind == "authorize_decision", decision == "allow"
+        assert!(det.evaluate(&ev).iter().all(|a| a.rule != "replay_attempt"));
     }
 
     #[test]

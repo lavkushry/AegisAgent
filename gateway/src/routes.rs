@@ -243,7 +243,9 @@ const TAMPER_DECISION: &str = "tamper_attempt";
 /// does not change the caller's response.
 async fn emit_tamper_attempt_receipt(
     pool: &sqlx::SqlitePool,
+    events: &EventSink,
     tenant_id: &str,
+    agent_id: Option<&str>,
     kind: &str,
     approval_id: &str,
     action_hash: Option<String>,
@@ -312,6 +314,33 @@ async fn emit_tamper_attempt_receipt(
     if let Err(e) = db::insert_audit_event(pool, &audit_record).await {
         error!("Failed to write tamper-attempt audit event: {:?}", e);
     }
+
+    // Integrity→SOC loop: the tamper-evident receipt now also surfaces on the async
+    // SOC stream as a `replay_attempt` AseEvent so the detector raises a HIGH alert
+    // (visible in `GET /v1/alerts`), not only in the receipt chain. STRICTLY
+    // ADDITIVE: this runs only after the receipt write above succeeded, and the
+    // emit is NON-BLOCKING (`try_send`) — a full/closed channel is dropped and never
+    // affects the caller's 409/CONFLICT response. Carries ids + the violation tag
+    // only (no payloads); tenant-scoped.
+    events.emit(AseEvent {
+        event_id: Uuid::new_v4().to_string(),
+        occurred_at: Utc::now().to_rfc3339(),
+        tenant_id: tenant_id.to_string(),
+        kind: "replay_attempt".to_string(),
+        agent_id: agent_id.unwrap_or("unknown").to_string(),
+        decision: "deny".to_string(),
+        tool: kind.to_string(),
+        action: TAMPER_DECISION.to_string(),
+        resource: Some(format!("approval:{}", approval_id)),
+        risk_score: 0,
+        reason: format!(
+            "approval-integrity violation: {} (approval:{})",
+            kind, approval_id
+        ),
+        run_id: None,
+        trace_id: None,
+        matched_policies: Vec::new(),
+    });
 }
 
 /// True if the approval window has passed. Defense-in-depth alongside the SDK's
@@ -1369,9 +1398,13 @@ pub async fn consume_approval(
             .ok()
             .flatten()
             .map(|a| a.original_call_hash);
+        // The approval record does not carry the agent id; the SOC event uses the
+        // "unknown" placeholder (the violation tag + approval id are the evidence).
         emit_tamper_attempt_receipt(
             &state.pool,
+            &state.events,
             &tenant_id,
+            None,
             "consume_not_consumable",
             &approval_id.to_string(),
             bound_hash,
@@ -1539,7 +1572,9 @@ pub async fn approve_approval(
     if approval_is_expired(&approval) {
         emit_tamper_attempt_receipt(
             &state.pool,
+            &state.events,
             &tenant_id,
+            None,
             "approve_expired",
             &approval_id.to_string(),
             Some(approval.original_call_hash.clone()),
@@ -3142,6 +3177,94 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(audit_count, 1);
+    }
+
+    // Integrity→SOC loop: a replay (consume of an already-consumed approval) must
+    // STILL return 409 and STILL write exactly one tamper receipt (unchanged) AND
+    // now ALSO emit a `replay_attempt` AseEvent onto the SOC stream so the detector
+    // can raise a HIGH alert. We keep the receiver (no drain spawned) and assert the
+    // event lands — mirroring `authorize_emits_security_event`.
+    #[tokio::test]
+    async fn replay_consume_emits_replay_attempt_security_event() {
+        let (state, tenant_id, agent_token, mut events_rx) =
+            setup_state_with_events("tamper_consume_soc").await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/13".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let first = consume_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        // The replay: a second consume of the now-used approval.
+        let replay = consume_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            None,
+        )
+        .await
+        .into_response();
+        // 409 response is UNCHANGED.
+        assert_eq!(replay.status(), StatusCode::CONFLICT);
+
+        // The tamper receipt is UNCHANGED — exactly one written for the replay.
+        let (receipt_count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ? AND decision = ? AND tool = 'consume_not_consumable'",
+        )
+        .bind(tenant_id.as_str())
+        .bind(TAMPER_DECISION)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            receipt_count, 1,
+            "exactly one tamper receipt for the replay"
+        );
+
+        // NEW: a `replay_attempt` AseEvent must have landed on the SOC stream. Drain
+        // the receiver (the earlier authorize_decision event is also queued since no
+        // drain task consumes it in this harness) and find the replay event.
+        let mut found_replay = false;
+        while let Ok(ev) = events_rx.try_recv() {
+            if ev.kind == "replay_attempt" {
+                assert_eq!(ev.decision, "deny");
+                assert_eq!(ev.tenant_id, tenant_id);
+                assert_eq!(ev.tool, "consume_not_consumable");
+                assert_eq!(
+                    ev.resource.as_deref(),
+                    Some(format!("approval:{}", approval_id).as_str())
+                );
+                found_replay = true;
+            }
+        }
+        assert!(
+            found_replay,
+            "replay must emit a replay_attempt AseEvent onto the SOC stream"
+        );
     }
 
     // T-D hardening (b): approving an expired approval is a detected integrity
