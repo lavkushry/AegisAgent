@@ -8,6 +8,15 @@ on:
 permissions:
   contents: read
 
+# Network resilience: crates.io registry downloads intermittently drop with
+# "OpenSSL ... unexpected eof while reading" under cargo's HTTP/2 multiplexing.
+# Disable multiplexing and raise the retry count so a transient fetch blip
+# retries instead of failing the build.
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_TERM_COLOR: always
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
