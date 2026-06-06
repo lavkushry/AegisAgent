@@ -47,3 +47,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Node.js (TypeScript SDK)
+node_modules/
+
+# Claude Code agent worktrees (local, ephemeral)
+.claude/worktrees/

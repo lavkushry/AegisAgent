@@ -7,10 +7,15 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "build": "tsc --noEmit",
     "test": "node --test test/canon.test.ts test/client.test.ts test/protect.test.ts"
   },
   "engines": {
     "node": ">=23.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.3"
   },
   "license": "MIT"
 }
