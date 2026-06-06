@@ -319,6 +319,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // soc_incidents: one persisted row per multi-event correlation incident
     // (correlate::Incident). source_event_ids is a JSON array of evidence ids.
+    // `status` ('open'/'closed') and `closed_at` support the Phase 6 lifecycle.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS soc_incidents (
             id               TEXT PRIMARY KEY,
@@ -328,7 +329,9 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             agent_id         TEXT NOT NULL,
             summary          TEXT NOT NULL,
             source_event_ids TEXT NOT NULL,
-            opened_at        TEXT NOT NULL
+            opened_at        TEXT NOT NULL,
+            status           TEXT NOT NULL DEFAULT 'open',
+            closed_at        TEXT
         );",
     )
     .execute(pool)
@@ -338,6 +341,9 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // Idempotent ALTER TABLE for existing DBs that pre-date the lifecycle columns.
+    ensure_soc_incident_lifecycle_columns(pool).await?;
 
     Ok(())
 }
@@ -396,6 +402,36 @@ async fn ensure_approval_consumed_at_column(pool: &SqlitePool) -> Result<(), sql
     sqlx::query("ALTER TABLE approvals ADD COLUMN consumed_at DATETIME")
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Idempotent migration: add `status` and `closed_at` to `soc_incidents` when
+/// upgrading an existing database that predates Phase 6. Uses PRAGMA table_info
+/// to check for column presence before attempting ALTER TABLE — SQLite does not
+/// support `ADD COLUMN IF NOT EXISTS`, so we guard it ourselves. Safe to call on
+/// a fresh DB (where CREATE TABLE already includes the columns); the PRAGMA check
+/// short-circuits before any ALTER is executed.
+async fn ensure_soc_incident_lifecycle_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(soc_incidents)")
+            .fetch_all(pool)
+            .await?;
+
+    let has_status = columns.iter().any(|(_, name, _, _, _, _)| name == "status");
+    let has_closed_at = columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "closed_at");
+
+    if !has_status {
+        sqlx::query("ALTER TABLE soc_incidents ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
+            .execute(pool)
+            .await?;
+    }
+    if !has_closed_at {
+        sqlx::query("ALTER TABLE soc_incidents ADD COLUMN closed_at TEXT")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1069,13 +1105,15 @@ pub async fn insert_soc_alert(
 
 /// Persist one correlation incident. Tenant-scoped, parameterized.
 /// `source_event_ids` is pre-serialised JSON (never concatenated into SQL).
+/// New incidents always start with `status='open'` and `closed_at=NULL`; the
+/// lifecycle is advanced via [`close_soc_incident`].
 pub async fn insert_soc_incident(
     pool: &SqlitePool,
     record: &SocIncidentRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO soc_incidents (id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO soc_incidents (id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL)",
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -1116,26 +1154,47 @@ pub async fn list_soc_alerts(
 
 /// List incidents for a tenant, newest-first, with pagination.
 /// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
+/// `status_filter` — when `Some("open")` or `Some("closed")`, restricts results
+/// to that lifecycle state; `None` returns all incidents regardless of status.
 /// Every query binds `tenant_id` — cross-tenant isolation guaranteed.
 pub async fn list_soc_incidents(
     pool: &SqlitePool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
+    status_filter: Option<&str>,
 ) -> Result<Vec<SocIncidentRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    sqlx::query_as::<_, SocIncidentRecord>(
-        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at
-         FROM soc_incidents
-         WHERE tenant_id = ?
-         ORDER BY opened_at DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
+    // We use two separate queries rather than building a dynamic SQL string, so
+    // there is zero risk of SQL injection — only static query strings appear here.
+    if let Some(sf) = status_filter {
+        sqlx::query_as::<_, SocIncidentRecord>(
+            "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
+             FROM soc_incidents
+             WHERE tenant_id = ? AND status = ?
+             ORDER BY opened_at DESC
+             LIMIT ? OFFSET ?",
+        )
+        .bind(tenant_id)
+        .bind(sf)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as::<_, SocIncidentRecord>(
+            "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
+             FROM soc_incidents
+             WHERE tenant_id = ?
+             ORDER BY opened_at DESC
+             LIMIT ? OFFSET ?",
+        )
+        .bind(tenant_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+    }
 }
 
 /// Fetch a single SOC incident by id, scoped to the given tenant.
@@ -1149,7 +1208,7 @@ pub async fn get_soc_incident(
     incident_id: &str,
 ) -> Result<Option<SocIncidentRecord>, sqlx::Error> {
     sqlx::query_as::<_, SocIncidentRecord>(
-        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at
+        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
          FROM soc_incidents
          WHERE tenant_id = ? AND id = ?",
     )
@@ -1157,6 +1216,33 @@ pub async fn get_soc_incident(
     .bind(incident_id)
     .fetch_optional(pool)
     .await
+}
+
+/// Close a SOC incident — flip its lifecycle status from `'open'` to `'closed'`
+/// and stamp `closed_at` with the current RFC-3339 timestamp. Tenant-scoped and
+/// parameterized (CWE-89 / CWE-284 safe). The `AND status != 'closed'` guard
+/// makes the operation idempotent: a second close returns `false` without touching
+/// the row, preserving the original `closed_at` timestamp.
+///
+/// Returns `true` if a row was updated (i.e. the incident existed, belonged to
+/// this tenant, and was still open), `false` otherwise.
+pub async fn close_soc_incident(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    incident_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let closed_at = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE soc_incidents
+         SET status = 'closed', closed_at = ?
+         WHERE tenant_id = ? AND id = ? AND status != 'closed'",
+    )
+    .bind(&closed_at)
+    .bind(tenant_id)
+    .bind(incident_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 /// Quarantine an MCP server — all its tools become deny-by-default.
@@ -1337,6 +1423,10 @@ mod tests {
             summary: "Test incident summary".to_string(),
             source_event_ids: serde_json::json!(["evt_1", "evt_2"]).to_string(),
             opened_at: chrono::Utc::now().to_rfc3339(),
+            // DB always sets 'open' on insert; these fields are in the struct to
+            // satisfy the type but the INSERT ignores them (uses literal defaults).
+            status: "open".to_string(),
+            closed_at: None,
         }
     }
 
@@ -1414,13 +1504,13 @@ mod tests {
             .await
             .unwrap();
 
-        let a_incs = list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0)
+        let a_incs = list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0, None)
             .await
             .unwrap();
         assert_eq!(a_incs.len(), 1);
         assert_eq!(a_incs[0].id, "inc_a1");
 
-        let b_incs = list_soc_incidents(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0)
+        let b_incs = list_soc_incidents(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0, None)
             .await
             .unwrap();
         assert_eq!(b_incs.len(), 1);
@@ -1440,11 +1530,17 @@ mod tests {
                 .unwrap();
         }
 
-        let page1 = list_soc_incidents(&pool, "tenant_a", 2, 0).await.unwrap();
+        let page1 = list_soc_incidents(&pool, "tenant_a", 2, 0, None)
+            .await
+            .unwrap();
         assert_eq!(page1.len(), 2);
-        let page2 = list_soc_incidents(&pool, "tenant_a", 2, 2).await.unwrap();
+        let page2 = list_soc_incidents(&pool, "tenant_a", 2, 2, None)
+            .await
+            .unwrap();
         assert_eq!(page2.len(), 2);
-        let page3 = list_soc_incidents(&pool, "tenant_a", 2, 4).await.unwrap();
+        let page3 = list_soc_incidents(&pool, "tenant_a", 2, 4, None)
+            .await
+            .unwrap();
         assert!(page3.is_empty());
     }
 
@@ -1492,10 +1588,14 @@ mod tests {
             summary: "Deny storm detected".to_string(),
             source_event_ids: source_event_ids_json.clone(),
             opened_at: "2026-06-06T12:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
         };
         insert_soc_incident(&pool, &record).await.unwrap();
 
-        let incs = list_soc_incidents(&pool, "tenant_a", 10, 0).await.unwrap();
+        let incs = list_soc_incidents(&pool, "tenant_a", 10, 0, None)
+            .await
+            .unwrap();
         assert_eq!(incs.len(), 1);
         assert_eq!(incs[0].source_event_ids, source_event_ids_json);
         let parsed: Vec<String> = serde_json::from_str(&incs[0].source_event_ids).unwrap();
@@ -1559,5 +1659,173 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_none());
+    }
+
+    // ── Phase 6: incident lifecycle tests ────────────────────────────────────
+
+    /// `get_soc_incident` round-trips `status` and `closed_at` correctly.
+    #[tokio::test]
+    async fn get_soc_incident_round_trips_status_and_closed_at() {
+        let pool = setup_pool("inc_lifecycle_roundtrip").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let record = make_incident("inc_rt", "tenant_a");
+        insert_soc_incident(&pool, &record).await.unwrap();
+
+        let fetched = get_soc_incident(&pool, "tenant_a", "inc_rt")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, "open");
+        assert!(
+            fetched.closed_at.is_none(),
+            "closed_at must be NULL on open incidents"
+        );
+    }
+
+    /// `close_soc_incident` flips status to 'closed' for the owning tenant.
+    #[tokio::test]
+    async fn close_soc_incident_flips_status_for_owning_tenant() {
+        let pool = setup_pool("inc_close_owner").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_close_a", "tenant_a"))
+            .await
+            .unwrap();
+
+        let closed = close_soc_incident(&pool, "tenant_a", "inc_close_a")
+            .await
+            .unwrap();
+        assert!(closed, "owning tenant must be able to close its incident");
+
+        let fetched = get_soc_incident(&pool, "tenant_a", "inc_close_a")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, "closed");
+        assert!(
+            fetched.closed_at.is_some(),
+            "closed_at must be set after closing"
+        );
+    }
+
+    /// `close_soc_incident` is a no-op (returns false) for a different tenant —
+    /// cross-tenant isolation guarantee (CWE-284).
+    #[tokio::test]
+    async fn close_soc_incident_is_noop_for_different_tenant() {
+        let pool = setup_pool("inc_close_isolation").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_iso_close", "tenant_a"))
+            .await
+            .unwrap();
+
+        // tenant_b must NOT be able to close tenant_a's incident.
+        let result = close_soc_incident(&pool, "tenant_b", "inc_iso_close")
+            .await
+            .unwrap();
+        assert!(!result, "tenant_b must not close tenant_a's incident");
+
+        // The incident must remain open.
+        let fetched = get_soc_incident(&pool, "tenant_a", "inc_iso_close")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, "open");
+        assert!(fetched.closed_at.is_none());
+    }
+
+    /// A second `close_soc_incident` call on an already-closed incident is
+    /// idempotent — it returns `false` and leaves `closed_at` unchanged.
+    #[tokio::test]
+    async fn close_soc_incident_is_idempotent() {
+        let pool = setup_pool("inc_close_idempotent").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_idem", "tenant_a"))
+            .await
+            .unwrap();
+
+        let first = close_soc_incident(&pool, "tenant_a", "inc_idem")
+            .await
+            .unwrap();
+        assert!(first, "first close must succeed");
+
+        let first_fetch = get_soc_incident(&pool, "tenant_a", "inc_idem")
+            .await
+            .unwrap()
+            .unwrap();
+        let first_closed_at = first_fetch.closed_at.clone().unwrap();
+
+        // Second close must return false and not change the timestamp.
+        let second = close_soc_incident(&pool, "tenant_a", "inc_idem")
+            .await
+            .unwrap();
+        assert!(!second, "second close must be a no-op");
+
+        let second_fetch = get_soc_incident(&pool, "tenant_a", "inc_idem")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second_fetch.status, "closed");
+        assert_eq!(
+            second_fetch.closed_at.unwrap(),
+            first_closed_at,
+            "closed_at must not change on a second close"
+        );
+    }
+
+    /// `list_soc_incidents` with `status_filter=Some("open")` only returns open
+    /// incidents; `Some("closed")` only returns closed ones.
+    #[tokio::test]
+    async fn list_soc_incidents_status_filter_works() {
+        let pool = setup_pool("inc_status_filter").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_open_1", "tenant_a"))
+            .await
+            .unwrap();
+        insert_soc_incident(&pool, &make_incident("inc_open_2", "tenant_a"))
+            .await
+            .unwrap();
+        insert_soc_incident(&pool, &make_incident("inc_closed_1", "tenant_a"))
+            .await
+            .unwrap();
+
+        // Close one of the three incidents.
+        close_soc_incident(&pool, "tenant_a", "inc_closed_1")
+            .await
+            .unwrap();
+
+        let open_list = list_soc_incidents(&pool, "tenant_a", 50, 0, Some("open"))
+            .await
+            .unwrap();
+        assert_eq!(open_list.len(), 2, "only two incidents should be open");
+        assert!(open_list.iter().all(|i| i.status == "open"));
+
+        let closed_list = list_soc_incidents(&pool, "tenant_a", 50, 0, Some("closed"))
+            .await
+            .unwrap();
+        assert_eq!(closed_list.len(), 1, "only one incident should be closed");
+        assert_eq!(closed_list[0].id, "inc_closed_1");
+        assert!(closed_list[0].closed_at.is_some());
+
+        let all_list = list_soc_incidents(&pool, "tenant_a", 50, 0, None)
+            .await
+            .unwrap();
+        assert_eq!(all_list.len(), 3, "unfiltered list must return all three");
     }
 }

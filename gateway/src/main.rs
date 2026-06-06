@@ -110,6 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // SOC Phase 5: Indexer Query API — paginated, tenant-scoped SOC views
         .route("/v1/alerts", get(routes::list_alerts))
         .route("/v1/incidents", get(routes::list_incidents))
+        // SOC Phase 6: Incident lifecycle — close an open incident
+        .route("/v1/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator — on-demand, human-triggered, LAW-2 compliant
         .route("/v1/incidents/:id/narrate", get(routes::narrate_incident))
         // SOC Phase 4: Response API — agent freeze/revoke, MCP quarantine

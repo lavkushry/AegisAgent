@@ -46,13 +46,20 @@ impl Narrator for TemplateNarrator {
         let event_count = count_source_events(&incident.source_event_ids);
         let next_steps = recommended_next_steps(&incident.kind);
 
+        let closed_line = match incident.closed_at.as_deref() {
+            Some(ts) => format!("**Closed at:** {}\n", ts),
+            None => String::new(),
+        };
+
         format!(
             "## Root Cause Analysis — Incident {id}\n\
              \n\
              **Kind:** {kind}\n\
              **Severity:** {severity}\n\
+             **Status:** {status}\n\
              **Affected agent:** {agent_id}\n\
              **Opened at:** {opened_at}\n\
+             {closed_line}\
              **Contributing events:** {event_count}\n\
              \n\
              ### Summary\n\
@@ -63,8 +70,10 @@ impl Narrator for TemplateNarrator {
             id = incident.id,
             kind = incident.kind,
             severity = incident.severity,
+            status = incident.status,
             agent_id = incident.agent_id,
             opened_at = incident.opened_at,
+            closed_line = closed_line,
             event_count = event_count,
             summary = incident.summary,
             next_steps = next_steps,
@@ -280,6 +289,8 @@ mod tests {
             summary: "Agent issued 15 denied tool calls in 60 seconds.".to_string(),
             source_event_ids: serde_json::json!(["evt_1", "evt_2", "evt_3"]).to_string(),
             opened_at: "2026-06-06T12:00:00Z".to_string(),
+            status: "closed".to_string(),
+            closed_at: Some("2026-06-06T13:00:00Z".to_string()),
         }
     }
 

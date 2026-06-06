@@ -344,6 +344,10 @@ pub struct SocAlertRecord {
 /// SOC Phase 5 — persisted correlation incident (multi-event pattern detected).
 /// `source_event_ids` is a JSON array of contributing event IDs. Stores identifiers
 /// and summary only — never payloads or secrets (redaction invariant). Tenant-scoped.
+///
+/// Phase 6 lifecycle: `status` is `"open"` on creation and flips to `"closed"` via
+/// `POST /v1/incidents/:id/close`. `closed_at` is set to the RFC-3339 close timestamp
+/// at that point (NULL while open). The RCA narrator is gated on closed incidents.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct SocIncidentRecord {
     pub id: String,
@@ -354,6 +358,10 @@ pub struct SocIncidentRecord {
     pub summary: String,
     pub source_event_ids: String, // JSON array
     pub opened_at: String,
+    /// Lifecycle status: `"open"` (default) or `"closed"`.
+    pub status: String,
+    /// RFC-3339 timestamp when the incident was closed; NULL while open.
+    pub closed_at: Option<String>,
 }
 
 /// Tamper-evident, hash-chained action receipt. The hashed body is every field
