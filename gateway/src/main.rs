@@ -15,6 +15,7 @@ mod detect;
 mod events;
 mod metrics;
 mod models;
+mod notify;
 mod policy;
 mod routes;
 
