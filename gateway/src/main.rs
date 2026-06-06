@@ -7,6 +7,7 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod db;
+mod detect;
 mod events;
 mod models;
 mod policy;
