@@ -1815,9 +1815,26 @@ fn parse_pagination(query: Option<&str>) -> (i64, i64) {
     (limit.clamp(1, db::SOC_MAX_LIMIT), offset)
 }
 
+/// Parse an optional equality filter value from a raw query string.
+/// Returns `Some(value)` only when the key is present and non-empty; combined
+/// with the `(? IS NULL OR col = ?)` SQL pattern this keeps all SQL strings
+/// STATIC and avoids any concatenation (CWE-89 safe).
+fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
+    query?.split('&').find_map(|pair| {
+        let mut kv = pair.splitn(2, '=');
+        match (kv.next(), kv.next()) {
+            (Some(k), Some(v)) if k == key && !v.is_empty() => Some(v.to_string()),
+            _ => None,
+        }
+    })
+}
+
 /// GET /v1/alerts — list SOC detection alerts for the authenticated tenant.
 ///
-/// Query params: `limit` (default 50, max 200), `offset` (default 0).
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `severity` — optional equality filter (e.g. `?severity=high`).
+///   `agent_id`  — optional equality filter (e.g. `?agent_id=abc`).
 /// Returns a JSON array of [`SocAlertRecord`]s ordered newest-first.
 /// Every result row is tenant-scoped via parameterized SQL — never leaks
 /// another tenant's data.
@@ -1832,8 +1849,19 @@ pub async fn list_alerts(
     };
 
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let severity = parse_filter(raw_query.as_deref(), "severity");
+    let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
 
-    match db::list_soc_alerts(&state.pool, &tenant_id, limit, offset).await {
+    match db::list_soc_alerts(
+        &state.pool,
+        &tenant_id,
+        limit,
+        offset,
+        severity.as_deref(),
+        agent_id.as_deref(),
+    )
+    .await
+    {
         Ok(alerts) => (StatusCode::OK, Json(alerts)).into_response(),
         Err(e) => {
             error!("Failed to list SOC alerts: {:?}", e);
@@ -1850,7 +1878,9 @@ pub async fn list_alerts(
 ///
 /// Query params:
 ///   `limit` (default 50, max 200), `offset` (default 0).
-///   `status` — optional filter: `"open"` or `"closed"` (omit for all).
+///   `status`   — optional filter: `"open"` or `"closed"` (omit for all).
+///   `severity` — optional equality filter (e.g. `?severity=high`).
+///   `agent_id` — optional equality filter (e.g. `?agent_id=abc`).
 /// Returns a JSON array of [`SocIncidentRecord`]s ordered newest-first.
 /// Every result row is tenant-scoped via parameterized SQL — never leaks
 /// another tenant's data.
@@ -1865,17 +1895,9 @@ pub async fn list_incidents(
     };
 
     let (limit, offset) = parse_pagination(raw_query.as_deref());
-
-    // Parse optional ?status=open|closed filter from raw query string.
-    let status_filter: Option<String> = raw_query.as_deref().and_then(|q| {
-        q.split('&').find_map(|pair| {
-            let mut kv = pair.splitn(2, '=');
-            match (kv.next(), kv.next()) {
-                (Some("status"), Some(v)) if v == "open" || v == "closed" => Some(v.to_string()),
-                _ => None,
-            }
-        })
-    });
+    let status_filter = parse_filter(raw_query.as_deref(), "status");
+    let severity = parse_filter(raw_query.as_deref(), "severity");
+    let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
 
     match db::list_soc_incidents(
         &state.pool,
@@ -1883,12 +1905,80 @@ pub async fn list_incidents(
         limit,
         offset,
         status_filter.as_deref(),
+        severity.as_deref(),
+        agent_id.as_deref(),
     )
     .await
     {
         Ok(incidents) => (StatusCode::OK, Json(incidents)).into_response(),
         Err(e) => {
             error!("Failed to list SOC incidents: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── SOC query layer: incident detail + aggregate summary ─────────────────────
+
+/// `GET /v1/incidents/:id` — single-incident detail, tenant-scoped.
+///
+/// Returns the full [`SocIncidentRecord`] for the given `id` when it belongs to
+/// the authenticated tenant, or HTTP 404 when the `id` is unknown **or** belongs
+/// to a different tenant (CWE-284: no information leakage across tenants).
+/// Both DB binds (`tenant_id`, `incident_id`) are parameterized — no SQL
+/// concatenation (CWE-89).
+pub async fn get_incident(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(incident)) => (StatusCode::OK, Json(incident)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Incident not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to fetch SOC incident {}: {:?}", incident_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /v1/soc/summary` — tenant-scoped SOC aggregate counts.
+///
+/// Returns `{ alerts_total, alerts_high, incidents_total, incidents_open,
+/// incidents_closed }` derived from five parameterized COUNT queries, all
+/// binding `tenant_id` (CWE-284).  `alerts_high` counts alerts with
+/// `severity = 'high'`; open/closed split on the incident `status` column.
+/// No SQL concatenation occurs (CWE-89).
+pub async fn soc_summary(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    match db::soc_summary(&state.pool, &tenant_id).await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(e) => {
+            error!("Failed to compute SOC summary: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
@@ -3577,5 +3667,215 @@ mod tests {
             first_closed_at,
             "closed_at must not change on second close"
         );
+    }
+
+    // ── SOC query layer: get_incident + soc_summary route tests ──────────────
+
+    /// Helper: call GET /v1/incidents/:id and return (status, json body).
+    async fn do_get_incident(
+        state: Arc<AppState>,
+        tenant_id: &str,
+        incident_id: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = get_incident(
+            State(state),
+            agent_headers(tenant_id, tenant_id),
+            Path(incident_id.to_string()),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        (status, json)
+    }
+
+    /// GET /v1/incidents/:id returns 200 with the incident body for the owning tenant.
+    #[tokio::test]
+    async fn get_incident_returns_200_for_own_incident() {
+        let (state, tenant_id, _) = setup_state("get_inc_own").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_get_own", "deny_storm").await;
+
+        let (status, json) = do_get_incident(state, &tenant_id, "inc_get_own").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["id"], "inc_get_own");
+        assert_eq!(json["kind"], "deny_storm");
+        assert_eq!(json["tenant_id"], tenant_id.as_str());
+    }
+
+    /// GET /v1/incidents/:id returns 404 for an unknown id.
+    #[tokio::test]
+    async fn get_incident_returns_404_for_unknown_id() {
+        let (state, tenant_id, _) = setup_state("get_inc_missing").await;
+
+        let (status, json) = do_get_incident(state, &tenant_id, "does_not_exist").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(json["error"].as_str().is_some());
+    }
+
+    /// GET /v1/incidents/:id returns 404 when the incident belongs to a different
+    /// tenant — cross-tenant isolation (CWE-284).
+    #[tokio::test]
+    async fn get_incident_returns_404_cross_tenant() {
+        let (state, tenant_id_a, _) = setup_state("get_inc_cross_tenant").await;
+        // Register a second tenant and insert an incident under it.
+        let tenant_id_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
+        db::register_tenant(&state.pool, &tenant_id_b, "Tenant B", "developer")
+            .await
+            .unwrap();
+        db::insert_soc_incident(
+            &state.pool,
+            &SocIncidentRecord {
+                id: "inc_other_tenant".to_string(),
+                tenant_id: tenant_id_b.clone(),
+                kind: "deny_storm".to_string(),
+                severity: "high".to_string(),
+                agent_id: "agent-b".to_string(),
+                summary: "B's incident".to_string(),
+                source_event_ids: serde_json::json!(["e1"]).to_string(),
+                opened_at: "2026-06-06T12:00:00Z".to_string(),
+                status: "open".to_string(),
+                closed_at: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // tenant_a must get 404, not tenant_b's data.
+        let (status, _) = do_get_incident(state, &tenant_id_a, "inc_other_tenant").await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant incident must return 404"
+        );
+    }
+
+    /// GET /v1/alerts?severity=high only returns high-severity alerts (route-level).
+    #[tokio::test]
+    async fn list_alerts_severity_filter_via_route() {
+        let (state, tenant_id, _) = setup_state("alerts_sev_route").await;
+
+        // Insert 1 high + 1 low alert.
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ra_high".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r1".to_string(),
+                severity: "high".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt1".to_string(),
+                summary: "High alert".to_string(),
+                created_at: "2026-06-06T10:00:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ra_low".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r2".to_string(),
+                severity: "low".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt2".to_string(),
+                summary: "Low alert".to_string(),
+                created_at: "2026-06-06T10:01:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = list_alerts(
+            State(state),
+            agent_headers(&tenant_id, &tenant_id),
+            axum::extract::RawQuery(Some("severity=high".to_string())),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let arr: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = arr.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "only 1 high-severity alert");
+        assert_eq!(arr[0]["id"], "ra_high");
+        assert_eq!(arr[0]["severity"], "high");
+    }
+
+    /// GET /v1/soc/summary returns correct aggregate counts for the tenant.
+    #[tokio::test]
+    async fn soc_summary_returns_correct_counts() {
+        let (state, tenant_id, _) = setup_state("soc_summary_route").await;
+
+        // Seed: 2 alerts (1 high, 1 medium), 2 incidents (1 open, 1 closed).
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ss_a1".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r1".to_string(),
+                severity: "high".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt1".to_string(),
+                summary: "High".to_string(),
+                created_at: "2026-06-06T10:00:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ss_a2".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r2".to_string(),
+                severity: "medium".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt2".to_string(),
+                summary: "Medium".to_string(),
+                created_at: "2026-06-06T10:01:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        insert_test_incident(&state.pool, &tenant_id, "ss_i1", "deny_storm").await;
+        insert_test_incident(&state.pool, &tenant_id, "ss_i2", "exfil").await;
+        db::close_soc_incident(&state.pool, &tenant_id, "ss_i2")
+            .await
+            .unwrap();
+
+        let response = soc_summary(State(state), agent_headers(&tenant_id, &tenant_id))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["alerts_total"], 2);
+        assert_eq!(json["alerts_high"], 1);
+        assert_eq!(json["incidents_total"], 2);
+        assert_eq!(json["incidents_open"], 1);
+        assert_eq!(json["incidents_closed"], 1);
+    }
+
+    /// GET /v1/soc/summary for a tenant with no data returns all-zero counts.
+    #[tokio::test]
+    async fn soc_summary_returns_zeros_when_empty() {
+        let (state, tenant_id, _) = setup_state("soc_summary_empty").await;
+
+        let response = soc_summary(State(state), agent_headers(&tenant_id, &tenant_id))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["alerts_total"], 0);
+        assert_eq!(json["alerts_high"], 0);
+        assert_eq!(json["incidents_total"], 0);
+        assert_eq!(json["incidents_open"], 0);
+        assert_eq!(json["incidents_closed"], 0);
     }
 }

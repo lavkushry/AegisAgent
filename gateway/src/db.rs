@@ -1168,73 +1168,80 @@ pub async fn insert_soc_incident(
     Ok(())
 }
 
-/// List alerts for a tenant, newest-first, with pagination.
+/// List alerts for a tenant, newest-first, with pagination and optional equality filters.
 /// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
-/// Every query binds `tenant_id` — cross-tenant isolation guaranteed.
+/// `severity` and `agent_id` are optional equality filters.  The SQL string is
+/// STATIC — optional filters use the `(? IS NULL OR col = ?)` pattern so no
+/// concatenation ever occurs (CWE-89 safe).  Both filter binds are duplicated
+/// because SQLite does not support referencing a positional placeholder twice.
+/// Every query binds `tenant_id` first — cross-tenant isolation guaranteed (CWE-284).
 pub async fn list_soc_alerts(
     pool: &SqlitePool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
+    severity: Option<&str>,
+    agent_id: Option<&str>,
 ) -> Result<Vec<SocAlertRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     sqlx::query_as::<_, SocAlertRecord>(
         "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at
          FROM soc_alerts
          WHERE tenant_id = ?
+           AND (? IS NULL OR severity = ?)
+           AND (? IS NULL OR agent_id = ?)
          ORDER BY created_at DESC
          LIMIT ? OFFSET ?",
     )
     .bind(tenant_id)
+    .bind(severity)
+    .bind(severity)
+    .bind(agent_id)
+    .bind(agent_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
     .await
 }
 
-/// List incidents for a tenant, newest-first, with pagination.
+/// List incidents for a tenant, newest-first, with pagination and optional equality filters.
 /// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
-/// `status_filter` — when `Some("open")` or `Some("closed")`, restricts results
-/// to that lifecycle state; `None` returns all incidents regardless of status.
-/// Every query binds `tenant_id` — cross-tenant isolation guaranteed.
+/// `status_filter` — optional equality filter (`"open"` or `"closed"`; `None` = all).
+/// `severity` and `agent_id` — optional equality filters.
+/// All optional filters use the `(? IS NULL OR col = ?)` pattern so the SQL string
+/// stays STATIC — no concatenation occurs (CWE-89 safe). Every query binds
+/// `tenant_id` first — cross-tenant isolation guaranteed (CWE-284).
 pub async fn list_soc_incidents(
     pool: &SqlitePool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
     status_filter: Option<&str>,
+    severity: Option<&str>,
+    agent_id: Option<&str>,
 ) -> Result<Vec<SocIncidentRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    // We use two separate queries rather than building a dynamic SQL string, so
-    // there is zero risk of SQL injection — only static query strings appear here.
-    if let Some(sf) = status_filter {
-        sqlx::query_as::<_, SocIncidentRecord>(
-            "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
-             FROM soc_incidents
-             WHERE tenant_id = ? AND status = ?
-             ORDER BY opened_at DESC
-             LIMIT ? OFFSET ?",
-        )
-        .bind(tenant_id)
-        .bind(sf)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
-    } else {
-        sqlx::query_as::<_, SocIncidentRecord>(
-            "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
-             FROM soc_incidents
-             WHERE tenant_id = ?
-             ORDER BY opened_at DESC
-             LIMIT ? OFFSET ?",
-        )
-        .bind(tenant_id)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
-    }
+    sqlx::query_as::<_, SocIncidentRecord>(
+        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
+         FROM soc_incidents
+         WHERE tenant_id = ?
+           AND (? IS NULL OR status = ?)
+           AND (? IS NULL OR severity = ?)
+           AND (? IS NULL OR agent_id = ?)
+         ORDER BY opened_at DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(status_filter)
+    .bind(status_filter)
+    .bind(severity)
+    .bind(severity)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
 }
 
 /// Fetch a single SOC incident by id, scoped to the given tenant.
@@ -1283,6 +1290,55 @@ pub async fn close_soc_incident(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Aggregate SOC counts for a tenant — all in one call for the `/v1/soc/summary`
+/// endpoint. Every COUNT query binds `tenant_id` first (CWE-284); all SQL strings
+/// are static (CWE-89). `alerts_high` counts only alerts with `severity = 'high'`;
+/// `incidents_open` / `incidents_closed` use the lifecycle `status` column.
+pub async fn soc_summary(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<crate::models::SocSummary, sqlx::Error> {
+    let (alerts_total,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM soc_alerts WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+
+    let (alerts_high,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM soc_alerts WHERE tenant_id = ? AND severity = 'high'")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+
+    let (incidents_total,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+
+    let (incidents_open,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ? AND status = 'open'",
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+
+    let (incidents_closed,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ? AND status = 'closed'",
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(crate::models::SocSummary {
+        alerts_total,
+        alerts_high,
+        incidents_total,
+        incidents_open,
+        incidents_closed,
+    })
 }
 
 /// Quarantine an MCP server — all its tools become deny-by-default.
@@ -1488,13 +1544,13 @@ mod tests {
             .await
             .unwrap();
 
-        let a_alerts = list_soc_alerts(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0)
+        let a_alerts = list_soc_alerts(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0, None, None)
             .await
             .unwrap();
         assert_eq!(a_alerts.len(), 1, "tenant_a should see only its own alert");
         assert_eq!(a_alerts[0].id, "alert_a1");
 
-        let b_alerts = list_soc_alerts(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0)
+        let b_alerts = list_soc_alerts(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0, None, None)
             .await
             .unwrap();
         assert_eq!(b_alerts.len(), 1, "tenant_b should see only its own alert");
@@ -1515,13 +1571,17 @@ mod tests {
                 .unwrap();
         }
 
-        let page1 = list_soc_alerts(&pool, "tenant_a", 3, 0).await.unwrap();
+        let page1 = list_soc_alerts(&pool, "tenant_a", 3, 0, None, None)
+            .await
+            .unwrap();
         assert_eq!(page1.len(), 3);
-        let page2 = list_soc_alerts(&pool, "tenant_a", 3, 3).await.unwrap();
+        let page2 = list_soc_alerts(&pool, "tenant_a", 3, 3, None, None)
+            .await
+            .unwrap();
         assert_eq!(page2.len(), 2);
 
         // Hard cap: requesting more than SOC_MAX_LIMIT must not exceed it.
-        let all = list_soc_alerts(&pool, "tenant_a", SOC_MAX_LIMIT + 10, 0)
+        let all = list_soc_alerts(&pool, "tenant_a", SOC_MAX_LIMIT + 10, 0, None, None)
             .await
             .unwrap();
         assert_eq!(all.len(), 5); // only 5 exist
@@ -1544,13 +1604,13 @@ mod tests {
             .await
             .unwrap();
 
-        let a_incs = list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0, None)
+        let a_incs = list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0, None, None, None)
             .await
             .unwrap();
         assert_eq!(a_incs.len(), 1);
         assert_eq!(a_incs[0].id, "inc_a1");
 
-        let b_incs = list_soc_incidents(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0, None)
+        let b_incs = list_soc_incidents(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0, None, None, None)
             .await
             .unwrap();
         assert_eq!(b_incs.len(), 1);
@@ -1570,15 +1630,15 @@ mod tests {
                 .unwrap();
         }
 
-        let page1 = list_soc_incidents(&pool, "tenant_a", 2, 0, None)
+        let page1 = list_soc_incidents(&pool, "tenant_a", 2, 0, None, None, None)
             .await
             .unwrap();
         assert_eq!(page1.len(), 2);
-        let page2 = list_soc_incidents(&pool, "tenant_a", 2, 2, None)
+        let page2 = list_soc_incidents(&pool, "tenant_a", 2, 2, None, None, None)
             .await
             .unwrap();
         assert_eq!(page2.len(), 2);
-        let page3 = list_soc_incidents(&pool, "tenant_a", 2, 4, None)
+        let page3 = list_soc_incidents(&pool, "tenant_a", 2, 4, None, None, None)
             .await
             .unwrap();
         assert!(page3.is_empty());
@@ -1603,7 +1663,9 @@ mod tests {
         };
         insert_soc_alert(&pool, &record).await.unwrap();
 
-        let alerts = list_soc_alerts(&pool, "tenant_a", 10, 0).await.unwrap();
+        let alerts = list_soc_alerts(&pool, "tenant_a", 10, 0, None, None)
+            .await
+            .unwrap();
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].rule, "critical_deny");
         assert_eq!(alerts[0].source_event_id, "evt_z123");
@@ -1633,7 +1695,7 @@ mod tests {
         };
         insert_soc_incident(&pool, &record).await.unwrap();
 
-        let incs = list_soc_incidents(&pool, "tenant_a", 10, 0, None)
+        let incs = list_soc_incidents(&pool, "tenant_a", 10, 0, None, None, None)
             .await
             .unwrap();
         assert_eq!(incs.len(), 1);
@@ -1850,22 +1912,310 @@ mod tests {
             .await
             .unwrap();
 
-        let open_list = list_soc_incidents(&pool, "tenant_a", 50, 0, Some("open"))
+        let open_list = list_soc_incidents(&pool, "tenant_a", 50, 0, Some("open"), None, None)
             .await
             .unwrap();
         assert_eq!(open_list.len(), 2, "only two incidents should be open");
         assert!(open_list.iter().all(|i| i.status == "open"));
 
-        let closed_list = list_soc_incidents(&pool, "tenant_a", 50, 0, Some("closed"))
+        let closed_list = list_soc_incidents(&pool, "tenant_a", 50, 0, Some("closed"), None, None)
             .await
             .unwrap();
         assert_eq!(closed_list.len(), 1, "only one incident should be closed");
         assert_eq!(closed_list[0].id, "inc_closed_1");
         assert!(closed_list[0].closed_at.is_some());
 
-        let all_list = list_soc_incidents(&pool, "tenant_a", 50, 0, None)
+        let all_list = list_soc_incidents(&pool, "tenant_a", 50, 0, None, None, None)
             .await
             .unwrap();
         assert_eq!(all_list.len(), 3, "unfiltered list must return all three");
+    }
+
+    // ── SOC query layer: severity/agent_id filter + soc_summary tests ─────────
+
+    fn make_alert_with(
+        id: &str,
+        tenant_id: &str,
+        severity: &str,
+        agent_id: &str,
+    ) -> SocAlertRecord {
+        SocAlertRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            rule: "test_rule".to_string(),
+            severity: severity.to_string(),
+            agent_id: agent_id.to_string(),
+            source_event_id: format!("evt_{}", id),
+            summary: format!("Alert {} summary", id),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn make_incident_with(
+        id: &str,
+        tenant_id: &str,
+        severity: &str,
+        agent_id: &str,
+    ) -> SocIncidentRecord {
+        SocIncidentRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: "deny_storm".to_string(),
+            severity: severity.to_string(),
+            agent_id: agent_id.to_string(),
+            summary: format!("Incident {} summary", id),
+            source_event_ids: serde_json::json!(["evt_a"]).to_string(),
+            opened_at: chrono::Utc::now().to_rfc3339(),
+            status: "open".to_string(),
+            closed_at: None,
+        }
+    }
+
+    /// `list_soc_alerts` with `severity=Some("high")` returns only high-severity
+    /// alerts for the tenant — and never another tenant's rows.
+    #[tokio::test]
+    async fn list_soc_alerts_severity_filter_and_isolation() {
+        let pool = setup_pool("alerts_severity_filter").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // Tenant A: 2 high, 1 medium.
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("al_a_h1", "tenant_a", "high", "agent_1"),
+        )
+        .await
+        .unwrap();
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("al_a_h2", "tenant_a", "high", "agent_2"),
+        )
+        .await
+        .unwrap();
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("al_a_m1", "tenant_a", "medium", "agent_1"),
+        )
+        .await
+        .unwrap();
+        // Tenant B: 1 high — must never appear in tenant_a results.
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("al_b_h1", "tenant_b", "high", "agent_x"),
+        )
+        .await
+        .unwrap();
+
+        let high_a = list_soc_alerts(&pool, "tenant_a", 50, 0, Some("high"), None)
+            .await
+            .unwrap();
+        assert_eq!(high_a.len(), 2, "tenant_a must see exactly 2 high alerts");
+        assert!(high_a.iter().all(|a| a.severity == "high"));
+        assert!(
+            high_a.iter().all(|a| a.tenant_id == "tenant_a"),
+            "isolation: no tenant_b rows"
+        );
+
+        let medium_a = list_soc_alerts(&pool, "tenant_a", 50, 0, Some("medium"), None)
+            .await
+            .unwrap();
+        assert_eq!(medium_a.len(), 1);
+        assert_eq!(medium_a[0].id, "al_a_m1");
+
+        let all_a = list_soc_alerts(&pool, "tenant_a", 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            all_a.len(),
+            3,
+            "unfiltered must return all 3 tenant_a alerts"
+        );
+    }
+
+    /// `list_soc_alerts` with `agent_id=Some(...)` returns only alerts matching
+    /// that agent — and never another tenant's rows.
+    #[tokio::test]
+    async fn list_soc_alerts_agent_id_filter_and_isolation() {
+        let pool = setup_pool("alerts_agent_filter").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("al_a1", "tenant_a", "high", "agent_target"),
+        )
+        .await
+        .unwrap();
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("al_a2", "tenant_a", "low", "agent_other"),
+        )
+        .await
+        .unwrap();
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("al_b1", "tenant_b", "high", "agent_target"),
+        )
+        .await
+        .unwrap();
+
+        let target_alerts = list_soc_alerts(&pool, "tenant_a", 50, 0, None, Some("agent_target"))
+            .await
+            .unwrap();
+        assert_eq!(target_alerts.len(), 1);
+        assert_eq!(target_alerts[0].id, "al_a1");
+        assert_eq!(target_alerts[0].tenant_id, "tenant_a");
+
+        // Combined severity + agent_id filter.
+        let combined =
+            list_soc_alerts(&pool, "tenant_a", 50, 0, Some("high"), Some("agent_target"))
+                .await
+                .unwrap();
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].id, "al_a1");
+    }
+
+    /// `list_soc_incidents` with `severity` and `agent_id` filters returns only
+    /// matching incidents for the tenant.
+    #[tokio::test]
+    async fn list_soc_incidents_severity_and_agent_filters() {
+        let pool = setup_pool("incidents_filters").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("inc_a_h1", "tenant_a", "high", "agent_alpha"),
+        )
+        .await
+        .unwrap();
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("inc_a_h2", "tenant_a", "high", "agent_beta"),
+        )
+        .await
+        .unwrap();
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("inc_a_l1", "tenant_a", "low", "agent_alpha"),
+        )
+        .await
+        .unwrap();
+        // Tenant B — must be isolated.
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("inc_b_h1", "tenant_b", "high", "agent_alpha"),
+        )
+        .await
+        .unwrap();
+
+        let high_a = list_soc_incidents(&pool, "tenant_a", 50, 0, None, Some("high"), None)
+            .await
+            .unwrap();
+        assert_eq!(high_a.len(), 2);
+        assert!(high_a.iter().all(|i| i.severity == "high"));
+        assert!(high_a.iter().all(|i| i.tenant_id == "tenant_a"));
+
+        let alpha_a = list_soc_incidents(&pool, "tenant_a", 50, 0, None, None, Some("agent_alpha"))
+            .await
+            .unwrap();
+        assert_eq!(alpha_a.len(), 2);
+        assert!(alpha_a.iter().all(|i| i.agent_id == "agent_alpha"));
+
+        // Status + severity combined.
+        let open_high =
+            list_soc_incidents(&pool, "tenant_a", 50, 0, Some("open"), Some("high"), None)
+                .await
+                .unwrap();
+        assert_eq!(open_high.len(), 2);
+    }
+
+    /// `soc_summary` returns correct tenant-scoped aggregate counts and excludes
+    /// another tenant's data.
+    #[tokio::test]
+    async fn soc_summary_counts_are_correct_and_isolated() {
+        let pool = setup_pool("soc_summary_counts").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // Tenant A: 3 alerts (2 high, 1 medium); 3 incidents (2 open, 1 closed).
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("sa1", "tenant_a", "high", "agent_1"),
+        )
+        .await
+        .unwrap();
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("sa2", "tenant_a", "high", "agent_1"),
+        )
+        .await
+        .unwrap();
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("sa3", "tenant_a", "medium", "agent_2"),
+        )
+        .await
+        .unwrap();
+
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("si1", "tenant_a", "high", "agent_1"),
+        )
+        .await
+        .unwrap();
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("si2", "tenant_a", "high", "agent_1"),
+        )
+        .await
+        .unwrap();
+        let inc_to_close = make_incident_with("si3", "tenant_a", "low", "agent_2");
+        insert_soc_incident(&pool, &inc_to_close).await.unwrap();
+        close_soc_incident(&pool, "tenant_a", "si3").await.unwrap();
+
+        // Tenant B: 1 alert, 1 incident — must not affect tenant_a counts.
+        insert_soc_alert(
+            &pool,
+            &make_alert_with("sb1", "tenant_b", "high", "agent_x"),
+        )
+        .await
+        .unwrap();
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("sib1", "tenant_b", "high", "agent_x"),
+        )
+        .await
+        .unwrap();
+
+        let summary = soc_summary(&pool, "tenant_a").await.unwrap();
+        assert_eq!(summary.alerts_total, 3);
+        assert_eq!(summary.alerts_high, 2);
+        assert_eq!(summary.incidents_total, 3);
+        assert_eq!(summary.incidents_open, 2);
+        assert_eq!(summary.incidents_closed, 1);
+
+        // Tenant B summary must not be contaminated by tenant_a data.
+        let b_summary = soc_summary(&pool, "tenant_b").await.unwrap();
+        assert_eq!(b_summary.alerts_total, 1);
+        assert_eq!(b_summary.incidents_total, 1);
+        assert_eq!(b_summary.incidents_open, 1);
+        assert_eq!(b_summary.incidents_closed, 0);
     }
 }
