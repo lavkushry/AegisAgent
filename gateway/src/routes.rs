@@ -131,6 +131,46 @@ fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
     sha256_hex(canonical_action_string(tool_call).as_bytes())
 }
 
+/// Deterministic, order-independent hash of an MCP server's advertised tool
+/// manifest. Re-discovery recomputes this and compares it to the value pinned on
+/// the server row; a mismatch is tool-manifest drift (supply-chain / tool-hijack
+/// signal — the threat the `mcp_manifest_drift` SOC rule surfaces).
+///
+/// This is a server-integrity hash, NOT the byte-parity-locked `aegis-jcs-1`
+/// action/receipt hash, so it carries its own `mcp-manifest-1` scheme tag and is
+/// not covered by the cross-language corpus. It hashes only the security-relevant
+/// shape of each tool (key, name, description, risk, mutation, approval, input
+/// schema) — never any call payload. Tools are sorted by `tool_key` so discovery
+/// order never changes the hash.
+fn compute_mcp_manifest_hash(tools: &[McpToolManifestItem]) -> String {
+    let mut entries: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            json!({
+                "tool_key": t.tool_key,
+                "name": t.name,
+                "description": t.description,
+                "risk": t.risk,
+                "mutates_state": t.mutates_state,
+                "approval_required": t.approval_required,
+                "input_schema": t.input_schema,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        a.get("tool_key")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(
+                b.get("tool_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+    });
+    let canonical = canonical_value_string(&Value::Array(entries));
+    format!("sha256:{}", sha256_hex(canonical.as_bytes()))
+}
+
 /// Canonical (scheme `aegis-jcs-1`) string for an arbitrary JSON value. Used for
 /// action-receipt hashing; MUST match the SDK's `canonicalize()` byte-for-byte
 /// (see `docs/action-receipt-spec.md` and `tests/receipt_chain_vectors.json`).
@@ -790,6 +830,55 @@ pub async fn discover_mcp_tools(
         };
         let _ = db::insert_audit_event(&state.pool, &audit_record).await;
         registered += 1;
+    }
+
+    // MCP tool-manifest drift detection (SOC `mcp_manifest_drift`). Pin the manifest
+    // hash on first discovery; on a later discovery whose hash differs from the pin,
+    // surface a drift event on the async SOC stream and re-pin to the new value (so
+    // each distinct change alerts exactly once). STRICTLY ADDITIVE and best-effort:
+    // any DB error here is logged and never blocks the discovery response, and the
+    // SOC emit is non-blocking (`try_send`). Carries the server key + hashes only —
+    // never any tool payload.
+    let new_manifest_hash = compute_mcp_manifest_hash(&payload.tools);
+    match db::get_mcp_server_manifest_hash(&state.pool, &tenant_id, &server_key).await {
+        Ok(pinned) => {
+            if !pinned.is_empty() && pinned != new_manifest_hash {
+                state.events.emit(AseEvent {
+                    event_id: Uuid::new_v4().to_string(),
+                    occurred_at: Utc::now().to_rfc3339(),
+                    tenant_id: tenant_id.clone(),
+                    kind: "mcp_manifest_drift".to_string(),
+                    agent_id: "system".to_string(),
+                    // Not a deny — drift is a server-integrity flag, not an authorize
+                    // decision (kept out of the deny-storm correlation, design law 1).
+                    decision: "flag".to_string(),
+                    tool: format!("mcp:{}", server_key),
+                    action: "discover".to_string(),
+                    resource: Some(server_key.clone()),
+                    risk_score: 0,
+                    reason: format!(
+                        "MCP tool-manifest drift on server '{}': pinned {} != observed {}",
+                        server_key, pinned, new_manifest_hash
+                    ),
+                    run_id: None,
+                    trace_id: None,
+                    matched_policies: Vec::new(),
+                });
+            }
+            if pinned != new_manifest_hash {
+                if let Err(e) = db::set_mcp_server_manifest_hash(
+                    &state.pool,
+                    &tenant_id,
+                    &server_key,
+                    &new_manifest_hash,
+                )
+                .await
+                {
+                    error!("Failed to pin MCP manifest hash: {:?}", e);
+                }
+            }
+        }
+        Err(e) => error!("Failed to read pinned MCP manifest hash: {:?}", e),
     }
 
     let tools = match db::list_mcp_tools(&state.pool, &tenant_id, &server_key).await {
@@ -4000,5 +4089,131 @@ mod tests {
         assert_eq!(json["incidents_total"], 0);
         assert_eq!(json["incidents_open"], 0);
         assert_eq!(json["incidents_closed"], 0);
+    }
+
+    // --- MCP tool-manifest drift (SOC `mcp_manifest_drift`) ---
+
+    fn drift_tool(tool_key: &str, risk: &str) -> McpToolManifestItem {
+        McpToolManifestItem {
+            tool_key: tool_key.to_string(),
+            name: format!("Tool {}", tool_key),
+            description: None,
+            input_schema: None,
+            risk: risk.to_string(),
+            mutates_state: false,
+            approval_required: false,
+        }
+    }
+
+    /// The manifest hash is order-independent (discovery order must not matter) but
+    /// sensitive to any security-relevant field change (e.g. a tool's risk level).
+    #[test]
+    fn mcp_manifest_hash_is_order_independent_and_change_sensitive() {
+        let a = vec![
+            drift_tool("create_issue", "medium"),
+            drift_tool("merge", "high"),
+        ];
+        let b = vec![
+            drift_tool("merge", "high"),
+            drift_tool("create_issue", "medium"),
+        ];
+        assert_eq!(
+            compute_mcp_manifest_hash(&a),
+            compute_mcp_manifest_hash(&b),
+            "reordering tools must not change the manifest hash"
+        );
+
+        let c = vec![
+            drift_tool("create_issue", "critical"),
+            drift_tool("merge", "high"),
+        ];
+        assert_ne!(
+            compute_mcp_manifest_hash(&a),
+            compute_mcp_manifest_hash(&c),
+            "changing a tool's risk must change the manifest hash"
+        );
+
+        assert!(compute_mcp_manifest_hash(&a).starts_with("sha256:"));
+    }
+
+    /// Re-discovering a server whose advertised manifest changed must emit a
+    /// `mcp_manifest_drift` AseEvent onto the SOC stream (and only on change).
+    #[tokio::test]
+    async fn discover_emits_manifest_drift_only_when_manifest_changes() {
+        let (state, tenant_id, _agent_token, mut events_rx) =
+            setup_state_with_events("mcp_drift").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        let headers = agent_headers(&tenant_id, &tenant_id);
+
+        // 1) First discovery pins the manifest — no drift.
+        let req1 = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "medium")],
+        };
+        discover_mcp_tools(
+            State(state.clone()),
+            headers.clone(),
+            Path("github-mcp".to_string()),
+            Json(req1),
+        )
+        .await;
+
+        // 2) Identical re-discovery — still no drift.
+        let req2 = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "medium")],
+        };
+        discover_mcp_tools(
+            State(state.clone()),
+            headers.clone(),
+            Path("github-mcp".to_string()),
+            Json(req2),
+        )
+        .await;
+
+        // 3) Changed manifest (risk escalated) — must drift.
+        let req3 = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "critical")],
+        };
+        discover_mcp_tools(
+            State(state.clone()),
+            headers,
+            Path("github-mcp".to_string()),
+            Json(req3),
+        )
+        .await;
+
+        let mut drift_events = 0;
+        while let Ok(ev) = events_rx.try_recv() {
+            if ev.kind == "mcp_manifest_drift" {
+                assert_eq!(ev.tenant_id, tenant_id);
+                assert_eq!(ev.decision, "flag");
+                assert_eq!(ev.resource.as_deref(), Some("github-mcp"));
+                assert_eq!(ev.tool, "mcp:github-mcp");
+                drift_events += 1;
+            }
+        }
+        assert_eq!(
+            drift_events, 1,
+            "exactly one drift event — pinned first, silent on identical, fires on change"
+        );
+
+        // The new manifest is now pinned (re-pinned on drift).
+        let pinned = db::get_mcp_server_manifest_hash(&state.pool, &tenant_id, "github-mcp")
+            .await
+            .unwrap();
+        let expected = compute_mcp_manifest_hash(&[drift_tool("create_issue", "critical")]);
+        assert_eq!(pinned, expected);
     }
 }
