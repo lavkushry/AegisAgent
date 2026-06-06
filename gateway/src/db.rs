@@ -123,6 +123,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     ensure_mcp_server_endpoint_column(pool).await?;
+    ensure_mcp_server_manifest_hash_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_tools (
@@ -367,6 +368,62 @@ async fn ensure_mcp_server_endpoint_column(pool: &SqlitePool) -> Result<(), sqlx
     }
 
     sqlx::query("ALTER TABLE mcp_servers ADD COLUMN endpoint TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Additive migration: pin a per-server MCP tool-manifest hash so re-discovery can
+/// detect drift (supply-chain / tool-hijack signal). Empty string means "not yet
+/// pinned" (first discovery pins it). Never holds payloads — a hash only.
+async fn ensure_mcp_server_manifest_hash_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(mcp_servers)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "manifest_hash")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE mcp_servers ADD COLUMN manifest_hash TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Read the pinned MCP tool-manifest hash for a server (`""` if never pinned).
+/// Tenant-scoped, parameterized.
+pub async fn get_mcp_server_manifest_hash(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+) -> Result<String, sqlx::Error> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT manifest_hash FROM mcp_servers WHERE tenant_id = ? AND server_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(server_key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.0).unwrap_or_default())
+}
+
+/// Pin (or re-pin) the MCP tool-manifest hash for a server. Tenant-scoped,
+/// parameterized.
+pub async fn set_mcp_server_manifest_hash(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    manifest_hash: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE mcp_servers SET manifest_hash = ? WHERE tenant_id = ? AND server_key = ?")
+        .bind(manifest_hash)
+        .bind(tenant_id)
+        .bind(server_key)
         .execute(pool)
         .await?;
     Ok(())

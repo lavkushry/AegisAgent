@@ -175,6 +175,30 @@ pub fn replay_attempt(event: &AseEvent) -> Option<Alert> {
     ))
 }
 
+/// MCP tool-manifest drift: an MCP server's advertised tool manifest changed
+/// versus the hash pinned at an earlier discovery. The gateway recomputes a
+/// server-integrity hash on every `discover_mcp_tools` and emits an `AseEvent`
+/// with `kind == "mcp_manifest_drift"` when it diverges from the pin. Drift is a
+/// supply-chain / tool-hijack signal — the manifest the operator approved is not
+/// the one now being advertised — so this raises a HIGH SOC alert pointing at the
+/// affected server. Deterministic field match on the event kind only (Laws 1–2);
+/// carries the server key + hashes, no payloads.
+pub fn mcp_manifest_drift(event: &AseEvent) -> Option<Alert> {
+    if event.kind != "mcp_manifest_drift" {
+        return None;
+    }
+    Some(Alert::from_event(
+        event,
+        "mcp_manifest_drift",
+        "high",
+        format!(
+            "MCP tool-manifest drift on '{}' — advertised manifest differs from the pinned hash: {}",
+            event.resource.as_deref().unwrap_or(event.tool.as_str()),
+            event.reason
+        ),
+    ))
+}
+
 /// The deterministic detection engine. Holds the ordered list of atomic rules and
 /// runs every one over each event.
 pub struct Detector {
@@ -189,6 +213,7 @@ impl Default for Detector {
                 approval_required_surface,
                 critical_deny,
                 replay_attempt,
+                mcp_manifest_drift,
             ],
         }
     }
@@ -417,6 +442,47 @@ mod tests {
         let det = Detector::default();
         let ev = base_event(); // kind == "authorize_decision", decision == "allow"
         assert!(det.evaluate(&ev).iter().all(|a| a.rule != "replay_attempt"));
+    }
+
+    // --- Rule (e): mcp_manifest_drift ---
+
+    fn drift_event() -> AseEvent {
+        let mut ev = base_event();
+        ev.kind = "mcp_manifest_drift".to_string();
+        ev.decision = "flag".to_string();
+        ev.tool = "mcp:github".to_string();
+        ev.action = "discover".to_string();
+        ev.resource = Some("github".to_string());
+        ev.reason = "MCP tool-manifest drift on server 'github': pinned sha256:aaa != \
+                      observed sha256:bbb"
+            .to_string();
+        ev
+    }
+
+    #[test]
+    fn mcp_manifest_drift_event_fires_high_alert() {
+        let ev = drift_event();
+        let alert = mcp_manifest_drift(&ev).expect("rule should fire");
+        assert_eq!(alert.rule, "mcp_manifest_drift");
+        assert_eq!(alert.severity, "high");
+        assert_eq!(alert.tenant_id, "tenant_123");
+        assert_eq!(alert.source_event_id, "evt_test_1");
+        assert!(alert.summary.contains("github"));
+    }
+
+    #[test]
+    fn authorize_decision_does_not_fire_mcp_manifest_drift() {
+        let ev = base_event(); // kind == "authorize_decision"
+        assert!(mcp_manifest_drift(&ev).is_none());
+    }
+
+    #[test]
+    fn evaluate_mcp_manifest_drift_produces_single_high_alert() {
+        let det = Detector::default();
+        let alerts = det.evaluate(&drift_event());
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule, "mcp_manifest_drift");
+        assert_eq!(alerts[0].severity, "high");
     }
 
     #[test]
