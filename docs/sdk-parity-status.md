@@ -24,3 +24,8 @@ byte-parity`, `Corpus byte-equality gate`).
 The TypeScript SDK parity goal — client + fail-closed `protect()` + canon, with a strict
 `tsc` build and a passing `node --test` suite — is complete; this document records that the
 `track/ts-sdk` task stubs are satisfied by the shipped code.
+
+The Go SDK parity goal — `canon` + `aegis.Client` + fail-closed `aegis.Protect` + the receipt
+chain verifier, all under `sdk-go/` with `go test ./...` green and the `Go SDK canon byte-parity`
+CI gate — is likewise complete; this document records that the `track/go-sdk` task stubs are
+satisfied by the shipped code.
