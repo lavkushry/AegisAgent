@@ -1,6 +1,12 @@
 FROM rust:1.96-bookworm AS builder
 WORKDIR /build
 
+# Network resilience for the crate fetch: crates.io downloads intermittently
+# drop with "unexpected eof while reading" under cargo's HTTP/2 multiplexing.
+# (The CI workflow sets these too, but they don't reach inside the docker build.)
+ENV CARGO_NET_RETRY=10
+ENV CARGO_HTTP_MULTIPLEXING=false
+
 COPY gateway/Cargo.toml gateway/Cargo.lock ./gateway/
 COPY gateway/src ./gateway/src
 COPY gateway/policies.cedar ./gateway/policies.cedar
