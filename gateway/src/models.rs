@@ -325,6 +325,37 @@ pub struct AuditEventRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// SOC Phase 5 — persisted detection alert (one rule fired on one event).
+/// Stores identifiers, summary and severity only — never raw payloads or secrets
+/// (redaction invariant). Tenant-scoped; `source_event_id` links back to the ASE
+/// event that triggered the alert.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct SocAlertRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub rule: String,
+    pub severity: String,
+    pub agent_id: String,
+    pub source_event_id: String,
+    pub summary: String,
+    pub created_at: String,
+}
+
+/// SOC Phase 5 — persisted correlation incident (multi-event pattern detected).
+/// `source_event_ids` is a JSON array of contributing event IDs. Stores identifiers
+/// and summary only — never payloads or secrets (redaction invariant). Tenant-scoped.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct SocIncidentRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub kind: String,
+    pub severity: String,
+    pub agent_id: String,
+    pub summary: String,
+    pub source_event_ids: String, // JSON array
+    pub opened_at: String,
+}
+
 /// Tamper-evident, hash-chained action receipt. The hashed body is every field
 /// here EXCEPT `receipt_hash` and `created_at` (see routes::receipt_body_value),
 /// with the previous link (`prev_receipt_hash`) inside the body. Scheme aegis-jcs-1.

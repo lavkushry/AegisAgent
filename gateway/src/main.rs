@@ -61,9 +61,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Async SOC event stream (Phase 0 keystone): the authorize hot path emits
     // non-blocking onto this channel; a background task drains it. Every later
-    // SOC phase consumes this one stream and never touches the inline path.
+    // SOC phase (detection, correlation, response, indexing) consumes this one
+    // stream and never touches the inline path.
+    // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
-    tokio::spawn(events::drain(events_rx));
+    tokio::spawn(events::drain(events_rx, pool.clone()));
 
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
@@ -104,6 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/audit/events", get(routes::get_audit_events))
         // Verifiable action receipts
         .route("/v1/receipts/:id/verify", get(routes::verify_receipt))
+        // SOC Phase 5: Indexer Query API — paginated, tenant-scoped SOC views
+        .route("/v1/alerts", get(routes::list_alerts))
+        .route("/v1/incidents", get(routes::list_incidents))
         // SOC Phase 4: Response API — agent freeze/revoke, MCP quarantine
         .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
         .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))
