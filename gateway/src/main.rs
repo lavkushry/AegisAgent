@@ -19,6 +19,7 @@ mod narrate;
 mod notify;
 mod policy;
 mod routes;
+mod sign;
 
 use routes::AppState;
 
