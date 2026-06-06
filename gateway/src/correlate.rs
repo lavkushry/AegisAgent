@@ -10,8 +10,8 @@
 //! Design-law compliance:
 //!
 //! * **Law 1 — deterministic only.** Every rule fires on a counted-field threshold
-//!   (`deny` count, total action count, `require_approval` count). No scores gate,
-//!   no ML, no tunable weights.
+//!   (`deny` count, total action count, `require_approval` count) or a structural
+//!   Source→Sink sequence (Rule D). No scores gate, no ML, no tunable weights.
 //! * **Law 2 — no LLM in the path.** Pure counting, window management, field
 //!   matching; zero model calls.
 //! * **Law 3 — runs in the async drain only.** [`Correlator::observe`] is invoked
@@ -20,7 +20,7 @@
 //! * **Bounded memory.** After every `observe` call the correlator evicts entries
 //!   older than `MAX_WINDOW_SECS`. The window map never grows unbounded.
 //! * **Tenant-scoped.** The sliding window key is `(tenant_id, agent_id)` — events
-//!   from different tenants are never aggregated together.
+//!   from different tenants or agents are never aggregated together.
 
 use crate::events::AseEvent;
 use serde::{Deserialize, Serialize};
@@ -48,9 +48,93 @@ pub const REPEATED_APPROVAL_K: usize = 10;
 /// automation-driven drip patterns.
 pub const REPEATED_APPROVAL_WINDOW_SECS: i64 = 300;
 
+/// Data-exfiltration pattern rule: fire when a Source action is followed by a
+/// Sink action for the same (tenant, agent) within this window (seconds).
+/// 120 s is long enough to catch a read-then-upload pair in one run, short
+/// enough to limit false positives from unrelated sequential tool calls.
+pub const EXFIL_WINDOW_SECS: i64 = 120;
+
 /// The longest window across all rules. Used for eviction: any entry older
 /// than this can never contribute to any rule, so it is safe to drop.
 const MAX_WINDOW_SECS: i64 = REPEATED_APPROVAL_WINDOW_SECS; // 300 s
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Exfiltration action classifier (Rule D — deterministic, no scores)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Role of an action in the Source→Sink exfiltration pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExfilRole {
+    /// Data-access action: the agent is reading/fetching data from a store.
+    Source,
+    /// Data-egress action: the agent is sending/writing data outward.
+    /// Preferred over Source when a token could match both — egress-safety.
+    Sink,
+    /// Neither a clear data source nor a clear egress action.
+    Other,
+}
+
+/// Lowercase substrings that classify an action as a data **source** (reads).
+/// Tokens are checked case-insensitively via `action.to_lowercase().contains(tok)`.
+/// These represent data retrieval operations.
+const SOURCE_TOKENS: &[&str] = &[
+    "read",     // read_file, readfile, read_record …
+    "get",      // get_object, getUser …
+    "fetch",    // fetch_data, fetchRows …
+    "list",     // list_files, listBuckets …
+    "download", // download_blob …
+    "query",    // query_db, queryTable …
+    "select",   // select_rows …
+    "export",   // export_csv …
+    "dump",     // dump_table, mysqldump …
+    "cat",      // cat (shell), concatenate file contents …
+];
+
+/// Lowercase substrings that classify an action as a data **sink** (egress).
+/// Checked BEFORE Source tokens when a name matches both — egress is the
+/// more dangerous role, so we prefer Sink for conservative alerting.
+///
+/// Rationale for potential overlap:
+/// * `"write_external"` could sound like a write (source side for some) but
+///   it names an outbound write path — Sink.
+/// * `"http"` covers generic HTTP POSTs/PUTs to external endpoints.
+/// * `"exfil"` is always Sink by definition.
+const SINK_TOKENS: &[&str] = &[
+    "send",           // send_message, sendEmail …
+    "post",           // post_webhook, postData …
+    "upload",         // upload_file, uploadBlob …
+    "email",          // email_report, emailUser …
+    "webhook",        // fire_webhook, callWebhook …
+    "push",           // push_notification, gitPush (egress to remote) …
+    "publish",        // publish_event, publishMessage …
+    "write_external", // explicit external-write convention
+    "share",          // share_document, shareLink …
+    "transfer",       // transfer_file, transferFunds …
+    "exfil",          // any action explicitly named exfil
+    "http",           // http_call, httpPost — generic outbound HTTP
+];
+
+/// Classify an action name into its [`ExfilRole`].
+///
+/// Sink tokens are tested **first** so that any ambiguous name (e.g. an action
+/// called `"post_read_result"`) is conservatively treated as egress.
+///
+/// The comparison is case-insensitive (lowercased once; O(tokens × action_len)).
+pub fn action_kind(action: &str) -> ExfilRole {
+    let lower = action.to_lowercase();
+    // Prefer Sink over Source for egress safety.
+    for tok in SINK_TOKENS {
+        if lower.contains(tok) {
+            return ExfilRole::Sink;
+        }
+    }
+    for tok in SOURCE_TOKENS {
+        if lower.contains(tok) {
+            return ExfilRole::Source;
+        }
+    }
+    ExfilRole::Other
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Incident — the correlation output
@@ -117,6 +201,12 @@ struct WindowEntry {
     event_id: String,
     /// The authorize decision (`"allow"` | `"deny"` | `"require_approval"`).
     decision: String,
+    /// The action name, stored for Rule D (data-exfil source→sink matching).
+    action: String,
+    /// True once this Source entry has been paired with a Sink by Rule D.
+    /// Prevents the same Source from generating a second incident when a
+    /// later Sink arrives (no-flood guarantee).
+    exfil_paired: bool,
 }
 
 /// Parse an RFC 3339 timestamp string into Unix seconds.
@@ -164,39 +254,46 @@ impl Correlator {
         let ts_now = parse_ts(&ev.occurred_at);
 
         // 1. Append the new entry.
-        let window = self.windows.entry(key).or_default();
+        let window = self.windows.entry(key.clone()).or_default();
         window.push(WindowEntry {
             ts_secs: ts_now,
             event_id: ev.event_id.clone(),
             decision: ev.decision.clone(),
+            action: ev.action.clone(),
+            exfil_paired: false,
         });
 
         // 2. Evict entries older than the longest window (bounded memory).
         let cutoff = ts_now - MAX_WINDOW_SECS;
         window.retain(|e| e.ts_secs >= cutoff);
 
-        // 3. Re-borrow immutably for rule evaluation.
-        let window = self
-            .windows
-            .get(&(ev.tenant_id.clone(), ev.agent_id.clone()))
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        // 3. Re-borrow immutably for rules A/B/C evaluation.
+        let window_slice = self.windows.get(&key).map(|v| v.as_slice()).unwrap_or(&[]);
 
         let mut incidents = Vec::new();
 
         // Rule A — deny_storm (HIGH)
-        if let Some(inc) = rule_deny_storm(ev, window, ts_now) {
+        if let Some(inc) = rule_deny_storm(ev, window_slice, ts_now) {
             incidents.push(inc);
         }
 
         // Rule B — runaway (HIGH)
-        if let Some(inc) = rule_runaway(ev, window, ts_now) {
+        if let Some(inc) = rule_runaway(ev, window_slice, ts_now) {
             incidents.push(inc);
         }
 
         // Rule C — repeated_approval (INFO)
-        if let Some(inc) = rule_repeated_approval(ev, window, ts_now) {
+        if let Some(inc) = rule_repeated_approval(ev, window_slice, ts_now) {
             incidents.push(inc);
+        }
+
+        // Rule D — data_exfil_pattern (HIGH).
+        // Needs a mutable borrow of the window to mark paired Source entries,
+        // so we re-borrow mutably here (rules A/B/C are already done).
+        if let Some(window_mut) = self.windows.get_mut(&key) {
+            if let Some(inc) = rule_data_exfil(ev, window_mut, ts_now) {
+                incidents.push(inc);
+            }
         }
 
         incidents
@@ -302,6 +399,62 @@ fn rule_repeated_approval(ev: &AseEvent, window: &[WindowEntry], ts_now: i64) ->
     }
 }
 
+/// Rule D — `data_exfil_pattern` (HIGH).
+///
+/// Within [`EXFIL_WINDOW_SECS`] seconds for the same (tenant, agent), a
+/// **Source** action (data access) is followed by a **Sink** action (egress),
+/// where `Source.ts <= Sink.ts` and both fall within the window.
+///
+/// Fires **on the completing Sink event** — i.e. only when the current event
+/// is a Sink and an un-paired Source exists in-window. The matched Source entry
+/// is marked `exfil_paired = true` so subsequent Sink events from the same
+/// agent do not re-fire on the same Source (no-flood guarantee).
+///
+/// Takes a mutable slice so it can mark the paired Source entry in place.
+fn rule_data_exfil(ev: &AseEvent, window: &mut [WindowEntry], ts_now: i64) -> Option<Incident> {
+    // Only fire when the current (triggering) event is a Sink.
+    if action_kind(&ev.action) != ExfilRole::Sink {
+        return None;
+    }
+
+    let exfil_cutoff = ts_now - EXFIL_WINDOW_SECS;
+
+    // Find the earliest un-paired Source entry inside the exfil window whose
+    // timestamp is <= the current Sink timestamp (causal ordering).
+    // We look for the first (oldest) qualifying Source so the pairing is
+    // deterministic regardless of window order.
+    let source_idx = window.iter().position(|e| {
+        e.ts_secs >= exfil_cutoff
+            && e.ts_secs <= ts_now
+            && !e.exfil_paired
+            && action_kind(&e.action) == ExfilRole::Source
+    });
+
+    let source_idx = source_idx?;
+
+    // Collect evidence: the Source event id + the Sink event id (current).
+    let source_event_id = window[source_idx].event_id.clone();
+    let source_action = window[source_idx].action.clone();
+
+    // Mark the Source as paired — prevents re-firing on subsequent Sinks
+    // without adding any new state (bounded by the window length).
+    window[source_idx].exfil_paired = true;
+
+    Some(Incident::new(
+        &ev.occurred_at,
+        &ev.tenant_id,
+        &ev.agent_id,
+        "data_exfil_pattern",
+        "high",
+        format!(
+            "Agent {} performed a data-access action ('{}') followed by an egress action \
+             ('{}') within {}s — possible data exfiltration pattern",
+            ev.agent_id, source_action, ev.action, EXFIL_WINDOW_SECS
+        ),
+        vec![source_event_id, ev.event_id.clone()],
+    ))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests (TDD — written first; implementation above written to make them green)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -330,6 +483,33 @@ mod tests {
             action: "push".to_string(),
             resource: None,
             risk_score: 40,
+            reason: "test".to_string(),
+            run_id: None,
+            trace_id: None,
+            matched_policies: vec![],
+        }
+    }
+
+    /// Like `make_event` but also sets the `action` field.
+    fn make_event_with_action(
+        event_id: &str,
+        tenant_id: &str,
+        agent_id: &str,
+        decision: &str,
+        occurred_at: &str,
+        action: &str,
+    ) -> AseEvent {
+        AseEvent {
+            event_id: event_id.to_string(),
+            occurred_at: occurred_at.to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: "authorize_decision".to_string(),
+            agent_id: agent_id.to_string(),
+            decision: decision.to_string(),
+            tool: "files".to_string(),
+            action: action.to_string(),
+            resource: None,
+            risk_score: 60,
             reason: "test".to_string(),
             run_id: None,
             trace_id: None,
@@ -670,5 +850,504 @@ mod tests {
         assert_eq!(inc.agent_id, "agent_fields");
         assert!(!inc.opened_at.is_empty(), "opened_at must be set");
         assert!(!inc.summary.is_empty(), "summary must be set");
+    }
+
+    // ─── action_kind classifier ───────────────────────────────────────────────
+
+    #[test]
+    fn action_kind_classifies_sources_correctly() {
+        // Plain source tokens.
+        assert_eq!(
+            action_kind("read_file"),
+            ExfilRole::Source,
+            "read_file → Source"
+        );
+        assert_eq!(
+            action_kind("get_object"),
+            ExfilRole::Source,
+            "get_object → Source"
+        );
+        assert_eq!(
+            action_kind("fetch_data"),
+            ExfilRole::Source,
+            "fetch_data → Source"
+        );
+        assert_eq!(
+            action_kind("list_buckets"),
+            ExfilRole::Source,
+            "list_buckets → Source"
+        );
+        assert_eq!(
+            action_kind("download_blob"),
+            ExfilRole::Source,
+            "download_blob → Source"
+        );
+        assert_eq!(
+            action_kind("query_db"),
+            ExfilRole::Source,
+            "query_db → Source"
+        );
+        assert_eq!(
+            action_kind("select_rows"),
+            ExfilRole::Source,
+            "select_rows → Source"
+        );
+        assert_eq!(
+            action_kind("export_csv"),
+            ExfilRole::Source,
+            "export_csv → Source"
+        );
+        assert_eq!(
+            action_kind("dump_table"),
+            ExfilRole::Source,
+            "dump_table → Source"
+        );
+        assert_eq!(action_kind("cat"), ExfilRole::Source, "cat → Source");
+        // Case-insensitive.
+        assert_eq!(
+            action_kind("READ_FILE"),
+            ExfilRole::Source,
+            "READ_FILE → Source"
+        );
+        assert_eq!(
+            action_kind("GetUser"),
+            ExfilRole::Source,
+            "GetUser → Source"
+        );
+    }
+
+    #[test]
+    fn action_kind_classifies_sinks_correctly() {
+        assert_eq!(
+            action_kind("send_message"),
+            ExfilRole::Sink,
+            "send_message → Sink"
+        );
+        assert_eq!(
+            action_kind("post_webhook"),
+            ExfilRole::Sink,
+            "post_webhook → Sink"
+        );
+        assert_eq!(
+            action_kind("upload_file"),
+            ExfilRole::Sink,
+            "upload_file → Sink"
+        );
+        assert_eq!(
+            action_kind("email_report"),
+            ExfilRole::Sink,
+            "email_report → Sink"
+        );
+        assert_eq!(
+            action_kind("call_webhook"),
+            ExfilRole::Sink,
+            "call_webhook → Sink"
+        );
+        assert_eq!(
+            action_kind("push_notification"),
+            ExfilRole::Sink,
+            "push_notification → Sink"
+        );
+        assert_eq!(
+            action_kind("publish_event"),
+            ExfilRole::Sink,
+            "publish_event → Sink"
+        );
+        assert_eq!(
+            action_kind("write_external"),
+            ExfilRole::Sink,
+            "write_external → Sink"
+        );
+        assert_eq!(
+            action_kind("share_document"),
+            ExfilRole::Sink,
+            "share_document → Sink"
+        );
+        assert_eq!(
+            action_kind("transfer_file"),
+            ExfilRole::Sink,
+            "transfer_file → Sink"
+        );
+        assert_eq!(
+            action_kind("exfil_data"),
+            ExfilRole::Sink,
+            "exfil_data → Sink"
+        );
+        assert_eq!(
+            action_kind("http_post"),
+            ExfilRole::Sink,
+            "http_post → Sink"
+        );
+        // Case-insensitive.
+        assert_eq!(
+            action_kind("UPLOAD_FILE"),
+            ExfilRole::Sink,
+            "UPLOAD_FILE → Sink"
+        );
+        assert_eq!(
+            action_kind("SendEmail"),
+            ExfilRole::Sink,
+            "SendEmail → Sink"
+        );
+    }
+
+    #[test]
+    fn action_kind_classifies_others_correctly() {
+        assert_eq!(action_kind("approve"), ExfilRole::Other, "approve → Other");
+        assert_eq!(
+            action_kind("merge_pr"),
+            ExfilRole::Other,
+            "merge_pr → Other"
+        );
+        assert_eq!(
+            action_kind("create_branch"),
+            ExfilRole::Other,
+            "create_branch → Other"
+        );
+        assert_eq!(action_kind(""), ExfilRole::Other, "empty → Other");
+        assert_eq!(
+            action_kind("unknown_action_xyz"),
+            ExfilRole::Other,
+            "unknown → Other"
+        );
+    }
+
+    #[test]
+    fn action_kind_sink_wins_over_source_for_ambiguous_names() {
+        // "post_read_result" contains both "post" (Sink) and "read" (Source).
+        // Sink must win (egress-safety rule: Sink tokens checked first).
+        assert_eq!(
+            action_kind("post_read_result"),
+            ExfilRole::Sink,
+            "when a name matches both Sink and Source, Sink must win"
+        );
+    }
+
+    // ─── Rule D — data_exfil_pattern ─────────────────────────────────────────
+
+    #[test]
+    fn exfil_source_then_sink_in_window_fires_exactly_once() {
+        // A Source (read_file) followed by a Sink (upload) within EXFIL_WINDOW_SECS
+        // → exactly one data_exfil_pattern incident.
+        let mut c = Correlator::default();
+
+        let source_ev = make_event_with_action(
+            "src_evt_1",
+            "tenant_ex",
+            "agent_ex",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "read_file",
+        );
+        let sink_ev = make_event_with_action(
+            "sink_evt_1",
+            "tenant_ex",
+            "agent_ex",
+            "allow",
+            "2026-06-06T10:00:30Z", // 30 s later, well within 120 s
+            "upload",
+        );
+
+        let inc_source = c.observe(&source_ev);
+        assert!(
+            inc_source.iter().all(|i| i.kind != "data_exfil_pattern"),
+            "Source event alone must not fire exfil"
+        );
+
+        let inc_sink = c.observe(&sink_ev);
+        let exfil_incidents: Vec<_> = inc_sink
+            .iter()
+            .filter(|i| i.kind == "data_exfil_pattern")
+            .collect();
+        assert_eq!(
+            exfil_incidents.len(),
+            1,
+            "exactly one data_exfil_pattern incident on the completing Sink event"
+        );
+
+        let inc = exfil_incidents[0];
+        assert_eq!(inc.severity, "high");
+        assert_eq!(inc.tenant_id, "tenant_ex");
+        assert_eq!(inc.agent_id, "agent_ex");
+        // Evidence must include both the source and sink event ids.
+        assert!(
+            inc.source_event_ids.contains(&"src_evt_1".to_string()),
+            "source event id must be in evidence"
+        );
+        assert!(
+            inc.source_event_ids.contains(&"sink_evt_1".to_string()),
+            "sink event id must be in evidence"
+        );
+        assert_eq!(
+            inc.source_event_ids.len(),
+            2,
+            "evidence has exactly two event ids"
+        );
+        // Summary names both actions and the agent.
+        assert!(
+            inc.summary.contains("read_file"),
+            "summary names source action"
+        );
+        assert!(inc.summary.contains("upload"), "summary names sink action");
+        assert!(inc.summary.contains("agent_ex"), "summary names agent");
+    }
+
+    #[test]
+    fn exfil_sink_then_source_wrong_order_does_not_fire() {
+        // Sink before Source — causal order violated, must not fire.
+        let mut c = Correlator::default();
+
+        let sink_ev = make_event_with_action(
+            "sink_first",
+            "tenant_ex2",
+            "agent_ex2",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "upload",
+        );
+        let source_ev = make_event_with_action(
+            "src_after",
+            "tenant_ex2",
+            "agent_ex2",
+            "allow",
+            "2026-06-06T10:00:30Z",
+            "read_file",
+        );
+
+        let inc1 = c.observe(&sink_ev);
+        let inc2 = c.observe(&source_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "data_exfil_pattern"),
+            "Sink-before-Source must not fire exfil pattern"
+        );
+    }
+
+    #[test]
+    fn exfil_source_only_does_not_fire() {
+        let mut c = Correlator::default();
+        let source_ev = make_event_with_action(
+            "src_only",
+            "tenant_ex3",
+            "agent_ex3",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "get_object",
+        );
+        let inc = c.observe(&source_ev);
+        assert!(
+            inc.iter().all(|i| i.kind != "data_exfil_pattern"),
+            "Source-only must not fire"
+        );
+    }
+
+    #[test]
+    fn exfil_sink_only_does_not_fire() {
+        let mut c = Correlator::default();
+        let sink_ev = make_event_with_action(
+            "sink_only",
+            "tenant_ex4",
+            "agent_ex4",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "send_message",
+        );
+        let inc = c.observe(&sink_ev);
+        assert!(
+            inc.iter().all(|i| i.kind != "data_exfil_pattern"),
+            "Sink-only must not fire"
+        );
+    }
+
+    #[test]
+    fn exfil_different_agents_same_tenant_do_not_pair() {
+        // Agent A does Source, Agent B does Sink — must NOT pair across agents.
+        let mut c = Correlator::default();
+
+        let source_ev = make_event_with_action(
+            "src_agent_a",
+            "tenant_shared",
+            "agent_A",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "read_file",
+        );
+        let sink_ev = make_event_with_action(
+            "sink_agent_b",
+            "tenant_shared",
+            "agent_B",
+            "allow",
+            "2026-06-06T10:00:10Z",
+            "upload",
+        );
+
+        let inc1 = c.observe(&source_ev);
+        let inc2 = c.observe(&sink_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "data_exfil_pattern"),
+            "events from different agents must not produce an exfil incident"
+        );
+    }
+
+    #[test]
+    fn exfil_different_tenants_same_agent_do_not_pair() {
+        // Tenant X has a Source; Tenant Y has a Sink — must NOT pair across tenants.
+        let mut c = Correlator::default();
+
+        let source_ev = make_event_with_action(
+            "src_t1",
+            "tenant_X",
+            "shared_agent",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "fetch_data",
+        );
+        let sink_ev = make_event_with_action(
+            "sink_t2",
+            "tenant_Y",
+            "shared_agent",
+            "allow",
+            "2026-06-06T10:00:10Z",
+            "upload",
+        );
+
+        let inc1 = c.observe(&source_ev);
+        let inc2 = c.observe(&sink_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "data_exfil_pattern"),
+            "events from different tenants must not produce an exfil incident"
+        );
+    }
+
+    #[test]
+    fn exfil_outside_window_does_not_fire() {
+        // Source at T=0, Sink at T=EXFIL_WINDOW_SECS+1 — outside the window.
+        let mut c = Correlator::default();
+
+        let source_ev = make_event_with_action(
+            "src_old",
+            "tenant_ew",
+            "agent_ew",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "query_db",
+        );
+        // Sink is 121 s later — 1 s past the 120 s exfil window.
+        // Note: MAX_WINDOW_SECS is 300 s so the entry is still in the outer
+        // window but outside the exfil-specific cutoff.
+        let sink_ev = make_event_with_action(
+            "sink_late",
+            "tenant_ew",
+            "agent_ew",
+            "allow",
+            "2026-06-06T10:02:01Z", // 121 s after source
+            "upload",
+        );
+
+        c.observe(&source_ev);
+        let inc = c.observe(&sink_ev);
+        assert!(
+            inc.iter().all(|i| i.kind != "data_exfil_pattern"),
+            "Source outside the exfil window must not pair with Sink"
+        );
+    }
+
+    #[test]
+    fn exfil_third_event_after_pair_does_not_re_fire() {
+        // Source → Sink → another_allow: only one incident, no re-fire on the
+        // third event.
+        let mut c = Correlator::default();
+
+        let source_ev = make_event_with_action(
+            "src_v1",
+            "tenant_nf",
+            "agent_nf",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "read_file",
+        );
+        let sink_ev = make_event_with_action(
+            "sink_v1",
+            "tenant_nf",
+            "agent_nf",
+            "allow",
+            "2026-06-06T10:00:10Z",
+            "upload",
+        );
+        // Third event: an unrelated allow that is not a Sink action.
+        let other_ev = make_event_with_action(
+            "other_v1",
+            "tenant_nf",
+            "agent_nf",
+            "allow",
+            "2026-06-06T10:00:20Z",
+            "approve",
+        );
+
+        let inc1 = c.observe(&source_ev);
+        let inc2 = c.observe(&sink_ev);
+        let inc3 = c.observe(&other_ev);
+
+        let exfil_count = inc1
+            .iter()
+            .chain(inc2.iter())
+            .chain(inc3.iter())
+            .filter(|i| i.kind == "data_exfil_pattern")
+            .count();
+
+        assert_eq!(
+            exfil_count, 1,
+            "exactly one exfil incident total; third event must not re-fire"
+        );
+    }
+
+    #[test]
+    fn exfil_second_sink_after_paired_does_not_re_fire_on_same_source() {
+        // Source → Sink1 (fires) → Sink2 (no second incident from same source).
+        let mut c = Correlator::default();
+
+        let source_ev = make_event_with_action(
+            "src_multi",
+            "tenant_ms",
+            "agent_ms",
+            "allow",
+            "2026-06-06T10:00:00Z",
+            "list_files",
+        );
+        let sink_ev1 = make_event_with_action(
+            "sink_multi_1",
+            "tenant_ms",
+            "agent_ms",
+            "allow",
+            "2026-06-06T10:00:10Z",
+            "upload",
+        );
+        let sink_ev2 = make_event_with_action(
+            "sink_multi_2",
+            "tenant_ms",
+            "agent_ms",
+            "allow",
+            "2026-06-06T10:00:20Z",
+            "send_message",
+        );
+
+        let inc1 = c.observe(&source_ev);
+        let inc2 = c.observe(&sink_ev1);
+        let inc3 = c.observe(&sink_ev2);
+
+        // Only one incident total (the Source was paired after the first Sink).
+        let exfil_count = inc1
+            .iter()
+            .chain(inc2.iter())
+            .chain(inc3.iter())
+            .filter(|i| i.kind == "data_exfil_pattern")
+            .count();
+
+        assert_eq!(
+            exfil_count, 1,
+            "second Sink must not re-fire on an already-paired Source"
+        );
     }
 }
