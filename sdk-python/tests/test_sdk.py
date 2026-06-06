@@ -98,6 +98,63 @@ class TestAegisSDK(unittest.TestCase):
         with self.assertRaises(PermissionError):
             my_test_func("hello")
 
+    @patch("time.sleep", return_value=None)
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_approval_timeout_raises_timeout_error(
+        self, mock_post, mock_get, _mock_sleep
+    ):
+        """Exhausting max_polls must raise TimeoutError (TASK-0204).
+
+        The decorator polls up to 150 times then raises TimeoutError. We mock
+        every poll to return 'PENDING' so the loop exhausts and the guard at
+        the end of the polling block fires.
+        """
+        correct_hash = _hash_tool_call(
+            tool="test_tool",
+            action="test_action",
+            resource=None,
+            mutates_state=True,
+            parameters={"param1": "hello"},
+        )
+        auth_resp = MagicMock()
+        auth_resp.status_code = 200
+        auth_resp.json.return_value = {
+            "decision": "require_approval",
+            "reason": "Approval required",
+            "approval": {
+                "approval_id": "89cf8b98-2103-4458-8210-344589cf8b98",
+                "status": "created",
+                "approver_group": "platform-leads",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "action_hash": correct_hash,
+            },
+        }
+        mock_post.return_value = auth_resp
+
+        # Every status poll returns PENDING — loop exhausts.
+        pending_resp = MagicMock()
+        pending_resp.status_code = 200
+        pending_resp.json.return_value = {
+            "status": "PENDING",
+            "action_hash": correct_hash,
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+        mock_get.return_value = pending_resp
+
+        executed = {"ran": False}
+
+        @protect_tool(self.client, tool="test_tool", action="test_action")
+        def my_test_func(param1):
+            executed["ran"] = True
+            return f"executed_{param1}"
+
+        with self.assertRaises(TimeoutError):
+            my_test_func("hello")
+        self.assertFalse(
+            executed["ran"], "timed-out approval must not execute the tool"
+        )
+
     @patch("requests.get")
     @patch("requests.post")
     def test_authorize_edited_approval(self, mock_post, mock_get):

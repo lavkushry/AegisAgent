@@ -67,6 +67,50 @@ class TestCanonicalAction(unittest.TestCase):
         self.assertIn("Café ☕", canonical)
         self.assertNotIn("\\u", canonical)
 
+    def test_canonicalize_empty_object(self) -> None:
+        """Empty parameters dict must produce a stable canonical string (TASK-0212)."""
+        canonical = _canonical_action(
+            tool="noop",
+            action="ping",
+            resource=None,
+            mutates_state=False,
+            parameters={},
+        )
+        self.assertIn('"parameters":{}', canonical)
+        parsed = json.loads(canonical)
+        self.assertEqual(parsed["parameters"], {})
+
+    def test_canonicalize_nested_arrays(self) -> None:
+        """Arrays (including nested) must be preserved verbatim — aegis-jcs-1
+        only sorts *object* keys, not array elements (TASK-0213)."""
+        canonical = _canonical_action(
+            tool="deploy",
+            action="rollout",
+            resource="cluster/prod",
+            mutates_state=True,
+            parameters={"targets": ["us-east-1", "eu-west-1"], "flags": [1, [2, 3]]},
+        )
+        parsed = json.loads(canonical)
+        self.assertEqual(parsed["parameters"]["targets"], ["us-east-1", "eu-west-1"])
+        self.assertEqual(parsed["parameters"]["flags"], [1, [2, 3]])
+
+    def test_canonicalize_null_values(self) -> None:
+        """None / JSON null must round-trip correctly and keys must be sorted
+        by Unicode code point (TASK-0214)."""
+        canonical = _canonical_action(
+            tool="github",
+            action="create_issue",
+            resource=None,
+            mutates_state=True,
+            parameters={"assignee": None, "milestone": None, "title": "fix"},
+        )
+        parsed = json.loads(canonical)
+        self.assertIsNone(parsed["parameters"]["assignee"])
+        self.assertIsNone(parsed["parameters"]["milestone"])
+        # Keys sorted: 'assignee' < 'milestone' < 'title'
+        self.assertLess(canonical.index('"assignee"'), canonical.index('"milestone"'))
+        self.assertLess(canonical.index('"milestone"'), canonical.index('"title"'))
+
 
 if __name__ == "__main__":
     unittest.main()
