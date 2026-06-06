@@ -10,6 +10,7 @@
 
 use crate::correlate::Correlator;
 use crate::detect::Detector;
+use crate::notify::{self, NotifyMessage, NotifySink};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -76,13 +77,27 @@ impl EventSink {
     }
 }
 
-/// Background drain (Phase 0 consumer + Phase 1 detection + Phase 3 correlation).
-/// Observes the stream, runs the deterministic [`Detector`] over each event, and
-/// then feeds the event into the stateful [`Correlator`] for multi-event pattern
-/// detection. All of this is out-of-band (design law 3): the inline authorize
-/// budget is never touched.
+/// Background drain (Phase 0 consumer + Phase 1 detection + Phase 2 notify +
+/// Phase 3 correlation).
+///
+/// Observes the stream, runs the deterministic [`Detector`] over each event,
+/// feeds high-signal events and alerts to the out-of-band [`NotifySink`]
+/// (Phase 2), and then runs the stateful [`Correlator`] for multi-event
+/// pattern detection (Phase 3). All of this is out-of-band (design law 3):
+/// the inline authorize budget is never touched.
+///
+/// ## Notify trigger policy (high-signal only, no spam)
+///
+/// * `deny` decision → notify (every denied action is SOC-visible).
+/// * `require_approval` decision → notify (human-in-the-loop gate opened).
+/// * HIGH-severity alert/incident → notify (active threat pattern detected).
+/// * `allow` decision → NOT notified (no noise).
+/// * INFO-severity alert/incident → NOT notified (logged only).
 pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
     let detector = Detector::default();
+    // Phase 2: construct the notify sink once from env; NullSink when
+    // AEGIS_WEBHOOK_URL is absent (safe default — no network calls in tests).
+    let sink: Box<dyn NotifySink> = notify::from_env();
     // Phase 3: one Correlator per drain task — mutable, bounded-memory sliding
     // windows keyed by (tenant_id, agent_id). Never touches the inline path.
     let mut correlator = Correlator::default();
@@ -97,19 +112,48 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
             "ASE",
         );
 
+        // Phase 2 — decision notify: deny and require_approval are high-signal.
+        // allow is intentionally excluded to avoid alert fatigue.
+        if ev.decision == "deny" || ev.decision == "require_approval" {
+            sink.notify(NotifyMessage {
+                kind: ev.kind.clone(),
+                severity: "high".to_string(),
+                tenant_id: ev.tenant_id.clone(),
+                agent_id: ev.agent_id.clone(),
+                summary: format!(
+                    "decision={} tool={} action={} reason={}",
+                    ev.decision, ev.tool, ev.action, ev.reason
+                ),
+                alert_or_incident_id: None,
+                occurred_at: ev.occurred_at.clone(),
+            });
+        }
+
         // Phase 1: deterministic, atomic detection over the single event.
         for alert in detector.evaluate(&ev) {
             match alert.severity.as_str() {
-                "high" => warn!(
-                    alert_id = %alert.alert_id,
-                    rule = %alert.rule,
-                    severity = %alert.severity,
-                    tenant = %alert.tenant_id,
-                    agent = %alert.agent_id,
-                    source_event_id = %alert.source_event_id,
-                    summary = %alert.summary,
-                    "SOC alert",
-                ),
+                "high" => {
+                    warn!(
+                        alert_id = %alert.alert_id,
+                        rule = %alert.rule,
+                        severity = %alert.severity,
+                        tenant = %alert.tenant_id,
+                        agent = %alert.agent_id,
+                        source_event_id = %alert.source_event_id,
+                        summary = %alert.summary,
+                        "SOC alert",
+                    );
+                    // Phase 2 — alert notify: HIGH alerts only.
+                    sink.notify(NotifyMessage {
+                        kind: "alert".to_string(),
+                        severity: alert.severity.clone(),
+                        tenant_id: alert.tenant_id.clone(),
+                        agent_id: alert.agent_id.clone(),
+                        summary: alert.summary.clone(),
+                        alert_or_incident_id: Some(alert.alert_id.clone()),
+                        occurred_at: alert.occurred_at.clone(),
+                    });
+                }
                 _ => info!(
                     alert_id = %alert.alert_id,
                     rule = %alert.rule,
@@ -127,16 +171,28 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
         // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
         for incident in correlator.observe(&ev) {
             match incident.severity.as_str() {
-                "high" => warn!(
-                    incident_id = %incident.incident_id,
-                    kind = %incident.kind,
-                    severity = %incident.severity,
-                    tenant = %incident.tenant_id,
-                    agent = %incident.agent_id,
-                    contributing_events = ?incident.source_event_ids.len(),
-                    summary = %incident.summary,
-                    "SOC incident",
-                ),
+                "high" => {
+                    warn!(
+                        incident_id = %incident.incident_id,
+                        kind = %incident.kind,
+                        severity = %incident.severity,
+                        tenant = %incident.tenant_id,
+                        agent = %incident.agent_id,
+                        contributing_events = ?incident.source_event_ids.len(),
+                        summary = %incident.summary,
+                        "SOC incident",
+                    );
+                    // Phase 2 — incident notify: HIGH incidents only.
+                    sink.notify(NotifyMessage {
+                        kind: "incident".to_string(),
+                        severity: incident.severity.clone(),
+                        tenant_id: incident.tenant_id.clone(),
+                        agent_id: incident.agent_id.clone(),
+                        summary: incident.summary.clone(),
+                        alert_or_incident_id: Some(incident.incident_id.clone()),
+                        occurred_at: incident.opened_at.clone(),
+                    });
+                }
                 _ => info!(
                     incident_id = %incident.incident_id,
                     kind = %incident.kind,
