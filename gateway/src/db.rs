@@ -830,11 +830,57 @@ pub async fn insert_audit_event(
     Ok(())
 }
 
-pub async fn insert_action_receipt(
+/// Atomically append a receipt to a tenant's hash chain (T-D hardening).
+///
+/// Reading the chain head and inserting the new (head-referencing) receipt happen
+/// inside a single `BEGIN IMMEDIATE` transaction on one connection, so concurrent
+/// appends for the same tenant are serialized at the writer and cannot fork the
+/// chain (two receipts sharing one `prev_receipt_hash`). `BEGIN IMMEDIATE` takes the
+/// SQLite write lock up front, so the head this txn reads is the head no other writer
+/// can append past before it commits.
+///
+/// `build` receives the current head hash (`""` for genesis) and returns the
+/// fully-formed, hashed receipt referencing it; the receipt-hash formula stays in the
+/// caller so the hashed body remains byte-parity-locked. All access is tenant-scoped
+/// and parameterized. Returns the record actually committed.
+pub async fn append_action_receipt_atomic<F>(
     pool: &SqlitePool,
-    record: &ActionReceiptRecord,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    tenant_id: &str,
+    build: F,
+) -> Result<ActionReceiptRecord, sqlx::Error>
+where
+    F: FnOnce(String) -> ActionReceiptRecord,
+{
+    let mut conn = pool.acquire().await?;
+
+    // IMMEDIATE acquires the write lock now, serializing concurrent appenders so the
+    // head read below can't be raced by another insert before this txn commits.
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+    // Helper: roll back and surface the original error if any step fails mid-txn,
+    // so we never leave a dangling write lock or a half-applied chain link.
+    async fn rollback(conn: &mut sqlx::SqliteConnection) {
+        let _ = sqlx::query("ROLLBACK").execute(conn).await;
+    }
+
+    let head: Option<(String,)> = match sqlx::query_as(
+        "SELECT receipt_hash FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&mut *conn)
+    .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            rollback(&mut conn).await;
+            return Err(e);
+        }
+    };
+    let prev = head.map(|(h,)| h).unwrap_or_default();
+
+    let record = build(prev);
+
+    if let Err(e) = sqlx::query(
         "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
@@ -855,23 +901,15 @@ pub async fn insert_action_receipt(
     .bind(&record.action_hash)
     .bind(&record.prev_receipt_hash)
     .bind(&record.receipt_hash)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
+    .execute(&mut *conn)
+    .await
+    {
+        rollback(&mut conn).await;
+        return Err(e);
+    }
 
-/// Latest receipt hash for a tenant (chain head). Uses rowid for insertion order.
-pub async fn get_latest_receipt_hash(
-    pool: &SqlitePool,
-    tenant_id: &str,
-) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT receipt_hash FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|(hash,)| hash))
+    sqlx::query("COMMIT").execute(&mut *conn).await?;
+    Ok(record)
 }
 
 pub async fn get_action_receipt_by_id(
