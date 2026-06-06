@@ -8,9 +8,10 @@
 //! (detection, correlation, response, indexing) is a *consumer* of this one
 //! stream and never touches the inline path again.
 
+use crate::detect::Detector;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Default in-memory buffer for the SOC event channel.
 pub const DEFAULT_CAPACITY: usize = 1024;
@@ -74,9 +75,12 @@ impl EventSink {
     }
 }
 
-/// Background drain (the Phase 0 consumer). For now it only observes the stream;
-/// Phases 1+ replace/extend this with detection, correlation, and indexing.
+/// Background drain (Phase 0 consumer + Phase 1 detection). Observes the stream
+/// and runs the deterministic [`Detector`] over each event, logging every alert.
+/// All of this is out-of-band (design law 3): the inline authorize budget is
+/// never touched. Phases 2+ extend this with notify sinks, correlation, indexing.
 pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
+    let detector = Detector::default();
     while let Some(ev) = rx.recv().await {
         debug!(
             event_id = %ev.event_id,
@@ -86,5 +90,31 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
             action = %ev.action,
             "ASE",
         );
+
+        // Phase 1: deterministic, atomic detection over the single event.
+        for alert in detector.evaluate(&ev) {
+            match alert.severity.as_str() {
+                "high" => warn!(
+                    alert_id = %alert.alert_id,
+                    rule = %alert.rule,
+                    severity = %alert.severity,
+                    tenant = %alert.tenant_id,
+                    agent = %alert.agent_id,
+                    source_event_id = %alert.source_event_id,
+                    summary = %alert.summary,
+                    "SOC alert",
+                ),
+                _ => info!(
+                    alert_id = %alert.alert_id,
+                    rule = %alert.rule,
+                    severity = %alert.severity,
+                    tenant = %alert.tenant_id,
+                    agent = %alert.agent_id,
+                    source_event_id = %alert.source_event_id,
+                    summary = %alert.summary,
+                    "SOC alert",
+                ),
+            }
+        }
     }
 }
