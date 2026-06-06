@@ -3,6 +3,11 @@ use chrono::Utc;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::str::FromStr;
 
+/// Default page size for `list_soc_alerts` / `list_soc_incidents`.
+pub const SOC_DEFAULT_LIMIT: i64 = 50;
+/// Hard cap to prevent accidentally returning enormous result sets.
+pub const SOC_MAX_LIMIT: i64 = 200;
+
 pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     // Enforce WAL mode and busy timeout on pool initialization
     let connection_options = sqlx::sqlite::SqliteConnectOptions::from_str(db_url)?
@@ -287,6 +292,49 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await?;
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_action_receipts_tenant ON action_receipts (tenant_id);",
+    )
+    .execute(pool)
+    .await?;
+
+    // ── Phase 5: SOC event indexer ────────────────────────────────────────────
+    // soc_alerts: one persisted row per detection rule firing (detect::Alert).
+    // Stores ids/summaries/hashes only — never raw payloads or secrets.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS soc_alerts (
+            id              TEXT PRIMARY KEY,
+            tenant_id       TEXT NOT NULL,
+            rule            TEXT NOT NULL,
+            severity        TEXT NOT NULL,
+            agent_id        TEXT NOT NULL,
+            source_event_id TEXT NOT NULL,
+            summary         TEXT NOT NULL,
+            created_at      TEXT NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_soc_alerts_tenant ON soc_alerts (tenant_id);")
+        .execute(pool)
+        .await?;
+
+    // soc_incidents: one persisted row per multi-event correlation incident
+    // (correlate::Incident). source_event_ids is a JSON array of evidence ids.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS soc_incidents (
+            id               TEXT PRIMARY KEY,
+            tenant_id        TEXT NOT NULL,
+            kind             TEXT NOT NULL,
+            severity         TEXT NOT NULL,
+            agent_id         TEXT NOT NULL,
+            summary          TEXT NOT NULL,
+            source_event_ids TEXT NOT NULL,
+            opened_at        TEXT NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_soc_incidents_tenant ON soc_incidents (tenant_id);",
     )
     .execute(pool)
     .await?;
@@ -993,6 +1041,103 @@ pub async fn is_agent_active(
     Ok(row.map(|(s,)| s == "active").unwrap_or(false))
 }
 
+// ── SOC Phase 5: alert + incident persistence ─────────────────────────────────
+
+/// Persist one detection alert. Tenant-scoped, parameterized. Best-effort: the
+/// drain task logs errors but never panics on insert failure (design law 3).
+/// Stores ids/summary/severity only — never raw payloads (redaction invariant).
+pub async fn insert_soc_alert(
+    pool: &SqlitePool,
+    record: &SocAlertRecord,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO soc_alerts (id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.rule)
+    .bind(&record.severity)
+    .bind(&record.agent_id)
+    .bind(&record.source_event_id)
+    .bind(&record.summary)
+    .bind(&record.created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Persist one correlation incident. Tenant-scoped, parameterized.
+/// `source_event_ids` is pre-serialised JSON (never concatenated into SQL).
+pub async fn insert_soc_incident(
+    pool: &SqlitePool,
+    record: &SocIncidentRecord,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO soc_incidents (id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.kind)
+    .bind(&record.severity)
+    .bind(&record.agent_id)
+    .bind(&record.summary)
+    .bind(&record.source_event_ids)
+    .bind(&record.opened_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// List alerts for a tenant, newest-first, with pagination.
+/// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
+/// Every query binds `tenant_id` — cross-tenant isolation guaranteed.
+pub async fn list_soc_alerts(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<SocAlertRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    sqlx::query_as::<_, SocAlertRecord>(
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at
+         FROM soc_alerts
+         WHERE tenant_id = ?
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+/// List incidents for a tenant, newest-first, with pagination.
+/// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
+/// Every query binds `tenant_id` — cross-tenant isolation guaranteed.
+pub async fn list_soc_incidents(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<SocIncidentRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    sqlx::query_as::<_, SocIncidentRecord>(
+        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at
+         FROM soc_incidents
+         WHERE tenant_id = ?
+         ORDER BY opened_at DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
 /// Quarantine an MCP server — all its tools become deny-by-default.
 /// Sets `status = 'quarantined'` on the server; the authorize path checks this.
 pub async fn set_mcp_server_status(
@@ -1144,5 +1289,195 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(tool.status, "approved");
+    }
+
+    // ── SOC Phase 5 DB tests ─────────────────────────────────────────────────
+
+    fn make_alert(id: &str, tenant_id: &str) -> SocAlertRecord {
+        SocAlertRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            rule: "confused_deputy_block".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_x".to_string(),
+            source_event_id: format!("evt_{}", id),
+            summary: "Test alert summary".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn make_incident(id: &str, tenant_id: &str) -> SocIncidentRecord {
+        SocIncidentRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: "deny_storm".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_y".to_string(),
+            summary: "Test incident summary".to_string(),
+            source_event_ids: serde_json::json!(["evt_1", "evt_2"]).to_string(),
+            opened_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[tokio::test]
+    async fn soc_alerts_are_tenant_scoped() {
+        let pool = setup_pool("soc_alerts_tenant").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // Insert one alert per tenant.
+        insert_soc_alert(&pool, &make_alert("alert_a1", "tenant_a"))
+            .await
+            .unwrap();
+        insert_soc_alert(&pool, &make_alert("alert_b1", "tenant_b"))
+            .await
+            .unwrap();
+
+        let a_alerts = list_soc_alerts(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0)
+            .await
+            .unwrap();
+        assert_eq!(a_alerts.len(), 1, "tenant_a should see only its own alert");
+        assert_eq!(a_alerts[0].id, "alert_a1");
+
+        let b_alerts = list_soc_alerts(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0)
+            .await
+            .unwrap();
+        assert_eq!(b_alerts.len(), 1, "tenant_b should see only its own alert");
+        assert_eq!(b_alerts[0].id, "alert_b1");
+    }
+
+    #[tokio::test]
+    async fn soc_alerts_pagination_limit_offset() {
+        let pool = setup_pool("soc_alerts_pagination").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        // Insert 5 alerts.
+        for i in 0..5u32 {
+            insert_soc_alert(&pool, &make_alert(&format!("al_{}", i), "tenant_a"))
+                .await
+                .unwrap();
+        }
+
+        let page1 = list_soc_alerts(&pool, "tenant_a", 3, 0).await.unwrap();
+        assert_eq!(page1.len(), 3);
+        let page2 = list_soc_alerts(&pool, "tenant_a", 3, 3).await.unwrap();
+        assert_eq!(page2.len(), 2);
+
+        // Hard cap: requesting more than SOC_MAX_LIMIT must not exceed it.
+        let all = list_soc_alerts(&pool, "tenant_a", SOC_MAX_LIMIT + 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 5); // only 5 exist
+    }
+
+    #[tokio::test]
+    async fn soc_incidents_are_tenant_scoped() {
+        let pool = setup_pool("soc_incidents_tenant").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_a1", "tenant_a"))
+            .await
+            .unwrap();
+        insert_soc_incident(&pool, &make_incident("inc_b1", "tenant_b"))
+            .await
+            .unwrap();
+
+        let a_incs = list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0)
+            .await
+            .unwrap();
+        assert_eq!(a_incs.len(), 1);
+        assert_eq!(a_incs[0].id, "inc_a1");
+
+        let b_incs = list_soc_incidents(&pool, "tenant_b", SOC_DEFAULT_LIMIT, 0)
+            .await
+            .unwrap();
+        assert_eq!(b_incs.len(), 1);
+        assert_eq!(b_incs[0].id, "inc_b1");
+    }
+
+    #[tokio::test]
+    async fn soc_incidents_pagination_limit_offset() {
+        let pool = setup_pool("soc_incidents_pagination").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        for i in 0..4u32 {
+            insert_soc_incident(&pool, &make_incident(&format!("inc_{}", i), "tenant_a"))
+                .await
+                .unwrap();
+        }
+
+        let page1 = list_soc_incidents(&pool, "tenant_a", 2, 0).await.unwrap();
+        assert_eq!(page1.len(), 2);
+        let page2 = list_soc_incidents(&pool, "tenant_a", 2, 2).await.unwrap();
+        assert_eq!(page2.len(), 2);
+        let page3 = list_soc_incidents(&pool, "tenant_a", 2, 4).await.unwrap();
+        assert!(page3.is_empty());
+    }
+
+    #[tokio::test]
+    async fn soc_alert_source_event_ids_stored_correctly() {
+        let pool = setup_pool("soc_alert_fields").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let record = SocAlertRecord {
+            id: "alert_fields".to_string(),
+            tenant_id: "tenant_a".to_string(),
+            rule: "critical_deny".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_z".to_string(),
+            source_event_id: "evt_z123".to_string(),
+            summary: "Critical deny detected".to_string(),
+            created_at: "2026-06-06T12:00:00Z".to_string(),
+        };
+        insert_soc_alert(&pool, &record).await.unwrap();
+
+        let alerts = list_soc_alerts(&pool, "tenant_a", 10, 0).await.unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule, "critical_deny");
+        assert_eq!(alerts[0].source_event_id, "evt_z123");
+        assert_eq!(alerts[0].severity, "high");
+    }
+
+    #[tokio::test]
+    async fn soc_incident_source_event_ids_json_round_trip() {
+        let pool = setup_pool("soc_incident_json").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let ids = vec!["evt_1", "evt_2", "evt_3"];
+        let source_event_ids_json = serde_json::to_string(&ids).unwrap();
+        let record = SocIncidentRecord {
+            id: "inc_json".to_string(),
+            tenant_id: "tenant_a".to_string(),
+            kind: "deny_storm".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_q".to_string(),
+            summary: "Deny storm detected".to_string(),
+            source_event_ids: source_event_ids_json.clone(),
+            opened_at: "2026-06-06T12:00:00Z".to_string(),
+        };
+        insert_soc_incident(&pool, &record).await.unwrap();
+
+        let incs = list_soc_incidents(&pool, "tenant_a", 10, 0).await.unwrap();
+        assert_eq!(incs.len(), 1);
+        assert_eq!(incs[0].source_event_ids, source_event_ids_json);
+        let parsed: Vec<String> = serde_json::from_str(&incs[0].source_event_ids).unwrap();
+        assert_eq!(parsed, ids);
     }
 }

@@ -9,11 +9,15 @@
 //! stream and never touches the inline path again.
 
 use crate::correlate::Correlator;
+use crate::db;
 use crate::detect::Detector;
+use crate::models::{SocAlertRecord, SocIncidentRecord};
 use crate::notify::{self, NotifyMessage, NotifySink};
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 /// Default in-memory buffer for the SOC event channel.
 pub const DEFAULT_CAPACITY: usize = 1024;
@@ -78,13 +82,14 @@ impl EventSink {
 }
 
 /// Background drain (Phase 0 consumer + Phase 1 detection + Phase 2 notify +
-/// Phase 3 correlation).
+/// Phase 3 correlation + Phase 5 indexing).
 ///
 /// Observes the stream, runs the deterministic [`Detector`] over each event,
 /// feeds high-signal events and alerts to the out-of-band [`NotifySink`]
-/// (Phase 2), and then runs the stateful [`Correlator`] for multi-event
-/// pattern detection (Phase 3). All of this is out-of-band (design law 3):
-/// the inline authorize budget is never touched.
+/// (Phase 2), runs the stateful [`Correlator`] for multi-event pattern detection
+/// (Phase 3), and persists alerts + incidents to `soc_alerts`/`soc_incidents`
+/// (Phase 5). All of this is out-of-band (design law 3): the inline authorize
+/// budget is never touched.
 ///
 /// ## Notify trigger policy (high-signal only, no spam)
 ///
@@ -93,7 +98,15 @@ impl EventSink {
 /// * HIGH-severity alert/incident → notify (active threat pattern detected).
 /// * `allow` decision → NOT notified (no noise).
 /// * INFO-severity alert/incident → NOT notified (logged only).
-pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
+///
+/// ## Persistence (Phase 5)
+///
+/// Alerts and incidents are inserted via [`db::insert_soc_alert`] /
+/// [`db::insert_soc_incident`] on every event loop iteration. Errors are logged
+/// and discarded; the drain loop never panics or aborts on a DB failure (design
+/// law 3 — out-of-band best-effort). Secrets are never stored: only ids,
+/// summaries, and severity (redaction invariant).
+pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) {
     let detector = Detector::default();
     // Phase 2: construct the notify sink once from env; NullSink when
     // AEGIS_WEBHOOK_URL is absent (safe default — no network calls in tests).
@@ -165,6 +178,24 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
                     "SOC alert",
                 ),
             }
+
+            // Phase 5 — persist the alert (best-effort; never panics on failure).
+            let alert_record = SocAlertRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: alert.tenant_id.clone(),
+                rule: alert.rule.clone(),
+                severity: alert.severity.clone(),
+                agent_id: alert.agent_id.clone(),
+                source_event_id: alert.source_event_id.clone(),
+                summary: alert.summary.clone(),
+                created_at: alert.occurred_at.clone(),
+            };
+            if let Err(e) = db::insert_soc_alert(&pool, &alert_record).await {
+                error!(
+                    alert_id = %alert.alert_id,
+                    "Phase 5: failed to persist SOC alert: {:?}", e
+                );
+            }
         }
 
         // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
@@ -203,6 +234,28 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
                     summary = %incident.summary,
                     "SOC incident",
                 ),
+            }
+
+            // Phase 5 — persist the incident (best-effort; never panics on failure).
+            // source_event_ids is serialised to JSON so the column stores structured
+            // evidence without SQL concatenation (redaction + parameterization).
+            let source_ids_json = serde_json::to_string(&incident.source_event_ids)
+                .unwrap_or_else(|_| "[]".to_string());
+            let incident_record = SocIncidentRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: incident.tenant_id.clone(),
+                kind: incident.kind.clone(),
+                severity: incident.severity.clone(),
+                agent_id: incident.agent_id.clone(),
+                summary: incident.summary.clone(),
+                source_event_ids: source_ids_json,
+                opened_at: incident.opened_at.clone(),
+            };
+            if let Err(e) = db::insert_soc_incident(&pool, &incident_record).await {
+                error!(
+                    incident_id = %incident.incident_id,
+                    "Phase 5: failed to persist SOC incident: {:?}", e
+                );
             }
         }
     }

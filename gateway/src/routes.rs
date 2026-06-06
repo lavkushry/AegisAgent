@@ -1746,6 +1746,98 @@ pub async fn get_audit_events(
     }
 }
 
+// ── SOC Phase 5: Indexer Query API ───────────────────────────────────────────
+
+/// Parse a `?limit=` / `?offset=` query string with sane defaults and hard caps.
+/// Avoids extracting `axum::extract::Query<HashMap<…>>` to keep the code simple;
+/// falls back to the default on any parse error.
+fn parse_pagination(query: Option<&str>) -> (i64, i64) {
+    let mut limit = db::SOC_DEFAULT_LIMIT;
+    let mut offset = 0i64;
+
+    if let Some(q) = query {
+        for pair in q.split('&') {
+            let mut kv = pair.splitn(2, '=');
+            match (kv.next(), kv.next()) {
+                (Some("limit"), Some(v)) => {
+                    if let Ok(n) = v.parse::<i64>() {
+                        limit = n;
+                    }
+                }
+                (Some("offset"), Some(v)) => {
+                    if let Ok(n) = v.parse::<i64>() {
+                        offset = n.max(0);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (limit.clamp(1, db::SOC_MAX_LIMIT), offset)
+}
+
+/// GET /v1/alerts — list SOC detection alerts for the authenticated tenant.
+///
+/// Query params: `limit` (default 50, max 200), `offset` (default 0).
+/// Returns a JSON array of [`SocAlertRecord`]s ordered newest-first.
+/// Every result row is tenant-scoped via parameterized SQL — never leaks
+/// another tenant's data.
+pub async fn list_alerts(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_soc_alerts(&state.pool, &tenant_id, limit, offset).await {
+        Ok(alerts) => (StatusCode::OK, Json(alerts)).into_response(),
+        Err(e) => {
+            error!("Failed to list SOC alerts: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/incidents — list SOC correlation incidents for the authenticated tenant.
+///
+/// Query params: `limit` (default 50, max 200), `offset` (default 0).
+/// Returns a JSON array of [`SocIncidentRecord`]s ordered newest-first.
+/// Every result row is tenant-scoped via parameterized SQL — never leaks
+/// another tenant's data.
+pub async fn list_incidents(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_soc_incidents(&state.pool, &tenant_id, limit, offset).await {
+        Ok(incidents) => (StatusCode::OK, Json(incidents)).into_response(),
+        Err(e) => {
+            error!("Failed to list SOC incidents: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 // ── SOC Phase 4: Response API ─────────────────────────────────────────────────
 
 /// Freeze an agent: all subsequent /v1/authorize calls for this agent will be
@@ -1921,7 +2013,8 @@ mod tests {
     async fn setup_state(test_name: &str) -> (Arc<AppState>, String, String) {
         let (state, tenant_id, agent_token, events_rx) = setup_state_with_events(test_name).await;
         // Drain in the background so existing tests are unaffected by the stream.
-        tokio::spawn(events::drain(events_rx));
+        // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
+        tokio::spawn(events::drain(events_rx, state.pool.clone()));
         (state, tenant_id, agent_token)
     }
 
@@ -2788,5 +2881,148 @@ mod tests {
             1,
             "approval_hash_mismatch_total must be 1 after one swap attempt"
         );
+    }
+
+    // ── SOC Phase 5: Indexer route tests ─────────────────────────────────────
+
+    /// list_alerts returns an empty array when no alerts exist, not an error.
+    #[tokio::test]
+    async fn list_alerts_empty_when_no_alerts() {
+        let (state, tenant_id, _agent_token) = setup_state("alerts_empty").await;
+
+        let response = list_alerts(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    /// list_incidents returns an empty array when no incidents exist.
+    #[tokio::test]
+    async fn list_incidents_empty_when_no_incidents() {
+        let (state, tenant_id, _agent_token) = setup_state("incidents_empty").await;
+
+        let response = list_incidents(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    /// Inserting a SOC alert directly into the DB then calling list_alerts via the
+    /// route returns that alert scoped to the correct tenant.
+    #[tokio::test]
+    async fn list_alerts_returns_tenant_scoped_alerts() {
+        let (state, tenant_id, _agent_token) = setup_state("alerts_tenant_route").await;
+
+        // Directly seed an alert for the tenant.
+        let alert = crate::models::SocAlertRecord {
+            id: "route_alert_1".to_string(),
+            tenant_id: tenant_id.clone(),
+            rule: "confused_deputy_block".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_route".to_string(),
+            source_event_id: "evt_route_1".to_string(),
+            summary: "Route test alert".to_string(),
+            created_at: "2026-06-06T10:00:00Z".to_string(),
+        };
+        db::insert_soc_alert(&state.pool, &alert).await.unwrap();
+
+        let response = list_alerts(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "route_alert_1");
+        assert_eq!(arr[0]["rule"], "confused_deputy_block");
+        assert_eq!(arr[0]["severity"], "high");
+        assert_eq!(arr[0]["tenant_id"], tenant_id.as_str());
+    }
+
+    /// Inserting a SOC incident directly then calling list_incidents via the route
+    /// returns it tenant-scoped.
+    #[tokio::test]
+    async fn list_incidents_returns_tenant_scoped_incidents() {
+        let (state, tenant_id, _agent_token) = setup_state("incidents_tenant_route").await;
+
+        let source_ids = serde_json::to_string(&vec!["evt_1", "evt_2"]).unwrap();
+        let incident = crate::models::SocIncidentRecord {
+            id: "route_inc_1".to_string(),
+            tenant_id: tenant_id.clone(),
+            kind: "deny_storm".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_route".to_string(),
+            summary: "Route test incident".to_string(),
+            source_event_ids: source_ids.clone(),
+            opened_at: "2026-06-06T10:00:00Z".to_string(),
+        };
+        db::insert_soc_incident(&state.pool, &incident)
+            .await
+            .unwrap();
+
+        let response = list_incidents(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "route_inc_1");
+        assert_eq!(arr[0]["kind"], "deny_storm");
+        assert_eq!(arr[0]["tenant_id"], tenant_id.as_str());
+    }
+
+    /// parse_pagination caps limit at SOC_MAX_LIMIT and defaults correctly.
+    #[test]
+    fn parse_pagination_caps_and_defaults() {
+        // No query string → defaults
+        let (limit, offset) = parse_pagination(None);
+        assert_eq!(limit, db::SOC_DEFAULT_LIMIT);
+        assert_eq!(offset, 0);
+
+        // Explicit small limit and offset
+        let (limit, offset) = parse_pagination(Some("limit=10&offset=5"));
+        assert_eq!(limit, 10);
+        assert_eq!(offset, 5);
+
+        // Exceeding max cap
+        let (limit, _) = parse_pagination(Some("limit=99999"));
+        assert_eq!(limit, db::SOC_MAX_LIMIT);
+
+        // Zero limit → clamped to 1
+        let (limit, _) = parse_pagination(Some("limit=0"));
+        assert_eq!(limit, 1);
+
+        // Negative offset → clamped to 0
+        let (_, offset) = parse_pagination(Some("offset=-5"));
+        assert_eq!(offset, 0);
     }
 }
