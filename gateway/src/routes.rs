@@ -720,6 +720,33 @@ pub async fn register_mcp_server(
         .into_response()
 }
 
+/// GET /v1/mcp/servers — tenant-scoped list of registered MCP servers with their
+/// current `status` (incl. `quarantined`) and pinned `manifest_hash`. Read-only;
+/// lets an operator (or the SOC console) triage a `mcp_manifest_drift` alert by
+/// seeing which servers are quarantined / drifted and acting via the
+/// quarantine/restore endpoints.
+pub async fn list_mcp_servers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let tenant_id = match get_tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    match db::list_mcp_servers(&state.pool, &tenant_id).await {
+        Ok(servers) => (StatusCode::OK, Json(servers)).into_response(),
+        Err(e) => {
+            error!("Failed to list MCP servers: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn discover_mcp_tools(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -4368,5 +4395,61 @@ mod tests {
         assert!(denied
             .matched_policies
             .contains(&"mcp_server_quarantined".to_string()));
+    }
+
+    /// GET /v1/mcp/servers lists a tenant's servers with status + manifest_hash,
+    /// and never leaks another tenant's servers.
+    #[tokio::test]
+    async fn list_mcp_servers_is_tenant_scoped_and_shows_status() {
+        let (state, tenant_id, _agent_token) = setup_state("list_mcp_servers").await;
+
+        for key in ["alpha-mcp", "beta-mcp"] {
+            db::upsert_mcp_server(
+                &state.pool,
+                &tenant_id,
+                key,
+                "Server",
+                Some("platform"),
+                "http",
+                Some("internal-registry"),
+                "trusted_internal_signed",
+                "http://127.0.0.1:9001/mcp",
+            )
+            .await
+            .unwrap();
+        }
+        // beta is quarantined; alpha gets a pinned manifest hash.
+        db::set_mcp_server_status(&state.pool, &tenant_id, "beta-mcp", "quarantined")
+            .await
+            .unwrap();
+        db::set_mcp_server_manifest_hash(&state.pool, &tenant_id, "alpha-mcp", "sha256:abc")
+            .await
+            .unwrap();
+
+        let response =
+            list_mcp_servers(State(state.clone()), agent_headers(&tenant_id, &tenant_id))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let servers: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(servers.len(), 2);
+        // ORDER BY server_key ASC → alpha, beta.
+        assert_eq!(servers[0]["server_key"], "alpha-mcp");
+        assert_eq!(servers[0]["status"], "active");
+        assert_eq!(servers[0]["manifest_hash"], "sha256:abc");
+        assert_eq!(servers[1]["server_key"], "beta-mcp");
+        assert_eq!(servers[1]["status"], "quarantined");
+
+        // A different tenant sees none of these servers.
+        db::register_tenant(&state.pool, "tenant_other", "Other Tenant", "developer")
+            .await
+            .unwrap();
+        let other = list_mcp_servers(State(state), agent_headers("tenant_other", "tenant_other"))
+            .await
+            .into_response();
+        let other_body = to_bytes(other.into_body(), usize::MAX).await.unwrap();
+        let other_servers: Vec<serde_json::Value> = serde_json::from_slice(&other_body).unwrap();
+        assert!(other_servers.is_empty());
     }
 }
