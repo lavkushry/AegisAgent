@@ -54,6 +54,16 @@ pub const REPEATED_APPROVAL_WINDOW_SECS: i64 = 300;
 /// enough to limit false positives from unrelated sequential tool calls.
 pub const EXFIL_WINDOW_SECS: i64 = 120;
 
+/// Trust-escalation rule: fire when a hard `deny` for a (tool, action) is
+/// followed by an `allow` for the **exact same** (agent, tool, action) within
+/// this window (seconds). A deny→allow flip for the same action moments later
+/// is suspicious privilege-probing / trust manipulation.
+///
+/// `require_approval` → (human approves) → `allow` is the **legitimate**
+/// human-in-the-loop path and deliberately does NOT trigger this rule —
+/// only a hard `deny` counts as the prior trigger.
+pub const TRUST_ESCALATION_WINDOW_SECS: i64 = 120;
+
 /// The longest window across all rules. Used for eviction: any entry older
 /// than this can never contribute to any rule, so it is safe to drop.
 const MAX_WINDOW_SECS: i64 = REPEATED_APPROVAL_WINDOW_SECS; // 300 s
@@ -201,12 +211,19 @@ struct WindowEntry {
     event_id: String,
     /// The authorize decision (`"allow"` | `"deny"` | `"require_approval"`).
     decision: String,
-    /// The action name, stored for Rule D (data-exfil source→sink matching).
+    /// The tool name — stored for Rule E (trust-escalation deny→allow matching).
+    tool: String,
+    /// The action name, stored for Rule D (data-exfil source→sink matching)
+    /// and Rule E (trust-escalation deny→allow matching).
     action: String,
     /// True once this Source entry has been paired with a Sink by Rule D.
     /// Prevents the same Source from generating a second incident when a
     /// later Sink arrives (no-flood guarantee).
     exfil_paired: bool,
+    /// True once this hard-`deny` entry has been paired with an `allow` by
+    /// Rule E. Prevents a second `allow` for the same (tool, action) from
+    /// re-firing the trust-escalation incident (no-flood guarantee).
+    trust_escalation_paired: bool,
 }
 
 /// Parse an RFC 3339 timestamp string into Unix seconds.
@@ -259,8 +276,10 @@ impl Correlator {
             ts_secs: ts_now,
             event_id: ev.event_id.clone(),
             decision: ev.decision.clone(),
+            tool: ev.tool.clone(),
             action: ev.action.clone(),
             exfil_paired: false,
+            trust_escalation_paired: false,
         });
 
         // 2. Evict entries older than the longest window (bounded memory).
@@ -292,6 +311,14 @@ impl Correlator {
         // so we re-borrow mutably here (rules A/B/C are already done).
         if let Some(window_mut) = self.windows.get_mut(&key) {
             if let Some(inc) = rule_data_exfil(ev, window_mut, ts_now) {
+                incidents.push(inc);
+            }
+        }
+
+        // Rule E — trust_escalation (HIGH).
+        // Needs a mutable borrow to mark the paired deny entry; runs after D.
+        if let Some(window_mut) = self.windows.get_mut(&key) {
+            if let Some(inc) = rule_trust_escalation(ev, window_mut, ts_now) {
                 incidents.push(inc);
             }
         }
@@ -452,6 +479,75 @@ fn rule_data_exfil(ev: &AseEvent, window: &mut [WindowEntry], ts_now: i64) -> Op
             ev.agent_id, source_action, ev.action, EXFIL_WINDOW_SECS
         ),
         vec![source_event_id, ev.event_id.clone()],
+    ))
+}
+
+/// Rule E — `trust_escalation` (HIGH).
+///
+/// Within [`TRUST_ESCALATION_WINDOW_SECS`] seconds for the same (tenant, agent),
+/// a hard `deny` decision for a `(tool, action)` pair is followed by an `allow`
+/// decision for the **exact same** `(tool, action)` pair by the **same agent**.
+///
+/// This is suspicious privilege-probing / trust manipulation: an action that was
+/// hard-denied should not flip to allowed for the same agent moments later without
+/// scrutiny. Fires **on the completing `allow` event**.
+///
+/// **Exclusion:** `require_approval` → (human approves) → `allow` is the
+/// legitimate human-in-the-loop path and must NOT fire this rule. Only a hard
+/// `deny` (decision string exactly `"deny"`) counts as the prior trigger.
+///
+/// The matched `deny` entry is marked `trust_escalation_paired = true` so
+/// subsequent `allow` events for the same `(tool, action)` do not re-fire on
+/// the same prior deny (no-flood guarantee).
+///
+/// Takes a mutable slice so it can mark the paired `deny` entry in place.
+fn rule_trust_escalation(
+    ev: &AseEvent,
+    window: &mut [WindowEntry],
+    ts_now: i64,
+) -> Option<Incident> {
+    // Only fire when the current (completing) event is a hard allow.
+    if ev.decision != "allow" {
+        return None;
+    }
+
+    let cutoff = ts_now - TRUST_ESCALATION_WINDOW_SECS;
+
+    // Find the earliest un-paired hard `deny` entry in-window for the exact
+    // same (tool, action). Case-sensitive equality on both fields (deterministic).
+    // We require ts_secs <= ts_now (causal ordering — deny precedes allow).
+    let deny_idx = window.iter().position(|e| {
+        e.ts_secs >= cutoff
+            && e.ts_secs <= ts_now
+            && e.decision == "deny"
+            && !e.trust_escalation_paired
+            && e.tool == ev.tool
+            && e.action == ev.action
+    });
+
+    let deny_idx = deny_idx?;
+
+    // Collect evidence: the deny event id + the current allow event id.
+    let deny_event_id = window[deny_idx].event_id.clone();
+    let deny_tool = window[deny_idx].tool.clone();
+    let deny_action = window[deny_idx].action.clone();
+
+    // Mark the deny as paired — prevents re-firing on subsequent allows for
+    // the same (tool, action) without adding any new state.
+    window[deny_idx].trust_escalation_paired = true;
+
+    Some(Incident::new(
+        &ev.occurred_at,
+        &ev.tenant_id,
+        &ev.agent_id,
+        "trust_escalation",
+        "high",
+        format!(
+            "Agent {} had a hard deny for {}.{} followed by an allow within {}s \
+             — possible privilege-probing or trust manipulation",
+            ev.agent_id, deny_tool, deny_action, TRUST_ESCALATION_WINDOW_SECS
+        ),
+        vec![deny_event_id, ev.event_id.clone()],
     ))
 }
 
@@ -1348,6 +1444,385 @@ mod tests {
         assert_eq!(
             exfil_count, 1,
             "second Sink must not re-fire on an already-paired Source"
+        );
+    }
+
+    // ─── Rule E — trust_escalation ───────────────────────────────────────────
+
+    /// Build an event with explicit tool + action, for trust-escalation tests.
+    fn make_te_event(
+        event_id: &str,
+        tenant_id: &str,
+        agent_id: &str,
+        decision: &str,
+        occurred_at: &str,
+        tool: &str,
+        action: &str,
+    ) -> AseEvent {
+        AseEvent {
+            event_id: event_id.to_string(),
+            occurred_at: occurred_at.to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: "authorize_decision".to_string(),
+            agent_id: agent_id.to_string(),
+            decision: decision.to_string(),
+            tool: tool.to_string(),
+            action: action.to_string(),
+            resource: None,
+            risk_score: 80,
+            reason: "test".to_string(),
+            run_id: None,
+            trace_id: None,
+            matched_policies: vec![],
+        }
+    }
+
+    #[test]
+    fn trust_escalation_deny_then_allow_same_tool_action_fires_exactly_once() {
+        // Hard deny followed by allow for same (agent, tool, action) in-window
+        // → exactly one trust_escalation incident.
+        let mut c = Correlator::default();
+
+        let deny_ev = make_te_event(
+            "te_deny_1",
+            "tenant_te",
+            "agent_te",
+            "deny",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev = make_te_event(
+            "te_allow_1",
+            "tenant_te",
+            "agent_te",
+            "allow",
+            "2026-06-06T14:01:00Z", // 60 s later, within 120 s window
+            "github",
+            "merge_pr",
+        );
+
+        let inc_deny = c.observe(&deny_ev);
+        assert!(
+            inc_deny.iter().all(|i| i.kind != "trust_escalation"),
+            "deny event alone must not fire trust_escalation"
+        );
+
+        let inc_allow = c.observe(&allow_ev);
+        let te_incidents: Vec<_> = inc_allow
+            .iter()
+            .filter(|i| i.kind == "trust_escalation")
+            .collect();
+
+        assert_eq!(
+            te_incidents.len(),
+            1,
+            "exactly one trust_escalation incident on the completing allow event"
+        );
+
+        let inc = te_incidents[0];
+        assert_eq!(inc.severity, "high");
+        assert_eq!(inc.tenant_id, "tenant_te");
+        assert_eq!(inc.agent_id, "agent_te");
+        assert_eq!(inc.source_event_ids.len(), 2);
+        assert!(
+            inc.source_event_ids.contains(&"te_deny_1".to_string()),
+            "deny event id must be in evidence"
+        );
+        assert!(
+            inc.source_event_ids.contains(&"te_allow_1".to_string()),
+            "allow event id must be in evidence"
+        );
+        // Summary names the agent and tool.action.
+        assert!(inc.summary.contains("agent_te"), "summary names the agent");
+        assert!(inc.summary.contains("github"), "summary names the tool");
+        assert!(inc.summary.contains("merge_pr"), "summary names the action");
+    }
+
+    #[test]
+    fn trust_escalation_require_approval_then_allow_is_legit_path_no_incident() {
+        // require_approval → allow is the legitimate human-in-the-loop path;
+        // must NOT fire trust_escalation (only a hard deny triggers).
+        let mut c = Correlator::default();
+
+        let ra_ev = make_te_event(
+            "te_ra_1",
+            "tenant_te2",
+            "agent_te2",
+            "require_approval",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev = make_te_event(
+            "te_allow_ra",
+            "tenant_te2",
+            "agent_te2",
+            "allow",
+            "2026-06-06T14:01:00Z",
+            "github",
+            "merge_pr",
+        );
+
+        let inc1 = c.observe(&ra_ev);
+        let inc2 = c.observe(&allow_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "trust_escalation"),
+            "require_approval → allow is the legit HITL path; must NOT fire trust_escalation"
+        );
+    }
+
+    #[test]
+    fn trust_escalation_allow_then_deny_wrong_order_no_incident() {
+        // allow before deny — not the suspicious sequence; must not fire.
+        let mut c = Correlator::default();
+
+        let allow_ev = make_te_event(
+            "te_allow_first",
+            "tenant_te3",
+            "agent_te3",
+            "allow",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let deny_ev = make_te_event(
+            "te_deny_after",
+            "tenant_te3",
+            "agent_te3",
+            "deny",
+            "2026-06-06T14:01:00Z",
+            "github",
+            "merge_pr",
+        );
+
+        let inc1 = c.observe(&allow_ev);
+        let inc2 = c.observe(&deny_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "trust_escalation"),
+            "allow→deny order must not fire trust_escalation"
+        );
+    }
+
+    #[test]
+    fn trust_escalation_deny_then_allow_different_tool_no_incident() {
+        // Deny for tool A, allow for tool B — different tool; must not pair.
+        let mut c = Correlator::default();
+
+        let deny_ev = make_te_event(
+            "te_deny_ta",
+            "tenant_te4",
+            "agent_te4",
+            "deny",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev = make_te_event(
+            "te_allow_tb",
+            "tenant_te4",
+            "agent_te4",
+            "allow",
+            "2026-06-06T14:01:00Z",
+            "jira", // different tool
+            "merge_pr",
+        );
+
+        let inc1 = c.observe(&deny_ev);
+        let inc2 = c.observe(&allow_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "trust_escalation"),
+            "different tool must not pair for trust_escalation"
+        );
+    }
+
+    #[test]
+    fn trust_escalation_deny_then_allow_different_action_no_incident() {
+        // Deny for action A, allow for action B — different action; must not pair.
+        let mut c = Correlator::default();
+
+        let deny_ev = make_te_event(
+            "te_deny_aa",
+            "tenant_te5",
+            "agent_te5",
+            "deny",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev = make_te_event(
+            "te_allow_ab",
+            "tenant_te5",
+            "agent_te5",
+            "allow",
+            "2026-06-06T14:01:00Z",
+            "github",
+            "create_branch", // different action
+        );
+
+        let inc1 = c.observe(&deny_ev);
+        let inc2 = c.observe(&allow_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "trust_escalation"),
+            "different action must not pair for trust_escalation"
+        );
+    }
+
+    #[test]
+    fn trust_escalation_different_agents_no_incident() {
+        // Agent A gets a deny; Agent B gets an allow for same tool+action.
+        // Must NOT pair — the deny-then-allow must be for the SAME agent.
+        let mut c = Correlator::default();
+
+        let deny_ev = make_te_event(
+            "te_deny_agA",
+            "tenant_te6",
+            "agent_te6_A",
+            "deny",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev = make_te_event(
+            "te_allow_agB",
+            "tenant_te6",
+            "agent_te6_B",
+            "allow",
+            "2026-06-06T14:01:00Z",
+            "github",
+            "merge_pr",
+        );
+
+        let inc1 = c.observe(&deny_ev);
+        let inc2 = c.observe(&allow_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "trust_escalation"),
+            "events from different agents must not produce trust_escalation"
+        );
+    }
+
+    #[test]
+    fn trust_escalation_different_tenants_no_incident() {
+        // Tenant X agent gets a deny; Tenant Y same-name agent gets an allow.
+        // Must NOT pair — isolated by (tenant_id, agent_id) window key.
+        let mut c = Correlator::default();
+
+        let deny_ev = make_te_event(
+            "te_deny_tx",
+            "tenant_X",
+            "shared_agent",
+            "deny",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev = make_te_event(
+            "te_allow_ty",
+            "tenant_Y",
+            "shared_agent",
+            "allow",
+            "2026-06-06T14:01:00Z",
+            "github",
+            "merge_pr",
+        );
+
+        let inc1 = c.observe(&deny_ev);
+        let inc2 = c.observe(&allow_ev);
+        let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
+        assert!(
+            all.iter().all(|i| i.kind != "trust_escalation"),
+            "events from different tenants must not produce trust_escalation"
+        );
+    }
+
+    #[test]
+    fn trust_escalation_outside_window_no_incident() {
+        // Deny at T=0, allow at T=TRUST_ESCALATION_WINDOW_SECS+1 — outside window.
+        let mut c = Correlator::default();
+
+        let deny_ev = make_te_event(
+            "te_deny_ow",
+            "tenant_ow",
+            "agent_ow",
+            "deny",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        // 121 s later — 1 s past the 120 s trust-escalation window.
+        // MAX_WINDOW_SECS (300 s) keeps the entry in memory, but the
+        // escalation-specific cutoff (120 s) must exclude it.
+        let allow_ev = make_te_event(
+            "te_allow_ow",
+            "tenant_ow",
+            "agent_ow",
+            "allow",
+            "2026-06-06T14:02:01Z", // 121 s after deny
+            "github",
+            "merge_pr",
+        );
+
+        c.observe(&deny_ev);
+        let inc = c.observe(&allow_ev);
+        assert!(
+            inc.iter().all(|i| i.kind != "trust_escalation"),
+            "deny outside the trust-escalation window must not pair with allow"
+        );
+    }
+
+    #[test]
+    fn trust_escalation_second_allow_after_pair_does_not_re_fire() {
+        // deny → allow1 (fires) → allow2 (same tool+action): only one incident,
+        // no re-fire because the deny is already paired.
+        let mut c = Correlator::default();
+
+        let deny_ev = make_te_event(
+            "te_deny_nf",
+            "tenant_nf2",
+            "agent_nf2",
+            "deny",
+            "2026-06-06T14:00:00Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev1 = make_te_event(
+            "te_allow_nf1",
+            "tenant_nf2",
+            "agent_nf2",
+            "allow",
+            "2026-06-06T14:00:30Z",
+            "github",
+            "merge_pr",
+        );
+        let allow_ev2 = make_te_event(
+            "te_allow_nf2",
+            "tenant_nf2",
+            "agent_nf2",
+            "allow",
+            "2026-06-06T14:01:00Z",
+            "github",
+            "merge_pr",
+        );
+
+        let inc1 = c.observe(&deny_ev);
+        let inc2 = c.observe(&allow_ev1);
+        let inc3 = c.observe(&allow_ev2);
+
+        let te_count = inc1
+            .iter()
+            .chain(inc2.iter())
+            .chain(inc3.iter())
+            .filter(|i| i.kind == "trust_escalation")
+            .count();
+
+        assert_eq!(
+            te_count, 1,
+            "second allow must not re-fire on an already-paired deny"
         );
     }
 }
