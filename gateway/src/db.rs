@@ -1138,6 +1138,27 @@ pub async fn list_soc_incidents(
     .await
 }
 
+/// Fetch a single SOC incident by id, scoped to the given tenant.
+///
+/// Returns `Ok(Some(_))` only when both `id` and `tenant_id` match — never
+/// leaks another tenant's row.  The two binds are positional and parameterized;
+/// no string concatenation occurs (CWE-89 / CWE-284).
+pub async fn get_soc_incident(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    incident_id: &str,
+) -> Result<Option<SocIncidentRecord>, sqlx::Error> {
+    sqlx::query_as::<_, SocIncidentRecord>(
+        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at
+         FROM soc_incidents
+         WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Quarantine an MCP server — all its tools become deny-by-default.
 /// Sets `status = 'quarantined'` on the server; the authorize path checks this.
 pub async fn set_mcp_server_status(
@@ -1479,5 +1500,64 @@ mod tests {
         assert_eq!(incs[0].source_event_ids, source_event_ids_json);
         let parsed: Vec<String> = serde_json::from_str(&incs[0].source_event_ids).unwrap();
         assert_eq!(parsed, ids);
+    }
+
+    // ── get_soc_incident tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_soc_incident_returns_row_for_owning_tenant() {
+        let pool = setup_pool("get_incident_owner").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let record = make_incident("inc_get_a", "tenant_a");
+        insert_soc_incident(&pool, &record).await.unwrap();
+
+        let result = get_soc_incident(&pool, "tenant_a", "inc_get_a")
+            .await
+            .unwrap();
+        assert!(result.is_some(), "owning tenant must get the incident");
+        let fetched = result.unwrap();
+        assert_eq!(fetched.id, "inc_get_a");
+        assert_eq!(fetched.kind, "deny_storm");
+        assert_eq!(fetched.agent_id, "agent_y");
+    }
+
+    #[tokio::test]
+    async fn get_soc_incident_returns_none_for_different_tenant() {
+        let pool = setup_pool("get_incident_isolation").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // Insert under tenant_a.
+        let record = make_incident("inc_iso", "tenant_a");
+        insert_soc_incident(&pool, &record).await.unwrap();
+
+        // tenant_b must NOT be able to retrieve tenant_a's incident.
+        let result = get_soc_incident(&pool, "tenant_b", "inc_iso")
+            .await
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "tenant_b must not see tenant_a's incident"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_soc_incident_returns_none_for_unknown_id() {
+        let pool = setup_pool("get_incident_missing").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let result = get_soc_incident(&pool, "tenant_a", "nonexistent_id")
+            .await
+            .unwrap();
+        assert!(result.is_none());
     }
 }
