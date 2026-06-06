@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "node --test test/canon.test.ts"
+    "test": "node --test test/canon.test.ts test/client.test.ts test/protect.test.ts"
   },
   "engines": {
     "node": ">=23.6"
