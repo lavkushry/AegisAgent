@@ -82,7 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Registrations
         .route("/v1/agents/register", post(routes::register_agent))
         .route("/v1/tools", post(routes::register_tool))
-        .route("/v1/mcp/servers", post(routes::register_mcp_server))
+        .route(
+            "/v1/mcp/servers",
+            get(routes::list_mcp_servers).post(routes::register_mcp_server),
+        )
         .route(
             "/v1/mcp/servers/:server_key/tools",
             get(routes::get_mcp_tool_manifest).post(routes::discover_mcp_tools),

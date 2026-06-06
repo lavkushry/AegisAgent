@@ -51,7 +51,7 @@ docker compose up --build && bash scripts/seed-demo.sh && python3 examples/githu
 
 ## API endpoints (contract)
 
-`GET /health` · `POST /v1/agents/register` · `POST /v1/tools` · `POST /v1/mcp/servers` · `GET|POST /v1/mcp/servers/:server_key/tools` · `POST .../tools/:tool_key/approve|disable` · `POST /v1/authorize` (returns `decision`, `action_hash`, approval info) · `GET /v1/approvals/:id` (returns `status`, bound `action_hash`; `EXPIRED` for stale pending) · `POST /v1/approvals/:id/approve|reject|edit` · `POST /v1/approvals/:id/consume` (single-use; 409 if already used/expired) · `GET /v1/runs/:id/timeline` · `GET /v1/audit/events` · `GET /v1/receipts/:id/verify` (recomputes receipt hash; returns `verified`).
+`GET /health` · `POST /v1/agents/register` · `POST /v1/tools` · `GET|POST /v1/mcp/servers` (GET lists servers with `status` + pinned `manifest_hash`) · `GET|POST /v1/mcp/servers/:server_key/tools` · `POST .../tools/:tool_key/approve|disable` · `POST /v1/authorize` (returns `decision`, `action_hash`, approval info) · `GET /v1/approvals/:id` (returns `status`, bound `action_hash`; `EXPIRED` for stale pending) · `POST /v1/approvals/:id/approve|reject|edit` · `POST /v1/approvals/:id/consume` (single-use; 409 if already used/expired) · `GET /v1/runs/:id/timeline` · `GET /v1/audit/events` · `GET /v1/receipts/:id/verify` (recomputes receipt hash; returns `verified`).
 
 ## Critical invariants (do not weaken)
 

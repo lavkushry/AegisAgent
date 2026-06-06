@@ -768,6 +768,20 @@ pub async fn upsert_mcp_server(
     Ok(row.0)
 }
 
+/// Tenant-scoped list of all MCP servers (for operator triage of quarantined /
+/// drifted servers). Parameterized; never crosses tenants.
+pub async fn list_mcp_servers(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<McpServerRecord>, sqlx::Error> {
+    sqlx::query_as::<_, McpServerRecord>(
+        "SELECT * FROM mcp_servers WHERE tenant_id = ? ORDER BY server_key ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_mcp_server_by_key(
     pool: &SqlitePool,
     tenant_id: &str,
