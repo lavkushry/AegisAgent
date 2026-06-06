@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AegisAgent SOC Console Mock</title>
+  <title>AegisAgent SOC Console</title>
   <style>
     body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
     header { padding: 24px 32px; background: #111827; border-bottom: 1px solid #334155; }
@@ -28,67 +28,472 @@
     code { color: #93c5fd; }
     small { color: #94a3b8; }
     .hash { color: #64748b; font-family: ui-monospace, monospace; font-size: 12px; }
+
+    /* ── Config bar ──────────────────────────────────────────────── */
+    #config-bar {
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 14px 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    #config-bar label { font-size: 12px; color: #94a3b8; white-space: nowrap; }
+    #config-bar input {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 13px;
+      padding: 4px 10px;
+      outline: none;
+    }
+    #config-bar input:focus { border-color: #6366f1; }
+    #url-input  { width: 220px; }
+    #token-input { width: 160px; }
+    button {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 13px;
+      padding: 5px 14px;
+      cursor: pointer;
+    }
+    button:hover { background: #273549; }
+    #auto-refresh-label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 13px; color: #94a3b8; cursor: pointer;
+    }
+    #status-msg { font-size: 12px; margin-left: auto; }
+    .status-ok      { color: #22c55e; }
+    .status-err     { color: #ef4444; }
+    .status-loading { color: #f59e0b; }
+
+    /* ── Live data sections ──────────────────────────────────────── */
+    .live-section {
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 18px;
+    }
+    .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .section-header h2 { margin: 0; }
+    .count-badge {
+      font-size: 12px; font-weight: 700;
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 999px; padding: 1px 9px; color: #e2e8f0;
+    }
+    .live-tag {
+      font-size: 11px; background: #052e16; border: 1px solid #14532d;
+      border-radius: 999px; padding: 1px 8px; color: #22c55e;
+    }
+    .err-tag {
+      font-size: 11px; background: #2d0a0a; border: 1px solid #7f1d1d;
+      border-radius: 999px; padding: 1px 8px; color: #ef4444;
+    }
+    .inline-err { color: #f87171; font-size: 13px; padding: 10px 0; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th {
+      text-align: left; color: #64748b;
+      font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+      padding: 0 8px 8px; border-bottom: 1px solid #1e293b;
+    }
+    tbody tr { border-bottom: 1px solid #1a2336; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody td { padding: 8px; vertical-align: top; }
+    .sev-critical, .sev-high { color: #ef4444; font-weight: 700; }
+    .sev-medium { color: #f59e0b; font-weight: 600; }
+    .sev-low    { color: #22c55e; }
+    .sev-info   { color: #94a3b8; }
+    .mono { font-family: ui-monospace, monospace; font-size: 12px; color: #64748b; }
+    .empty-row td { color: #475569; text-align: center; padding: 24px; }
+
+    /* ── Fallback demo label ─────────────────────────────────────── */
+    .fallback-label {
+      font-size: 11px; color: #475569;
+      text-transform: uppercase; letter-spacing: .06em;
+      border: 1px dashed #334155; border-radius: 6px; padding: 2px 8px; margin-left: 10px;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>AegisAgent — SOC Console</h1>
-    <small>Static mock for MVP README/demo context. The integrity-anchored Agent SOC: detect, contain, and <em>prove</em> every agent action. Not connected to the gateway.</small>
+    <small>Integrity-anchored Agent SOC: detect, contain, and <em>prove</em> every agent action.</small>
   </header>
   <main>
-    <!-- Overview tiles -->
+
+    <!-- Config bar -->
     <section>
-      <h2>Overview (last 24h)</h2>
+      <div id="config-bar">
+        <label for="url-input">Gateway URL</label>
+        <input id="url-input" type="text" value="http://127.0.0.1:8080" spellcheck="false" autocomplete="off">
+        <label for="token-input">Bearer token</label>
+        <input id="token-input" type="password" value="tenant_123" autocomplete="new-password">
+        <button id="refresh-btn">Refresh</button>
+        <label id="auto-refresh-label">
+          <input type="checkbox" id="auto-refresh-chk"> Auto (5 s)
+        </label>
+        <span id="status-msg"></span>
+      </div>
+    </section>
+
+    <!-- Live: Alerts -->
+    <section class="live-section">
+      <div class="section-header">
+        <h2>Alerts</h2>
+        <span class="count-badge" id="alerts-count">—</span>
+        <span id="alerts-tag"></span>
+      </div>
+      <div id="alerts-error" class="inline-err" style="display:none;"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Rule</th>
+            <th>Agent</th>
+            <th>Summary</th>
+            <th>Created</th>
+            <th class="mono">ID</th>
+          </tr>
+        </thead>
+        <tbody id="alerts-tbody">
+          <tr class="empty-row"><td colspan="6">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Live: Incidents -->
+    <section class="live-section">
+      <div class="section-header">
+        <h2>Incidents</h2>
+        <span class="count-badge" id="incidents-count">—</span>
+        <span id="incidents-tag"></span>
+      </div>
+      <div id="incidents-error" class="inline-err" style="display:none;"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Kind</th>
+            <th>Agent</th>
+            <th>Summary</th>
+            <th>Opened</th>
+            <th class="mono">ID</th>
+          </tr>
+        </thead>
+        <tbody id="incidents-tbody">
+          <tr class="empty-row"><td colspan="6">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Overview tiles (static; live counts patch the two dynamic tiles) -->
+    <section>
+      <h2>Overview (last 24 h) <span class="fallback-label">static demo</span></h2>
       <div class="cards">
         <div class="card"><small>Protected actions</small><div class="value">128</div></div>
         <div class="card"><small>Blocked (deny)</small><div class="value deny">7</div></div>
         <div class="card"><small>Pending approvals</small><div class="value approval">3</div></div>
-        <div class="card"><small>Open incidents</small><div class="value crit">1</div></div>
-        <div class="card"><small>Detections</small><div class="value">12</div></div>
-        <div class="card"><small>Receipt chain</small><div class="value verified">✓ verified</div></div>
-        <div class="card"><small>Mean time to contain</small><div class="value">8s</div></div>
+        <div class="card"><small>Open incidents</small><div class="value crit" id="tile-incidents">1</div></div>
+        <div class="card"><small>Detections / alerts</small><div class="value" id="tile-alerts">12</div></div>
+        <div class="card"><small>Receipt chain</small><div class="value verified">&#10003; verified</div></div>
+        <div class="card"><small>Mean time to contain</small><div class="value">8 s</div></div>
       </div>
     </section>
 
-    <!-- Correlated, PROVABLE incident -->
+    <!-- Correlated, PROVABLE incident (static demo) -->
     <section>
-      <h2>Incident — provable timeline</h2>
+      <h2>Incident detail &mdash; provable timeline <span class="fallback-label">demo content</span></h2>
       <div class="incident">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
           <div>
-            <strong class="crit">inc_01J — Prompt injection → high-risk GitHub action</strong>
-            <div><small>agent <code>coding-agent-prod</code> · run <code>run_991</code> · severity critical · status: contained (frozen)</small></div>
+            <strong class="crit">inc_01J &mdash; Prompt injection &rarr; high-risk GitHub action</strong>
+            <div><small>agent <code>coding-agent-prod</code> &middot; run <code>run_991</code> &middot; severity critical &middot; status: contained (frozen)</small></div>
           </div>
           <div style="text-align:right;">
             <span class="badge atlas">ATLAS AML.T0051</span>
             <span class="badge atlas">OWASP LLM01</span>
-            <div style="margin-top:6px;"><span class="badge ok">✓ timeline verified (receipt chain)</span></div>
+            <div style="margin-top:6px;"><span class="badge ok">&#10003; timeline verified (receipt chain)</span></div>
           </div>
         </div>
         <div style="margin-top:12px;">
-          <div class="row"><small>10:02:31</small><div><strong class="allow">Allowed</strong> <code>github.read_issue</code> — public issue #391</div><span class="hash">rcpt …a1b2</span></div>
-          <div class="row"><small>10:02:31</small><div>context labelled <code>untrusted_external</code> (deterministic)</div><span class="hash">rcpt …a1b2</span></div>
+          <div class="row"><small>10:02:31</small><div><strong class="allow">Allowed</strong> <code>github.read_issue</code> &mdash; public issue #391</div><span class="hash">rcpt &hellip;a1b2</span></div>
+          <div class="row"><small>10:02:31</small><div>context labelled <code>untrusted_external</code> (deterministic)</div><span class="hash">rcpt &hellip;a1b2</span></div>
           <div class="row"><small>10:03:04</small><div><strong class="crit">Detection AEG-1002</strong> confused-deputy-mutation (level 12)</div><span class="badge atlas">AML.T0051</span></div>
-          <div class="row"><small>10:05:10</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> → <code>main</code> · policy <code>forbid-untrusted-mutation</code></div><span class="hash">rcpt …c3d4</span></div>
-          <div class="row"><small>10:05:11</small><div>approve-then-swap attempt → <strong class="deny">SDK fail-closed</strong> (action_hash mismatch · T-A1)</div><span class="hash">rcpt …c3d4</span></div>
-          <div class="row"><small>10:05:12</small><div><strong class="approval">Active Response</strong> — agent <code>frozen</code>; Slack alert → #agent-security</div><span class="badge ok">contained</span></div>
-          <div class="row"><small>10:06:00</small><div>RCA drafted (sandboxed narrator) — root cause: untrusted issue carried hijack instructions</div><span class="badge">RCA</span></div>
+          <div class="row"><small>10:05:10</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> &rarr; <code>main</code> &middot; policy <code>forbid-untrusted-mutation</code></div><span class="hash">rcpt &hellip;c3d4</span></div>
+          <div class="row"><small>10:05:11</small><div>approve-then-swap attempt &rarr; <strong class="deny">SDK fail-closed</strong> (action_hash mismatch &middot; T-A1)</div><span class="hash">rcpt &hellip;c3d4</span></div>
+          <div class="row"><small>10:05:12</small><div><strong class="approval">Active Response</strong> &mdash; agent <code>frozen</code>; Slack alert &rarr; #agent-security</div><span class="badge ok">contained</span></div>
+          <div class="row"><small>10:06:00</small><div>RCA drafted (sandboxed narrator) &mdash; root cause: untrusted issue carried hijack instructions</div><span class="badge">RCA</span></div>
         </div>
-        <div style="margin-top:10px;"><small>Evidence: receipt chain …a1b2 → …c3d4 (one-click verify) · approver: rejected · executed: nothing</small></div>
+        <div style="margin-top:10px;"><small>Evidence: receipt chain &hellip;a1b2 &rarr; &hellip;c3d4 (one-click verify) &middot; approver: rejected &middot; executed: nothing</small></div>
       </div>
     </section>
 
-    <!-- Live decision feed -->
+    <!-- Live decision feed (static demo) -->
     <section>
-      <h2>Live decision feed</h2>
+      <h2>Live decision feed <span class="fallback-label">demo content</span></h2>
       <div class="timeline">
-        <div class="event"><small>12:04:11</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> after untrusted issue context · <small>trust: untrusted_external</small></div><span class="hash">action …9af1</span></div>
-        <div class="event"><small>12:03:58</small><div><strong class="approval">Approval created</strong> <code>github.merge_pull_request</code> → <code>main</code> · bound to action_hash</div><small>group: platform-leads</small></div>
+        <div class="event"><small>12:04:11</small><div><strong class="deny">Blocked</strong> <code>github.merge_pull_request</code> after untrusted issue context &middot; <small>trust: untrusted_external</small></div><span class="hash">action &hellip;9af1</span></div>
+        <div class="event"><small>12:03:58</small><div><strong class="approval">Approval created</strong> <code>github.merge_pull_request</code> &rarr; <code>main</code> &middot; bound to action_hash</div><small>group: platform-leads</small></div>
         <div class="event"><small>12:03:40</small><div><strong class="allow">Allowed</strong> <code>github.read_issue</code> from public repository</div><small>risk: low</small></div>
-        <div class="event"><small>12:03:22</small><div><strong class="deny">Drift</strong> MCP <code>github-mcp-demo</code> manifest hash ≠ pinned (AEG-4002)</div><span class="badge atlas">AML.T0010</span></div>
+        <div class="event"><small>12:03:22</small><div><strong class="deny">Drift</strong> MCP <code>github-mcp-demo</code> manifest hash &ne; pinned (AEG-4002)</div><span class="badge atlas">AML.T0010</span></div>
         <div class="event"><small>12:03:01</small><div><strong>MCP discovered</strong> <code>github-mcp-demo.create_issue</code></div><small>status: pending</small></div>
       </div>
     </section>
+
   </main>
+
+  <script>
+    (function () {
+      "use strict";
+
+      /* ── DOM refs ─────────────────────────────────────────────── */
+      var urlInput       = document.getElementById("url-input");
+      var tokenInput     = document.getElementById("token-input");
+      var refreshBtn     = document.getElementById("refresh-btn");
+      var autoChk        = document.getElementById("auto-refresh-chk");
+      var statusMsg      = document.getElementById("status-msg");
+
+      var alertsTbody    = document.getElementById("alerts-tbody");
+      var incidentsTbody = document.getElementById("incidents-tbody");
+      var alertsCount    = document.getElementById("alerts-count");
+      var incidentsCount = document.getElementById("incidents-count");
+      var alertsTag      = document.getElementById("alerts-tag");
+      var incidentsTag   = document.getElementById("incidents-tag");
+      var alertsError    = document.getElementById("alerts-error");
+      var incidentsError = document.getElementById("incidents-error");
+      var tileAlerts     = document.getElementById("tile-alerts");
+      var tileIncidents  = document.getElementById("tile-incidents");
+
+      var autoTimer = null;
+
+      /* ── Severity CSS class ───────────────────────────────────── */
+      function sevClass(sev) {
+        if (!sev) { return "sev-info"; }
+        switch (String(sev).toLowerCase()) {
+          case "critical": return "sev-critical";
+          case "high":     return "sev-high";
+          case "medium":   return "sev-medium";
+          case "low":      return "sev-low";
+          default:         return "sev-info";
+        }
+      }
+
+      /* ── Safe text node ───────────────────────────────────────── */
+      function txt(val) {
+        return document.createTextNode(val == null ? "" : String(val));
+      }
+
+      /* ── Build a <td> with either a text node or a child element */
+      function makeTd(cls, child) {
+        var cell = document.createElement("td");
+        if (cls) { cell.className = cls; }
+        cell.appendChild(child instanceof Node ? child : txt(child));
+        return cell;
+      }
+
+      /* ── Format ISO timestamp ─────────────────────────────────── */
+      function fmtTime(iso) {
+        if (!iso) { return "—"; }
+        try {
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) { return String(iso); }
+          return d.toLocaleString(undefined, {
+            month: "short", day: "numeric",
+            hour: "2-digit", minute: "2-digit", second: "2-digit"
+          });
+        } catch (_) { return String(iso); }
+      }
+
+      /* ── Truncate a UUID/ID for table display ─────────────────── */
+      function shortId(id) {
+        if (!id) { return "—"; }
+        var s = String(id);
+        return s.length > 12 ? "…" + s.slice(-8) : s;
+      }
+
+      /* ── Render alerts table ──────────────────────────────────── */
+      function renderAlerts(rows) {
+        alertsTbody.innerHTML = "";
+        if (!rows || rows.length === 0) {
+          var tr = document.createElement("tr");
+          tr.className = "empty-row";
+          var td = document.createElement("td");
+          td.setAttribute("colspan", "6");
+          td.appendChild(txt("No alerts"));
+          tr.appendChild(td);
+          alertsTbody.appendChild(tr);
+          return;
+        }
+        rows.forEach(function (a) {
+          var tr = document.createElement("tr");
+          var sevSpan = document.createElement("span");
+          sevSpan.className = sevClass(a.severity);
+          sevSpan.appendChild(txt(a.severity || "—"));
+          tr.appendChild(makeTd(null, sevSpan));
+          tr.appendChild(makeTd(null, a.rule || "—"));
+          tr.appendChild(makeTd("mono", a.agent_id || "—"));
+          tr.appendChild(makeTd(null, a.summary || "—"));
+          tr.appendChild(makeTd("mono", fmtTime(a.created_at)));
+          tr.appendChild(makeTd("mono", shortId(a.id)));
+          alertsTbody.appendChild(tr);
+        });
+      }
+
+      /* ── Render incidents table ───────────────────────────────── */
+      function renderIncidents(rows) {
+        incidentsTbody.innerHTML = "";
+        if (!rows || rows.length === 0) {
+          var tr = document.createElement("tr");
+          tr.className = "empty-row";
+          var td = document.createElement("td");
+          td.setAttribute("colspan", "6");
+          td.appendChild(txt("No incidents"));
+          tr.appendChild(td);
+          incidentsTbody.appendChild(tr);
+          return;
+        }
+        rows.forEach(function (inc) {
+          var tr = document.createElement("tr");
+          var sevSpan = document.createElement("span");
+          sevSpan.className = sevClass(inc.severity);
+          sevSpan.appendChild(txt(inc.severity || "—"));
+          tr.appendChild(makeTd(null, sevSpan));
+          tr.appendChild(makeTd(null, inc.kind || "—"));
+          tr.appendChild(makeTd("mono", inc.agent_id || "—"));
+          tr.appendChild(makeTd(null, inc.summary || "—"));
+          tr.appendChild(makeTd("mono", fmtTime(inc.opened_at)));
+          tr.appendChild(makeTd("mono", shortId(inc.id)));
+          incidentsTbody.appendChild(tr);
+        });
+      }
+
+      /* ── Status message ───────────────────────────────────────── */
+      function setStatus(msg, cls) {
+        statusMsg.className = cls || "";
+        statusMsg.textContent = msg;
+      }
+
+      /* ── Live / error tag pill ────────────────────────────────── */
+      function setTag(el, ok) {
+        el.innerHTML = "";
+        var span = document.createElement("span");
+        span.className = ok ? "live-tag" : "err-tag";
+        span.textContent = ok ? "live" : "error";
+        el.appendChild(span);
+      }
+
+      /* ── Build fetch headers (no secrets hardcoded) ───────────── */
+      function makeHeaders() {
+        var h = { "Accept": "application/json" };
+        var tok = tokenInput.value;
+        if (tok) { h["Authorization"] = "Bearer " + tok; }
+        return h;
+      }
+
+      /* ── Gateway base URL (trim trailing slash) ───────────────── */
+      function baseUrl() {
+        return (urlInput.value || "http://127.0.0.1:8080").replace(/\/+$/, "");
+      }
+
+      /* ── Load /v1/alerts ──────────────────────────────────────── */
+      function loadAlerts() {
+        alertsError.style.display = "none";
+        alertsError.textContent   = "";
+        return fetch(baseUrl() + "/v1/alerts?limit=50&offset=0", { headers: makeHeaders() })
+          .then(function (resp) {
+            if (!resp.ok) { throw new Error("HTTP " + resp.status + " " + resp.statusText); }
+            return resp.json();
+          })
+          .then(function (data) {
+            var rows = Array.isArray(data) ? data : (Array.isArray(data.alerts) ? data.alerts : []);
+            renderAlerts(rows);
+            alertsCount.textContent = rows.length;
+            setTag(alertsTag, true);
+            tileAlerts.textContent = rows.length;
+            return rows.length;
+          })
+          .catch(function (err) {
+            renderAlerts([]);
+            alertsCount.textContent = "!";
+            setTag(alertsTag, false);
+            alertsError.style.display = "";
+            alertsError.textContent   = "Alerts unavailable: " + err.message;
+            return null;
+          });
+      }
+
+      /* ── Load /v1/incidents ───────────────────────────────────── */
+      function loadIncidents() {
+        incidentsError.style.display = "none";
+        incidentsError.textContent   = "";
+        return fetch(baseUrl() + "/v1/incidents?limit=50&offset=0", { headers: makeHeaders() })
+          .then(function (resp) {
+            if (!resp.ok) { throw new Error("HTTP " + resp.status + " " + resp.statusText); }
+            return resp.json();
+          })
+          .then(function (data) {
+            var rows = Array.isArray(data) ? data : (Array.isArray(data.incidents) ? data.incidents : []);
+            renderIncidents(rows);
+            incidentsCount.textContent = rows.length;
+            setTag(incidentsTag, true);
+            tileIncidents.textContent = rows.length;
+            return rows.length;
+          })
+          .catch(function (err) {
+            renderIncidents([]);
+            incidentsCount.textContent = "!";
+            setTag(incidentsTag, false);
+            incidentsError.style.display = "";
+            incidentsError.textContent   = "Incidents unavailable: " + err.message;
+            return null;
+          });
+      }
+
+      /* ── Refresh both endpoints in parallel ───────────────────── */
+      function refreshAll() {
+        setStatus("Fetching…", "status-loading");
+        var t0 = Date.now();
+        Promise.all([loadAlerts(), loadIncidents()])
+          .then(function (results) {
+            var aOk = results[0] !== null;
+            var iOk = results[1] !== null;
+            var ms  = Date.now() - t0;
+            if (!aOk && !iOk) {
+              setStatus("Gateway unreachable — demo content shown below", "status-err");
+            } else if (!aOk || !iOk) {
+              setStatus("Partial: one endpoint unavailable (" + ms + " ms)", "status-err");
+            } else {
+              setStatus(
+                "Loaded " + results[0] + " alert(s), " + results[1] + " incident(s) in " + ms + " ms",
+                "status-ok"
+              );
+            }
+          });
+      }
+
+      /* ── Auto-refresh (5 s) ───────────────────────────────────── */
+      function startAuto() {
+        stopAuto();
+        autoTimer = setInterval(refreshAll, 5000);
+      }
+      function stopAuto() {
+        if (autoTimer !== null) { clearInterval(autoTimer); autoTimer = null; }
+      }
+
+      autoChk.addEventListener("change", function () {
+        autoChk.checked ? startAuto() : stopAuto();
+      });
+      refreshBtn.addEventListener("click", refreshAll);
+
+      /* ── Initial load on page open ────────────────────────────── */
+      refreshAll();
+    }());
+  </script>
 </body>
 </html>
