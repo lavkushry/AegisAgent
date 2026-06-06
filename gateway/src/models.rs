@@ -364,6 +364,19 @@ pub struct SocIncidentRecord {
     pub closed_at: Option<String>,
 }
 
+/// SOC query layer — tenant-scoped aggregate counts for `GET /v1/soc/summary`.
+/// All counts are derived from parameterized COUNT queries bound to `tenant_id` —
+/// no cross-tenant leakage (CWE-284). `alerts_high` = severity='high';
+/// `incidents_open` / `incidents_closed` split on the lifecycle `status` column.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SocSummary {
+    pub alerts_total: i64,
+    pub alerts_high: i64,
+    pub incidents_total: i64,
+    pub incidents_open: i64,
+    pub incidents_closed: i64,
+}
+
 /// Tamper-evident, hash-chained action receipt. The hashed body is every field
 /// here EXCEPT `receipt_hash` and `created_at` (see routes::receipt_body_value),
 /// with the previous link (`prev_receipt_hash`) inside the body. Scheme aegis-jcs-1.
