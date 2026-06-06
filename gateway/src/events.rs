@@ -8,6 +8,7 @@
 //! (detection, correlation, response, indexing) is a *consumer* of this one
 //! stream and never touches the inline path again.
 
+use crate::correlate::Correlator;
 use crate::detect::Detector;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -75,12 +76,17 @@ impl EventSink {
     }
 }
 
-/// Background drain (Phase 0 consumer + Phase 1 detection). Observes the stream
-/// and runs the deterministic [`Detector`] over each event, logging every alert.
-/// All of this is out-of-band (design law 3): the inline authorize budget is
-/// never touched. Phases 2+ extend this with notify sinks, correlation, indexing.
+/// Background drain (Phase 0 consumer + Phase 1 detection + Phase 3 correlation).
+/// Observes the stream, runs the deterministic [`Detector`] over each event, and
+/// then feeds the event into the stateful [`Correlator`] for multi-event pattern
+/// detection. All of this is out-of-band (design law 3): the inline authorize
+/// budget is never touched.
 pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
     let detector = Detector::default();
+    // Phase 3: one Correlator per drain task — mutable, bounded-memory sliding
+    // windows keyed by (tenant_id, agent_id). Never touches the inline path.
+    let mut correlator = Correlator::default();
+
     while let Some(ev) = rx.recv().await {
         debug!(
             event_id = %ev.event_id,
@@ -113,6 +119,33 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>) {
                     source_event_id = %alert.source_event_id,
                     summary = %alert.summary,
                     "SOC alert",
+                ),
+            }
+        }
+
+        // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
+        // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
+        for incident in correlator.observe(&ev) {
+            match incident.severity.as_str() {
+                "high" => warn!(
+                    incident_id = %incident.incident_id,
+                    kind = %incident.kind,
+                    severity = %incident.severity,
+                    tenant = %incident.tenant_id,
+                    agent = %incident.agent_id,
+                    contributing_events = ?incident.source_event_ids.len(),
+                    summary = %incident.summary,
+                    "SOC incident",
+                ),
+                _ => info!(
+                    incident_id = %incident.incident_id,
+                    kind = %incident.kind,
+                    severity = %incident.severity,
+                    tenant = %incident.tenant_id,
+                    agent = %incident.agent_id,
+                    contributing_events = ?incident.source_event_ids.len(),
+                    summary = %incident.summary,
+                    "SOC incident",
                 ),
             }
         }
