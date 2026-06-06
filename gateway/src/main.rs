@@ -1,4 +1,7 @@
 use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::IntoResponse,
     routing::{get, post},
     Router,
 };
@@ -9,11 +12,27 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod db;
 mod detect;
 mod events;
+mod metrics;
 mod models;
 mod policy;
 mod routes;
 
 use routes::AppState;
+
+/// GET /metrics — Prometheus text exposition of process-wide security counters.
+/// Bound only on the existing 127.0.0.1 listener; no new bind, no public exposure.
+/// Labels are omitted to avoid leaking tenant/agent identifiers.
+async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let body = state.metrics.render_prometheus();
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,11 +63,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
     tokio::spawn(events::drain(events_rx));
 
-    // Shared state
+    // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
         policy_engine,
         events,
+        metrics: metrics::SecurityMetrics::new(),
     });
 
     // Construct Axum router
@@ -96,6 +116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         // Fallback or health check
         .route("/health", get(|| async { "healthy" }))
+        // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
+        .route("/metrics", get(metrics_handler))
         .with_state(state);
 
     // Bind strictly to 127.0.0.1 for security testing, matching rules in mandatory-secure-web-skills
