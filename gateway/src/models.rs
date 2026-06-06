@@ -386,5 +386,12 @@ pub struct ActionReceiptRecord {
     pub action_hash: Option<String>,
     pub prev_receipt_hash: String,
     pub receipt_hash: String,
+    /// Optional Ed25519 signature (lowercase hex) computed OVER `receipt_hash`.
+    /// Additive metadata — NOT part of the canonical body or `receipt_hash`.
+    /// NULL when receipt signing is not configured (hermetic default = unsigned).
+    pub signature: Option<String>,
+    /// Lowercase-hex Ed25519 public key of the signer, so a third party can verify
+    /// the `signature` without contacting the gateway. NULL when unsigned.
+    pub signer_public_key: Option<String>,
     pub created_at: DateTime<Utc>,
 }

@@ -16,6 +16,7 @@ use crate::events::{AseEvent, EventSink};
 use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
+use crate::sign;
 
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
@@ -164,6 +165,21 @@ fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
     sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
 }
 
+/// Optionally attach an Ed25519 signature OVER the already-computed `receipt_hash`.
+///
+/// This runs AFTER `compute_receipt_hash` and never feeds back into the hash: the
+/// signature and signer public key are additive metadata stored alongside the
+/// receipt, so the byte-parity-locked `aegis-jcs-1` chain is untouched. When no
+/// signer is configured (`global_signer() == None`), both fields stay NULL and
+/// the receipt is emitted unsigned (hermetic default). We sign the hash, never a
+/// payload (redaction preserved).
+fn apply_receipt_signature(receipt: &mut ActionReceiptRecord) {
+    if let Some(signer) = sign::global_signer() {
+        receipt.signature = Some(signer.sign_hash(&receipt.receipt_hash));
+        receipt.signer_public_key = Some(signer.public_key_hex());
+    }
+}
+
 /// Emit a hash-chained, verifiable receipt for a finalized decision. Non-fatal:
 /// a receipt write failure is logged but does not change the authorization result.
 async fn emit_action_receipt(
@@ -196,9 +212,13 @@ async fn emit_action_receipt(
             action_hash: Some(hash_tool_call(&payload.tool_call)),
             prev_receipt_hash,
             receipt_hash: String::new(),
+            signature: None,
+            signer_public_key: None,
             created_at: Utc::now(),
         };
+        // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
         receipt.receipt_hash = compute_receipt_hash(&receipt);
+        apply_receipt_signature(&mut receipt);
         receipt
     })
     .await;
@@ -250,9 +270,13 @@ async fn emit_tamper_attempt_receipt(
             action_hash: action_hash_for_receipt,
             prev_receipt_hash,
             receipt_hash: String::new(),
+            signature: None,
+            signer_public_key: None,
             created_at: Utc::now(),
         };
+        // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
         receipt.receipt_hash = compute_receipt_hash(&receipt);
+        apply_receipt_signature(&mut receipt);
         receipt
     })
     .await;
@@ -1417,8 +1441,20 @@ pub async fn verify_receipt(
 
     match db::get_action_receipt_by_id(&state.pool, &tenant_id, &receipt_id).await {
         Ok(Some(rec)) => {
+            // Hash (chain) integrity — UNCHANGED. This is the byte-parity-locked check.
             let recomputed = compute_receipt_hash(&rec);
             let verified = recomputed == rec.receipt_hash;
+
+            // Optional signature verification — ADDITIVE, never affects `verified`.
+            // signed   -> signature_verified = true/false (Ed25519 over receipt_hash)
+            // unsigned -> signature_verified = null (no signer was configured)
+            let signature_verified = match (&rec.signature, &rec.signer_public_key) {
+                (Some(sig), Some(pk)) => {
+                    Value::Bool(sign::verify_signature(pk, &rec.receipt_hash, sig))
+                }
+                _ => Value::Null,
+            };
+
             (
                 StatusCode::OK,
                 Json(json!({
@@ -1427,6 +1463,9 @@ pub async fn verify_receipt(
                     "receipt_hash": rec.receipt_hash,
                     "recomputed_hash": recomputed,
                     "prev_receipt_hash": rec.prev_receipt_hash,
+                    "signed": rec.signature.is_some(),
+                    "signature_verified": signature_verified,
+                    "signer_public_key": rec.signer_public_key,
                 })),
             )
                 .into_response()
@@ -2566,6 +2605,123 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["verified"].as_bool(), Some(true));
         assert_eq!(json["receipt_id"].as_str(), Some(receipt_id.as_str()));
+        // Hermetic default: no signing key configured → unsigned.
+        // signature_verified is null and `signed` is false; hash `verified` unchanged.
+        assert_eq!(json["signed"].as_bool(), Some(false));
+        assert!(json["signature_verified"].is_null());
+    }
+
+    // A fixed test secret (hex, 32 bytes). Test-only — not a real key. Used to
+    // emit a signed receipt directly via the atomic appender (so we exercise the
+    // verify endpoint's signature path without coupling to the process-global env
+    // signer, which `OnceLock`-initializes once per process).
+    const TEST_SIGNING_SECRET_HEX: &str =
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+
+    fn unsigned_receipt_template(tenant_id: &str) -> ActionReceiptRecord {
+        ActionReceiptRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: Some(Uuid::new_v4().to_string()),
+            ts: Utc::now().to_rfc3339(),
+            agent_id: Some("signing-agent".to_string()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            tool: Some("github".to_string()),
+            action: Some("merge_pull_request".to_string()),
+            resource: Some("payments#1".to_string()),
+            source_trust: "trusted_internal_signed".to_string(),
+            decision: "allow".to_string(),
+            approver: None,
+            action_hash: Some("aaaa".to_string()),
+            prev_receipt_hash: String::new(),
+            receipt_hash: String::new(),
+            signature: None,
+            signer_public_key: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_signature_for_a_signed_receipt() {
+        let (state, tenant_id, _agent_token) = setup_state("signed_receipt").await;
+        let signer = sign::ReceiptSigner::from_secret_hex(TEST_SIGNING_SECRET_HEX).unwrap();
+
+        // Insert a signed receipt through the real atomic appender. Hash FIRST over
+        // the live chain head, then sign OVER that hash (additive metadata).
+        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
+            let mut r = unsigned_receipt_template(&tenant_id);
+            r.prev_receipt_hash = prev;
+            r.receipt_hash = compute_receipt_hash(&r);
+            r.signature = Some(signer.sign_hash(&r.receipt_hash));
+            r.signer_public_key = Some(signer.public_key_hex());
+            r
+        })
+        .await
+        .expect("signed receipt insert");
+
+        let response = verify_receipt(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(rec.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // Hash integrity unchanged AND signature verifies.
+        assert_eq!(json["verified"].as_bool(), Some(true));
+        assert_eq!(json["signed"].as_bool(), Some(true));
+        assert_eq!(json["signature_verified"].as_bool(), Some(true));
+        assert_eq!(
+            json["signer_public_key"].as_str(),
+            Some(signer.public_key_hex().as_str())
+        );
+    }
+
+    #[test]
+    fn signing_does_not_perturb_receipt_hash() {
+        // BYTE-PARITY GUARD: compute_receipt_hash must be identical whether or not
+        // the signature/signer fields are populated. The signature sits OVER the
+        // hash; it is never an input to it.
+        let signer = sign::ReceiptSigner::from_secret_hex(TEST_SIGNING_SECRET_HEX).unwrap();
+
+        let mut unsigned = ActionReceiptRecord {
+            id: "rcpt_parity".to_string(),
+            tenant_id: "t".to_string(),
+            decision_id: None,
+            ts: "2026-06-02T12:00:00Z".to_string(),
+            agent_id: Some("a".to_string()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            tool: Some("github".to_string()),
+            action: Some("merge_pull_request".to_string()),
+            resource: Some("payments#1".to_string()),
+            source_trust: "trusted_internal_signed".to_string(),
+            decision: "allow".to_string(),
+            approver: None,
+            action_hash: Some("aaaa".to_string()),
+            prev_receipt_hash: String::new(),
+            receipt_hash: String::new(),
+            signature: None,
+            signer_public_key: None,
+            created_at: Utc::now(),
+        };
+        let hash_unsigned = compute_receipt_hash(&unsigned);
+
+        // Populate the signature fields and re-hash: the hash MUST be unchanged.
+        unsigned.signature = Some(signer.sign_hash(&hash_unsigned));
+        unsigned.signer_public_key = Some(signer.public_key_hex());
+        let hash_signed = compute_receipt_hash(&unsigned);
+
+        assert_eq!(
+            hash_unsigned, hash_signed,
+            "signing must not change the receipt hash (byte-parity moat)"
+        );
     }
 
     #[tokio::test]
@@ -2767,6 +2923,8 @@ mod tests {
                         action_hash: Some(format!("sha256:dead{:04}", i)),
                         prev_receipt_hash: prev,
                         receipt_hash: String::new(),
+                        signature: None,
+                        signer_public_key: None,
                         created_at: Utc::now(),
                     };
                     rec.receipt_hash = compute_receipt_hash(&rec);

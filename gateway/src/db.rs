@@ -258,6 +258,8 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             action_hash TEXT,
             prev_receipt_hash TEXT NOT NULL,
             receipt_hash TEXT NOT NULL,
+            signature TEXT,
+            signer_public_key TEXT,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id)
         );",
@@ -345,6 +347,9 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Idempotent ALTER TABLE for existing DBs that pre-date the lifecycle columns.
     ensure_soc_incident_lifecycle_columns(pool).await?;
 
+    // Idempotent ALTER TABLE for existing DBs that pre-date optional receipt signing.
+    ensure_action_receipt_signature_columns(pool).await?;
+
     Ok(())
 }
 
@@ -429,6 +434,39 @@ async fn ensure_soc_incident_lifecycle_columns(pool: &SqlitePool) -> Result<(), 
     }
     if !has_closed_at {
         sqlx::query("ALTER TABLE soc_incidents ADD COLUMN closed_at TEXT")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Idempotent migration: add `signature` and `signer_public_key` (both nullable)
+/// to `action_receipts` for optional Ed25519 receipt signing. These columns are
+/// additive metadata stored ALONGSIDE the receipt; they are NOT part of
+/// `receipt_hash` or the canonical body, so the byte-parity-locked hash chain is
+/// unchanged. Existing rows stay NULL (unsigned) — no data loss. Uses PRAGMA
+/// table_info to guard the ALTER (SQLite has no `ADD COLUMN IF NOT EXISTS`); safe
+/// on a fresh DB where CREATE TABLE already includes the columns.
+async fn ensure_action_receipt_signature_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(action_receipts)")
+            .fetch_all(pool)
+            .await?;
+
+    let has_signature = columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "signature");
+    let has_signer_public_key = columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "signer_public_key");
+
+    if !has_signature {
+        sqlx::query("ALTER TABLE action_receipts ADD COLUMN signature TEXT")
+            .execute(pool)
+            .await?;
+    }
+    if !has_signer_public_key {
+        sqlx::query("ALTER TABLE action_receipts ADD COLUMN signer_public_key TEXT")
             .execute(pool)
             .await?;
     }
@@ -965,8 +1003,8 @@ where
     let record = build(prev);
 
     if let Err(e) = sqlx::query(
-        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, signature, signer_public_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -985,6 +1023,8 @@ where
     .bind(&record.action_hash)
     .bind(&record.prev_receipt_hash)
     .bind(&record.receipt_hash)
+    .bind(&record.signature)
+    .bind(&record.signer_public_key)
     .execute(&mut *conn)
     .await
     {
