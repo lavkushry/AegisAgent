@@ -864,6 +864,18 @@ pub async fn discover_mcp_tools(
                     trace_id: None,
                     matched_policies: Vec::new(),
                 });
+
+                // Fail-closed response (Phase 4): drift is a tool-hijack signal, so
+                // auto-quarantine the server. The inline authorize gate above then
+                // denies every tool call until an operator verifies the new manifest
+                // out-of-band and explicitly restores the server. Best-effort: a DB
+                // error is logged and never blocks the discovery response.
+                if let Err(e) =
+                    db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, "quarantined")
+                        .await
+                {
+                    error!("Failed to auto-quarantine drifted MCP server: {:?}", e);
+                }
             }
             if pinned != new_manifest_hash {
                 if let Err(e) = db::set_mcp_server_manifest_hash(
@@ -1107,6 +1119,70 @@ pub async fn authorize_action(
     let is_mcp_call = mcp_server_key.is_some();
 
     if let Some(server_key) = mcp_server_key.as_deref() {
+        // Fail-closed server-level gate (Phase 4 response enforcement). A
+        // quarantined MCP server — whether quarantined by an operator or
+        // auto-quarantined on tool-manifest drift — denies ALL of its tool calls
+        // inline, regardless of any tool's prior approved status. Without this,
+        // quarantine was recorded but never enforced on the authorize hot path.
+        match db::get_mcp_server_by_key(&state.pool, &tenant_id, server_key).await {
+            Ok(Some(server)) if server.status == "quarantined" => {
+                let decision_id = Uuid::new_v4();
+                let reason = format!(
+                    "MCP server '{}' is quarantined; all tool calls are denied (fail-closed).",
+                    server_key
+                );
+                let matched_policies = vec!["mcp_server_quarantined".to_string()];
+                risk_level = "critical".to_string();
+                risk_score = 100;
+
+                if let Err(e) = write_decision_and_audit(
+                    &state.pool,
+                    &state.events,
+                    &tenant_id,
+                    &agent_id,
+                    &payload,
+                    decision_id,
+                    "deny",
+                    risk_score,
+                    &reason,
+                    &matched_policies,
+                    "mcp_tool_called",
+                )
+                .await
+                {
+                    error!("Failed to write quarantined-server denial: {:?}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "Database error"})),
+                    )
+                        .into_response();
+                }
+
+                return (
+                    StatusCode::OK,
+                    Json(AuthorizeResponse {
+                        decision_id,
+                        decision: "deny".to_string(),
+                        risk_score,
+                        risk_level,
+                        reason,
+                        matched_policies,
+                        approval: None,
+                    }),
+                )
+                    .into_response();
+            }
+            Ok(_) => {}
+            Err(e) => {
+                error!("Failed to look up MCP server status: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        }
+
         match db::get_mcp_tool_by_key(
             &state.pool,
             &tenant_id,
@@ -4215,5 +4291,82 @@ mod tests {
             .unwrap();
         let expected = compute_mcp_manifest_hash(&[drift_tool("create_issue", "critical")]);
         assert_eq!(pinned, expected);
+
+        // Fail-closed response: drift must auto-quarantine the server.
+        let server = db::get_mcp_server_by_key(&state.pool, &tenant_id, "github-mcp")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.status, "quarantined");
+    }
+
+    /// A quarantined MCP server must deny an otherwise-approved tool inline
+    /// (Phase 4 response enforcement). Before this, quarantine was recorded but
+    /// never checked on the authorize hot path.
+    #[tokio::test]
+    async fn quarantined_mcp_server_denies_approved_tool() {
+        let (state, tenant_id, agent_token) = setup_state("mcp_quarantine_enforced").await;
+        let server_id = db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+        let tool = McpToolManifestItem {
+            tool_key: "create_issue".to_string(),
+            name: "Create issue".to_string(),
+            description: None,
+            input_schema: None,
+            risk: "medium".to_string(),
+            mutates_state: false,
+            approval_required: false,
+        };
+        db::upsert_mcp_tool(&state.pool, &tenant_id, &server_id, &tool)
+            .await
+            .unwrap();
+        db::set_mcp_tool_status(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "create_issue",
+            "approved",
+        )
+        .await
+        .unwrap();
+
+        // Baseline: the approved tool authorizes while the server is active.
+        let allowed = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("mcp:github-mcp", "create_issue"),
+        )
+        .await;
+        assert_eq!(allowed.decision, "allow");
+
+        // Quarantine the server — the same approved tool must now be denied.
+        assert!(
+            db::set_mcp_server_status(&state.pool, &tenant_id, "github-mcp", "quarantined")
+                .await
+                .unwrap()
+        );
+        let denied = call_authorize(
+            state,
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("mcp:github-mcp", "create_issue"),
+        )
+        .await;
+        assert_eq!(denied.decision, "deny");
+        assert!(denied
+            .matched_policies
+            .contains(&"mcp_server_quarantined".to_string()));
     }
 }
