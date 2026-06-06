@@ -174,36 +174,119 @@ async fn emit_action_receipt(
     decision_id: Uuid,
     decision: &str,
 ) {
-    let prev_receipt_hash = db::get_latest_receipt_hash(pool, tenant_id)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    // Build the head-referencing receipt inside one atomic transaction (T-D
+    // hardening): the chain head is read and the new link inserted under a single
+    // write lock, so concurrent authorizes for this tenant cannot fork the chain.
+    let result = db::append_action_receipt_atomic(pool, tenant_id, |prev_receipt_hash| {
+        let mut receipt = ActionReceiptRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: Some(decision_id.to_string()),
+            ts: Utc::now().to_rfc3339(),
+            agent_id: Some(agent_id.to_string()),
+            user_id: payload.user.as_ref().map(|u| u.id.clone()),
+            run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
+            trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
+            tool: Some(payload.tool_call.tool.clone()),
+            action: Some(payload.tool_call.action.clone()),
+            resource: payload.tool_call.resource.clone(),
+            source_trust: payload.context.source_trust.clone(),
+            decision: decision.to_string(),
+            approver: None,
+            action_hash: Some(hash_tool_call(&payload.tool_call)),
+            prev_receipt_hash,
+            receipt_hash: String::new(),
+            created_at: Utc::now(),
+        };
+        receipt.receipt_hash = compute_receipt_hash(&receipt);
+        receipt
+    })
+    .await;
 
-    let mut receipt = ActionReceiptRecord {
+    if let Err(e) = result {
+        error!("Failed to write action receipt: {:?}", e);
+    }
+}
+
+/// Decision label for a receipt recording a detected integrity violation (T-D:
+/// attacks on the evidence chain). A tamper-attempt receipt is appended to the same
+/// hash chain as normal decisions so the chain itself records the attack — storing
+/// ONLY hashes, never payloads.
+const TAMPER_DECISION: &str = "tamper_attempt";
+
+/// Append a tamper-attempt record to a tenant's receipt chain when the gateway
+/// detects an integrity violation (an approval `action_hash` mismatch, or a consume
+/// of an already-used / expired approval). Reuses the atomic, hash-chained receipt
+/// machinery so the attack is tamper-evidently recorded. `kind` is a short, stable
+/// tag for the violation; `action_hash` is the bound hash (never a payload). Also
+/// mirrors the event into the audit log. Best-effort: a write failure is logged and
+/// does not change the caller's response.
+async fn emit_tamper_attempt_receipt(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+    kind: &str,
+    approval_id: &str,
+    action_hash: Option<String>,
+) {
+    let kind_owned = kind.to_string();
+    let action_hash_for_receipt = action_hash.clone();
+    let result = db::append_action_receipt_atomic(pool, tenant_id, |prev_receipt_hash| {
+        let mut receipt = ActionReceiptRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: None,
+            ts: Utc::now().to_rfc3339(),
+            agent_id: None,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            // `tool`/`resource` carry only the violation tag + approval id (no payload).
+            tool: Some(kind_owned.clone()),
+            action: Some(TAMPER_DECISION.to_string()),
+            resource: Some(format!("approval:{}", approval_id)),
+            source_trust: "malicious_suspected".to_string(),
+            decision: TAMPER_DECISION.to_string(),
+            approver: None,
+            action_hash: action_hash_for_receipt,
+            prev_receipt_hash,
+            receipt_hash: String::new(),
+            created_at: Utc::now(),
+        };
+        receipt.receipt_hash = compute_receipt_hash(&receipt);
+        receipt
+    })
+    .await;
+
+    if let Err(e) = result {
+        error!("Failed to write tamper-attempt receipt: {:?}", e);
+        return;
+    }
+
+    // Mirror to the audit log (hashes only — never payloads).
+    let audit_record = AuditEventRecord {
         id: Uuid::new_v4().to_string(),
         tenant_id: tenant_id.to_string(),
-        decision_id: Some(decision_id.to_string()),
-        ts: Utc::now().to_rfc3339(),
-        agent_id: Some(agent_id.to_string()),
-        user_id: payload.user.as_ref().map(|u| u.id.clone()),
-        run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
-        trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
-        tool: Some(payload.tool_call.tool.clone()),
-        action: Some(payload.tool_call.action.clone()),
-        resource: payload.tool_call.resource.clone(),
-        source_trust: payload.context.source_trust.clone(),
-        decision: decision.to_string(),
-        approver: None,
-        action_hash: Some(hash_tool_call(&payload.tool_call)),
-        prev_receipt_hash,
-        receipt_hash: String::new(),
+        event_type: "tamper_attempt".to_string(),
+        agent_id: None,
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        span_id: None,
+        skill: None,
+        action: Some(kind.to_string()),
+        resource: Some(format!("approval:{}", approval_id)),
+        event_json: serde_json::to_string(&json!({
+            "kind": kind,
+            "approval_id": approval_id,
+            "action_hash": action_hash,
+        }))
+        .unwrap_or_default(),
+        input_hash: None,
+        output_hash: None,
         created_at: Utc::now(),
     };
-    receipt.receipt_hash = compute_receipt_hash(&receipt);
-
-    if let Err(e) = db::insert_action_receipt(pool, &receipt).await {
-        error!("Failed to write action receipt: {:?}", e);
+    if let Err(e) = db::insert_audit_event(pool, &audit_record).await {
+        error!("Failed to write tamper-attempt audit event: {:?}", e);
     }
 }
 
@@ -1254,6 +1337,22 @@ pub async fn consume_approval(
         };
 
     if !consumed {
+        // A consume of an already-used / expired / not-approved approval is an
+        // attack on the evidence chain (replay / T-D): record it as a tamper-attempt
+        // receipt so the chain itself captures the attempt. Hashes only, no payloads.
+        let bound_hash = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .ok()
+            .flatten()
+            .map(|a| a.original_call_hash);
+        emit_tamper_attempt_receipt(
+            &state.pool,
+            &tenant_id,
+            "consume_not_consumable",
+            &approval_id.to_string(),
+            bound_hash,
+        )
+        .await;
         return (
             StatusCode::CONFLICT,
             Json(json!({
@@ -1395,8 +1494,18 @@ pub async fn approve_approval(
             .into_response();
     }
 
-    // Fail closed if the approval window has already passed.
+    // Fail closed if the approval window has already passed. Granting an expired
+    // approval is an attack on the evidence chain (T-D); record the attempt as a
+    // tamper-attempt receipt (hashes only) before refusing.
     if approval_is_expired(&approval) {
+        emit_tamper_attempt_receipt(
+            &state.pool,
+            &tenant_id,
+            "approve_expired",
+            &approval_id.to_string(),
+            Some(approval.original_call_hash.clone()),
+        )
+        .await;
         return (
             StatusCode::CONFLICT,
             Json(json!({
@@ -2309,19 +2418,227 @@ mod tests {
         assert_eq!(approved_response.risk_score, 40);
     }
 
+    // T-D hardening (a): concurrent appends must keep a tenant's receipt chain
+    // strictly linear. If head-select + insert were not atomic, two racing tasks
+    // could read the same head and fork the chain (two receipts sharing one
+    // `prev_receipt_hash`). We append from many tokio tasks at once and assert the
+    // resulting chain is a single unbroken line with no duplicated prev-hash.
+    #[tokio::test]
+    async fn concurrent_receipt_appends_stay_linear() {
+        let (state, tenant_id, _agent_token) = setup_state("concurrent_chain").await;
+
+        const TASKS: usize = 24;
+        let mut handles = Vec::with_capacity(TASKS);
+        for i in 0..TASKS {
+            let pool = state.pool.clone();
+            let tenant = tenant_id.clone();
+            handles.push(tokio::spawn(async move {
+                db::append_action_receipt_atomic(&pool, &tenant, |prev| {
+                    let mut rec = ActionReceiptRecord {
+                        id: Uuid::new_v4().to_string(),
+                        tenant_id: tenant.clone(),
+                        decision_id: Some(Uuid::new_v4().to_string()),
+                        ts: Utc::now().to_rfc3339(),
+                        agent_id: Some("concurrency-agent".to_string()),
+                        user_id: None,
+                        run_id: None,
+                        trace_id: None,
+                        tool: Some("github".to_string()),
+                        action: Some(format!("op_{}", i)),
+                        resource: None,
+                        source_trust: "trusted_internal_signed".to_string(),
+                        decision: "allow".to_string(),
+                        approver: None,
+                        action_hash: Some(format!("sha256:dead{:04}", i)),
+                        prev_receipt_hash: prev,
+                        receipt_hash: String::new(),
+                        created_at: Utc::now(),
+                    };
+                    rec.receipt_hash = compute_receipt_hash(&rec);
+                    rec
+                })
+                .await
+            }));
+        }
+        for h in handles {
+            h.await.unwrap().expect("atomic append must succeed");
+        }
+
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT prev_receipt_hash, receipt_hash FROM action_receipts
+             WHERE tenant_id = ? ORDER BY rowid ASC",
+        )
+        .bind(tenant_id.as_str())
+        .fetch_all(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), TASKS, "every append must commit exactly once");
+
+        let mut seen_prev = std::collections::HashSet::new();
+        let mut seen_receipt = std::collections::HashSet::new();
+        let mut expected_prev = String::new();
+        for (prev, receipt) in &rows {
+            assert_eq!(
+                prev, &expected_prev,
+                "fork detected: prev-hash does not chain to the prior receipt"
+            );
+            assert!(
+                seen_prev.insert(prev.clone()),
+                "fork detected: duplicate prev_receipt_hash {}",
+                prev
+            );
+            assert!(
+                seen_receipt.insert(receipt.clone()),
+                "duplicate receipt_hash {}",
+                receipt
+            );
+            expected_prev = receipt.clone();
+        }
+    }
+
+    // T-D hardening (b): a consume of an already-used approval is a replay attack on
+    // the evidence chain. The gateway must record a tamper-attempt receipt (hashes
+    // only, no payloads) so the chain captures the attempt, and still return 409.
+    #[tokio::test]
+    async fn replay_consume_emits_tamper_receipt() {
+        let (state, tenant_id, agent_token) = setup_state("tamper_consume").await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/11".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let first = consume_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let (before,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ? AND decision = ?",
+        )
+        .bind(tenant_id.as_str())
+        .bind(TAMPER_DECISION)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(before, 0);
+
+        let replay = consume_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(replay.status(), StatusCode::CONFLICT);
+
+        let recs: Vec<ActionReceiptRecord> = sqlx::query_as(
+            "SELECT * FROM action_receipts WHERE tenant_id = ? AND decision = ? ORDER BY rowid ASC",
+        )
+        .bind(tenant_id.as_str())
+        .bind(TAMPER_DECISION)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(recs.len(), 1, "exactly one tamper receipt for the replay");
+        let tamper = &recs[0];
+        assert_eq!(tamper.receipt_hash, compute_receipt_hash(tamper));
+        assert!(!tamper.prev_receipt_hash.is_empty(), "must chain onto head");
+        assert_eq!(tamper.tool.as_deref(), Some("consume_not_consumable"));
+        assert_eq!(
+            tamper.resource.as_deref(),
+            Some(format!("approval:{}", approval_id).as_str())
+        );
+
+        let (audit_count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND event_type = 'tamper_attempt'",
+        )
+        .bind(tenant_id.as_str())
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(audit_count, 1);
+    }
+
+    // T-D hardening (b): approving an expired approval is a detected integrity
+    // violation; it must likewise leave a tamper-attempt receipt and return 409.
+    #[tokio::test]
+    async fn approve_expired_emits_tamper_receipt() {
+        let (state, tenant_id, agent_token) = setup_state("tamper_approve_expired").await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/12".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
+            .bind(Utc::now() - Duration::minutes(5))
+            .bind(tenant_id.as_str())
+            .bind(approval_id.to_string())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let approve = approve_approval(
+            State(state.clone()),
+            agent_headers(&tenant_id, &tenant_id),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::CONFLICT);
+
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ? AND decision = ? AND tool = 'approve_expired'",
+        )
+        .bind(tenant_id.as_str())
+        .bind(TAMPER_DECISION)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            count, 1,
+            "an expired-approval grant attempt must be recorded"
+        );
+    }
+
     // ── Security metrics tests ────────────────────────────────────────────────
 
-    /// D2 TDD (RED → GREEN): a mutating action from an untrusted-external source
-    /// is denied by Cedar's "untrusted-mutation-forbid" rule AND increments
-    /// `provenance_denials_total`. Also verifies GET /metrics text contains the
-    /// counter (integration check for the exposition format).
+    /// A mutating action from an untrusted-external source is denied by Cedar's
+    /// "untrusted-mutation-forbid" rule AND increments `provenance_denials_total`.
     #[tokio::test]
     async fn provenance_denial_increments_counter() {
         use std::sync::atomic::Ordering;
 
         let (state, tenant_id, agent_token) = setup_state("provenance_denial_counter").await;
 
-        // Build a mutating request with untrusted_external provenance.
         let mut request = mcp_authorize_request("github", "push_commit");
         request.tool_call.mutates_state = true;
         request.context.source_trust = "untrusted_external".to_string();
@@ -2350,7 +2667,6 @@ mod tests {
             "provenance_denials_total must be 1 after one denied provenance"
         );
 
-        // Verify Prometheus text exposition includes the counter.
         let metrics_text = state.metrics.render_prometheus();
         assert!(
             metrics_text.contains("provenance_denials_total 1\n"),
@@ -2362,8 +2678,7 @@ mod tests {
         );
     }
 
-    /// A second provenance denial (malicious_suspected) increments the same
-    /// counter: proves the check covers all three untrusted levels.
+    /// All three untrusted levels increment the same counter.
     #[tokio::test]
     async fn provenance_denial_counter_accumulates() {
         use std::sync::atomic::Ordering;
@@ -2388,8 +2703,7 @@ mod tests {
         );
     }
 
-    /// A trusted-internal mutating action that is ALLOWED must NOT increment
-    /// `provenance_denials_total` (counter stays zero).
+    /// A trusted-internal mutating action that is ALLOWED must NOT increment the counter.
     #[tokio::test]
     async fn trusted_mutating_action_does_not_increment_provenance_counter() {
         use std::sync::atomic::Ordering;
@@ -2400,7 +2714,6 @@ mod tests {
         req.tool_call.mutates_state = true;
         req.context.source_trust = "trusted_internal_signed".to_string();
         let resp = call_authorize(state.clone(), &tenant_id, &agent_token, req).await;
-        // trusted_internal_signed + mutates_state => allow (Cedar policy)
         assert_ne!(resp.decision, "deny");
 
         assert_eq!(
@@ -2421,7 +2734,6 @@ mod tests {
 
         let (state, tenant_id, agent_token) = setup_state("hash_mismatch_counter").await;
 
-        // Create an approval (merge to main triggers require_approval).
         let mut request = mcp_authorize_request("github", "merge_pull_request");
         request.tool_call.mutates_state = true;
         request.tool_call.resource = Some("repo/example/pull/99".to_string());
@@ -2429,7 +2741,6 @@ mod tests {
         let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
         let approval_id = response.approval.expect("approval created").approval_id;
 
-        // Approve it.
         let approve = approve_approval(
             State(state.clone()),
             agent_headers(&tenant_id, &tenant_id),
@@ -2451,7 +2762,6 @@ mod tests {
             0
         );
 
-        // Consume with a deliberately wrong claimed_action_hash (swap detected).
         let mismatch_resp = consume_approval(
             State(state.clone()),
             agent_headers(&tenant_id, &tenant_id),
