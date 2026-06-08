@@ -25,6 +25,20 @@ pub struct RegisterAgentResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchAgentRequest {
+    pub name: Option<String>,
+    pub owner_team: Option<String>,
+    pub owner_email: Option<String>,
+    pub environment: Option<String>,
+    pub framework: Option<String>,
+    pub model_provider: Option<String>,
+    pub model_name: Option<String>,
+    pub purpose: Option<String>,
+    pub risk_tier: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterToolAction {
     pub action_key: String,
     pub description: Option<String>,
@@ -261,7 +275,7 @@ pub struct McpToolRecord {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct PolicyRecord {
     pub id: String,
     pub tenant_id: String,
@@ -412,4 +426,32 @@ pub struct ActionReceiptRecord {
     /// the `signature` without contacting the gateway. NULL when unsigned.
     pub signer_public_key: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTenantRequest {
+    pub id: String,
+    pub name: String,
+    pub plan: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateMcpServerRequest {
+    pub name: Option<String>,
+    pub owner_team: Option<Option<String>>,
+    pub transport: Option<String>,
+    pub source: Option<Option<String>>,
+    pub trust_level: Option<String>,
+    pub endpoint: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantStats {
+    pub total_decisions: i64,
+    pub decisions_allow: i64,
+    pub decisions_deny: i64,
+    pub decisions_require_approval: i64,
+    pub total_agents: i64,
+    pub total_receipts: i64,
 }

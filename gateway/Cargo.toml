@@ -10,7 +10,7 @@ readme = "../README.md"
 publish = false
 
 [dependencies]
-axum = { version = "0.7.5", features = ["macros"] }
+axum = { version = "0.7.5", features = ["macros", "ws"] }
 tokio = { version = "1.38", features = ["full"] }
 sqlx = { version = "0.7.4", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "json"] }
 cedar-policy = "3.2.1"
@@ -27,5 +27,8 @@ uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+tower-http = { version = "0.5", features = ["cors", "request-id", "propagate-header", "set-header", "util", "compression-full", "limit", "timeout"] }
+tower = { version = "0.4", features = ["util"] }
+jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }

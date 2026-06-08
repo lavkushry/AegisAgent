@@ -1,7 +1,9 @@
 use crate::models::AuthorizeRequest;
 use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request};
+use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::RwLock;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
@@ -16,7 +18,8 @@ pub enum PolicyError {
 }
 
 pub struct PolicyEngine {
-    policy_set: PolicySet,
+    base_policy_set: RwLock<PolicySet>,
+    tenant_policy_sets: RwLock<HashMap<String, PolicySet>>,
 }
 
 impl PolicyEngine {
@@ -28,10 +31,92 @@ impl PolicyEngine {
         let policy_set =
             PolicySet::from_str(&policy_str).map_err(|e| PolicyError::Parse(e.to_string()))?;
 
-        Ok(Self { policy_set })
+        Ok(Self {
+            base_policy_set: RwLock::new(policy_set),
+            tenant_policy_sets: RwLock::new(HashMap::new()),
+        })
     }
 
-    pub fn authorize(&self, auth_req: &AuthorizeRequest) -> Result<AuthorizeDecision, PolicyError> {
+    pub fn has_tenant(&self, tenant_id: &str) -> bool {
+        let sets = self.tenant_policy_sets.read().unwrap();
+        sets.contains_key(tenant_id)
+    }
+
+    pub async fn reload_tenant_policies(
+        &self,
+        pool: &sqlx::SqlitePool,
+        tenant_id: &str,
+    ) -> Result<(), PolicyError> {
+        let db_policies = crate::db::list_policies(pool, tenant_id)
+            .await
+            .map_err(|e| PolicyError::File(e.to_string()))?;
+
+        // Rebuild policy set for this tenant.
+        // Start with the base policy set
+        let mut policy_set = {
+            let base = self.base_policy_set.read().unwrap();
+            base.clone()
+        };
+
+        // Append each active policy from the database
+        for policy_rec in db_policies {
+            if policy_rec.status != "active" {
+                continue;
+            }
+            // Parse Cedar policy from the body string
+            let custom_set = PolicySet::from_str(&policy_rec.body).map_err(|e| {
+                PolicyError::Parse(format!(
+                    "Failed to parse custom policy '{}': {}",
+                    policy_rec.id, e
+                ))
+            })?;
+
+            // Merge custom rules into policy_set
+            for p in custom_set.policies() {
+                policy_set.add(p.clone()).map_err(|e| {
+                    PolicyError::Parse(format!(
+                        "Failed to add custom policy '{}': {}",
+                        policy_rec.id, e
+                    ))
+                })?;
+            }
+        }
+
+        // Write the rebuilt policy set to our thread-safe map
+        let mut sets = self.tenant_policy_sets.write().unwrap();
+        sets.insert(tenant_id.to_string(), policy_set);
+
+        Ok(())
+    }
+
+    pub async fn reload_file<P: AsRef<Path>>(&self, policy_path: P) -> Result<(), PolicyError> {
+        let policy_str = tokio::fs::read_to_string(policy_path)
+            .await
+            .map_err(|e| PolicyError::File(e.to_string()))?;
+
+        let policy_set =
+            PolicySet::from_str(&policy_str).map_err(|e| PolicyError::Parse(e.to_string()))?;
+
+        // Update the base policy set
+        {
+            let mut base = self.base_policy_set.write().unwrap();
+            *base = policy_set;
+        }
+
+        // Clear cached tenant policy sets as base policies changed
+        {
+            let mut sets = self.tenant_policy_sets.write().unwrap();
+            sets.clear();
+        }
+
+        Ok(())
+    }
+
+    pub fn authorize(
+        &self,
+        tenant_id: &str,
+        auth_req: &AuthorizeRequest,
+    ) -> Result<AuthorizeDecision, PolicyError> {
         let authorizer = Authorizer::new();
 
         // Construct Entity UIDs matching Cedar policy structures
@@ -73,7 +158,14 @@ impl PolicyEngine {
         // We use empty entities for now as we evaluate policies based on request context attributes
         let entities = Entities::empty();
 
-        let response = authorizer.is_authorized(&request, &self.policy_set, &entities);
+        // Read lock to get this tenant's policy set
+        let sets = self.tenant_policy_sets.read().unwrap();
+        let policy_set = sets.get(tenant_id).cloned().unwrap_or_else(|| {
+            let base = self.base_policy_set.read().unwrap();
+            base.clone()
+        });
+
+        let response = authorizer.is_authorized(&request, &policy_set, &entities);
 
         let mut decision = match response.decision() {
             Decision::Allow => "allow".to_string(),
@@ -86,7 +178,7 @@ impl PolicyEngine {
 
         for policy_id in response.diagnostics().reason() {
             matched_policies.push(policy_id.to_string());
-            if let Some(policy) = self.policy_set.policy(policy_id) {
+            if let Some(policy) = policy_set.policy(policy_id) {
                 // If the decision is ALLOW but any of the satisfied policies annotations indicate
                 // `require_approval`, override the binary decision to `require_approval`.
                 if decision == "allow" {
@@ -137,11 +229,6 @@ mod tests {
         PolicyEngine::init("policies.cedar").await.unwrap()
     }
 
-    /// Build a request for a generic *mutating* tool call (a github branch
-    /// creation, which is NOT matched by the `github_merge` rule) triggered by
-    /// content at the given source trust level. Used to exercise the
-    /// deterministic anti-confused-deputy trust-provenance gate across all 6
-    /// trust levels.
     fn mutating_request_at_trust(trust_level: &str) -> AuthorizeRequest {
         AuthorizeRequest {
             request_id: None,
@@ -165,17 +252,11 @@ mod tests {
         }
     }
 
-    // --- Anti-confused-deputy trust-provenance gate: all 6 trust levels ---
-    // For a mutating action, the source trust level deterministically gates the
-    // decision (defeats the confused-deputy / indirect-prompt-injection class,
-    // e.g. a malicious public GitHub issue hijacking an agent into a privileged
-    // write). Classifiers may only TIGHTEN a label, never loosen it.
-
     #[tokio::test]
     async fn test_trusted_internal_signed_mutation_allowed() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("trusted_internal_signed");
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "allow");
     }
 
@@ -183,7 +264,7 @@ mod tests {
     async fn test_trusted_internal_unsigned_mutation_allowed() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("trusted_internal_unsigned");
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "allow");
     }
 
@@ -191,7 +272,7 @@ mod tests {
     async fn test_semi_trusted_customer_mutation_requires_approval() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("semi_trusted_customer");
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "require_approval");
     }
 
@@ -199,7 +280,7 @@ mod tests {
     async fn test_untrusted_external_mutation_denied() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("untrusted_external");
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -207,18 +288,15 @@ mod tests {
     async fn test_malicious_suspected_mutation_denied() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("malicious_suspected");
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "deny");
     }
 
     #[tokio::test]
     async fn test_unknown_mutation_denied() {
-        // Fail-closed on unclassified ingress: an unknown/unlabelled trigger
-        // must NOT be allowed to drive a mutation, and must NOT merely soft-pause
-        // for approval. Provenance is deterministic and fail-closed -> deny.
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("unknown");
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -246,7 +324,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "allow");
     }
 
@@ -276,7 +354,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "require_approval");
         assert_eq!(result.approver_group, Some("platform-leads".to_string()));
     }
@@ -305,7 +383,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -333,7 +411,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize(&request).unwrap();
+        let result = engine.authorize("test_tenant", &request).unwrap();
         assert_eq!(result.decision, "require_approval");
         assert_eq!(
             result.approver_group,

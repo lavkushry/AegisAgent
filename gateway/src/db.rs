@@ -15,9 +15,37 @@ pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .busy_timeout(std::time::Duration::from_secs(5));
 
+    let max_connections = std::env::var("AEGIS_DB_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(5);
+
+    let idle_timeout = std::env::var("AEGIS_DB_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30);
+
+    let acquire_timeout = std::env::var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(5);
+
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections)
+        .idle_timeout(std::time::Duration::from_secs(idle_timeout))
+        .acquire_timeout(std::time::Duration::from_secs(acquire_timeout))
         .connect_with(connection_options)
+        .await?;
+
+    // Performance tuning PRAGMAs for SQLite WAL mode autocheckpointing
+    sqlx::query("PRAGMA journal_size_limit = 67108864;")
+        .execute(&pool)
+        .await?;
+    sqlx::query("PRAGMA synchronous = NORMAL;")
+        .execute(&pool)
+        .await?;
+    sqlx::query("PRAGMA wal_autocheckpoint = 1000;")
+        .execute(&pool)
         .await?;
 
     // Run migrations
@@ -608,6 +636,36 @@ pub async fn get_agent_by_key(
         .await
 }
 
+pub async fn list_agents(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AgentRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRecord>(
+        "SELECT * FROM agents WHERE tenant_id = ? AND status != 'deleted' ORDER BY created_at DESC LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_agent_by_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    id: &str,
+) -> Result<Option<AgentRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRecord>(
+        "SELECT * FROM agents WHERE tenant_id = ? AND id = ? AND status != 'deleted'",
+    )
+    .bind(tenant_id)
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status)
@@ -630,6 +688,124 @@ pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(),
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn update_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE agents SET 
+            name = ?, 
+            owner_team = ?, 
+            owner_email = ?, 
+            environment = ?, 
+            framework = ?, 
+            model_provider = ?, 
+            model_name = ?, 
+            purpose = ?, 
+            risk_tier = ?, 
+            status = ?, 
+            updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(&record.name)
+    .bind(&record.owner_team)
+    .bind(&record.owner_email)
+    .bind(&record.environment)
+    .bind(&record.framework)
+    .bind(&record.model_provider)
+    .bind(&record.model_name)
+    .bind(&record.purpose)
+    .bind(&record.risk_tier)
+    .bind(&record.status)
+    .bind(&record.tenant_id)
+    .bind(&record.id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_policies(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<PolicyRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PolicyRecord>(
+        "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
+         FROM policies
+         WHERE tenant_id = ?
+         ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_policy_by_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    policy_id: &str,
+) -> Result<Option<PolicyRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PolicyRecord>(
+        "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
+         FROM policies
+         WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(policy_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn insert_policy(pool: &SqlitePool, record: &PolicyRecord) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO policies (id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.policy_key)
+    .bind(&record.name)
+    .bind(&record.language)
+    .bind(&record.body)
+    .bind(record.version)
+    .bind(&record.status)
+    .bind(&record.created_by)
+    .bind(record.created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_policy(pool: &SqlitePool, record: &PolicyRecord) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE policies
+         SET policy_key = ?, name = ?, language = ?, body = ?, version = ?, status = ?, created_by = ?, created_at = ?
+         WHERE tenant_id = ? AND id = ?"
+    )
+    .bind(&record.policy_key)
+    .bind(&record.name)
+    .bind(&record.language)
+    .bind(&record.body)
+    .bind(record.version)
+    .bind(&record.status)
+    .bind(&record.created_by)
+    .bind(record.created_at)
+    .bind(&record.tenant_id)
+    .bind(&record.id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_policy(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    policy_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM policies WHERE tenant_id = ? AND id = ?")
+        .bind(tenant_id)
+        .bind(policy_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -766,20 +942,6 @@ pub async fn upsert_mcp_server(
             .await?;
 
     Ok(row.0)
-}
-
-/// Tenant-scoped list of all MCP servers (for operator triage of quarantined /
-/// drifted servers). Parameterized; never crosses tenants.
-pub async fn list_mcp_servers(
-    pool: &SqlitePool,
-    tenant_id: &str,
-) -> Result<Vec<McpServerRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpServerRecord>(
-        "SELECT * FROM mcp_servers WHERE tenant_id = ? ORDER BY server_key ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
 }
 
 pub async fn get_mcp_server_by_key(
@@ -932,6 +1094,51 @@ pub async fn insert_decision(
     Ok(())
 }
 
+pub async fn list_decisions(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    agent_id: Option<&str>,
+    decision: Option<&str>,
+) -> Result<Vec<DecisionRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, created_at
+         FROM decisions
+         WHERE tenant_id = ?
+           AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR decision = ?)
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(decision)
+    .bind(decision)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_decision_by_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_id: &str,
+) -> Result<Option<DecisionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(decision_id)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn insert_approval(
     pool: &SqlitePool,
     record: &ApprovalRecord,
@@ -955,6 +1162,52 @@ pub async fn insert_approval(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn list_pending_approvals(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ApprovalRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let now = Utc::now();
+    sqlx::query_as::<_, ApprovalRecord>(
+        "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, created_at
+         FROM approvals
+         WHERE tenant_id = ?
+           AND status = 'created'
+           AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(now)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_action_receipts(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    sqlx::query_as::<_, ActionReceiptRecord>(
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, signature, signer_public_key, created_at
+         FROM action_receipts
+         WHERE tenant_id = ?
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn get_approval_by_id(
@@ -1430,6 +1683,134 @@ pub async fn set_mcp_server_status(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+pub async fn list_mcp_servers(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<McpServerRecord>, sqlx::Error> {
+    sqlx::query_as::<_, McpServerRecord>(
+        "SELECT * FROM mcp_servers WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn update_mcp_server(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    name: Option<&str>,
+    owner_team: Option<Option<&str>>,
+    transport: Option<&str>,
+    source: Option<Option<&str>>,
+    trust_level: Option<&str>,
+    endpoint: Option<&str>,
+    status: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    let mut query_str = "UPDATE mcp_servers SET ".to_string();
+    let mut bindings = Vec::new();
+
+    if let Some(n) = name {
+        query_str.push_str("name = ?, ");
+        bindings.push(Some(n.to_string()));
+    }
+    if let Some(ot) = owner_team {
+        query_str.push_str("owner_team = ?, ");
+        bindings.push(ot.map(|s| s.to_string()));
+    }
+    if let Some(t) = transport {
+        query_str.push_str("transport = ?, ");
+        bindings.push(Some(t.to_string()));
+    }
+    if let Some(s) = source {
+        query_str.push_str("source = ?, ");
+        bindings.push(s.map(|v| v.to_string()));
+    }
+    if let Some(tl) = trust_level {
+        query_str.push_str("trust_level = ?, ");
+        bindings.push(Some(tl.to_string()));
+    }
+    if let Some(ep) = endpoint {
+        query_str.push_str("endpoint = ?, ");
+        bindings.push(Some(ep.to_string()));
+    }
+    if let Some(st) = status {
+        query_str.push_str("status = ?, ");
+        bindings.push(Some(st.to_string()));
+    }
+
+    if bindings.is_empty() {
+        return Ok(false);
+    }
+    query_str.truncate(query_str.len() - 2);
+
+    query_str.push_str(" WHERE tenant_id = ? AND server_key = ?");
+
+    let mut q = sqlx::query(&query_str);
+    for val in bindings {
+        q = q.bind(val);
+    }
+    q = q.bind(tenant_id).bind(server_key);
+
+    let result = q.execute(pool).await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn get_tenant_stats(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<crate::models::TenantStats, sqlx::Error> {
+    let (total_decisions,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+
+    let (decisions_allow,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'allow'")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+
+    let (decisions_deny,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'deny'")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+
+    let (decisions_require_approval,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'require_approval'",
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+
+    let (total_agents,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM agents WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .fetch_one(pool)
+        .await?;
+
+    let (total_receipts,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+
+    Ok(crate::models::TenantStats {
+        total_decisions,
+        decisions_allow,
+        decisions_deny,
+        decisions_require_approval,
+        total_agents,
+        total_receipts,
+    })
 }
 
 #[cfg(test)]

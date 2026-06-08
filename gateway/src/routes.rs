@@ -1,3 +1,4 @@
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -7,6 +8,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -18,6 +20,102 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Instant;
+
+#[derive(Debug, Clone)]
+struct TokenBucket {
+    tokens: f64,
+    last_refreshed: Instant,
+}
+
+#[derive(Debug)]
+pub struct RateLimiter {
+    buckets: Mutex<HashMap<String, TokenBucket>>,
+    pub capacity: f64,
+    pub refill_rate: f64,
+}
+
+impl RateLimiter {
+    pub fn new(capacity: f64, refill_rate: f64) -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            capacity,
+            refill_rate,
+        }
+    }
+
+    pub fn check_rate_limit(&self, tenant_id: &str) -> bool {
+        if self.capacity <= 0.0 || self.refill_rate <= 0.0 {
+            return true;
+        }
+
+        let mut buckets = self.buckets.lock().unwrap();
+        let now = Instant::now();
+
+        let bucket = buckets
+            .entry(tenant_id.to_string())
+            .or_insert_with(|| TokenBucket {
+                tokens: self.capacity,
+                last_refreshed: now,
+            });
+
+        let elapsed = now.duration_since(bucket.last_refreshed).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.refill_rate).min(self.capacity);
+        bucket.last_refreshed = now;
+
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct QuotaManager {
+    quotas: Mutex<HashMap<String, (u64, Instant)>>,
+    pub limit: u64,
+    pub window_secs: u64,
+}
+
+impl QuotaManager {
+    pub fn new(limit: u64, window_secs: u64) -> Self {
+        Self {
+            quotas: Mutex::new(HashMap::new()),
+            limit,
+            window_secs,
+        }
+    }
+
+    pub fn check_quota(&self, tenant_id: &str) -> bool {
+        if self.limit == 0 {
+            return true;
+        }
+
+        let mut quotas = self.quotas.lock().unwrap();
+        let now = Instant::now();
+
+        let (count, window_start) = quotas
+            .entry(tenant_id.to_string())
+            .or_insert_with(|| (0, now));
+
+        if now.duration_since(*window_start).as_secs() >= self.window_secs {
+            *count = 0;
+            *window_start = now;
+        }
+
+        if *count < self.limit {
+            *count += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
@@ -26,34 +124,87 @@ pub struct AppState {
     pub events: EventSink,
     /// Process-wide security counters exposed on GET /metrics.
     pub metrics: SecurityMetrics,
+    /// Approval time-to-live in seconds. Configurable via AEGIS_APPROVAL_TTL_SECS
+    /// environment variable (default: 1800 = 30 minutes).
+    pub approval_ttl_secs: i64,
+    pub rate_limiter: RateLimiter,
+    pub quota_manager: QuotaManager,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct Claims {
+    sub: String,
+    tenant_id: Option<String>,
+    exp: usize,
+}
+
+fn validate_jwt(token: &str) -> Option<String> {
+    let secret = std::env::var("AEGIS_JWT_SECRET").unwrap_or_else(|_| "default_secret".to_string());
+    let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+    let validation = jsonwebtoken::Validation::default();
+    jsonwebtoken::decode::<Claims>(token, &key, &validation)
+        .map(|data| data.claims.tenant_id.unwrap_or(data.claims.sub))
+        .ok()
 }
 
 // Extractor helper to get tenant_id from Bearer token
-fn get_tenant_from_headers(
-    headers: &HeaderMap,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let auth_header = headers
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .ok_or((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Missing Authorization header"})),
-        ))?;
+#[derive(Debug, Clone)]
+pub struct TenantId(pub String);
 
-    if !auth_header.starts_with("Bearer ") {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Invalid Authorization format"})),
-        ));
-    }
+#[axum::async_trait]
+impl<S> axum::extract::FromRequestParts<S> for TenantId
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, Json<serde_json::Value>);
 
-    let token = &auth_header["Bearer ".len()..];
-    // For local testing, if token is "aegis_secret" or similar, use "tenant_123"
-    // If it starts with "tenant_", treat it as the tenant_id.
-    if token.starts_with("tenant_") {
-        Ok(token.to_string())
-    } else {
-        Ok("tenant_123".to_string())
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let auth_header = parts
+            .headers
+            .get("Authorization")
+            .and_then(|h| h.to_str().ok())
+            .ok_or((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Missing Authorization header"})),
+            ))?;
+
+        if !auth_header.starts_with("Bearer ") {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid Authorization format"})),
+            ));
+        }
+
+        let token = &auth_header["Bearer ".len()..];
+
+        // Try proper JWT validation first
+        if let Some(tenant_id) = validate_jwt(token) {
+            return Ok(TenantId(tenant_id));
+        }
+
+        // If JWT validation failed or it is not a valid JWT:
+        // Check if JWT validation is strictly required
+        if std::env::var("AEGIS_JWT_REQUIRED")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid or expired JWT token"})),
+            ));
+        }
+
+        // Fallback to old heuristic
+        let tenant_id = if token.starts_with("tenant_") {
+            token.to_string()
+        } else {
+            "tenant_123".to_string()
+        };
+
+        Ok(TenantId(tenant_id))
     }
 }
 
@@ -465,17 +616,11 @@ async fn write_decision_and_audit(
     Ok(())
 }
 
-// Register Agent Handler
 pub async fn register_agent(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterAgentRequest>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     // Ensure tenant exists in database, auto-create if missing for developer onboarding convenience
     if let Err(e) = db::get_tenant_by_id(&state.pool, &tenant_id).await {
         error!("Database lookup error: {:?}", e);
@@ -599,17 +744,151 @@ pub async fn register_agent(
         .into_response()
 }
 
+pub async fn list_agents(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_agents(&state.pool, &tenant_id, limit, offset).await {
+        Ok(agents) => (StatusCode::OK, Json(agents)).into_response(),
+        Err(e) => {
+            error!("Failed to list agents: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn get_agent(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::get_agent_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(Some(agent)) => (StatusCode::OK, Json(agent)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Agent not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to get agent detail: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn patch_agent(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+    Json(payload): Json<PatchAgentRequest>,
+) -> impl IntoResponse {
+    let mut agent = match db::get_agent_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Agent not found"})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to lookup agent for patch: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    if let Some(name) = payload.name {
+        agent.name = name;
+    }
+    if let Some(owner_team) = payload.owner_team {
+        agent.owner_team = Some(owner_team);
+    }
+    if let Some(owner_email) = payload.owner_email {
+        agent.owner_email = Some(owner_email);
+    }
+    if let Some(environment) = payload.environment {
+        agent.environment = environment;
+    }
+    if let Some(framework) = payload.framework {
+        agent.framework = Some(framework);
+    }
+    if let Some(model_provider) = payload.model_provider {
+        agent.model_provider = Some(model_provider);
+    }
+    if let Some(model_name) = payload.model_name {
+        agent.model_name = Some(model_name);
+    }
+    if let Some(purpose) = payload.purpose {
+        agent.purpose = Some(purpose);
+    }
+    if let Some(risk_tier) = payload.risk_tier {
+        agent.risk_tier = risk_tier;
+    }
+    if let Some(status) = payload.status {
+        agent.status = status;
+    }
+
+    match db::update_agent(&state.pool, &agent).await {
+        Ok(_) => (StatusCode::OK, Json(agent)).into_response(),
+        Err(e) => {
+            error!("Failed to update agent: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn delete_agent(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::set_agent_status(&state.pool, &tenant_id, &id, "deleted").await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(json!({"message": "Agent successfully deleted"})),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Agent not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to delete agent: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 // Register Static Tool Handler
 pub async fn register_tool(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterToolRequest>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     // Insert skill
     let skill_id = match db::insert_skill(
         &state.pool,
@@ -668,14 +947,9 @@ pub async fn register_tool(
 // Register MCP Server Handler
 pub async fn register_mcp_server(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterMcpServerRequest>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     if let Err(e) = ensure_tenant_exists(&state.pool, &tenant_id).await {
         error!("Failed to initialize tenant for MCP server: {:?}", e);
         return (
@@ -720,44 +994,12 @@ pub async fn register_mcp_server(
         .into_response()
 }
 
-/// GET /v1/mcp/servers — tenant-scoped list of registered MCP servers with their
-/// current `status` (incl. `quarantined`) and pinned `manifest_hash`. Read-only;
-/// lets an operator (or the SOC console) triage a `mcp_manifest_drift` alert by
-/// seeing which servers are quarantined / drifted and acting via the
-/// quarantine/restore endpoints.
-pub async fn list_mcp_servers(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
-    match db::list_mcp_servers(&state.pool, &tenant_id).await {
-        Ok(servers) => (StatusCode::OK, Json(servers)).into_response(),
-        Err(e) => {
-            error!("Failed to list MCP servers: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
-        }
-    }
-}
-
 pub async fn discover_mcp_tools(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
     Json(payload): Json<DiscoverMcpToolsRequest>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     let server = match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(Some(server)) => server,
         Ok(None) => {
@@ -946,14 +1188,9 @@ pub async fn discover_mcp_tools(
 
 pub async fn get_mcp_tool_manifest(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -992,32 +1229,27 @@ pub async fn get_mcp_tool_manifest(
 
 pub async fn approve_mcp_tool(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path((server_key, tool_key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    update_mcp_tool_status(state, headers, server_key, tool_key, "approved").await
+    update_mcp_tool_status(state, tenant_id, server_key, tool_key, "approved").await
 }
 
 pub async fn disable_mcp_tool(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path((server_key, tool_key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    update_mcp_tool_status(state, headers, server_key, tool_key, "disabled").await
+    update_mcp_tool_status(state, tenant_id, server_key, tool_key, "disabled").await
 }
 
 async fn update_mcp_tool_status(
     state: Arc<AppState>,
-    headers: HeaderMap,
+    tenant_id: String,
     server_key: String,
     tool_key: String,
     status: &str,
 ) -> axum::response::Response {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::set_mcp_tool_status(&state.pool, &tenant_id, &server_key, &tool_key, status).await {
         Ok(true) => {
             let audit_record = AuditEventRecord {
@@ -1110,6 +1342,79 @@ pub async fn authorize_action(
 
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
+
+    // Check Rate Limiting (TASK-0012)
+    if !state.rate_limiter.check_rate_limit(&tenant_id) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"error": "Too many requests. Rate limit exceeded."})),
+        )
+            .into_response();
+    }
+
+    // Check Request Quota (TASK-0013)
+    if !state.quota_manager.check_quota(&tenant_id) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"error": "Request quota exceeded."})),
+        )
+            .into_response();
+    }
+
+    // Check if the agent is frozen or revoked (TASK-0014)
+    if agent.status == "frozen" || agent.status == "revoked" {
+        let decision_id = Uuid::new_v4();
+        let reason = format!(
+            "Agent '{}' is {}; all tool calls are denied (fail-closed).",
+            agent.agent_key, agent.status
+        );
+        let matched_policies = vec![format!("agent_{}", agent.status)];
+        let risk_score = 100;
+        let risk_level = "critical".to_string();
+
+        let audit_event_type = if mcp_server_key_from_tool(&payload.tool_call.tool).is_some() {
+            "mcp_tool_called"
+        } else {
+            "tool_call_intercepted"
+        };
+
+        if let Err(e) = write_decision_and_audit(
+            &state.pool,
+            &state.events,
+            &tenant_id,
+            &agent_id,
+            &payload,
+            decision_id,
+            "deny",
+            risk_score,
+            &reason,
+            &matched_policies,
+            audit_event_type,
+        )
+        .await
+        {
+            error!("Failed to write agent-frozen denial: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+
+        return (
+            StatusCode::OK,
+            Json(AuthorizeResponse {
+                decision_id,
+                decision: "deny".to_string(),
+                risk_score,
+                risk_level,
+                reason,
+                matched_policies,
+                approval: None,
+            }),
+        )
+            .into_response();
+    }
 
     // Map risk levels based on DB registered action, falling back to policy engine defaults.
     let mut risk_score = 10;
@@ -1327,8 +1632,16 @@ pub async fn authorize_action(
         }
     }
 
+    // Ensure policies for the tenant are loaded into the engine.
+    if !state.policy_engine.has_tenant(&tenant_id) {
+        let _ = state
+            .policy_engine
+            .reload_tenant_policies(&state.pool, &tenant_id)
+            .await;
+    }
+
     // Call policy engine to evaluate Cedar rules
-    let policy_decision = match state.policy_engine.authorize(&payload) {
+    let policy_decision = match state.policy_engine.authorize(&tenant_id, &payload) {
         Ok(d) => d,
         Err(e) => {
             error!("Policy engine error: {:?}", e);
@@ -1418,7 +1731,7 @@ pub async fn authorize_action(
 
     if decision_str == "require_approval" {
         let approval_id = Uuid::new_v4();
-        let expires_at = Utc::now() + Duration::minutes(30);
+        let expires_at = Utc::now() + Duration::seconds(state.approval_ttl_secs);
         let original_call_hash = hash_tool_call(&payload.tool_call);
 
         let approval_record = ApprovalRecord {
@@ -1493,14 +1806,9 @@ pub async fn authorize_action(
 // Get Approval Status Handler
 pub async fn get_approval(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
         Ok(Some(app)) => {
             let edited_call: Option<AuthorizeToolCall> = app
@@ -1558,16 +1866,11 @@ pub struct ConsumeApprovalBody {
 // The SDK calls this before executing so an approval cannot be replayed/reused.
 pub async fn consume_approval(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
     // JSON body is optional; old callers that POST with no body still work.
     body: Option<Json<ConsumeApprovalBody>>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     let consumed =
         match db::consume_approval(&state.pool, &tenant_id, &approval_id.to_string()).await {
             Ok(c) => c,
@@ -1656,14 +1959,9 @@ pub async fn consume_approval(
 // Verify a stored action receipt by recomputing its hash from the canonical body.
 pub async fn verify_receipt(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(receipt_id): Path<String>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::get_action_receipt_by_id(&state.pool, &tenant_id, &receipt_id).await {
         Ok(Some(rec)) => {
             // Hash (chain) integrity — UNCHANGED. This is the byte-parity-locked check.
@@ -1714,15 +2012,10 @@ pub async fn verify_receipt(
 // Approve Handler
 pub async fn approve_approval(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
     Json(payload): Json<ApproveRequest>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     // Load the approval first so we can fail closed on stale or already-decided
     // requests instead of blindly transitioning to APPROVED.
     let approval =
@@ -1837,15 +2130,10 @@ pub async fn approve_approval(
 // Reject Handler
 pub async fn reject_approval(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
     Json(payload): Json<ApproveRequest>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     // Update approval status to REJECTED
     if let Err(e) = db::update_approval_status(
         &state.pool,
@@ -1901,15 +2189,10 @@ pub async fn reject_approval(
 // Edit parameters handler
 pub async fn edit_approval(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
     Json(payload): Json<EditApprovalRequest>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     let edited_call_str = serde_json::to_string(&payload.edited_tool_call).unwrap_or_default();
 
     // Update approval status to EDITED
@@ -1968,14 +2251,9 @@ pub async fn edit_approval(
 // Get Investigation Run Timeline
 pub async fn get_timeline(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(run_id): Path<String>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::get_audit_events_by_run(&state.pool, &tenant_id, &run_id).await {
         Ok(events) => (StatusCode::OK, Json(events)).into_response(),
         Err(e) => {
@@ -1992,13 +2270,8 @@ pub async fn get_timeline(
 // Get All Audit Events Logs
 pub async fn get_audit_events(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::get_all_audit_events(&state.pool, &tenant_id).await {
         Ok(events) => (StatusCode::OK, Json(events)).into_response(),
         Err(e) => {
@@ -2056,6 +2329,494 @@ fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
     })
 }
 
+/// GET /v1/decisions — list decisions for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `agent_id` — optional equality filter.
+///   `decision` — optional equality filter.
+pub async fn list_decisions(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
+    let decision = parse_filter(raw_query.as_deref(), "decision");
+
+    match db::list_decisions(
+        &state.pool,
+        &tenant_id,
+        limit,
+        offset,
+        agent_id.as_deref(),
+        decision.as_deref(),
+    )
+    .await
+    {
+        Ok(decisions) => (StatusCode::OK, Json(decisions)).into_response(),
+        Err(e) => {
+            error!("Failed to list decisions: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/decisions/:id — get a single decision detail for the authenticated tenant.
+pub async fn get_decision(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::get_decision_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(Some(decision)) => (StatusCode::OK, Json(decision)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Decision not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to get decision: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/approvals — list pending approvals for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+pub async fn list_approvals(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_pending_approvals(&state.pool, &tenant_id, limit, offset).await {
+        Ok(approvals) => {
+            let mapped: Vec<serde_json::Value> = approvals
+                .into_iter()
+                .map(|app| {
+                    let edited_call: Option<AuthorizeToolCall> = app
+                        .edited_skill_call
+                        .as_ref()
+                        .and_then(|s| serde_json::from_str(s).ok());
+                    let effective_status = if app.status == "created" && approval_is_expired(&app) {
+                        "EXPIRED".to_string()
+                    } else {
+                        app.status.clone()
+                    };
+                    json!({
+                        "approval_id": app.id,
+                        "status": effective_status,
+                        "approver_group": app.approver_group,
+                        "approver_user_id": app.approver_user_id,
+                        "reason": app.reason,
+                        "action_hash": app.original_call_hash,
+                        "edited_tool_call": edited_call,
+                        "expires_at": app.expires_at,
+                        "decided_at": app.decided_at,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(mapped)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to list pending approvals: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/receipts — list paginated action receipts for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+pub async fn list_receipts(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_action_receipts(&state.pool, &tenant_id, limit, offset).await {
+        Ok(receipts) => (StatusCode::OK, Json(receipts)).into_response(),
+        Err(e) => {
+            error!("Failed to list receipts: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/receipts/:id — get a single action receipt for the authenticated tenant.
+pub async fn get_receipt(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::get_action_receipt_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(Some(receipt)) => (StatusCode::OK, Json(receipt)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Receipt not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to get receipt: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct VerifyChainRequest {
+    pub receipts: Vec<Value>,
+}
+
+pub async fn verify_receipt_chain(
+    State(_state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<VerifyChainRequest>,
+) -> impl IntoResponse {
+    let receipts = &payload.receipts;
+    if receipts.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "verified": true,
+                "error": null
+            })),
+        )
+            .into_response();
+    }
+
+    let mut prev = String::new();
+    for (i, receipt) in receipts.iter().enumerate() {
+        let obj = match receipt.as_object() {
+            Some(o) => o,
+            None => {
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "verified": false,
+                        "error": format!("Receipt at index {} is not a valid JSON object", i)
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        // 1. Tenant validation (CWE-284 isolation!)
+        if let Some(tenant_in_receipt) = obj.get("tenant_id").and_then(|v| v.as_str()) {
+            if tenant_in_receipt != tenant_id {
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "verified": false,
+                        "error": format!("Tenant mismatch at index {}: receipt has tenant '{}' but request is for '{}'", i, tenant_in_receipt, tenant_id)
+                    })),
+                )
+                    .into_response();
+            }
+        }
+
+        // 2. Hash validation
+        let stored = match obj.get("receipt_hash").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "verified": false,
+                        "error": format!("Missing receipt_hash at index {}", i)
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        // Remove receipt_hash, signature, signer_public_key, and created_at to get canonical body
+        let mut body = obj.clone();
+        body.remove("receipt_hash");
+        body.remove("signature");
+        body.remove("signer_public_key");
+        body.remove("created_at");
+
+        let recomputed = sha256_hex(canonical_value_string(&Value::Object(body)).as_bytes());
+        if recomputed != stored {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "verified": false,
+                    "error": format!("Hash mismatch at index {}: stored '{}', recomputed '{}'", i, stored, recomputed)
+                })),
+            )
+                .into_response();
+        }
+
+        // 3. Linkage validation
+        let prev_in_receipt = obj
+            .get("prev_receipt_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if i == 0 {
+            prev = prev_in_receipt.to_string();
+        }
+        if prev_in_receipt != prev {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "verified": false,
+                    "error": format!("Link broken at index {}: prev_receipt_hash '{}' does not match expected '{}'", i, prev_in_receipt, prev)
+                })),
+            )
+                .into_response();
+        }
+
+        prev = stored.to_string();
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "verified": true,
+            "error": null
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct CreatePolicyRequest {
+    pub policy_key: String,
+    pub name: String,
+    pub body: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct UpdatePolicyRequest {
+    pub policy_key: Option<String>,
+    pub name: Option<String>,
+    pub body: Option<String>,
+    pub status: Option<String>,
+}
+
+pub async fn list_policies(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::list_policies(&state.pool, &tenant_id).await {
+        Ok(policies) => (StatusCode::OK, Json(policies)).into_response(),
+        Err(e) => {
+            error!("Failed to list policies: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn create_policy(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<CreatePolicyRequest>,
+) -> impl IntoResponse {
+    // Validate Cedar compilation
+    if let Err(e) = cedar_policy::PolicySet::from_str(&payload.body) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("Cedar compilation error: {}", e)})),
+        )
+            .into_response();
+    }
+
+    let policy_id = Uuid::new_v4().to_string();
+    let record = PolicyRecord {
+        id: policy_id,
+        tenant_id: tenant_id.clone(),
+        policy_key: payload.policy_key,
+        name: payload.name,
+        language: "cedar".to_string(),
+        body: payload.body,
+        version: 1,
+        status: "active".to_string(),
+        created_by: None,
+        created_at: Utc::now(),
+    };
+
+    match db::insert_policy(&state.pool, &record).await {
+        Ok(_) => {
+            // Trigger hot-reload
+            if let Err(e) = state
+                .policy_engine
+                .reload_tenant_policies(&state.pool, &tenant_id)
+                .await
+            {
+                error!("Failed to hot-reload policies after create: {:?}", e);
+            }
+            (StatusCode::CREATED, Json(record)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to create policy: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn update_policy(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdatePolicyRequest>,
+) -> impl IntoResponse {
+    let mut record = match db::get_policy_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Policy not found"})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to lookup policy for update: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    if let Some(policy_key) = payload.policy_key {
+        record.policy_key = policy_key;
+    }
+    if let Some(name) = payload.name {
+        record.name = name;
+    }
+    if let Some(body) = payload.body {
+        // Validate Cedar compilation
+        if let Err(e) = cedar_policy::PolicySet::from_str(&body) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Cedar compilation error: {}", e)})),
+            )
+                .into_response();
+        }
+        record.body = body;
+    }
+    if let Some(status) = payload.status {
+        record.status = status;
+    }
+    record.version += 1;
+
+    match db::update_policy(&state.pool, &record).await {
+        Ok(_) => {
+            // Trigger hot-reload
+            if let Err(e) = state
+                .policy_engine
+                .reload_tenant_policies(&state.pool, &tenant_id)
+                .await
+            {
+                error!("Failed to hot-reload policies after update: {:?}", e);
+            }
+            (StatusCode::OK, Json(record)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to update policy: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn delete_policy(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::delete_policy(&state.pool, &tenant_id, &id).await {
+        Ok(true) => {
+            // Trigger hot-reload
+            if let Err(e) = state
+                .policy_engine
+                .reload_tenant_policies(&state.pool, &tenant_id)
+                .await
+            {
+                error!("Failed to hot-reload policies after delete: {:?}", e);
+            }
+            (
+                StatusCode::OK,
+                Json(json!({"message": "Policy successfully deleted"})),
+            )
+                .into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Policy not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to delete policy: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn reload_global_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let policy_path =
+        std::env::var("CEDAR_POLICY_PATH").unwrap_or_else(|_| "policies.cedar".into());
+    match state.policy_engine.reload_file(&policy_path).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(json!({"message": "Global policies successfully reloaded"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to reload global policy file: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Failed to reload file: {}", e)})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// GET /v1/alerts — list SOC detection alerts for the authenticated tenant.
 ///
 /// Query params:
@@ -2067,14 +2828,9 @@ fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
 /// another tenant's data.
 pub async fn list_alerts(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     let (limit, offset) = parse_pagination(raw_query.as_deref());
     let severity = parse_filter(raw_query.as_deref(), "severity");
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
@@ -2113,14 +2869,9 @@ pub async fn list_alerts(
 /// another tenant's data.
 pub async fn list_incidents(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     let (limit, offset) = parse_pagination(raw_query.as_deref());
     let status_filter = parse_filter(raw_query.as_deref(), "status");
     let severity = parse_filter(raw_query.as_deref(), "severity");
@@ -2160,14 +2911,9 @@ pub async fn list_incidents(
 /// concatenation (CWE-89).
 pub async fn get_incident(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(incident_id): Path<String>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
         Ok(Some(incident)) => (StatusCode::OK, Json(incident)).into_response(),
         Ok(None) => (
@@ -2195,13 +2941,8 @@ pub async fn get_incident(
 /// No SQL concatenation occurs (CWE-89).
 pub async fn soc_summary(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::soc_summary(&state.pool, &tenant_id).await {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(e) => {
@@ -2232,14 +2973,9 @@ pub async fn soc_summary(
 ///   idempotent at the DB level; concurrent closes are safe.
 pub async fn close_incident(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(incident_id): Path<String>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     // First verify the incident exists for this tenant (provides a meaningful 404
     // rather than a silent no-op when the id is simply wrong or belongs to another
     // tenant — CWE-284 isolation).
@@ -2372,14 +3108,9 @@ pub async fn close_incident(
 /// * The narrator is constructed inside the handler (no AppState mutation).
 pub async fn narrate_incident(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(incident_id): Path<String>,
 ) -> impl IntoResponse {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
         Ok(Some(inc)) => inc,
         Ok(None) => {
@@ -2422,41 +3153,36 @@ pub async fn narrate_incident(
 /// denied immediately without Cedar evaluation. Reversible via /unfreeze.
 pub async fn freeze_agent(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
-    set_agent_operational_status(state, headers, agent_id, "frozen").await
+    set_agent_operational_status(state, tenant_id, agent_id, "frozen").await
 }
 
 /// Restore a frozen agent to active status.
 pub async fn unfreeze_agent(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
-    set_agent_operational_status(state, headers, agent_id, "active").await
+    set_agent_operational_status(state, tenant_id, agent_id, "active").await
 }
 
 /// Permanently revoke an agent — not reversible via API.
 pub async fn revoke_agent(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
-    set_agent_operational_status(state, headers, agent_id, "revoked").await
+    set_agent_operational_status(state, tenant_id, agent_id, "revoked").await
 }
 
 async fn set_agent_operational_status(
     state: Arc<AppState>,
-    headers: HeaderMap,
+    tenant_id: String,
     agent_id: String,
     status: &str,
 ) -> axum::response::Response {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::set_agent_status(&state.pool, &tenant_id, &agent_id, status).await {
         Ok(true) => {
             let audit = AuditEventRecord {
@@ -2508,32 +3234,27 @@ async fn set_agent_operational_status(
 /// server until it is restored. Tenant-scoped, parameterized, fail-closed.
 pub async fn quarantine_mcp_server(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
 ) -> impl IntoResponse {
-    update_mcp_server_quarantine(state, headers, server_key, "quarantined").await
+    update_mcp_server_quarantine(state, tenant_id, server_key, "quarantined").await
 }
 
 /// Restore a quarantined MCP server to active status.
 pub async fn restore_mcp_server(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
 ) -> impl IntoResponse {
-    update_mcp_server_quarantine(state, headers, server_key, "active").await
+    update_mcp_server_quarantine(state, tenant_id, server_key, "active").await
 }
 
 async fn update_mcp_server_quarantine(
     state: Arc<AppState>,
-    headers: HeaderMap,
+    tenant_id: String,
     server_key: String,
     status: &str,
 ) -> axum::response::Response {
-    let tenant_id = match get_tenant_from_headers(&headers) {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
-
     match db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, status).await {
         Ok(true) => {
             let audit = AuditEventRecord {
@@ -2581,12 +3302,904 @@ async fn update_mcp_server_quarantine(
     }
 }
 
+pub async fn get_tenant(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if tenant_id != id {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Tenant not found"})),
+        )
+            .into_response();
+    }
+
+    match db::get_tenant_by_id(&state.pool, &tenant_id).await {
+        Ok(Some(tenant)) => (StatusCode::OK, Json(tenant)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Tenant not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to get tenant: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn create_tenant(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateTenantRequest>,
+) -> impl IntoResponse {
+    match db::get_tenant_by_id(&state.pool, &payload.id).await {
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({"error": "Tenant already exists"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Database error checking tenant existence: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+        _ => {}
+    }
+
+    match db::register_tenant(&state.pool, &payload.id, &payload.name, &payload.plan).await {
+        Ok(()) => {
+            let record = TenantRecord {
+                id: payload.id.clone(),
+                name: payload.name.clone(),
+                plan: payload.plan.clone(),
+                created_at: Utc::now(),
+            };
+            (StatusCode::CREATED, Json(record)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to register tenant: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn list_mcp_servers(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_mcp_servers(&state.pool, &tenant_id, limit, offset).await {
+        Ok(servers) => (StatusCode::OK, Json(servers)).into_response(),
+        Err(e) => {
+            error!("Failed to list MCP servers: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn get_mcp_server(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(server_key): Path<String>,
+) -> impl IntoResponse {
+    match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+        Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "MCP server not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to get MCP server: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn update_mcp_server(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(server_key): Path<String>,
+    Json(payload): Json<UpdateMcpServerRequest>,
+) -> impl IntoResponse {
+    match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "MCP server not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Database error getting MCP server: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+        _ => {}
+    }
+
+    match db::update_mcp_server(
+        &state.pool,
+        &tenant_id,
+        &server_key,
+        payload.name.as_deref(),
+        payload.owner_team.as_ref().map(|o| o.as_deref()),
+        payload.transport.as_deref(),
+        payload.source.as_ref().map(|o| o.as_deref()),
+        payload.trust_level.as_deref(),
+        payload.endpoint.as_deref(),
+        payload.status.as_deref(),
+    )
+    .await
+    {
+        Ok(true) => match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+            Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to fetch updated server"})),
+            )
+                .into_response(),
+        },
+        Ok(false) => match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+            Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
+            _ => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "MCP server not found"})),
+            )
+                .into_response(),
+        },
+        Err(e) => {
+            error!("Failed to update MCP server: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn ws_events(
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let tenant_id = if let Some(token) = params.get("token").or_else(|| params.get("jwt")) {
+        if let Some(tid) = validate_jwt(token) {
+            tid
+        } else if std::env::var("AEGIS_JWT_REQUIRED")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid or expired JWT token"})),
+            )
+                .into_response();
+        } else {
+            if token.starts_with("tenant_") {
+                token.to_string()
+            } else {
+                "tenant_123".to_string()
+            }
+        }
+    } else {
+        let auth_header = headers.get("Authorization").and_then(|h| h.to_str().ok());
+        if let Some(auth) = auth_header {
+            if let Some(token) = auth.strip_prefix("Bearer ") {
+                if let Some(tid) = validate_jwt(token) {
+                    tid
+                } else if std::env::var("AEGIS_JWT_REQUIRED")
+                    .map(|v| v == "true")
+                    .unwrap_or(false)
+                {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "Invalid or expired JWT token"})),
+                    )
+                        .into_response();
+                } else {
+                    if token.starts_with("tenant_") {
+                        token.to_string()
+                    } else {
+                        "tenant_123".to_string()
+                    }
+                }
+            } else {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "Invalid Authorization format"})),
+                )
+                    .into_response();
+            }
+        } else {
+            if std::env::var("AEGIS_JWT_REQUIRED")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+            {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "Missing authentication"})),
+                )
+                    .into_response();
+            } else {
+                "tenant_123".to_string()
+            }
+        }
+    };
+
+    ws.on_upgrade(move |socket| handle_socket(socket, state, tenant_id))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, tenant_id: String) {
+    let mut rx = state.events.subscribe();
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(ev) => {
+                        if ev.tenant_id == tenant_id {
+                            if let Ok(msg) = serde_json::to_string(&ev) {
+                                if socket.send(Message::Text(msg)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+pub async fn get_tenant_stats(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::get_tenant_stats(&state.pool, &tenant_id).await {
+        Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
+        Err(e) => {
+            error!("Failed to get tenant stats: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn get_openapi_spec() -> impl IntoResponse {
+    let spec = json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "AegisAgent Control Plane API",
+            "version": env!("CARGO_PKG_VERSION"),
+            "description": "API specification for AegisAgent Gateway - fail-closed approval integrity, deterministic trust-provenance gating, and verifiable action receipts."
+        },
+        "paths": {
+            "/health": {
+                "get": {
+                    "summary": "Health status",
+                    "responses": {
+                        "200": { "description": "System is healthy" }
+                    }
+                }
+            },
+            "/v1/version": {
+                "get": {
+                    "summary": "Version information",
+                    "responses": {
+                        "200": { "description": "Version details" }
+                    }
+                }
+            },
+            "/v1/agents/register": {
+                "post": {
+                    "summary": "Register a new agent",
+                    "responses": {
+                        "201": { "description": "Agent registered successfully" }
+                    }
+                }
+            },
+            "/v1/agents": {
+                "get": {
+                    "summary": "List agents",
+                    "responses": {
+                        "200": { "description": "List of agents" }
+                    }
+                }
+            },
+            "/v1/agents/{id}": {
+                "get": {
+                    "summary": "Get agent details",
+                    "responses": {
+                        "200": { "description": "Agent details" }
+                    }
+                },
+                "patch": {
+                    "summary": "Update agent metadata",
+                    "responses": {
+                        "200": { "description": "Agent updated" }
+                    }
+                },
+                "delete": {
+                    "summary": "Delete an agent",
+                    "responses": {
+                        "200": { "description": "Agent deleted" }
+                    }
+                }
+            },
+            "/v1/agents/{id}/freeze": {
+                "post": {
+                    "summary": "Freeze an agent",
+                    "responses": {
+                        "200": { "description": "Agent frozen" }
+                    }
+                }
+            },
+            "/v1/agents/{id}/unfreeze": {
+                "post": {
+                    "summary": "Unfreeze an agent",
+                    "responses": {
+                        "200": { "description": "Agent unfrozen" }
+                    }
+                }
+            },
+            "/v1/agents/{id}/revoke": {
+                "post": {
+                    "summary": "Revoke an agent",
+                    "responses": {
+                        "200": { "description": "Agent revoked" }
+                    }
+                }
+            },
+            "/v1/tools": {
+                "post": {
+                    "summary": "Register a tool",
+                    "responses": {
+                        "200": { "description": "Tool registered" }
+                    }
+                }
+            },
+            "/v1/mcp/servers": {
+                "get": {
+                    "summary": "List MCP servers",
+                    "responses": {
+                        "200": { "description": "List of MCP servers" }
+                    }
+                },
+                "post": {
+                    "summary": "Register an MCP server",
+                    "responses": {
+                        "201": { "description": "MCP server registered" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}": {
+                "get": {
+                    "summary": "Get MCP server details",
+                    "responses": {
+                        "200": { "description": "MCP server details" }
+                    }
+                },
+                "put": {
+                    "summary": "Update MCP server metadata",
+                    "responses": {
+                        "200": { "description": "MCP server updated" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/tools": {
+                "get": {
+                    "summary": "Get MCP tool manifest",
+                    "responses": {
+                        "200": { "description": "Tool manifest" }
+                    }
+                },
+                "post": {
+                    "summary": "Discover MCP tools",
+                    "responses": {
+                        "200": { "description": "Tools discovered" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/tools/{tool_key}/approve": {
+                "post": {
+                    "summary": "Approve an MCP tool",
+                    "responses": {
+                        "200": { "description": "Tool approved" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/tools/{tool_key}/disable": {
+                "post": {
+                    "summary": "Disable an MCP tool",
+                    "responses": {
+                        "200": { "description": "Tool disabled" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/quarantine": {
+                "post": {
+                    "summary": "Quarantine MCP server",
+                    "responses": {
+                        "200": { "description": "Server quarantined" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/restore": {
+                "post": {
+                    "summary": "Restore MCP server",
+                    "responses": {
+                        "200": { "description": "Server restored" }
+                    }
+                }
+            },
+            "/v1/authorize": {
+                "post": {
+                    "summary": "Authorize tool action",
+                    "responses": {
+                        "200": { "description": "Authorization decision" }
+                    }
+                }
+            },
+            "/v1/decisions": {
+                "get": {
+                    "summary": "List decisions",
+                    "responses": {
+                        "200": { "description": "List of decisions" }
+                    }
+                }
+            },
+            "/v1/decisions/{id}": {
+                "get": {
+                    "summary": "Get decision details",
+                    "responses": {
+                        "200": { "description": "Decision details" }
+                    }
+                }
+            },
+            "/v1/policies": {
+                "get": {
+                    "summary": "List custom policies",
+                    "responses": {
+                        "200": { "description": "List of custom policies" }
+                    }
+                },
+                "post": {
+                    "summary": "Create custom Cedar policy",
+                    "responses": {
+                        "201": { "description": "Policy created" }
+                    }
+                }
+            },
+            "/v1/policies/{id}": {
+                "put": {
+                    "summary": "Update Cedar policy",
+                    "responses": {
+                        "200": { "description": "Policy updated" }
+                    }
+                },
+                "delete": {
+                    "summary": "Delete custom policy",
+                    "responses": {
+                        "200": { "description": "Policy deleted" }
+                    }
+                }
+            },
+            "/v1/policies/reload": {
+                "post": {
+                    "summary": "Reload global policies",
+                    "responses": {
+                        "200": { "description": "Policies reloaded" }
+                    }
+                }
+            },
+            "/v1/approvals": {
+                "get": {
+                    "summary": "List approvals",
+                    "responses": {
+                        "200": { "description": "List of approvals" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}": {
+                "get": {
+                    "summary": "Get approval details",
+                    "responses": {
+                        "200": { "description": "Approval details" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/approve": {
+                "post": {
+                    "summary": "Approve approval request",
+                    "responses": {
+                        "200": { "description": "Approved successfully" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/reject": {
+                "post": {
+                    "summary": "Reject approval request",
+                    "responses": {
+                        "200": { "description": "Rejected successfully" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/edit": {
+                "post": {
+                    "summary": "Edit parameters bound to approval",
+                    "responses": {
+                        "200": { "description": "Approval edited" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/consume": {
+                "post": {
+                    "summary": "Consume single-use approval",
+                    "responses": {
+                        "200": { "description": "Approval consumed" }
+                    }
+                }
+            },
+            "/v1/runs/{id}/timeline": {
+                "get": {
+                    "summary": "Get timeline events",
+                    "responses": {
+                        "200": { "description": "List of timeline events" }
+                    }
+                }
+            },
+            "/v1/audit/events": {
+                "get": {
+                    "summary": "Get audit events log",
+                    "responses": {
+                        "200": { "description": "List of audit events" }
+                    }
+                }
+            },
+            "/v1/receipts": {
+                "get": {
+                    "summary": "List action receipts",
+                    "responses": {
+                        "200": { "description": "List of receipts" }
+                    }
+                }
+            },
+            "/v1/receipts/{id}": {
+                "get": {
+                    "summary": "Get receipt details",
+                    "responses": {
+                        "200": { "description": "Receipt details" }
+                    }
+                }
+            },
+            "/v1/receipts/{id}/verify": {
+                "get": {
+                    "summary": "Verify single receipt hash integrity",
+                    "responses": {
+                        "200": { "description": "Verification status" }
+                    }
+                }
+            },
+            "/v1/receipts/verify-chain": {
+                "post": {
+                    "summary": "Verify sequential receipt chain linkage",
+                    "responses": {
+                        "200": { "description": "Chain verification result" }
+                    }
+                }
+            },
+            "/v1/alerts": {
+                "get": {
+                    "summary": "List SOC alerts",
+                    "responses": {
+                        "200": { "description": "List of SOC alerts" }
+                    }
+                }
+            },
+            "/v1/incidents": {
+                "get": {
+                    "summary": "List SOC incidents",
+                    "responses": {
+                        "200": { "description": "List of SOC incidents" }
+                    }
+                }
+            },
+            "/v1/incidents/{id}": {
+                "get": {
+                    "summary": "Get SOC incident details",
+                    "responses": {
+                        "200": { "description": "Incident details" }
+                    }
+                }
+            },
+            "/v1/incidents/{id}/close": {
+                "post": {
+                    "summary": "Close SOC incident",
+                    "responses": {
+                        "200": { "description": "Incident closed" }
+                    }
+                }
+            },
+            "/v1/incidents/{id}/narrate": {
+                "get": {
+                    "summary": "Narrate closed SOC incident RCA",
+                    "responses": {
+                        "200": { "description": "RCANarrator output" }
+                    }
+                }
+            },
+            "/v1/soc/summary": {
+                "get": {
+                    "summary": "Get aggregated SOC counts summary",
+                    "responses": {
+                        "200": { "description": "Aggregate SOC summary" }
+                    }
+                }
+            },
+            "/v1/tenants": {
+                "post": {
+                    "summary": "Create new tenant",
+                    "responses": {
+                        "201": { "description": "Tenant created" }
+                    }
+                }
+            },
+            "/v1/tenants/{id}": {
+                "get": {
+                    "summary": "Get tenant info details",
+                    "responses": {
+                        "200": { "description": "Tenant info details" }
+                    }
+                }
+            },
+            "/v1/ws/events": {
+                "get": {
+                    "summary": "WebSocket live events stream",
+                    "responses": {
+                        "101": { "description": "Protocol upgraded to WebSocket" }
+                    }
+                }
+            },
+            "/v1/stats": {
+                "get": {
+                    "summary": "Get tenant statistics summary",
+                    "responses": {
+                        "200": { "description": "Tenant stats" }
+                    }
+                }
+            }
+        }
+    });
+
+    (StatusCode::OK, Json(spec))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::events;
     use axum::body::to_bytes;
+    use axum::extract::FromRequestParts;
     use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_jwt_tenant_extraction() {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+
+        let secret = "test_jwt_secret_1234567890";
+        std::env::set_var("AEGIS_JWT_SECRET", secret);
+        std::env::set_var("AEGIS_JWT_REQUIRED", "true");
+
+        let claims = Claims {
+            sub: "tenant_from_sub".to_string(),
+            tenant_id: Some("tenant_from_claim".to_string()),
+            exp: (Utc::now() + Duration::hours(1)).timestamp() as usize,
+        };
+
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        // Test validate_jwt helper directly
+        let extracted = validate_jwt(&token);
+        assert_eq!(extracted, Some("tenant_from_claim".to_string()));
+
+        // Test validate_jwt with sub fallback
+        let claims_sub_only = Claims {
+            sub: "tenant_from_sub_fallback".to_string(),
+            tenant_id: None,
+            exp: (Utc::now() + Duration::hours(1)).timestamp() as usize,
+        };
+        let token_sub = encode(
+            &Header::default(),
+            &claims_sub_only,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+        let extracted_sub = validate_jwt(&token_sub);
+        assert_eq!(extracted_sub, Some("tenant_from_sub_fallback".to_string()));
+
+        // Test validate_jwt with wrong secret
+        let wrong_token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret("wrong_secret".as_bytes()),
+        )
+        .unwrap();
+        assert_eq!(validate_jwt(&wrong_token), None);
+
+        // Test extractor
+        let request = axum::http::Request::builder()
+            .header("Authorization", format!("Bearer {}", token))
+            .body(())
+            .unwrap();
+
+        let (mut parts, _) = request.into_parts();
+        let tenant = TenantId::from_request_parts(&mut parts, &()).await.unwrap();
+        assert_eq!(tenant.0, "tenant_from_claim");
+
+        // Test extractor with invalid token when JWT is required
+        let request_invalid = axum::http::Request::builder()
+            .header("Authorization", "Bearer invalid_token")
+            .body(())
+            .unwrap();
+        let (mut parts_invalid, _) = request_invalid.into_parts();
+        let res = TenantId::from_request_parts(&mut parts_invalid, &()).await;
+        assert!(res.is_err());
+        let (status, _) = res.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Clean up env vars
+        std::env::remove_var("AEGIS_JWT_SECRET");
+        std::env::remove_var("AEGIS_JWT_REQUIRED");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter() {
+        let limiter = RateLimiter::new(2.0, 10.0);
+        assert!(limiter.check_rate_limit("t1"));
+        assert!(limiter.check_rate_limit("t1"));
+        assert!(!limiter.check_rate_limit("t1")); // bucket exhausted
+
+        // Different tenant has its own bucket
+        assert!(limiter.check_rate_limit("t2"));
+
+        // Refill check
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+        assert!(limiter.check_rate_limit("t1")); // refilled at least 1 token
+    }
+
+    #[tokio::test]
+    async fn test_quota_manager() {
+        let quota = QuotaManager::new(2, 1); // limit 2 requests per 1 second
+        assert!(quota.check_quota("t1"));
+        assert!(quota.check_quota("t1"));
+        assert!(!quota.check_quota("t1")); // quota exceeded
+
+        // Different tenant has its own quota
+        assert!(quota.check_quota("t2"));
+
+        // Reset check after window passes
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+        assert!(quota.check_quota("t1")); // window reset
+    }
+
+    #[tokio::test]
+    async fn test_authorize_action_rate_limiting_and_quota() {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events("limit_test").await;
+        // Drain events in background
+        tokio::spawn(events::drain(events_rx, state_raw.pool.clone()));
+
+        // Create a custom app state with rate limit capacity = 1
+        let policy_engine1 = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine: policy_engine1,
+            events: state_raw.events.clone(),
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1.0, 1.0),
+            quota_manager: QuotaManager::new(0, 86400), // quota disabled
+        });
+
+        let request = mcp_authorize_request("mcp:server:tool", "read");
+        let headers = agent_headers(&agent_token, &tenant_id);
+
+        // First request is allowed through rate limiter
+        let resp1 = authorize_action(State(state.clone()), headers.clone(), Json(request.clone()))
+            .await
+            .into_response();
+        // Since we don't have "mcp:server:tool" registered/approved in the database for this test setup,
+        // it will be denied (403 or similar) or return require_approval/etc., but NOT 429!
+        assert_ne!(resp1.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Immediate second request is blocked by rate limiter (429)
+        let resp2 = authorize_action(State(state.clone()), headers.clone(), Json(request.clone()))
+            .await
+            .into_response();
+        assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Now test quota
+        let policy_engine2 = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state_quota = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine: policy_engine2,
+            events: state_raw.events.clone(),
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(100.0, 100.0), // high rate limit
+            quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
+        });
+
+        // First request is allowed through quota
+        let resp3 = authorize_action(
+            State(state_quota.clone()),
+            headers.clone(),
+            Json(request.clone()),
+        )
+        .await
+        .into_response();
+        assert_ne!(resp3.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Second request is blocked by quota (429)
+        let resp4 = authorize_action(
+            State(state_quota.clone()),
+            headers.clone(),
+            Json(request.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp4.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
 
     async fn setup_state(test_name: &str) -> (Arc<AppState>, String, String) {
         let (state, tenant_id, agent_token, events_rx) = setup_state_with_events(test_name).await;
@@ -2640,6 +4253,9 @@ mod tests {
             policy_engine,
             events,
             metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -2857,7 +4473,7 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
@@ -2871,7 +4487,7 @@ mod tests {
         // First consume succeeds.
         let first = consume_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             None,
         )
@@ -2882,7 +4498,7 @@ mod tests {
         // Second consume is rejected — single-use.
         let second = consume_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             None,
         )
@@ -2911,7 +4527,7 @@ mod tests {
         // The /verify endpoint recomputes the hash and confirms integrity.
         let response = verify_receipt(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(receipt_id.clone()),
         )
         .await
@@ -2980,7 +4596,7 @@ mod tests {
 
         let response = verify_receipt(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(rec.id.clone()),
         )
         .await
@@ -3065,7 +4681,7 @@ mod tests {
         // get_approval reports EXPIRED for the still-pending, past-window approval.
         let get_resp = get_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
         )
         .await
@@ -3077,7 +4693,7 @@ mod tests {
         // approve_approval refuses to grant an expired approval.
         let approve_resp = approve_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
@@ -3128,7 +4744,7 @@ mod tests {
 
         let status_response = get_approval(
             State(state),
-            agent_headers("tenant_routes", &tenant_id),
+            TenantId("tenant_routes".to_string()),
             Path(approval.approval_id),
         )
         .await
@@ -3302,7 +4918,7 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
@@ -3315,7 +4931,7 @@ mod tests {
 
         let first = consume_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             None,
         )
@@ -3335,7 +4951,7 @@ mod tests {
 
         let replay = consume_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             None,
         )
@@ -3390,7 +5006,7 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
@@ -3403,7 +5019,7 @@ mod tests {
 
         let first = consume_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             None,
         )
@@ -3414,7 +5030,7 @@ mod tests {
         // The replay: a second consume of the now-used approval.
         let replay = consume_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             None,
         )
@@ -3482,7 +5098,7 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
@@ -3621,7 +5237,7 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
@@ -3642,7 +5258,7 @@ mod tests {
 
         let mismatch_resp = consume_approval(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             Path(approval_id),
             Some(Json(ConsumeApprovalBody {
                 claimed_action_hash: Some(
@@ -3677,7 +5293,7 @@ mod tests {
 
         let response = list_alerts(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             axum::extract::RawQuery(None),
         )
         .await
@@ -3696,7 +5312,7 @@ mod tests {
 
         let response = list_incidents(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             axum::extract::RawQuery(None),
         )
         .await
@@ -3729,7 +5345,7 @@ mod tests {
 
         let response = list_alerts(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             axum::extract::RawQuery(None),
         )
         .await
@@ -3744,6 +5360,293 @@ mod tests {
         assert_eq!(arr[0]["rule"], "confused_deputy_block");
         assert_eq!(arr[0]["severity"], "high");
         assert_eq!(arr[0]["tenant_id"], tenant_id.as_str());
+    }
+
+    #[tokio::test]
+    async fn test_list_agents_returns_tenant_scoped_and_paginated_agents() {
+        let (state, tenant_id, _agent_token) = setup_state("list_agents_route").await;
+
+        // Seed 3 agents for this tenant
+        for idx in 1..=3 {
+            let agent = AgentRecord {
+                id: format!("agent_id_{}", idx),
+                tenant_id: tenant_id.clone(),
+                agent_key: format!("agent-key-{}", idx),
+                agent_token: format!("agent-token-{}", idx),
+                name: format!("Agent Name {}", idx),
+                owner_team: Some("platform".to_string()),
+                owner_email: None,
+                environment: "production".to_string(),
+                framework: None,
+                model_provider: None,
+                model_name: None,
+                purpose: None,
+                risk_tier: "high".to_string(),
+                status: "active".to_string(),
+                created_at: Utc::now() - Duration::hours(idx), // older first
+                updated_at: Utc::now(),
+            };
+            db::insert_agent(&state.pool, &agent).await.unwrap();
+        }
+
+        // Seed an agent for another tenant to test isolation
+        let other_tenant = "other_tenant_id".to_string();
+        db::register_tenant(&state.pool, &other_tenant, "Other Tenant", "developer")
+            .await
+            .unwrap();
+        let other_agent = AgentRecord {
+            id: "other_agent_id".to_string(),
+            tenant_id: other_tenant.clone(),
+            agent_key: "other-agent-key".to_string(),
+            agent_token: "other-agent-token".to_string(),
+            name: "Other Agent Name".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &other_agent).await.unwrap();
+
+        // 1. Check all agents for tenant_id (should be 4 total including the default setup agent)
+        let response = list_agents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = json.as_array().unwrap();
+        // 3 newly seeded agents + 1 setup agent = 4
+        assert_eq!(arr.len(), 4);
+
+        // 2. Check pagination (limit=2)
+        let response_paginated = list_agents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=2".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_paginated.status(), StatusCode::OK);
+        let body_p = to_bytes(response_paginated.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_p: serde_json::Value = serde_json::from_slice(&body_p).unwrap();
+        assert_eq!(json_p.as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_agent_detail_route() {
+        let (state, tenant_id, _agent_token) = setup_state("get_agent_route").await;
+
+        // Seed an agent
+        let agent = AgentRecord {
+            id: "get_agent_test_id".to_string(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "get-agent-key".to_string(),
+            agent_token: "get-agent-token".to_string(),
+            name: "Get Agent Name".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        // 1. Fetch existing agent (should return 200)
+        let response = get_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("get_agent_test_id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let fetched: AgentRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(fetched.id, "get_agent_test_id");
+        assert_eq!(fetched.name, "Get Agent Name");
+
+        // 2. Fetch non-existing agent (should return 404)
+        let response_404 = get_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("non_existent_id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_404.status(), StatusCode::NOT_FOUND);
+
+        // 3. Fetch cross-tenant agent (should return 404)
+        let other_tenant = "other_tenant_id".to_string();
+        let response_cross = get_agent(
+            State(state.clone()),
+            TenantId(other_tenant),
+            Path("get_agent_test_id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_cross.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_patch_agent_route() {
+        let (state, tenant_id, _agent_token) = setup_state("patch_agent_route").await;
+
+        // Seed an agent
+        let agent = AgentRecord {
+            id: "patch_agent_test_id".to_string(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "patch-agent-key".to_string(),
+            agent_token: "patch-agent-token".to_string(),
+            name: "Original Name".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        // 1. Patch name and environment
+        let patch_request = PatchAgentRequest {
+            name: Some("Updated Name".to_string()),
+            owner_team: Some("new-team".to_string()),
+            owner_email: None,
+            environment: Some("staging".to_string()),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: None,
+            status: Some("frozen".to_string()),
+        };
+
+        let response = patch_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("patch_agent_test_id".to_string()),
+            Json(patch_request),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let updated: AgentRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated.name, "Updated Name");
+        assert_eq!(updated.owner_team, Some("new-team".to_string()));
+        assert_eq!(updated.environment, "staging");
+        assert_eq!(updated.status, "frozen");
+
+        // Verify it was actually updated in the database
+        let db_agent = db::get_agent_by_id(&state.pool, &tenant_id, "patch_agent_test_id")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(db_agent.name, "Updated Name");
+        assert_eq!(db_agent.environment, "staging");
+        assert_eq!(db_agent.status, "frozen");
+
+        // 2. Patch non-existing agent (should return 404)
+        let response_404 = patch_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("non_existent_id".to_string()),
+            Json(PatchAgentRequest {
+                name: Some("New Name".to_string()),
+                owner_team: None,
+                owner_email: None,
+                environment: None,
+                framework: None,
+                model_provider: None,
+                model_name: None,
+                purpose: None,
+                risk_tier: None,
+                status: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_delete_agent_route() {
+        let (state, tenant_id, _agent_token) = setup_state("delete_agent_route").await;
+
+        // Seed an agent
+        let agent = AgentRecord {
+            id: "delete_agent_test_id".to_string(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "delete-agent-key".to_string(),
+            agent_token: "delete-agent-token".to_string(),
+            name: "Delete Test Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        // 1. Delete the agent
+        let response = delete_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("delete_agent_test_id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 2. Fetch the agent (should return 404 because it is soft-deleted)
+        let response_get = get_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("delete_agent_test_id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_get.status(), StatusCode::NOT_FOUND);
+
+        // 3. Delete non-existing agent (should return 404)
+        let response_404 = delete_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("non_existent_id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_404.status(), StatusCode::NOT_FOUND);
     }
 
     /// Inserting a SOC incident directly then calling list_incidents via the route
@@ -3771,7 +5674,7 @@ mod tests {
 
         let response = list_incidents(
             State(state.clone()),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             axum::extract::RawQuery(None),
         )
         .await
@@ -3850,9 +5753,13 @@ mod tests {
             format!("Bearer {}", tenant_id).parse().unwrap(),
         );
 
-        let response = narrate_incident(State(state), headers, Path("inc_narrate_1".to_string()))
-            .await
-            .into_response();
+        let response = narrate_incident(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("inc_narrate_1".to_string()),
+        )
+        .await
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
 
@@ -3886,9 +5793,13 @@ mod tests {
             format!("Bearer {}", tenant_id).parse().unwrap(),
         );
 
-        let response = narrate_incident(State(state), headers, Path("inc_other".to_string()))
-            .await
-            .into_response();
+        let response = narrate_incident(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("inc_other".to_string()),
+        )
+        .await
+        .into_response();
 
         assert_eq!(
             response.status(),
@@ -3910,9 +5821,13 @@ mod tests {
             "Authorization",
             format!("Bearer {}", tenant_id).parse().unwrap(),
         );
-        let response = close_incident(State(state), headers, Path(incident_id.to_string()))
-            .await
-            .into_response();
+        let response = close_incident(
+            State(state),
+            TenantId(tenant_id.to_string()),
+            Path(incident_id.to_string()),
+        )
+        .await
+        .into_response();
         let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -3994,7 +5909,7 @@ mod tests {
     ) -> (StatusCode, serde_json::Value) {
         let response = get_incident(
             State(state),
-            agent_headers(tenant_id, tenant_id),
+            TenantId(tenant_id.to_string()),
             Path(incident_id.to_string()),
         )
         .await
@@ -4104,7 +6019,7 @@ mod tests {
 
         let response = list_alerts(
             State(state),
-            agent_headers(&tenant_id, &tenant_id),
+            TenantId(tenant_id.clone()),
             axum::extract::RawQuery(Some("severity=high".to_string())),
         )
         .await
@@ -4161,7 +6076,7 @@ mod tests {
             .await
             .unwrap();
 
-        let response = soc_summary(State(state), agent_headers(&tenant_id, &tenant_id))
+        let response = soc_summary(State(state), TenantId(tenant_id.clone()))
             .await
             .into_response();
 
@@ -4180,7 +6095,7 @@ mod tests {
     async fn soc_summary_returns_zeros_when_empty() {
         let (state, tenant_id, _) = setup_state("soc_summary_empty").await;
 
-        let response = soc_summary(State(state), agent_headers(&tenant_id, &tenant_id))
+        let response = soc_summary(State(state), TenantId(tenant_id.clone()))
             .await
             .into_response();
 
@@ -4259,15 +6174,13 @@ mod tests {
         .await
         .unwrap();
 
-        let headers = agent_headers(&tenant_id, &tenant_id);
-
         // 1) First discovery pins the manifest — no drift.
         let req1 = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "medium")],
         };
         discover_mcp_tools(
             State(state.clone()),
-            headers.clone(),
+            TenantId(tenant_id.clone()),
             Path("github-mcp".to_string()),
             Json(req1),
         )
@@ -4279,7 +6192,7 @@ mod tests {
         };
         discover_mcp_tools(
             State(state.clone()),
-            headers.clone(),
+            TenantId(tenant_id.clone()),
             Path("github-mcp".to_string()),
             Json(req2),
         )
@@ -4291,7 +6204,7 @@ mod tests {
         };
         discover_mcp_tools(
             State(state.clone()),
-            headers,
+            TenantId(tenant_id.clone()),
             Path("github-mcp".to_string()),
             Json(req3),
         )
@@ -4397,6 +6310,863 @@ mod tests {
             .contains(&"mcp_server_quarantined".to_string()));
     }
 
+    #[tokio::test]
+    async fn authorize_action_denies_frozen_and_revoked_agent() {
+        let (state, tenant_id, agent_token) = setup_state("agent_frozen_revoked").await;
+
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_id = agent.id;
+
+        // Baseline: active agent should be allowed
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let allowed =
+            call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        assert_eq!(allowed.decision, "allow");
+
+        // Freeze the agent
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "frozen")
+                .await
+                .unwrap()
+        );
+
+        // Frozen agent should be denied
+        let frozen_denied =
+            call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        assert_eq!(frozen_denied.decision, "deny");
+        assert!(frozen_denied
+            .matched_policies
+            .contains(&"agent_frozen".to_string()));
+
+        // Revoke the agent
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "revoked")
+                .await
+                .unwrap()
+        );
+
+        // Revoked agent should be denied
+        let revoked_denied =
+            call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        assert_eq!(revoked_denied.decision, "deny");
+        assert!(revoked_denied
+            .matched_policies
+            .contains(&"agent_revoked".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_and_get_decisions_route() {
+        let (state, tenant_id, agent_token) = setup_state("list_get_decisions").await;
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_id = agent.id;
+
+        let agent_id2 = Uuid::new_v4().to_string();
+        let agent2 = AgentRecord {
+            id: agent_id2.clone(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "second-agent".to_string(),
+            agent_token: "tok_2".to_string(),
+            name: "Second Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent2).await.unwrap();
+
+        let decision_id1 = Uuid::new_v4().to_string();
+        let record1 = DecisionRecord {
+            id: decision_id1.clone(),
+            tenant_id: tenant_id.clone(),
+            agent_id: agent_id.clone(),
+            user_id: Some("user_1".to_string()),
+            run_id: Some("run_1".to_string()),
+            trace_id: Some("trace_1".to_string()),
+            skill: "fs".to_string(),
+            action: "read".to_string(),
+            resource: Some("foo.txt".to_string()),
+            input_json: "{}".to_string(),
+            decision: "allow".to_string(),
+            risk_score: Some(1),
+            reason: Some("ok".to_string()),
+            matched_policy_ids: None,
+            created_at: Utc::now(),
+        };
+        db::insert_decision(&state.pool, &record1).await.unwrap();
+
+        let decision_id2 = Uuid::new_v4().to_string();
+        let record2 = DecisionRecord {
+            id: decision_id2.clone(),
+            tenant_id: tenant_id.clone(),
+            agent_id: agent_id2.clone(),
+            user_id: Some("user_2".to_string()),
+            run_id: Some("run_2".to_string()),
+            trace_id: Some("trace_2".to_string()),
+            skill: "http".to_string(),
+            action: "get".to_string(),
+            resource: Some("http://example.com".to_string()),
+            input_json: "{}".to_string(),
+            decision: "deny".to_string(),
+            risk_score: Some(10),
+            reason: Some("bad site".to_string()),
+            matched_policy_ids: None,
+            created_at: Utc::now() - Duration::seconds(10),
+        };
+        db::insert_decision(&state.pool, &record2).await.unwrap();
+
+        // 1. List decisions without filters
+        let response = list_decisions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let list = json.as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        // Order is newest first, so record1 (created Utc::now()) should be first
+        assert_eq!(list[0]["id"].as_str(), Some(decision_id1.as_str()));
+        assert_eq!(list[1]["id"].as_str(), Some(decision_id2.as_str()));
+
+        // 2. List decisions with filter: agent_id
+        let response_filter = list_decisions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some(format!("agent_id={}", agent_id2))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_filter.status(), StatusCode::OK);
+        let body_filter = to_bytes(response_filter.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_filter: serde_json::Value = serde_json::from_slice(&body_filter).unwrap();
+        let list_filter = json_filter.as_array().unwrap();
+        assert_eq!(list_filter.len(), 1);
+        assert_eq!(list_filter[0]["id"].as_str(), Some(decision_id2.as_str()));
+
+        // 3. Get decision detail success
+        let response_detail = get_decision(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(decision_id1.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_detail.status(), StatusCode::OK);
+        let body_detail = to_bytes(response_detail.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_detail: serde_json::Value = serde_json::from_slice(&body_detail).unwrap();
+        assert_eq!(json_detail["id"].as_str(), Some(decision_id1.as_str()));
+
+        // 4. Get decision detail cross-tenant (should return 404)
+        let other_tenant = "tenant_other_decisions";
+        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
+            .await
+            .unwrap();
+        let response_cross = get_decision(
+            State(state.clone()),
+            TenantId(other_tenant.to_string()),
+            Path(decision_id1.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_cross.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_list_approvals_route() {
+        let (state, tenant_id, agent_token) = setup_state("list_approvals").await;
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_id = agent.id;
+
+        let decision_id1 = Uuid::new_v4().to_string();
+        let record_dec = DecisionRecord {
+            id: decision_id1.clone(),
+            tenant_id: tenant_id.clone(),
+            agent_id,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "fs".to_string(),
+            action: "write".to_string(),
+            resource: None,
+            input_json: "{}".to_string(),
+            decision: "require_approval".to_string(),
+            risk_score: None,
+            reason: None,
+            matched_policy_ids: None,
+            created_at: Utc::now(),
+        };
+        db::insert_decision(&state.pool, &record_dec).await.unwrap();
+
+        let approval_id1 = Uuid::new_v4().to_string();
+        let record1 = ApprovalRecord {
+            id: approval_id1.clone(),
+            tenant_id: tenant_id.clone(),
+            decision_id: decision_id1.clone(),
+            status: "created".to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: "{}".to_string(),
+            original_call_hash: "hash1".to_string(),
+            edited_skill_call: None,
+            expires_at: Some(Utc::now() + Duration::minutes(10)),
+            decided_at: None,
+            created_at: Utc::now(),
+        };
+        db::insert_approval(&state.pool, &record1).await.unwrap();
+
+        // Expired approval
+        let approval_id2 = Uuid::new_v4().to_string();
+        let record2 = ApprovalRecord {
+            id: approval_id2.clone(),
+            tenant_id: tenant_id.clone(),
+            decision_id: decision_id1.clone(),
+            status: "created".to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: "{}".to_string(),
+            original_call_hash: "hash2".to_string(),
+            edited_skill_call: None,
+            expires_at: Some(Utc::now() - Duration::minutes(10)),
+            decided_at: None,
+            created_at: Utc::now() - Duration::minutes(10),
+        };
+        db::insert_approval(&state.pool, &record2).await.unwrap();
+
+        // 1. List approvals (should only return non-expired record1)
+        let response = list_approvals(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let list = json.as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["approval_id"].as_str(), Some(approval_id1.as_str()));
+    }
+
+    #[tokio::test]
+    async fn test_list_and_get_receipts_route() {
+        let (state, tenant_id, _) = setup_state("list_get_receipts").await;
+
+        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
+            let mut r = unsigned_receipt_template(&tenant_id);
+            r.prev_receipt_hash = prev;
+            r.receipt_hash = compute_receipt_hash(&r);
+            r
+        })
+        .await
+        .unwrap();
+
+        // 1. List receipts
+        let response = list_receipts(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let list = json.as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["id"].as_str(), Some(rec.id.as_str()));
+
+        // 2. Get receipt detail success
+        let response_detail = get_receipt(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(rec.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_detail.status(), StatusCode::OK);
+        let body_detail = to_bytes(response_detail.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_detail: serde_json::Value = serde_json::from_slice(&body_detail).unwrap();
+        assert_eq!(json_detail["id"].as_str(), Some(rec.id.as_str()));
+
+        // 3. Get receipt detail cross-tenant (should return 404)
+        let other_tenant = "tenant_other_receipts";
+        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
+            .await
+            .unwrap();
+        let response_cross = get_receipt(
+            State(state.clone()),
+            TenantId(other_tenant.to_string()),
+            Path(rec.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_cross.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_verify_receipt_chain_route() {
+        let (state, tenant_id, _) = setup_state("verify_chain_route").await;
+
+        let corpus_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/receipt_chain_vectors.json"
+        );
+        let raw = std::fs::read_to_string(corpus_path).expect("shared receipt corpus must exist");
+        let corpus: Value = serde_json::from_str(&raw).unwrap();
+        let receipts = corpus["receipts"].as_array().unwrap().clone();
+
+        // 1. Verify successful corpus chain
+        let payload = VerifyChainRequest {
+            receipts: receipts.clone(),
+        };
+        let response = verify_receipt_chain(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["verified"].as_bool(), Some(true));
+
+        // 2. Tampered field (hash mismatch)
+        let mut tampered_receipts = receipts.clone();
+        if let Some(obj) = tampered_receipts[1].as_object_mut() {
+            obj.insert("action".to_string(), json!("delete_repo"));
+        }
+        let payload_tampered = VerifyChainRequest {
+            receipts: tampered_receipts,
+        };
+        let response_tampered = verify_receipt_chain(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload_tampered),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_tampered.status(), StatusCode::OK);
+        let body_tampered = to_bytes(response_tampered.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_tampered: Value = serde_json::from_slice(&body_tampered).unwrap();
+        assert_eq!(json_tampered["verified"].as_bool(), Some(false));
+
+        // 3. Mismatched tenant validation
+        let mut tenant_receipts = receipts.clone();
+        if let Some(obj) = tenant_receipts[0].as_object_mut() {
+            obj.insert("tenant_id".to_string(), json!("tenant_other"));
+        }
+        let payload_tenant = VerifyChainRequest {
+            receipts: tenant_receipts,
+        };
+        let response_tenant = verify_receipt_chain(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload_tenant),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_tenant.status(), StatusCode::OK);
+        let body_tenant = to_bytes(response_tenant.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_tenant: Value = serde_json::from_slice(&body_tenant).unwrap();
+        assert_eq!(json_tenant["verified"].as_bool(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_policy_crud_and_reload_route() {
+        let (state, tenant_id, _) = setup_state("policy_crud_reload").await;
+
+        // 1. List policies (initially empty)
+        let response = list_policies(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+
+        // 2. Create custom Cedar policy
+        let payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+
+        // 3. Create invalid policy (should return 400)
+        let payload_invalid = CreatePolicyRequest {
+            policy_key: "invalid".to_string(),
+            name: "Invalid".to_string(),
+            body: "permit (invalid syntax);".to_string(),
+        };
+        let response_invalid = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload_invalid),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_invalid.status(), StatusCode::BAD_REQUEST);
+
+        // 4. List policies (should contain 1 policy)
+        let response_list = list_policies(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response_list.status(), StatusCode::OK);
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_list: Value = serde_json::from_slice(&body_list).unwrap();
+        assert_eq!(json_list.as_array().unwrap().len(), 1);
+
+        // 5. Update policy (change status to inactive)
+        let payload_update = UpdatePolicyRequest {
+            policy_key: None,
+            name: None,
+            body: None,
+            status: Some("inactive".to_string()),
+        };
+        let response_update = update_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+            Json(payload_update),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update.status(), StatusCode::OK);
+
+        // 6. Delete policy
+        let response_delete = delete_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_delete.status(), StatusCode::OK);
+
+        // 7. Delete non-existent policy (should return 404)
+        let response_delete_404 = delete_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_tenant_crud_route() {
+        let (state, tenant_id, _) = setup_state("tenant_crud_route").await;
+
+        // 1. Create a new tenant
+        let new_tenant_id = "tenant_test_xyz";
+        let create_payload = CreateTenantRequest {
+            id: new_tenant_id.to_string(),
+            name: "XYZ Corporation".to_string(),
+            plan: "enterprise".to_string(),
+        };
+
+        let create_resp = create_tenant(State(state.clone()), Json(create_payload))
+            .await
+            .into_response();
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let body = to_bytes(create_resp.into_body(), usize::MAX).await.unwrap();
+        let record: TenantRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(record.id, new_tenant_id);
+        assert_eq!(record.name, "XYZ Corporation");
+        assert_eq!(record.plan, "enterprise");
+
+        // 2. Create again (should conflict)
+        let create_payload_dup = CreateTenantRequest {
+            id: new_tenant_id.to_string(),
+            name: "XYZ Corporation".to_string(),
+            plan: "enterprise".to_string(),
+        };
+        let create_resp_dup = create_tenant(State(state.clone()), Json(create_payload_dup))
+            .await
+            .into_response();
+        assert_eq!(create_resp_dup.status(), StatusCode::CONFLICT);
+
+        // 3. Get tenant info
+        let get_resp = get_tenant(
+            State(state.clone()),
+            TenantId(new_tenant_id.to_string()),
+            Path(new_tenant_id.to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(get_resp.status(), StatusCode::OK);
+        let body_get = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+        let record_get: TenantRecord = serde_json::from_slice(&body_get).unwrap();
+        assert_eq!(record_get.id, new_tenant_id);
+
+        // 4. Get tenant info (cross-tenant, should return 404)
+        let get_resp_cross = get_tenant(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(new_tenant_id.to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(get_resp_cross.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_servers_metadata_route() {
+        let (state, tenant_id, _) = setup_state("mcp_servers_metadata_route").await;
+
+        // Register two MCP servers
+        let server_key1 = "github-mcp";
+        let payload1 = RegisterMcpServerRequest {
+            server_key: server_key1.to_string(),
+            name: "GitHub MCP Server".to_string(),
+            owner_team: Some("secops".to_string()),
+            transport: "stdio".to_string(),
+            source: Some("npx".to_string()),
+            trust_level: "semi_trusted".to_string(),
+            endpoint: "http://localhost:5001".to_string(),
+        };
+        let _ = register_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload1),
+        )
+        .await;
+
+        let server_key2 = "slack-mcp";
+        let payload2 = RegisterMcpServerRequest {
+            server_key: server_key2.to_string(),
+            name: "Slack MCP Server".to_string(),
+            owner_team: Some("comms".to_string()),
+            transport: "http".to_string(),
+            source: None,
+            trust_level: "trusted_internal".to_string(),
+            endpoint: "http://localhost:5002".to_string(),
+        };
+        let _ = register_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload2),
+        )
+        .await;
+
+        // 1. List MCP servers
+        let list_resp = list_mcp_servers(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=10".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let body_list = to_bytes(list_resp.into_body(), usize::MAX).await.unwrap();
+        let list: Vec<McpServerRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert_eq!(list.len(), 2);
+
+        // 2. Get specific MCP server
+        let get_resp = get_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(server_key1.to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(get_resp.status(), StatusCode::OK);
+        let body_get = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+        let s1: McpServerRecord = serde_json::from_slice(&body_get).unwrap();
+        assert_eq!(s1.server_key, server_key1);
+        assert_eq!(s1.trust_level, "semi_trusted");
+
+        // 3. Update MCP server metadata
+        let update_payload = UpdateMcpServerRequest {
+            name: Some("GitHub Enterprise MCP".to_string()),
+            owner_team: Some(Some("devops-core".to_string())),
+            transport: None,
+            source: None,
+            trust_level: Some("trusted_internal".to_string()),
+            endpoint: Some("http://internal-gateway:8081".to_string()),
+            status: Some("active".to_string()),
+        };
+        let update_resp = update_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(server_key1.to_string()),
+            Json(update_payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(update_resp.status(), StatusCode::OK);
+        let body_update = to_bytes(update_resp.into_body(), usize::MAX).await.unwrap();
+        let s_updated: McpServerRecord = serde_json::from_slice(&body_update).unwrap();
+        assert_eq!(s_updated.name, "GitHub Enterprise MCP");
+        assert_eq!(s_updated.owner_team, Some("devops-core".to_string()));
+        assert_eq!(s_updated.trust_level, "trusted_internal");
+        assert_eq!(s_updated.endpoint, "http://internal-gateway:8081");
+
+        // 4. Update non-existent (should return 404)
+        let update_404_resp = update_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("non-existent".to_string()),
+            Json(UpdateMcpServerRequest {
+                name: Some("xyz".to_string()),
+                owner_team: None,
+                transport: None,
+                source: None,
+                trust_level: None,
+                endpoint: None,
+                status: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(update_404_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_tenant_stats_route() {
+        let (state, tenant_id, agent_token) = setup_state("tenant_stats_route").await;
+
+        let auth_payload = AuthorizeRequest {
+            request_id: None,
+            agent: AuthorizeAgentContext {
+                id: "routes-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "github".to_string(),
+                action: "read_file".to_string(),
+                resource: Some("README.md".to_string()),
+                mutates_state: false,
+                parameters: json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            axum::http::HeaderValue::from_str(&format!("Bearer {}", agent_token)).unwrap(),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
+        );
+
+        let _ = authorize_action(State(state.clone()), headers, Json(auth_payload)).await;
+
+        // Query stats
+        let stats_resp = get_tenant_stats(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(stats_resp.status(), StatusCode::OK);
+        let body_stats = to_bytes(stats_resp.into_body(), usize::MAX).await.unwrap();
+        let stats: TenantStats = serde_json::from_slice(&body_stats).unwrap();
+        assert_eq!(stats.total_decisions, 1);
+        assert_eq!(stats.decisions_allow, 1);
+        assert_eq!(stats.total_agents, 1);
+    }
+
+    #[tokio::test]
+    async fn test_openapi_spec_route() {
+        let spec_resp = get_openapi_spec().await.into_response();
+        assert_eq!(spec_resp.status(), StatusCode::OK);
+        let body_spec = to_bytes(spec_resp.into_body(), usize::MAX).await.unwrap();
+        let spec_json: Value = serde_json::from_slice(&body_spec).unwrap();
+        assert_eq!(spec_json["openapi"], "3.1.0");
+        assert_eq!(spec_json["info"]["title"], "AegisAgent Control Plane API");
+    }
+
+    #[tokio::test]
+    async fn test_event_sink_broadcasting() {
+        let (sink, _rx) = EventSink::channel(100);
+        let mut sub = sink.subscribe();
+
+        let event = AseEvent {
+            event_id: "evt_test".to_string(),
+            occurred_at: "2026-06-02T12:00:00Z".to_string(),
+            tenant_id: "tenant_abc".to_string(),
+            kind: "authorize_decision".to_string(),
+            agent_id: "agent_abc".to_string(),
+            decision: "allow".to_string(),
+            tool: "github".to_string(),
+            action: "read".to_string(),
+            resource: None,
+            risk_score: 10,
+            reason: "test".to_string(),
+            run_id: None,
+            trace_id: None,
+            matched_policies: vec![],
+        };
+
+        sink.emit(event.clone());
+
+        let received = sub.recv().await.unwrap();
+        assert_eq!(received.event_id, "evt_test");
+        assert_eq!(received.tenant_id, "tenant_abc");
+    }
+
+    #[tokio::test]
+    async fn test_request_size_limit() {
+        use axum::http::{Request, StatusCode};
+        use axum::{extract::DefaultBodyLimit, routing::post, Router};
+        use tower::ServiceExt;
+
+        // Create a test app with a body limit of 10 bytes
+        let app = Router::new()
+            .route("/", post(|body: String| async { body }))
+            .layer(DefaultBodyLimit::max(10));
+
+        // Send a request with a small body (8 bytes)
+        let request_small = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("content-type", "text/plain")
+            .body(axum::body::Body::from("12345678"))
+            .unwrap();
+        let response_small = app.clone().oneshot(request_small).await.unwrap();
+        assert_eq!(response_small.status(), StatusCode::OK);
+
+        // Send a request with a large body (12 bytes)
+        let request_large = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("content-type", "text/plain")
+            .body(axum::body::Body::from("123456789012"))
+            .unwrap();
+        let response_large = app.oneshot(request_large).await.unwrap();
+        assert_eq!(response_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_request_timeout() {
+        use axum::http::{Request, StatusCode};
+        use axum::{routing::get, Router};
+        use std::time::Duration;
+        use tower::ServiceExt;
+        use tower_http::timeout::TimeoutLayer;
+
+        // Create a test app with a timeout of 50ms
+        let app = Router::new()
+            .route("/fast", get(|| async { "fast" }))
+            .route(
+                "/slow",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    "slow"
+                }),
+            )
+            .layer(TimeoutLayer::new(Duration::from_millis(50)));
+
+        // Fast request should succeed
+        let req_fast = Request::builder()
+            .uri("/fast")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp_fast = app.clone().oneshot(req_fast).await.unwrap();
+        assert_eq!(resp_fast.status(), StatusCode::OK);
+
+        // Slow request should time out
+        let req_slow = Request::builder()
+            .uri("/slow")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp_slow = app.oneshot(req_slow).await.unwrap();
+        assert!(
+            resp_slow.status() == StatusCode::REQUEST_TIMEOUT
+                || resp_slow.status() == StatusCode::GATEWAY_TIMEOUT
+                || resp_slow.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "expected timeout status, got: {:?}",
+            resp_slow.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_response_compression() {
+        use axum::http::{header, Request, StatusCode};
+        use axum::{routing::get, Router};
+        use tower::ServiceExt;
+        use tower_http::compression::CompressionLayer;
+
+        let app = Router::new()
+            .route(
+                "/",
+                get(|| async {
+                    let large_body = "hello compression ".repeat(200);
+                    ([(header::CONTENT_TYPE, "text/plain")], large_body)
+                }),
+            )
+            .layer(CompressionLayer::new());
+
+        // Request with Accept-Encoding: gzip
+        let req = Request::builder()
+            .uri("/")
+            .header(header::ACCEPT_ENCODING, "gzip")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let content_encoding = resp.headers().get(header::CONTENT_ENCODING);
+        assert!(
+            content_encoding.is_some(),
+            "Content-Encoding header missing"
+        );
+        assert_eq!(content_encoding.unwrap(), "gzip");
+    }
+
     /// GET /v1/mcp/servers lists a tenant's servers with status + manifest_hash,
     /// and never leaks another tenant's servers.
     #[tokio::test]
@@ -4426,28 +7196,42 @@ mod tests {
             .await
             .unwrap();
 
-        let response =
-            list_mcp_servers(State(state.clone()), agent_headers(&tenant_id, &tenant_id))
-                .await
-                .into_response();
+        let response = list_mcp_servers(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let servers: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(servers.len(), 2);
-        // ORDER BY server_key ASC → alpha, beta.
-        assert_eq!(servers[0]["server_key"], "alpha-mcp");
-        assert_eq!(servers[0]["status"], "active");
-        assert_eq!(servers[0]["manifest_hash"], "sha256:abc");
-        assert_eq!(servers[1]["server_key"], "beta-mcp");
-        assert_eq!(servers[1]["status"], "quarantined");
+        // Order-agnostic: locate each server by key (the handler paginates by
+        // created_at DESC).
+        let alpha = servers
+            .iter()
+            .find(|s| s["server_key"] == "alpha-mcp")
+            .unwrap();
+        let beta = servers
+            .iter()
+            .find(|s| s["server_key"] == "beta-mcp")
+            .unwrap();
+        assert_eq!(alpha["status"], "active");
+        assert_eq!(alpha["manifest_hash"], "sha256:abc");
+        assert_eq!(beta["status"], "quarantined");
 
         // A different tenant sees none of these servers.
         db::register_tenant(&state.pool, "tenant_other", "Other Tenant", "developer")
             .await
             .unwrap();
-        let other = list_mcp_servers(State(state), agent_headers("tenant_other", "tenant_other"))
-            .await
-            .into_response();
+        let other = list_mcp_servers(
+            State(state),
+            TenantId("tenant_other".to_string()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let other_body = to_bytes(other.into_body(), usize::MAX).await.unwrap();
         let other_servers: Vec<serde_json::Value> = serde_json::from_slice(&other_body).unwrap();
         assert!(other_servers.is_empty());

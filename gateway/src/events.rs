@@ -54,6 +54,7 @@ pub struct AseEvent {
 #[derive(Clone)]
 pub struct EventSink {
     tx: mpsc::Sender<AseEvent>,
+    tx_broadcast: tokio::sync::broadcast::Sender<AseEvent>,
 }
 
 impl EventSink {
@@ -61,7 +62,13 @@ impl EventSink {
     /// receiver; tests keep it to assert exactly what was emitted.
     pub fn channel(capacity: usize) -> (Self, mpsc::Receiver<AseEvent>) {
         let (tx, rx) = mpsc::channel(capacity);
-        (Self { tx }, rx)
+        let (tx_broadcast, _) = tokio::sync::broadcast::channel(capacity);
+        (Self { tx, tx_broadcast }, rx)
+    }
+
+    /// Subscribe to live events.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AseEvent> {
+        self.tx_broadcast.subscribe()
     }
 
     /// Emit one event. Never blocks and never propagates an error into the
@@ -69,6 +76,9 @@ impl EventSink {
     /// inline decision is unaffected (fail-open for *observability*, never for
     /// the security decision itself).
     pub fn emit(&self, event: AseEvent) {
+        // Broadcast the event to any active subscribers (WebSockets)
+        let _ = self.tx_broadcast.send(event.clone());
+
         match self.tx.try_send(event) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(ev)) => {
