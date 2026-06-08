@@ -344,6 +344,25 @@ pub struct AuditEventRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// GDPR data-portability bundle (#946): the complete set of a single tenant's
+/// records, assembled tenant-scoped for `GET /v1/tenants/:id/export`. Serialized
+/// to JSON; every list is filtered by `tenant_id`, so it never crosses tenants.
+#[derive(Debug, Serialize)]
+pub struct TenantExport {
+    /// Format tag so consumers can version the export shape.
+    pub schema: String,
+    pub tenant_id: String,
+    /// RFC 3339 UTC time the export was produced.
+    pub exported_at: String,
+    pub tenant: Option<TenantRecord>,
+    pub agents: Vec<AgentRecord>,
+    pub decisions: Vec<DecisionRecord>,
+    pub approvals: Vec<ApprovalRecord>,
+    pub action_receipts: Vec<ActionReceiptRecord>,
+    pub audit_events: Vec<AuditEventRecord>,
+    pub mcp_servers: Vec<McpServerRecord>,
+}
+
 /// SOC Phase 5 — persisted detection alert (one rule fired on one event).
 /// Stores identifiers, summary and severity only — never raw payloads or secrets
 /// (redaction invariant). Tenant-scoped; `source_event_id` links back to the ASE

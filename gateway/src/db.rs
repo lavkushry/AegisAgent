@@ -658,6 +658,72 @@ pub async fn get_tenant_by_id(
         .await
 }
 
+/// GDPR data-portability (#946): assemble the complete set of one tenant's
+/// records into a [`TenantExport`]. Every query is `tenant_id`-scoped and
+/// parameterized; rows are returned in full (no pagination cap) so the export is
+/// complete. Read-only.
+pub async fn export_tenant_data(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<TenantExport, sqlx::Error> {
+    let tenant = get_tenant_by_id(pool, tenant_id).await?;
+
+    let agents = sqlx::query_as::<_, AgentRecord>(
+        "SELECT * FROM agents WHERE tenant_id = ? ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+
+    let decisions = sqlx::query_as::<_, DecisionRecord>(
+        "SELECT * FROM decisions WHERE tenant_id = ? ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+
+    let approvals = sqlx::query_as::<_, ApprovalRecord>(
+        "SELECT * FROM approvals WHERE tenant_id = ? ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+
+    let action_receipts = sqlx::query_as::<_, ActionReceiptRecord>(
+        "SELECT * FROM action_receipts WHERE tenant_id = ? ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+
+    let audit_events = sqlx::query_as::<_, AuditEventRecord>(
+        "SELECT * FROM audit_events WHERE tenant_id = ? ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mcp_servers = sqlx::query_as::<_, McpServerRecord>(
+        "SELECT * FROM mcp_servers WHERE tenant_id = ? ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(TenantExport {
+        schema: "aegis-tenant-export-1".to_string(),
+        tenant_id: tenant_id.to_string(),
+        exported_at: Utc::now().to_rfc3339(),
+        tenant,
+        agents,
+        decisions,
+        approvals,
+        action_receipts,
+        audit_events,
+        mcp_servers,
+    })
+}
+
 pub async fn register_tenant(
     pool: &SqlitePool,
     id: &str,
