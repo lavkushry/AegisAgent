@@ -1,3 +1,4 @@
+from .accumulator import ReceiptAccumulator
 from .canon import CANON_VERSION, canonical_hash, canonicalize, sha256_hex
 from .client import AegisClient, AegisAsyncClient
 from .decorator import (
@@ -7,6 +8,7 @@ from .decorator import (
     set_context_trust_level,
     trust_level,
 )
+from .evidence import create_evidence_pack
 from .logging import StructuredJSONFormatter
 from .receipts import (
     compute_receipt_hash,
@@ -15,6 +17,7 @@ from .receipts import (
     verify_chain,
     verify_receipt,
 )
+from .webhooks import WebhookHandler, verify_slack_signature
 
 __all__ = [
     "AegisClient",
@@ -25,6 +28,11 @@ __all__ = [
     "get_context_trust_level",
     "trust_level",
     "StructuredJSONFormatter",
+    "ReceiptAccumulator",
+    "create_evidence_pack",
+    # webhook / Slack callback handling
+    "verify_slack_signature",
+    "WebhookHandler",
     # canonicalization (scheme aegis-jcs-1)
     "CANON_VERSION",
     "canonicalize",
