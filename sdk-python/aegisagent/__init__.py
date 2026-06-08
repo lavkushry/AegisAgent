@@ -1,5 +1,6 @@
+from .accumulator import ReceiptAccumulator
 from .canon import CANON_VERSION, canonical_hash, canonicalize, sha256_hex
-from .client import AegisClient, AegisAsyncClient
+from .client import AegisAsyncClient, AegisClient
 from .decorator import (
     async_protect_tool,
     get_context_trust_level,
@@ -7,6 +8,7 @@ from .decorator import (
     set_context_trust_level,
     trust_level,
 )
+from .evidence import create_evidence_pack
 from .logging import StructuredJSONFormatter
 from .receipts import (
     compute_receipt_hash,
@@ -25,6 +27,8 @@ __all__ = [
     "get_context_trust_level",
     "trust_level",
     "StructuredJSONFormatter",
+    "ReceiptAccumulator",
+    "create_evidence_pack",
     # canonicalization (scheme aegis-jcs-1)
     "CANON_VERSION",
     "canonicalize",
