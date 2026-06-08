@@ -3465,6 +3465,37 @@ pub async fn get_tenant(
     }
 }
 
+/// GET /v1/tenants/:id/export — GDPR data-portability (#946). Returns the full
+/// tenant-scoped data bundle (agents, decisions, approvals, receipts, audit
+/// events, MCP servers) as JSON. A caller may export ONLY its own tenant: a path
+/// id that doesn't match the authenticated tenant returns 404 (same convention as
+/// `get_tenant`, so tenant existence isn't leaked).
+pub async fn export_tenant(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if tenant_id != id {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Tenant not found"})),
+        )
+            .into_response();
+    }
+
+    match db::export_tenant_data(&state.pool, &tenant_id).await {
+        Ok(export) => (StatusCode::OK, Json(export)).into_response(),
+        Err(e) => {
+            error!("Failed to export tenant data: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn create_tenant(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTenantRequest>,
@@ -7500,5 +7531,65 @@ mod tests {
             r2.risk_level, "critical",
             "re-registration must invalidate the cache (no stale low-risk metadata)"
         );
+    }
+
+    /// #946 GDPR export: a tenant exports its own data bundle; a mismatched path
+    /// id is 404; another tenant's export contains none of this tenant's records.
+    #[tokio::test]
+    async fn export_tenant_bundles_own_data_and_is_scoped() {
+        let (state, tenant_id, agent_token) = setup_state("tenant_export").await;
+
+        // Generate data: one authorize → a decision + receipt + audit event.
+        let _ = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("github", "read_issue"),
+        )
+        .await;
+
+        // Happy path: export own tenant.
+        let resp = export_tenant(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(tenant_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["schema"], "aegis-tenant-export-1");
+        assert_eq!(v["tenant_id"], tenant_id);
+        assert!(
+            !v["agents"].as_array().unwrap().is_empty(),
+            "export must include the tenant's agent"
+        );
+        assert!(
+            !v["decisions"].as_array().unwrap().is_empty(),
+            "export must include the decision"
+        );
+        assert!(!v["action_receipts"].as_array().unwrap().is_empty());
+
+        // Cross-tenant: a path id that isn't the authenticated tenant → 404.
+        let denied = export_tenant(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("tenant_other".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+
+        // Tenant isolation: another tenant's export contains none of A's records.
+        db::register_tenant(&state.pool, "tenant_other", "Other", "developer")
+            .await
+            .unwrap();
+        let other = db::export_tenant_data(&state.pool, "tenant_other")
+            .await
+            .unwrap();
+        assert!(other.agents.is_empty());
+        assert!(other.decisions.is_empty());
+        assert!(other.action_receipts.is_empty());
     }
 }
