@@ -1,5 +1,5 @@
 from .canon import CANON_VERSION, canonical_hash, canonicalize, sha256_hex
-from .client import AegisClient
+from .client import AegisClient, AegisAsyncClient
 from .decorator import (
     async_protect_tool,
     get_context_trust_level,
@@ -18,6 +18,7 @@ from .receipts import (
 
 __all__ = [
     "AegisClient",
+    "AegisAsyncClient",
     "protect_tool",
     "async_protect_tool",
     "set_context_trust_level",

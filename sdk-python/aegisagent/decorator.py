@@ -400,16 +400,26 @@ def async_protect_tool(
                 parameters=parameters,
             )
 
-            # 5. Call authorize endpoint (sync client → offload to thread)
-            auth_response = await asyncio.to_thread(
-                client.authorize,
-                tool=tool,
-                action=action,
-                parameters=parameters,
-                resource=resource,
-                source_trust=source_trust,
-                trace_id=trace_id,
-            )
+            # 5. Call authorize endpoint
+            if inspect.iscoroutinefunction(client.authorize):
+                auth_response = await client.authorize(
+                    tool=tool,
+                    action=action,
+                    parameters=parameters,
+                    resource=resource,
+                    source_trust=source_trust,
+                    trace_id=trace_id,
+                )
+            else:
+                auth_response = await asyncio.to_thread(
+                    client.authorize,
+                    tool=tool,
+                    action=action,
+                    parameters=parameters,
+                    resource=resource,
+                    source_trust=source_trust,
+                    trace_id=trace_id,
+                )
 
             decision = auth_response.get("decision", "deny")
             reason = auth_response.get("reason", "No reason provided.")
@@ -457,9 +467,12 @@ def async_protect_tool(
                     await asyncio.sleep(interval)
                     interval = min(interval * poll_backoff, poll_max_interval)
 
-                    status_info = await asyncio.to_thread(
-                        client.get_approval_status, approval_id
-                    )
+                    if inspect.iscoroutinefunction(client.get_approval_status):
+                        status_info = await client.get_approval_status(approval_id)
+                    else:
+                        status_info = await asyncio.to_thread(
+                            client.get_approval_status, approval_id
+                        )
                     if not status_info:
                         continue
 
@@ -478,9 +491,12 @@ def async_protect_tool(
                             status_info, expected_action_hash, "status"
                         )
                         # Single-use: atomically consume before executing.
-                        consumed = await asyncio.to_thread(
-                            client.consume_approval, approval_id
-                        )
+                        if inspect.iscoroutinefunction(client.consume_approval):
+                            consumed = await client.consume_approval(approval_id)
+                        else:
+                            consumed = await asyncio.to_thread(
+                                client.consume_approval, approval_id
+                            )
                         if not consumed:
                             raise PermissionError(
                                 f"Action '{tool}.{action}' approval could not be "
