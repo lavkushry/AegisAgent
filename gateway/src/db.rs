@@ -3,6 +3,16 @@ use chrono::Utc;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::str::FromStr;
 
+/// Liveness/readiness ping for the `/health` endpoint: a trivial `SELECT 1`
+/// that confirms the pool can acquire a connection and the store answers.
+/// Returns `Err` (fail-closed) on any pool/query failure.
+pub async fn health_check(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(pool)
+        .await
+        .map(|_| ())
+}
+
 /// Default page size for `list_soc_alerts` / `list_soc_incidents`.
 pub const SOC_DEFAULT_LIMIT: i64 = 50;
 /// Hard cap to prevent accidentally returning enormous result sets.
@@ -1852,6 +1862,18 @@ mod tests {
             Uuid::new_v4().simple()
         );
         init_db(&db_url).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn health_check_succeeds_on_live_pool() {
+        let pool = setup_pool("health_check").await;
+        health_check(&pool)
+            .await
+            .expect("health_check must succeed against a live pool");
+
+        // After the pool is closed the ping must fail (drives the /health 503 path).
+        pool.close().await;
+        assert!(health_check(&pool).await.is_err());
     }
 
     #[tokio::test]
