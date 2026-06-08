@@ -39,8 +39,8 @@ class TestApprovalExpiry(unittest.TestCase):
         self.client.agent_token = "mock_agent_token"
 
     @patch("time.sleep", return_value=None)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     def test_approved_but_expired_fails_closed(self, mock_post, mock_get, _sleep):
         correct_hash = _hash_tool_call(
             tool="test_tool",
@@ -77,8 +77,8 @@ class TestApprovalExpiry(unittest.TestCase):
         self.assertFalse(executed["ran"], "expired approval must not execute the tool")
 
     @patch("time.sleep", return_value=None)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     def test_approved_within_window_still_executes(self, mock_post, mock_get, _sleep):
         correct_hash = _hash_tool_call(
             tool="test_tool",
@@ -111,8 +111,8 @@ class TestApprovalExpiry(unittest.TestCase):
         self.assertEqual(my_test_func("hello"), "executed_hello")
 
     @patch("time.sleep", return_value=None)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     def test_approved_but_not_consumable_fails_closed(
         self, mock_post, mock_get, _sleep
     ):

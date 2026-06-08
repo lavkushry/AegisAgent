@@ -97,7 +97,7 @@ except ImportError:
 class TestAsyncProtectToolAllow(unittest.IsolatedAsyncioTestCase):
     """allow decision → tool executes, result returned."""
 
-    @patch("requests.post")
+    @patch("requests.Session.post")
     async def test_allow_executes(self, mock_post):
         mock_post.return_value = _allow_response()
         client = _make_client()
@@ -110,7 +110,7 @@ class TestAsyncProtectToolAllow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "ok:hello")
         mock_post.assert_called_once()
 
-    @patch("requests.post")
+    @patch("requests.Session.post")
     async def test_allow_does_not_raise(self, mock_post):
         mock_post.return_value = _allow_response()
         client = _make_client()
@@ -133,7 +133,7 @@ class TestAsyncProtectToolAllow(unittest.IsolatedAsyncioTestCase):
 class TestAsyncProtectToolDeny(unittest.IsolatedAsyncioTestCase):
     """deny decision → PermissionError raised, tool NOT executed."""
 
-    @patch("requests.post")
+    @patch("requests.Session.post")
     async def test_deny_raises_permission_error(self, mock_post):
         mock_post.return_value = _deny_response()
         client = _make_client()
@@ -147,7 +147,7 @@ class TestAsyncProtectToolDeny(unittest.IsolatedAsyncioTestCase):
             await my_tool()
         self.assertFalse(ran, "Tool MUST NOT execute on deny")
 
-    @patch("requests.post")
+    @patch("requests.Session.post")
     async def test_deny_not_executed(self, mock_post):
         mock_post.return_value = _deny_response()
         client = _make_client()
@@ -173,8 +173,8 @@ class TestAsyncProtectToolApproval(unittest.IsolatedAsyncioTestCase):
     """require_approval → poll → APPROVED → consume → execute."""
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     async def test_approval_poll_approved_executes(
         self, mock_post, mock_get, mock_sleep
     ):
@@ -204,8 +204,8 @@ class TestAsyncProtectToolApproval(unittest.IsolatedAsyncioTestCase):
         mock_sleep.assert_called()
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     async def test_approval_hash_mismatch_fails_closed(
         self, mock_post, mock_get, mock_sleep
     ):
@@ -237,8 +237,8 @@ class TestAsyncProtectToolApproval(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(executed, "Tool must NOT execute on hash mismatch")
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     async def test_approval_rejected_raises(self, mock_post, mock_get, mock_sleep):
         real_hash = _hash_tool_call(
             tool="svc",
@@ -263,8 +263,8 @@ class TestAsyncProtectToolApproval(unittest.IsolatedAsyncioTestCase):
             await delete_thing()
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     async def test_approval_edited_rebinds_and_executes(
         self, mock_post, mock_get, mock_sleep
     ):
@@ -302,7 +302,7 @@ class TestAsyncProtectToolApproval(unittest.IsolatedAsyncioTestCase):
 class TestAsyncProtectToolUnknownDecision(unittest.IsolatedAsyncioTestCase):
     """Unknown gateway decision → PermissionError."""
 
-    @patch("requests.post")
+    @patch("requests.Session.post")
     async def test_unknown_decision_fails_closed(self, mock_post):
         m = MagicMock()
         m.status_code = 200
@@ -369,8 +369,8 @@ class TestExponentialBackoffSync(unittest.TestCase):
         return auth_resp, consume, get_sides, real_hash
 
     @patch("time.sleep", return_value=None)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     def test_backoff_interval_grows_and_caps(self, mock_post, mock_get, mock_sleep):
         """Sleep args must grow by poll_backoff and be capped at poll_max_interval."""
         auth_resp, consume, get_sides, _ = self._approval_setup(5)
@@ -404,8 +404,8 @@ class TestExponentialBackoffSync(unittest.TestCase):
         self.assertAlmostEqual(sleep_calls[3], 4.0, places=5)
 
     @patch("time.sleep", return_value=None)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     def test_backoff_default_kwargs_approve_on_first_poll(
         self, mock_post, mock_get, mock_sleep
     ):
@@ -457,8 +457,8 @@ class TestExponentialBackoffAsync(unittest.IsolatedAsyncioTestCase):
     """async_protect_tool: sleep interval grows and is capped."""
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch("requests.get")
-    @patch("requests.post")
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
     async def test_async_backoff_interval_grows_and_caps(
         self, mock_post, mock_get, mock_sleep
     ):

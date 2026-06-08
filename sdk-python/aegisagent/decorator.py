@@ -4,6 +4,7 @@ import logging
 import re
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, Optional, Tuple
@@ -19,14 +20,25 @@ logger = logging.getLogger("aegisagent")
 _context_store = threading.local()
 
 
-def set_context_trust_level(trust_level: str):
+def set_context_trust_level(trust_level_val: str):
     """Sets the source trust level for the current thread context."""
-    _context_store.trust_level = trust_level
+    _context_store.trust_level = trust_level_val
 
 
 def get_context_trust_level() -> str:
     """Gets the source trust level for the current thread context (default: 'unknown')."""
     return getattr(_context_store, "trust_level", "unknown")
+
+
+@contextmanager
+def trust_level(level: str):
+    """Context manager to temporarily set the thread-local source trust level."""
+    old_level = get_context_trust_level()
+    set_context_trust_level(level)
+    try:
+        yield
+    finally:
+        set_context_trust_level(old_level)
 
 
 def _canonical_action(

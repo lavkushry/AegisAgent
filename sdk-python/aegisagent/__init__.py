@@ -5,7 +5,9 @@ from .decorator import (
     get_context_trust_level,
     protect_tool,
     set_context_trust_level,
+    trust_level,
 )
+from .logging import StructuredJSONFormatter
 from .receipts import (
     compute_receipt_hash,
     seal_chain,
@@ -20,6 +22,8 @@ __all__ = [
     "async_protect_tool",
     "set_context_trust_level",
     "get_context_trust_level",
+    "trust_level",
+    "StructuredJSONFormatter",
     # canonicalization (scheme aegis-jcs-1)
     "CANON_VERSION",
     "canonicalize",
@@ -31,4 +35,18 @@ __all__ = [
     "compute_receipt_hash",
     "verify_receipt",
     "verify_chain",
+    "__version__",
 ]
+
+try:
+    from importlib.metadata import version
+except ImportError:
+    try:
+        from importlib_metadata import version  # type: ignore
+    except ImportError:
+        version = lambda pkg: "0.1.0"
+
+try:
+    __version__ = version("aegisagent")
+except Exception:
+    __version__ = "0.1.0"
