@@ -418,6 +418,12 @@ pub struct ActionReceiptRecord {
     pub action_hash: Option<String>,
     pub prev_receipt_hash: String,
     pub receipt_hash: String,
+    /// Canonicalization scheme that produced `action_hash` / `receipt_hash` (e.g.
+    /// `aegis-jcs-1`). Additive metadata so each receipt is self-describing and a
+    /// future scheme bump stays migratable — NOT part of the canonical body or
+    /// `receipt_hash` (the byte-parity-locked chain is untouched).
+    #[serde(default)]
+    pub canon_version: String,
     /// Optional Ed25519 signature (lowercase hex) computed OVER `receipt_hash`.
     /// Additive metadata — NOT part of the canonical body or `receipt_hash`.
     /// NULL when receipt signing is not configured (hermetic default = unsigned).

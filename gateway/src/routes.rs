@@ -501,6 +501,8 @@ async fn emit_action_receipt(
             action_hash: Some(hash_tool_call(&payload.tool_call)),
             prev_receipt_hash,
             receipt_hash: String::new(),
+            // Self-describing scheme tag; additive, not folded into receipt_hash.
+            canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
             created_at: Utc::now(),
@@ -561,6 +563,7 @@ async fn emit_tamper_attempt_receipt(
             action_hash: action_hash_for_receipt,
             prev_receipt_hash,
             receipt_hash: String::new(),
+            canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
             created_at: Utc::now(),
@@ -4676,6 +4679,38 @@ mod tests {
         assert!(json["signature_verified"].is_null());
     }
 
+    /// #930: every emitted receipt records the canonicalization scheme that hashed
+    /// it, and that field is additive — the byte-parity-locked `receipt_hash` is the
+    /// same whether or not `canon_version` is set.
+    #[tokio::test]
+    async fn emitted_receipt_records_canon_version() {
+        let (state, tenant_id, agent_token) = setup_state("receipt_canon_version").await;
+
+        let request = mcp_authorize_request("github", "read_issue");
+        let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        let (receipt_id,): (String,) = sqlx::query_as(
+            "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(tenant_id.as_str())
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+        let receipt = db::get_action_receipt_by_id(&state.pool, &tenant_id, &receipt_id)
+            .await
+            .unwrap()
+            .expect("emitted receipt should be retrievable");
+
+        // The scheme is recorded and self-describing.
+        assert_eq!(receipt.canon_version, CANON_VERSION);
+        assert_eq!(receipt.canon_version, "aegis-jcs-1");
+
+        // Byte-parity guard: canon_version is additive metadata, NOT folded into the
+        // hash — recomputing the hash over the same body still matches.
+        assert_eq!(receipt.receipt_hash, compute_receipt_hash(&receipt));
+    }
+
     // A fixed test secret (hex, 32 bytes). Test-only — not a real key. Used to
     // emit a signed receipt directly via the atomic appender (so we exercise the
     // verify endpoint's signature path without coupling to the process-global env
@@ -4702,6 +4737,7 @@ mod tests {
             action_hash: Some("aaaa".to_string()),
             prev_receipt_hash: String::new(),
             receipt_hash: String::new(),
+            canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
             created_at: Utc::now(),
@@ -4772,6 +4808,7 @@ mod tests {
             action_hash: Some("aaaa".to_string()),
             prev_receipt_hash: String::new(),
             receipt_hash: String::new(),
+            canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
             created_at: Utc::now(),
@@ -4988,6 +5025,7 @@ mod tests {
                         action_hash: Some(format!("sha256:dead{:04}", i)),
                         prev_receipt_hash: prev,
                         receipt_hash: String::new(),
+                        canon_version: CANON_VERSION.to_string(),
                         signature: None,
                         signer_public_key: None,
                         created_at: Utc::now(),

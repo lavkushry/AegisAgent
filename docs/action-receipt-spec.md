@@ -40,8 +40,11 @@ This is the same scheme used for `action_hash` (see `tests/canonical_action_vect
 | `input_hash` / `output_hash` | string\|null | hashes, never raw payloads |
 | `prev_receipt_hash` | string | link to the previous receipt (`""` for genesis) |
 | `receipt_hash` | string | SHA-256 of the canonical body (see §3) |
+| `canon_version` | string | canonicalization scheme tag (e.g. `aegis-jcs-1`); self-describing, **additive metadata — NOT in the hashed body** |
+| `signature` | string\|null | optional Ed25519 signature over `receipt_hash`; **additive — NOT in the hashed body** |
+| `signer_public_key` | string\|null | signer public key (hex) for `signature`; **additive — NOT in the hashed body** |
 
-Additional fields are permitted; they are included in the hash. Secrets MUST NOT appear — store hashes, not raw payloads.
+Additional **body** fields are permitted and are included in the hash. The three metadata fields above (`canon_version`, `signature`, `signer_public_key`) sit *outside* the canonical body and are excluded from `receipt_hash`, so they can be added without changing the byte-parity-locked hash. Secrets MUST NOT appear — store hashes, not raw payloads.
 
 ---
 

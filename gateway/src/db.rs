@@ -287,6 +287,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             action_hash TEXT,
             prev_receipt_hash TEXT NOT NULL,
             receipt_hash TEXT NOT NULL,
+            canon_version TEXT NOT NULL DEFAULT '',
             signature TEXT,
             signer_public_key TEXT,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -295,6 +296,8 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    ensure_action_receipts_canon_version_column(pool).await?;
 
     // Create indexes for tenant_id to guarantee sub-millisecond query performance
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents (tenant_id);")
@@ -452,6 +455,28 @@ pub async fn set_mcp_server_manifest_hash(
         .bind(manifest_hash)
         .bind(tenant_id)
         .bind(server_key)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Additive migration: record the canonicalization scheme on each receipt so the
+/// hash chain is self-describing and a future scheme bump stays migratable. Empty
+/// string on legacy rows. NOT part of `receipt_hash` (byte-parity untouched).
+async fn ensure_action_receipts_canon_version_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(action_receipts)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "canon_version")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE action_receipts ADD COLUMN canon_version TEXT NOT NULL DEFAULT ''")
         .execute(pool)
         .await?;
     Ok(())
@@ -1197,7 +1222,7 @@ pub async fn list_action_receipts(
 ) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     sqlx::query_as::<_, ActionReceiptRecord>(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, signature, signer_public_key, created_at
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
          FROM action_receipts
          WHERE tenant_id = ?
          ORDER BY created_at DESC
@@ -1327,8 +1352,8 @@ where
     let record = build(prev);
 
     if let Err(e) = sqlx::query(
-        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, signature, signer_public_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -1347,6 +1372,7 @@ where
     .bind(&record.action_hash)
     .bind(&record.prev_receipt_hash)
     .bind(&record.receipt_hash)
+    .bind(&record.canon_version)
     .bind(&record.signature)
     .bind(&record.signer_public_key)
     .execute(&mut *conn)
