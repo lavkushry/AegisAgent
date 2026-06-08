@@ -340,6 +340,34 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Composite indexes matching the hot tenant-scoped list/query paths so the
+    // filtered + `ORDER BY created_at DESC` listings stay index-driven instead of
+    // table-scanning. Column order = filter prefix, then the sort column.
+    // (#940) list_decisions: WHERE tenant_id [AND agent_id] [AND decision] ORDER BY created_at DESC
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_decisions_tenant_agent_created ON decisions (tenant_id, agent_id, created_at);",
+    )
+    .execute(pool)
+    .await?;
+    // (#941) list_pending_approvals: WHERE tenant_id AND status ORDER BY created_at DESC
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_approvals_tenant_status_created ON approvals (tenant_id, status, created_at);",
+    )
+    .execute(pool)
+    .await?;
+    // (#942) audit_events: WHERE tenant_id [AND event_type] ORDER BY created_at
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_type_created ON audit_events (tenant_id, event_type, created_at);",
+    )
+    .execute(pool)
+    .await?;
+    // (#943) list_action_receipts: WHERE tenant_id ORDER BY created_at DESC
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_action_receipts_tenant_created ON action_receipts (tenant_id, created_at);",
+    )
+    .execute(pool)
+    .await?;
+
     // ── Phase 5: SOC event indexer ────────────────────────────────────────────
     // soc_alerts: one persisted row per detection rule firing (detect::Alert).
     // Stores ids/summaries/hashes only — never raw payloads or secrets.
@@ -1862,6 +1890,25 @@ mod tests {
             Uuid::new_v4().simple()
         );
         init_db(&db_url).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn composite_hot_path_indexes_exist() {
+        let pool = setup_pool("composite_indexes").await;
+        for name in [
+            "idx_decisions_tenant_agent_created",
+            "idx_approvals_tenant_status_created",
+            "idx_audit_events_tenant_type_created",
+            "idx_action_receipts_tenant_created",
+        ] {
+            let found: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+                    .bind(name)
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap();
+            assert!(found.is_some(), "composite index {name} must be created");
+        }
     }
 
     #[tokio::test]
