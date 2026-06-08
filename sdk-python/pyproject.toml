@@ -17,12 +17,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional async backend: AegisAsyncClient is httpx-based. Runtime-optional
+# (the sync client needs no new dep) — install with `pip install aegisagent[async]`.
+async = [
+    "httpx>=0.24",
+]
 # black 26.x requires Python >=3.10; pin a 3.9-compatible release there so the
 # 3.9 CI leg can install the [dev] extra. The `black --check` only runs on 3.12,
 # which keeps 26.5.1 — so formatting enforcement is unchanged.
+# httpx is included so the async-client test suite runs in CI (the async tests
+# construct AegisAsyncClient, which requires httpx).
 dev = [
     "black==26.5.1; python_version >= '3.10'",
     "black==25.11.0; python_version < '3.10'",
+    "httpx>=0.24",
 ]
 
 [project.urls]
