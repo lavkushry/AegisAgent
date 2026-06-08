@@ -249,6 +249,11 @@ pub struct McpServerRecord {
     pub endpoint: String,
     pub version: Option<String>,
     pub status: String,
+    /// Pinned MCP tool-manifest hash (scheme `mcp-manifest-1`). Empty until the
+    /// first discovery pins it; re-pinned on drift. Surfaced so operators can see
+    /// the current manifest fingerprint alongside the server's status.
+    #[serde(default)]
+    pub manifest_hash: String,
     pub created_at: DateTime<Utc>,
 }
 

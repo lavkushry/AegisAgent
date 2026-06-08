@@ -7166,4 +7166,74 @@ mod tests {
         );
         assert_eq!(content_encoding.unwrap(), "gzip");
     }
+
+    /// GET /v1/mcp/servers lists a tenant's servers with status + manifest_hash,
+    /// and never leaks another tenant's servers.
+    #[tokio::test]
+    async fn list_mcp_servers_is_tenant_scoped_and_shows_status() {
+        let (state, tenant_id, _agent_token) = setup_state("list_mcp_servers").await;
+
+        for key in ["alpha-mcp", "beta-mcp"] {
+            db::upsert_mcp_server(
+                &state.pool,
+                &tenant_id,
+                key,
+                "Server",
+                Some("platform"),
+                "http",
+                Some("internal-registry"),
+                "trusted_internal_signed",
+                "http://127.0.0.1:9001/mcp",
+            )
+            .await
+            .unwrap();
+        }
+        // beta is quarantined; alpha gets a pinned manifest hash.
+        db::set_mcp_server_status(&state.pool, &tenant_id, "beta-mcp", "quarantined")
+            .await
+            .unwrap();
+        db::set_mcp_server_manifest_hash(&state.pool, &tenant_id, "alpha-mcp", "sha256:abc")
+            .await
+            .unwrap();
+
+        let response = list_mcp_servers(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let servers: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(servers.len(), 2);
+        // Order-agnostic: locate each server by key (the handler paginates by
+        // created_at DESC).
+        let alpha = servers
+            .iter()
+            .find(|s| s["server_key"] == "alpha-mcp")
+            .unwrap();
+        let beta = servers
+            .iter()
+            .find(|s| s["server_key"] == "beta-mcp")
+            .unwrap();
+        assert_eq!(alpha["status"], "active");
+        assert_eq!(alpha["manifest_hash"], "sha256:abc");
+        assert_eq!(beta["status"], "quarantined");
+
+        // A different tenant sees none of these servers.
+        db::register_tenant(&state.pool, "tenant_other", "Other Tenant", "developer")
+            .await
+            .unwrap();
+        let other = list_mcp_servers(
+            State(state),
+            TenantId("tenant_other".to_string()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        let other_body = to_bytes(other.into_body(), usize::MAX).await.unwrap();
+        let other_servers: Vec<serde_json::Value> = serde_json::from_slice(&other_body).unwrap();
+        assert!(other_servers.is_empty());
+    }
 }
