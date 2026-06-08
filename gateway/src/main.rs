@@ -41,15 +41,32 @@ fn build_hash() -> &'static str {
     }
 }
 
-/// GET /health — JSON status + version for monitoring and readiness probes.
-async fn health_handler() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(json!({
-            "status": "healthy",
-            "version": VERSION,
-        })),
-    )
+/// GET /health — readiness probe. Pings the database (`SELECT 1`) so the result
+/// reflects real serviceability: `200 healthy` only when the DB answers, else
+/// `503 unhealthy` (fail-closed, so an orchestrator won't route traffic to a
+/// gateway that can't reach its store).
+async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::health_check(&state.pool).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "status": "healthy",
+                "version": VERSION,
+                "db": "up",
+            })),
+        ),
+        Err(e) => {
+            tracing::warn!("health check DB ping failed: {:?}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "status": "unhealthy",
+                    "version": VERSION,
+                    "db": "down",
+                })),
+            )
+        }
+    }
 }
 
 /// GET /v1/version — build metadata for deployment verification.
