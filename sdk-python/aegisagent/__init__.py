@@ -1,6 +1,6 @@
 from .accumulator import ReceiptAccumulator
 from .canon import CANON_VERSION, canonical_hash, canonicalize, sha256_hex
-from .client import AegisAsyncClient, AegisClient
+from .client import AegisClient, AegisAsyncClient
 from .decorator import (
     async_protect_tool,
     get_context_trust_level,
