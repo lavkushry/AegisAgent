@@ -26,6 +26,9 @@ pub struct AppState {
     pub events: EventSink,
     /// Process-wide security counters exposed on GET /metrics.
     pub metrics: SecurityMetrics,
+    /// Approval time-to-live in seconds. Configurable via AEGIS_APPROVAL_TTL_SECS
+    /// environment variable (default: 1800 = 30 minutes).
+    pub approval_ttl_secs: i64,
 }
 
 // Extractor helper to get tenant_id from Bearer token
@@ -1391,7 +1394,7 @@ pub async fn authorize_action(
 
     if decision_str == "require_approval" {
         let approval_id = Uuid::new_v4();
-        let expires_at = Utc::now() + Duration::minutes(30);
+        let expires_at = Utc::now() + Duration::seconds(state.approval_ttl_secs);
         let original_call_hash = hash_tool_call(&payload.tool_call);
 
         let approval_record = ApprovalRecord {
@@ -2613,6 +2616,7 @@ mod tests {
             policy_engine,
             events,
             metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
         });
 
         (state, tenant_id, agent_token, events_rx)

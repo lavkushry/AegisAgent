@@ -3,8 +3,9 @@ use axum::{
     http::{header, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use serde_json::json;
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -22,6 +23,40 @@ mod routes;
 mod sign;
 
 use routes::AppState;
+
+/// Gateway version — kept in sync with Cargo.toml.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Build-time git hash (set by CI or defaults to "dev").
+fn build_hash() -> &'static str {
+    match option_env!("AEGIS_BUILD_HASH") {
+        Some(h) => h,
+        None => "dev",
+    }
+}
+
+/// GET /health — JSON status + version for monitoring and readiness probes.
+async fn health_handler() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "healthy",
+            "version": VERSION,
+        })),
+    )
+}
+
+/// GET /v1/version — build metadata for deployment verification.
+async fn version_handler() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "version": VERSION,
+            "build_hash": build_hash(),
+            "name": "aegis-gateway",
+        })),
+    )
+}
 
 /// GET /metrics — Prometheus text exposition of process-wide security counters.
 /// Bound only on the existing 127.0.0.1 listener; no new bind, no public exposure.
@@ -48,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    info!("Starting AegisAgent Control Plane...");
+    info!("Starting AegisAgent Control Plane v{}...", VERSION);
 
     // Database setup (local SQLite file)
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://aegis.db".into());
@@ -69,12 +104,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
     tokio::spawn(events::drain(events_rx, pool.clone()));
 
+    // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
+    let approval_ttl_secs: i64 = std::env::var("AEGIS_APPROVAL_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1800);
+    info!("Approval TTL: {}s", approval_ttl_secs);
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
         policy_engine,
         events,
         metrics: metrics::SecurityMetrics::new(),
+        approval_ttl_secs,
     });
 
     // Construct Axum router
@@ -130,16 +173,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/mcp/servers/:server_key/restore",
             post(routes::restore_mcp_server),
         )
-        // Fallback or health check
-        .route("/health", get(|| async { "healthy" }))
+        // Health and version
+        .route("/health", get(health_handler))
+        .route("/v1/version", get(version_handler))
         // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
         .route("/metrics", get(metrics_handler))
         .with_state(state);
 
-    // Bind strictly to 127.0.0.1 for security testing, matching rules in mandatory-secure-web-skills
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
+    // Bind address — configurable via AEGIS_BIND_ADDR, defaults to 127.0.0.1:8080
+    // for security (local-only in dev/test). Production deployments should set this
+    // to 0.0.0.0:<port> behind a reverse proxy.
+    let bind_addr =
+        std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     info!("AegisAgent Listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, app).await?;
 
+    // Graceful shutdown: listen for SIGTERM (container orchestrators) and Ctrl-C.
+    // In-flight requests are drained before the process exits.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    info!("AegisAgent shut down gracefully.");
     Ok(())
+}
+
+/// Wait for a shutdown signal (Ctrl-C or SIGTERM on Unix).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => { info!("Received Ctrl-C, starting graceful shutdown..."); },
+        _ = terminate => { info!("Received SIGTERM, starting graceful shutdown..."); },
+    }
 }
