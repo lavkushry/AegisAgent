@@ -409,6 +409,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let quota_manager = routes::QuotaManager::new(quota_limit, quota_window_secs);
 
+    // Read-through cache for registered-action metadata (#899). Bounded LRU;
+    // AEGIS_SKILL_CACHE_CAPACITY == 0 disables it.
+    let skill_cache_capacity: usize = std::env::var("AEGIS_SKILL_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024);
+    let skill_cache = routes::SkillActionCache::new(skill_cache_capacity);
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -418,6 +426,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         approval_ttl_secs,
         rate_limiter,
         quota_manager,
+        skill_cache,
     });
 
     // Read request body size limit (default 1MB)
