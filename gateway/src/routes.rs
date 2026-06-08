@@ -20,7 +20,7 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -116,6 +116,102 @@ impl QuotaManager {
     }
 }
 
+/// The static registration metadata a `skill_actions` row contributes to a
+/// decision: `(risk, mutates_state, approval_required, default_decision)`.
+pub type SkillActionMeta = (String, bool, bool, String);
+
+/// Bounded, tenant-keyed LRU cache for `db::get_skill_action` lookups on the
+/// authorize hot path (#899). This caches **only static registration metadata**
+/// that changes solely when a tool/MCP action is (re-)registered — and every such
+/// write invalidates the key (see `register_tool` / `discover_mcp_tools`). The
+/// Cedar decision itself is **never** cached: this only avoids a DB JOIN per
+/// authorize, so it cannot change a decision. Fail-closed by construction —
+/// only *positive* hits are stored; an unknown action keeps missing to the DB,
+/// and a stale entry can never outlive the registration that would loosen it.
+pub struct SkillActionCache {
+    inner: Mutex<SkillActionCacheInner>,
+    capacity: usize,
+}
+
+#[derive(Default)]
+struct SkillActionCacheInner {
+    map: HashMap<String, SkillActionMeta>,
+    /// Recency order, least-recent at the front.
+    order: VecDeque<String>,
+}
+
+impl SkillActionCache {
+    /// `capacity == 0` disables the cache (every lookup misses, nothing stored).
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(SkillActionCacheInner::default()),
+            capacity,
+        }
+    }
+
+    pub fn cache_key(tenant_id: &str, skill_key: &str, action_key: &str) -> String {
+        // \x1f (unit separator) cannot appear in these identifiers, so the join
+        // is unambiguous across the three tenant-scoped components.
+        format!("{tenant_id}\x1f{skill_key}\x1f{action_key}")
+    }
+
+    fn touch(order: &mut VecDeque<String>, key: &str) {
+        if let Some(pos) = order.iter().position(|k| k == key) {
+            order.remove(pos);
+        }
+        order.push_back(key.to_string());
+    }
+
+    /// Return a cached positive hit, marking it most-recently-used.
+    pub fn get(&self, key: &str) -> Option<SkillActionMeta> {
+        if self.capacity == 0 {
+            return None;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let val = inner.map.get(key).cloned();
+        if val.is_some() {
+            Self::touch(&mut inner.order, key);
+        }
+        val
+    }
+
+    /// Store a positive lookup result, evicting the least-recent entry if full.
+    pub fn insert(&self, key: String, value: SkillActionMeta) {
+        if self.capacity == 0 {
+            return;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.insert(key.clone(), value);
+        Self::touch(&mut inner.order, &key);
+        while inner.map.len() > self.capacity {
+            if let Some(evict) = inner.order.pop_front() {
+                inner.map.remove(&evict);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Drop a key so the next lookup re-reads the DB (called on every
+    /// registration write that could change the action's settings).
+    pub fn invalidate(&self, key: &str) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.remove(key);
+        if let Some(pos) = inner.order.iter().position(|k| k == key) {
+            inner.order.remove(pos);
+        }
+    }
+}
+
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
@@ -129,6 +225,8 @@ pub struct AppState {
     pub approval_ttl_secs: i64,
     pub rate_limiter: RateLimiter,
     pub quota_manager: QuotaManager,
+    /// Read-through cache for registered-action metadata (#899).
+    pub skill_cache: SkillActionCache,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -935,6 +1033,13 @@ pub async fn register_tool(
             )
                 .into_response();
         }
+        // #899: a (re-)registration may tighten this action's settings, so drop any
+        // cached entry — the next authorize re-reads the fresh row (fail-closed).
+        state.skill_cache.invalidate(&SkillActionCache::cache_key(
+            &tenant_id,
+            &payload.skill_key,
+            &action.action_key,
+        ));
     }
 
     (
@@ -1079,6 +1184,12 @@ pub async fn discover_mcp_tools(
             )
                 .into_response();
         }
+        // #899: re-discovery may change this tool's settings — invalidate the cache.
+        state.skill_cache.invalidate(&SkillActionCache::cache_key(
+            &tenant_id,
+            &skill_key,
+            &tool.tool_key,
+        ));
 
         let audit_record = AuditEventRecord {
             id: Uuid::new_v4().to_string(),
@@ -1422,29 +1533,47 @@ pub async fn authorize_action(
     let mut action_approval_required = false;
     let mut action_default_decision = "policy".to_string();
 
-    match db::get_skill_action(
-        &state.pool,
+    // Read-through cache (#899): registered-action metadata is static between
+    // registrations, so serve it from the LRU and fall back to the DB on a miss.
+    let skill_cache_key = SkillActionCache::cache_key(
         &tenant_id,
         &payload.tool_call.tool,
         &payload.tool_call.action,
-    )
-    .await
-    {
-        Ok(Some((risk, _, approval_required, default_decision))) => {
-            risk_level = risk;
-            risk_score = risk_score_for_level(&risk_level);
-            action_approval_required = approval_required;
-            action_default_decision = default_decision;
-        }
-        Ok(None) => {}
-        Err(e) => {
-            error!("Failed to look up registered action: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
-        }
+    );
+    let action_meta = match state.skill_cache.get(&skill_cache_key) {
+        Some(meta) => Some(meta),
+        None => match db::get_skill_action(
+            &state.pool,
+            &tenant_id,
+            &payload.tool_call.tool,
+            &payload.tool_call.action,
+        )
+        .await
+        {
+            Ok(Some(meta)) => {
+                // Cache only positive hits; unknown actions keep missing to the DB.
+                state
+                    .skill_cache
+                    .insert(skill_cache_key.clone(), meta.clone());
+                Some(meta)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                error!("Failed to look up registered action: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        },
+    };
+
+    if let Some((risk, _, approval_required, default_decision)) = action_meta {
+        risk_level = risk;
+        risk_score = risk_score_for_level(&risk_level);
+        action_approval_required = approval_required;
+        action_default_decision = default_decision;
     }
 
     let mcp_server_key = mcp_server_key_from_tool(&payload.tool_call.tool).map(str::to_string);
@@ -4149,6 +4278,7 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1.0, 1.0),
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
+            skill_cache: SkillActionCache::new(1024),
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -4178,6 +4308,7 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(100.0, 100.0), // high rate limit
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
+            skill_cache: SkillActionCache::new(1024),
         });
 
         // First request is allowed through quota
@@ -4256,6 +4387,7 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
+            skill_cache: SkillActionCache::new(1024),
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -7235,5 +7367,100 @@ mod tests {
         let other_body = to_bytes(other.into_body(), usize::MAX).await.unwrap();
         let other_servers: Vec<serde_json::Value> = serde_json::from_slice(&other_body).unwrap();
         assert!(other_servers.is_empty());
+    }
+
+    // ---- #899: skill_action read-through LRU cache ----
+
+    #[test]
+    fn skill_action_cache_hit_evict_invalidate_and_disabled() {
+        let meta = |r: &str| (r.to_string(), false, false, "policy".to_string());
+        let cache = SkillActionCache::new(2);
+        let k1 = SkillActionCache::cache_key("t1", "s", "a1");
+        let k2 = SkillActionCache::cache_key("t1", "s", "a2");
+        let k3 = SkillActionCache::cache_key("t1", "s", "a3");
+
+        cache.insert(k1.clone(), meta("low"));
+        assert_eq!(cache.get(&k1), Some(meta("low"))); // hit
+                                                       // Tenant-scoped: same skill/action under another tenant is a distinct key.
+        assert_eq!(
+            cache.get(&SkillActionCache::cache_key("t2", "s", "a1")),
+            None
+        );
+
+        // LRU eviction at capacity 2: k1 is most-recently-used, so inserting k3
+        // over capacity evicts the least-recent (k2).
+        cache.insert(k2.clone(), meta("low"));
+        let _ = cache.get(&k1);
+        cache.insert(k3.clone(), meta("low"));
+        assert_eq!(cache.get(&k2), None);
+        assert!(cache.get(&k1).is_some());
+        assert!(cache.get(&k3).is_some());
+
+        cache.invalidate(&k1);
+        assert_eq!(cache.get(&k1), None);
+
+        // Capacity 0 disables the cache entirely.
+        let disabled = SkillActionCache::new(0);
+        disabled.insert(k1.clone(), meta("low"));
+        assert_eq!(disabled.get(&k1), None);
+    }
+
+    async fn register_ship_action(state: &Arc<AppState>, tenant_id: &str, risk: &str) {
+        let req = RegisterToolRequest {
+            skill_key: "deployer".to_string(),
+            name: "Deployer".to_string(),
+            r#type: "static".to_string(),
+            auth_type: None,
+            owner_team: None,
+            default_risk: None,
+            actions: vec![RegisterToolAction {
+                action_key: "ship".to_string(),
+                description: None,
+                risk: risk.to_string(),
+                mutates_state: false,
+                data_access: None,
+                approval_required: false,
+                default_decision: "policy".to_string(),
+            }],
+        };
+        let resp = register_tool(
+            State(state.clone()),
+            TenantId(tenant_id.to_string()),
+            Json(req),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// Fail-closed staleness guard: after a cached authorize, re-registering the
+    /// same action with a STRICTER risk must be reflected on the next authorize
+    /// (the registration invalidates the cache — no stale looser metadata).
+    #[tokio::test]
+    async fn authorize_skill_cache_invalidated_on_reregister() {
+        let (state, tenant_id, agent_token) = setup_state("skill_cache_reregister").await;
+
+        register_ship_action(&state, &tenant_id, "low").await;
+        let r1 = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("deployer", "ship"),
+        )
+        .await;
+        assert_eq!(r1.risk_level, "low"); // populates the cache
+
+        register_ship_action(&state, &tenant_id, "critical").await; // invalidates
+        let r2 = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("deployer", "ship"),
+        )
+        .await;
+        assert_eq!(
+            r2.risk_level, "critical",
+            "re-registration must invalidate the cache (no stale low-risk metadata)"
+        );
     }
 }
