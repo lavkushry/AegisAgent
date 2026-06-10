@@ -7926,4 +7926,148 @@ mod tests {
         assert!(other.decisions.is_empty());
         assert!(other.action_receipts.is_empty());
     }
+
+    fn register_agent_router(state: Arc<AppState>) -> axum::Router {
+        use axum::routing::post;
+        axum::Router::new()
+            .route("/v1/agents/register", post(register_agent))
+            .with_state(state)
+    }
+
+    fn register_agent_payload(agent_key: &str) -> serde_json::Value {
+        json!({
+            "agent_key": agent_key,
+            "name": "Test Agent",
+            "owner_team": "platform",
+            "environment": "staging",
+            "framework": "langchain",
+            "model_provider": "anthropic",
+            "model_name": "claude",
+            "risk_tier": "medium",
+            "purpose": "testing"
+        })
+    }
+
+    /// #0111: POST /v1/agents/register with a valid payload returns 201 and
+    /// a fresh agent_id/agent_token.
+    #[tokio::test]
+    async fn register_agent_returns_201_with_valid_payload() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, tenant_id, _agent_token) = setup_state("register_agent_201").await;
+        let app = register_agent_router(state);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/agents/register")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", tenant_id))
+            .body(axum::body::Body::from(
+                register_agent_payload("new-agent").to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: RegisterAgentResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.agent_key, "new-agent");
+        assert!(!parsed.agent_token.is_empty());
+    }
+
+    /// #0112: registering the same agent_key twice returns 200 with the
+    /// existing agent's id/token, instead of creating a duplicate.
+    #[tokio::test]
+    async fn register_agent_returns_existing_agent_on_duplicate_key() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, tenant_id, _agent_token) = setup_state("register_agent_dup").await;
+        let app = register_agent_router(state);
+
+        let make_request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents/register")
+                .header("content-type", "application/json")
+                .header("Authorization", format!("Bearer {}", tenant_id))
+                .body(axum::body::Body::from(
+                    register_agent_payload("dup-agent").to_string(),
+                ))
+                .unwrap()
+        };
+
+        let first = app.clone().oneshot(make_request()).await.unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let first_body = axum::body::to_bytes(first.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let first_parsed: RegisterAgentResponse = serde_json::from_slice(&first_body).unwrap();
+
+        let second = app.oneshot(make_request()).await.unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_body = axum::body::to_bytes(second.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let second_parsed: RegisterAgentResponse = serde_json::from_slice(&second_body).unwrap();
+
+        assert_eq!(second_parsed.id, first_parsed.id);
+        assert_eq!(second_parsed.agent_token, first_parsed.agent_token);
+    }
+
+    /// #0113: a payload missing the required agent_key field is rejected
+    /// before reaching the handler (JSON extractor failure).
+    #[tokio::test]
+    async fn register_agent_rejects_missing_agent_key() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, tenant_id, _agent_token) = setup_state("register_agent_missing_key").await;
+        let app = register_agent_router(state);
+
+        let mut payload = register_agent_payload("ignored");
+        payload.as_object_mut().unwrap().remove("agent_key");
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/agents/register")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", tenant_id))
+            .body(axum::body::Body::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "expected a 4xx for missing agent_key, got {:?}",
+            response.status()
+        );
+    }
+
+    /// #0114: a request with no Authorization header is rejected with 401
+    /// before the handler runs (TenantId extractor).
+    #[tokio::test]
+    async fn register_agent_rejects_missing_authorization_header() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, _tenant_id, _agent_token) = setup_state("register_agent_no_auth").await;
+        let app = register_agent_router(state);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/agents/register")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                register_agent_payload("no-auth-agent").to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }
