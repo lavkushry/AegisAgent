@@ -8,6 +8,7 @@
 //! (detection, correlation, response, indexing) is a *consumer* of this one
 //! stream and never touches the inline path again.
 
+use crate::baseline;
 use crate::correlate::Correlator;
 use crate::db;
 use crate::detect::Detector;
@@ -117,6 +118,65 @@ impl EventSink {
 /// and discarded; the drain loop never panics or aborts on a DB failure (design
 /// law 3 — out-of-band best-effort). Secrets are never stored: only ids,
 /// summaries, and severity (redaction invariant).
+/// Log, notify (HIGH only), and persist (Phase 5) one detection alert —
+/// shared by Phase 1 ([`Detector`]) and SOC-007 ([`baseline`]) alerts.
+/// Best-effort: a persistence error is logged and never panics or aborts the
+/// drain loop (design law 3).
+async fn handle_alert(alert: &crate::detect::Alert, sink: &dyn NotifySink, pool: &SqlitePool) {
+    match alert.severity.as_str() {
+        "high" => {
+            warn!(
+                alert_id = %alert.alert_id,
+                rule = %alert.rule,
+                severity = %alert.severity,
+                tenant = %alert.tenant_id,
+                agent = %alert.agent_id,
+                source_event_id = %alert.source_event_id,
+                summary = %alert.summary,
+                "SOC alert",
+            );
+            // Phase 2 — alert notify: HIGH alerts only.
+            sink.notify(NotifyMessage {
+                kind: "alert".to_string(),
+                severity: alert.severity.clone(),
+                tenant_id: alert.tenant_id.clone(),
+                agent_id: alert.agent_id.clone(),
+                summary: alert.summary.clone(),
+                alert_or_incident_id: Some(alert.alert_id.clone()),
+                occurred_at: alert.occurred_at.clone(),
+            });
+        }
+        _ => info!(
+            alert_id = %alert.alert_id,
+            rule = %alert.rule,
+            severity = %alert.severity,
+            tenant = %alert.tenant_id,
+            agent = %alert.agent_id,
+            source_event_id = %alert.source_event_id,
+            summary = %alert.summary,
+            "SOC alert",
+        ),
+    }
+
+    // Phase 5 — persist the alert (best-effort; never panics on failure).
+    let alert_record = SocAlertRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: alert.tenant_id.clone(),
+        rule: alert.rule.clone(),
+        severity: alert.severity.clone(),
+        agent_id: alert.agent_id.clone(),
+        source_event_id: alert.source_event_id.clone(),
+        summary: alert.summary.clone(),
+        created_at: alert.occurred_at.clone(),
+    };
+    if let Err(e) = db::insert_soc_alert(pool, &alert_record).await {
+        error!(
+            alert_id = %alert.alert_id,
+            "Phase 5: failed to persist SOC alert: {:?}", e
+        );
+    }
+}
+
 pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize {
     let detector = Detector::default();
     // Phase 2: construct the notify sink once from env; NullSink when
@@ -157,56 +217,21 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
 
         // Phase 1: deterministic, atomic detection over the single event.
         for alert in detector.evaluate(&ev) {
-            match alert.severity.as_str() {
-                "high" => {
-                    warn!(
-                        alert_id = %alert.alert_id,
-                        rule = %alert.rule,
-                        severity = %alert.severity,
-                        tenant = %alert.tenant_id,
-                        agent = %alert.agent_id,
-                        source_event_id = %alert.source_event_id,
-                        summary = %alert.summary,
-                        "SOC alert",
-                    );
-                    // Phase 2 — alert notify: HIGH alerts only.
-                    sink.notify(NotifyMessage {
-                        kind: "alert".to_string(),
-                        severity: alert.severity.clone(),
-                        tenant_id: alert.tenant_id.clone(),
-                        agent_id: alert.agent_id.clone(),
-                        summary: alert.summary.clone(),
-                        alert_or_incident_id: Some(alert.alert_id.clone()),
-                        occurred_at: alert.occurred_at.clone(),
-                    });
-                }
-                _ => info!(
-                    alert_id = %alert.alert_id,
-                    rule = %alert.rule,
-                    severity = %alert.severity,
-                    tenant = %alert.tenant_id,
-                    agent = %alert.agent_id,
-                    source_event_id = %alert.source_event_id,
-                    summary = %alert.summary,
-                    "SOC alert",
-                ),
-            }
+            handle_alert(&alert, sink.as_ref(), &pool).await;
+        }
 
-            // Phase 5 — persist the alert (best-effort; never panics on failure).
-            let alert_record = SocAlertRecord {
-                id: Uuid::new_v4().to_string(),
-                tenant_id: alert.tenant_id.clone(),
-                rule: alert.rule.clone(),
-                severity: alert.severity.clone(),
-                agent_id: alert.agent_id.clone(),
-                source_event_id: alert.source_event_id.clone(),
-                summary: alert.summary.clone(),
-                created_at: alert.occurred_at.clone(),
-            };
-            if let Err(e) = db::insert_soc_alert(&pool, &alert_record).await {
+        // SOC-007 (#1190): per-agent behavioral baselining (rate anomaly +
+        // first-use-of-tool). Runs after Phase 1 — out-of-band (Law 3).
+        match baseline::evaluate(&pool, &ev).await {
+            Ok(baseline_alerts) => {
+                for alert in baseline_alerts {
+                    handle_alert(&alert, sink.as_ref(), &pool).await;
+                }
+            }
+            Err(e) => {
                 error!(
-                    alert_id = %alert.alert_id,
-                    "Phase 5: failed to persist SOC alert: {:?}", e
+                    event_id = %ev.event_id,
+                    "SOC-007: behavioral baseline evaluation failed: {:?}", e
                 );
             }
         }

@@ -530,6 +530,36 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // SOC-007 (#1190): per-(tenant, agent) hourly action counts, used as the
+    // rolling 7-day baseline for the behavioral-anomaly rate check.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_hourly_action_counts (
+            tenant_id    TEXT NOT NULL,
+            agent_id     TEXT NOT NULL,
+            hour_bucket  TEXT NOT NULL,
+            action_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (tenant_id, agent_id, hour_bucket)
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    // SOC-007 (#1190): every (tool, action) an agent has ever been observed
+    // calling — used to detect "agent used a tool/action it has never used
+    // before" (a deterministic, threshold-free anomaly signal).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agent_known_tool_actions (
+            tenant_id     TEXT NOT NULL,
+            agent_id      TEXT NOT NULL,
+            tool_key      TEXT NOT NULL,
+            action_key    TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, agent_id, tool_key, action_key)
+        );",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -2176,6 +2206,112 @@ pub async fn is_agent_active(
             .fetch_optional(pool)
             .await?;
     Ok(row.map(|(s,)| s == "active").unwrap_or(false))
+}
+
+// ── SOC-007 (#1190): behavioral baselining ────────────────────────────────────
+
+/// Increment the action count for `(tenant_id, agent_id, hour_bucket)` and
+/// return the new count. `hour_bucket` is an opaque, sortable string (e.g.
+/// `"2026-06-10T12"`) — comparisons are purely lexicographic.
+pub async fn increment_agent_hourly_count(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    hour_bucket: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO agent_hourly_action_counts (tenant_id, agent_id, hour_bucket, action_count)
+         VALUES (?, ?, ?, 1)
+         ON CONFLICT (tenant_id, agent_id, hour_bucket)
+         DO UPDATE SET action_count = action_count + 1",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(hour_bucket)
+    .execute(pool)
+    .await?;
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT action_count FROM agent_hourly_action_counts
+         WHERE tenant_id = ? AND agent_id = ? AND hour_bucket = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(hour_bucket)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count)
+}
+
+/// Action counts for every hour bucket in `[since_bucket, current_bucket)` for
+/// `(tenant_id, agent_id)` — the rolling baseline window, excluding the current
+/// (still-accumulating) hour. Lexicographic string comparison works because
+/// `hour_bucket` is zero-padded `YYYY-MM-DDTHH`.
+pub async fn get_recent_hourly_counts(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    since_bucket: &str,
+    current_bucket: &str,
+) -> Result<Vec<i64>, sqlx::Error> {
+    let counts: Vec<(i64,)> = sqlx::query_as(
+        "SELECT action_count FROM agent_hourly_action_counts
+         WHERE tenant_id = ? AND agent_id = ?
+           AND hour_bucket >= ? AND hour_bucket < ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(since_bucket)
+    .bind(current_bucket)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(counts.into_iter().map(|(c,)| c).collect())
+}
+
+/// Record that `(tenant_id, agent_id)` has been observed calling
+/// `(tool_key, action_key)`. Returns `true` if this is the *first* time this
+/// agent has used this tool/action (a deterministic novelty signal), `false`
+/// if it was already known.
+pub async fn record_known_tool_action(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    tool_key: &str,
+    action_key: &str,
+    occurred_at: &str,
+) -> Result<bool, sqlx::Error> {
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM agent_known_tool_actions
+         WHERE tenant_id = ? AND agent_id = ? AND tool_key = ? AND action_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(tool_key)
+    .bind(action_key)
+    .fetch_optional(pool)
+    .await?;
+
+    if existing.is_some() {
+        return Ok(false);
+    }
+
+    sqlx::query(
+        "INSERT INTO agent_known_tool_actions
+            (tenant_id, agent_id, tool_key, action_key, first_seen_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (tenant_id, agent_id, tool_key, action_key) DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(tool_key)
+    .bind(action_key)
+    .bind(occurred_at)
+    .execute(pool)
+    .await?;
+
+    Ok(true)
 }
 
 // ── SOC Phase 5: alert + incident persistence ─────────────────────────────────
