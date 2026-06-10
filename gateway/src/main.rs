@@ -11,8 +11,9 @@ use axum::{
 };
 use serde_json::json;
 use std::sync::Arc;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
@@ -80,6 +81,28 @@ async fn version_handler() -> impl IntoResponse {
             "name": "aegis-gateway",
         })),
     )
+}
+
+/// Builds the panic handler for [`CatchPanicLayer::custom`] (#1153). Logs the
+/// panic payload at ERROR level, increments `aegis_handler_panics_total`, and
+/// returns a structured 500 JSON body instead of dropping the connection.
+fn panic_response(
+    state: Arc<AppState>,
+) -> impl Fn(Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response + Clone {
+    move |err: Box<dyn std::any::Any + Send + 'static>| {
+        let detail = if let Some(s) = err.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = err.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "unknown panic".to_string()
+        };
+        error!("handler panicked: {}", detail);
+        state.metrics.inc_handler_panic();
+
+        let body = Json(json!({"error": "Internal server error"}));
+        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+    }
 }
 
 /// GET /metrics — Prometheus text exposition of process-wide security counters.
@@ -777,7 +800,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 6. Global request timeout
         .layer(tower_http::timeout::TimeoutLayer::new(
             std::time::Duration::from_secs(request_timeout_secs),
-        ));
+        ))
+        // 7. CatchPanic — outermost, so a panic anywhere in the stack returns
+        // a structured 500 instead of dropping the connection (#1153).
+        .layer(CatchPanicLayer::custom(panic_response(state.clone())));
 
     // Bind address — configurable via AEGIS_BIND_ADDR, defaults to 127.0.0.1:8080
     // for security (local-only in dev/test). Production deployments should set this
@@ -957,6 +983,72 @@ mod tests {
         assert_eq!(alerts[0].source_event_id, "evt_test_shutdown");
 
         // Clean up DB file
+        let db_path = db_url.strip_prefix("sqlite://").unwrap_or(&db_url);
+        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_file(format!("{}-shm", db_path));
+        let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+
+    /// #1153: a panicking handler must not drop the connection — the
+    /// CatchPanicLayer should convert it into a structured 500 JSON
+    /// response and increment `aegis_handler_panics_total`.
+    #[tokio::test]
+    async fn catch_panic_layer_returns_500_and_increments_metric() {
+        use axum::routing::get;
+        use tower::ServiceExt;
+
+        let db_url = format!(
+            "sqlite://target/test_catch_panic_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let pool = db::init_db(&db_url).await.unwrap();
+        let policy_engine = crate::policy::PolicyEngine::init("policies.cedar")
+            .await
+            .unwrap();
+        let (events, _events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
+        let state = Arc::new(routes::AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
+            quota_manager: routes::QuotaManager::new(0, 86400),
+            skill_cache: routes::SkillActionCache::new(1024),
+        });
+
+        let app = Router::new()
+            .route(
+                "/boom",
+                get(|| async {
+                    panic!("boom");
+                    #[allow(unreachable_code)]
+                    ""
+                }),
+            )
+            .with_state(state.clone())
+            .layer(CatchPanicLayer::custom(panic_response(state.clone())));
+
+        let response = app
+            .oneshot(Request::builder().uri("/boom").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "Internal server error");
+
+        assert_eq!(
+            state
+                .metrics
+                .handler_panics_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
         let db_path = db_url.strip_prefix("sqlite://").unwrap_or(&db_url);
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(format!("{}-shm", db_path));
