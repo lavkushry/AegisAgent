@@ -5086,6 +5086,66 @@ mod tests {
         assert_eq!(response.decision, "deny");
     }
 
+    /// #0119: a mutating action whose triggering content has
+    /// `semi_trusted_customer` provenance is paused for human review rather
+    /// than auto-allowed or auto-denied.
+    #[tokio::test]
+    async fn authorize_requires_approval_for_customer_context() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_customer_context").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "semi_trusted_customer".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+
+        assert_eq!(response.decision, "require_approval");
+        let approval = response.approval.expect("approval info should be present");
+        assert_eq!(
+            approval.approver_group.as_deref(),
+            Some("security-reviewers")
+        );
+    }
+
+    /// #0120: the `risk_score` returned by `/v1/authorize` matches the
+    /// registered action's risk level via `risk_score_for_level`.
+    #[tokio::test]
+    async fn authorize_returns_correct_risk_score() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_risk_score").await;
+        register_ship_action(&state, &tenant_id, "high").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+
+        assert_eq!(response.risk_level, "high");
+        assert_eq!(response.risk_score, 75);
+    }
+
+    /// #0121: a critical-risk registered action that would otherwise be
+    /// allowed has `matched_policies` annotated with the secure-default that
+    /// downgraded it to `require_approval`.
+    #[tokio::test]
+    async fn authorize_returns_correct_matched_policies() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_matched_policies").await;
+        register_ship_action(&state, &tenant_id, "critical").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+
+        assert_eq!(response.decision, "require_approval");
+        assert_eq!(response.risk_score, 95);
+        assert!(response
+            .matched_policies
+            .contains(&"critical_risk_requires_approval".to_string()));
+    }
+
     #[tokio::test]
     async fn approval_flow_binds_original_action_hash() {
         let (state, tenant_id, agent_token) = setup_state("approval_action_hash").await;
