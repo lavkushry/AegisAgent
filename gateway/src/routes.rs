@@ -3955,6 +3955,74 @@ pub async fn get_db_stats(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }
 }
 
+/// POST /v1/admin/backup (#945): write a consistent point-in-time copy of the
+/// database via `VACUUM INTO`. The destination filename is restricted to a
+/// bare filename (no path separators or `..`) under `AEGIS_BACKUP_DIR`
+/// (default `backups`), which is created if missing, to prevent path
+/// traversal to arbitrary filesystem locations.
+pub async fn create_db_backup(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateBackupRequest>,
+) -> impl IntoResponse {
+    let filename = std::path::Path::new(&payload.filename);
+    if payload.filename.is_empty()
+        || filename.file_name().map(|f| f.to_owned()) != Some(filename.as_os_str().to_owned())
+        || payload.filename.contains("..")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "filename must be a bare filename with no path separators"})),
+        )
+            .into_response();
+    }
+
+    let backup_dir = std::env::var("AEGIS_BACKUP_DIR").unwrap_or_else(|_| "backups".to_string());
+    if let Err(e) = std::fs::create_dir_all(&backup_dir) {
+        error!("Failed to create backup directory: {:?}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "Failed to create backup directory"})),
+        )
+            .into_response();
+    }
+
+    let dest_path = std::path::Path::new(&backup_dir).join(&payload.filename);
+    let dest_path_str = dest_path.to_string_lossy().to_string();
+
+    // VACUUM INTO refuses to write to an already-existing file.
+    if dest_path.exists() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "Backup file already exists"})),
+        )
+            .into_response();
+    }
+
+    match db::backup_database_to(&state.pool, &dest_path_str).await {
+        Ok(()) => {
+            let size_bytes = std::fs::metadata(&dest_path)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0);
+            (
+                StatusCode::OK,
+                Json(CreateBackupResponse {
+                    path: dest_path_str,
+                    size_bytes,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to create db backup: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn get_openapi_spec() -> impl IntoResponse {
     let spec = json!({
         "openapi": "3.1.0",
@@ -4363,6 +4431,16 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Get whole-database operational stats (size, per-table row counts)",
                     "responses": {
                         "200": { "description": "DB stats" }
+                    }
+                }
+            },
+            "/v1/admin/backup": {
+                "post": {
+                    "summary": "Create a point-in-time database backup copy",
+                    "responses": {
+                        "200": { "description": "Backup created" },
+                        "400": { "description": "Invalid filename" },
+                        "409": { "description": "Backup file already exists" }
                     }
                 }
             }
@@ -8223,6 +8301,57 @@ mod tests {
             .find(|t| t.table == "decisions")
             .expect("decisions table present in db-stats");
         assert!(decisions.row_count >= 1);
+    }
+
+    /// #945: POST /v1/admin/backup writes a point-in-time copy under
+    /// AEGIS_BACKUP_DIR; rejects path-traversal filenames; rejects a repeat
+    /// request for the same filename (VACUUM INTO refuses to overwrite).
+    #[tokio::test]
+    async fn test_create_db_backup_route() {
+        let (state, _tenant_id, _agent_token) = setup_state("db_backup_route").await;
+
+        let backup_dir = format!("target/backup_route_{}", Uuid::new_v4().simple());
+        std::env::set_var("AEGIS_BACKUP_DIR", &backup_dir);
+
+        // Path traversal is rejected.
+        let bad_resp = create_db_backup(
+            State(state.clone()),
+            Json(CreateBackupRequest {
+                filename: "../escape.db".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(bad_resp.status(), StatusCode::BAD_REQUEST);
+
+        // A bare filename succeeds and reports a non-zero size.
+        let resp = create_db_backup(
+            State(state.clone()),
+            Json(CreateBackupRequest {
+                filename: "snapshot.db".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let backup: CreateBackupResponse = serde_json::from_slice(&body).unwrap();
+        assert!(backup.size_bytes > 0);
+        assert!(std::path::Path::new(&backup.path).exists());
+
+        // A repeat with the same filename is rejected (file already exists).
+        let dup_resp = create_db_backup(
+            State(state.clone()),
+            Json(CreateBackupRequest {
+                filename: "snapshot.db".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(dup_resp.status(), StatusCode::CONFLICT);
+
+        std::env::remove_var("AEGIS_BACKUP_DIR");
+        let _ = std::fs::remove_dir_all(&backup_dir);
     }
 
     #[tokio::test]

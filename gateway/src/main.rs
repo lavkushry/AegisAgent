@@ -599,6 +599,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Statistics
         .route("/v1/stats", get(routes::get_tenant_stats))
         .route("/v1/admin/db-stats", get(routes::get_db_stats))
+        .route("/v1/admin/backup", post(routes::create_db_backup))
         // OpenAPI Specification
         .route("/v1/openapi.json", get(routes::get_openapi_spec))
         // Health and version
