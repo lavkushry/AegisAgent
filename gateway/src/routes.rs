@@ -830,7 +830,7 @@ pub async fn register_agent(
                 Json(RegisterAgentResponse {
                     id,
                     agent_key: agent.agent_key,
-                    agent_token: agent.agent_token,
+                    agent_token: "[REDACTED]".to_string(),
                 }),
             )
                 .into_response();
@@ -848,6 +848,7 @@ pub async fn register_agent(
 
     // Generate a secure agent token
     let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+    let hashed_token = db::hash_token(&agent_token);
 
     let agent_id = Uuid::new_v4();
 
@@ -855,7 +856,7 @@ pub async fn register_agent(
         id: agent_id.to_string(),
         tenant_id: tenant_id.clone(),
         agent_key: payload.agent_key,
-        agent_token: agent_token.clone(),
+        agent_token: hashed_token,
         name: payload.name,
         owner_team: payload.owner_team,
         owner_email: None,
@@ -4783,7 +4784,7 @@ mod tests {
             id: agent_id,
             tenant_id: tenant_id.clone(),
             agent_key: "routes-agent".to_string(),
-            agent_token: agent_token.clone(),
+            agent_token: db::hash_token(&agent_token),
             name: "Routes Agent".to_string(),
             owner_team: Some("platform".to_string()),
             owner_email: None,
@@ -9078,7 +9079,7 @@ mod tests {
         let second_parsed: RegisterAgentResponse = serde_json::from_slice(&second_body).unwrap();
 
         assert_eq!(second_parsed.id, first_parsed.id);
-        assert_eq!(second_parsed.agent_token, first_parsed.agent_token);
+        assert_eq!(second_parsed.agent_token, "[REDACTED]");
     }
 
     #[tokio::test]
@@ -9108,6 +9109,58 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "Tenant 'tenant_nonexistent_xyz' not found");
+    }
+
+    #[tokio::test]
+    async fn test_agent_token_is_hashed_in_db() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, tenant_id, _) = setup_state("agent_token_hashing").await;
+        let app = register_agent_router(state.clone());
+
+        // 1. Register a new agent
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/agents/register")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", tenant_id))
+            .body(axum::body::Body::from(
+                register_agent_payload("hash-agent").to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: RegisterAgentResponse = serde_json::from_slice(&body).unwrap();
+        let cleartext_token = parsed.agent_token;
+
+        // Verify we got a valid-looking cleartext token
+        assert!(cleartext_token.starts_with("agent_tok_"));
+
+        // 2. Query the DB directly to check the stored token
+        let stored_agent = db::get_agent_by_key(&state.pool, &tenant_id, "hash-agent")
+            .await
+            .unwrap()
+            .expect("agent should exist in database");
+
+        // Stored token must NOT be cleartext
+        assert_ne!(stored_agent.agent_token, cleartext_token);
+
+        // Stored token must be the SHA-256 hash of the cleartext token
+        let expected_hash = db::hash_token(&cleartext_token);
+        assert_eq!(stored_agent.agent_token, expected_hash);
+
+        // 3. Verify that get_agent_by_token successfully resolves the agent using cleartext
+        let resolved = db::get_agent_by_token(&state.pool, &tenant_id, &cleartext_token)
+            .await
+            .unwrap();
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().agent_key, "hash-agent");
     }
 
     /// #0113: a payload missing the required agent_key field is rejected
