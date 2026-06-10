@@ -1,5 +1,5 @@
 use crate::models::*;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::str::FromStr;
 
@@ -279,6 +279,37 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tenant_id) REFERENCES tenants(id)
         );",
+    )
+    .execute(pool)
+    .await?;
+
+    // #0106: archive table for old audit_events rows, identical schema (minus
+    // the FK, since archived rows must outlive any later tenant deletion).
+    // Populated by `archive_audit_events_older_than`.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_events_archive (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            agent_id TEXT,
+            user_id TEXT,
+            run_id TEXT,
+            trace_id TEXT,
+            span_id TEXT,
+            skill TEXT,
+            action TEXT,
+            resource TEXT,
+            event_json TEXT NOT NULL,
+            input_hash TEXT,
+            output_hash TEXT,
+            created_at DATETIME NOT NULL,
+            archived_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_archive_tenant ON audit_events_archive (tenant_id);",
     )
     .execute(pool)
     .await?;
@@ -1561,6 +1592,36 @@ pub async fn insert_audit_event(
     Ok(())
 }
 
+/// Move `audit_events` rows older than `cutoff` into `audit_events_archive`
+/// (#0106), then delete them from the live table. Runs as a single
+/// transaction so a row is never lost or duplicated across the two tables.
+/// Returns the number of rows archived.
+pub async fn archive_audit_events_older_than(
+    pool: &SqlitePool,
+    cutoff: DateTime<Utc>,
+) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO audit_events_archive
+            (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, created_at)
+         SELECT id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, created_at
+         FROM audit_events
+         WHERE created_at < ?",
+    )
+    .bind(cutoff)
+    .execute(&mut *tx)
+    .await?;
+
+    let result = sqlx::query("DELETE FROM audit_events WHERE created_at < ?")
+        .bind(cutoff)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
 /// Atomically append a receipt to a tenant's hash chain (T-D hardening).
 ///
 /// Reading the chain head and inserting the new (head-referencing) receipt happen
@@ -2174,6 +2235,75 @@ mod tests {
                     .unwrap();
             assert!(found.is_some(), "composite index {name} must be created");
         }
+    }
+
+    /// #0106: rows older than the cutoff are moved to audit_events_archive
+    /// and removed from audit_events; recent rows are untouched.
+    #[tokio::test]
+    async fn archive_audit_events_older_than_moves_old_rows() {
+        let pool = setup_pool("audit_archival").await;
+        register_tenant(&pool, "tenant_archive", "Archive Tenant", "developer")
+            .await
+            .unwrap();
+
+        let old_event = AuditEventRecord {
+            id: "evt_old".to_string(),
+            tenant_id: "tenant_archive".to_string(),
+            event_type: "decision".to_string(),
+            agent_id: None,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: None,
+            action: None,
+            resource: None,
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            created_at: Utc::now(),
+        };
+        let new_event = AuditEventRecord {
+            id: "evt_new".to_string(),
+            ..old_event.clone()
+        };
+        insert_audit_event(&pool, &old_event).await.unwrap();
+        insert_audit_event(&pool, &new_event).await.unwrap();
+
+        // Backdate evt_old so it falls before the cutoff.
+        sqlx::query(
+            "UPDATE audit_events SET created_at = '2000-01-01T00:00:00Z' WHERE id = 'evt_old'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let cutoff = Utc::now() - chrono::Duration::days(1);
+        let archived = archive_audit_events_older_than(&pool, cutoff)
+            .await
+            .unwrap();
+        assert_eq!(archived, 1);
+
+        let remaining: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = 'evt_old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining.0, 0);
+
+        let archived_row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_events_archive WHERE id = 'evt_old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(archived_row.0, 1);
+
+        let still_present: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = 'evt_new'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(still_present.0, 1);
     }
 
     #[tokio::test]
