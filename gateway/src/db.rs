@@ -13,6 +13,47 @@ pub async fn health_check(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .map(|_| ())
 }
 
+/// Returns `true` if `err` is a transient SQLite "database is locked"
+/// (`SQLITE_BUSY`, code 5) or "table is locked" (`SQLITE_LOCKED`, code 6)
+/// error — both are safe to retry, unlike e.g. constraint violations.
+fn is_retryable_sqlite_busy(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db_err) => matches!(db_err.code().as_deref(), Some("5") | Some("6")),
+        _ => false,
+    }
+}
+
+/// Run a write operation, retrying up to `max_retries` additional times with
+/// exponential backoff (1ms, 2ms, 4ms, ...) if it fails with a transient
+/// `SQLITE_BUSY`/`SQLITE_LOCKED` error (#1151). Non-retryable errors and the
+/// final attempt's error propagate immediately. Each retry is logged at
+/// DEBUG level.
+pub async fn retry_on_busy<F, Fut, T>(max_retries: u32, mut f: F) -> Result<T, sqlx::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    let mut attempt = 0;
+    loop {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt < max_retries && is_retryable_sqlite_busy(&e) => {
+                let delay_ms = 1u64 << attempt;
+                tracing::debug!(
+                    "retrying after SQLITE_BUSY/LOCKED (attempt {}/{}, backoff {}ms): {}",
+                    attempt + 1,
+                    max_retries,
+                    delay_ms,
+                    e
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Default page size for `list_soc_alerts` / `list_soc_incidents`.
 pub const SOC_DEFAULT_LIMIT: i64 = 50;
 /// Hard cap to prevent accidentally returning enormous result sets.
@@ -756,20 +797,23 @@ pub async fn consume_approval(
     tenant_id: &str,
     approval_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let now = Utc::now();
-    let result = sqlx::query(
-        "UPDATE approvals
-         SET consumed_at = ?
-         WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
-           AND (expires_at IS NULL OR expires_at > ?)",
-    )
-    .bind(now)
-    .bind(tenant_id)
-    .bind(approval_id)
-    .bind(now)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected() == 1)
+    retry_on_busy(3, || async {
+        let now = Utc::now();
+        let result = sqlx::query(
+            "UPDATE approvals
+             SET consumed_at = ?
+             WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
+               AND (expires_at IS NULL OR expires_at > ?)",
+        )
+        .bind(now)
+        .bind(tenant_id)
+        .bind(approval_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    })
+    .await
 }
 
 // --- Multi-Tenant CRUD Operations ---
@@ -2438,6 +2482,110 @@ mod tests {
             Uuid::new_v4().simple()
         );
         init_db(&db_url).await.unwrap()
+    }
+
+    /// Minimal `sqlx::error::DatabaseError` impl for simulating SQLite error
+    /// codes (e.g. SQLITE_BUSY = "5") in `retry_on_busy` tests, without
+    /// needing a live locked connection.
+    #[derive(Debug)]
+    struct MockDbError {
+        code: &'static str,
+    }
+
+    impl std::fmt::Display for MockDbError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "mock db error code {}", self.code)
+        }
+    }
+
+    impl std::error::Error for MockDbError {}
+
+    impl sqlx::error::DatabaseError for MockDbError {
+        fn message(&self) -> &str {
+            "mock db error"
+        }
+
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(self.code.into())
+        }
+
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    fn busy_error() -> sqlx::Error {
+        sqlx::Error::Database(Box::new(MockDbError { code: "5" }))
+    }
+
+    /// #1151: `retry_on_busy` retries a transient SQLITE_BUSY error with
+    /// exponential backoff and succeeds once the lock clears.
+    #[tokio::test]
+    async fn retry_on_busy_retries_transient_busy_then_succeeds() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let attempts = AtomicU32::new(0);
+
+        let result: Result<&str, sqlx::Error> = retry_on_busy(3, || {
+            let n = attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n < 2 {
+                    Err(busy_error())
+                } else {
+                    Ok("ok")
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), "ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    /// #1151: a non-retryable error (e.g. constraint violation) propagates
+    /// immediately without retrying.
+    #[tokio::test]
+    async fn retry_on_busy_propagates_non_retryable_error_immediately() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let attempts = AtomicU32::new(0);
+
+        let result: Result<&str, sqlx::Error> = retry_on_busy(3, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async move { Err(sqlx::Error::RowNotFound) }
+        })
+        .await;
+
+        assert!(matches!(result, Err(sqlx::Error::RowNotFound)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    /// #1151: after `max_retries` exhausted retryable failures, the final
+    /// error is returned.
+    #[tokio::test]
+    async fn retry_on_busy_gives_up_after_max_retries() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let attempts = AtomicU32::new(0);
+
+        let result: Result<&str, sqlx::Error> = retry_on_busy(3, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async move { Err(busy_error()) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        // initial attempt + 3 retries = 4 total
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
