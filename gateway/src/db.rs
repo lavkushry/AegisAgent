@@ -66,6 +66,8 @@ pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     // Run migrations
     run_migrations(&pool).await?;
 
+    migrate_agent_tokens(&pool).await?;
+
     Ok(pool)
 }
 
@@ -944,18 +946,49 @@ pub async fn register_tenant(
     Ok(())
 }
 
+pub fn hash_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 pub async fn get_agent_by_token(
     pool: &SqlitePool,
     tenant_id: &str,
     token: &str,
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
+    let hashed = hash_token(token);
     sqlx::query_as::<_, AgentRecord>(
         "SELECT * FROM agents WHERE tenant_id = ? AND agent_token = ? AND status != 'quarantined'",
     )
     .bind(tenant_id)
-    .bind(token)
+    .bind(hashed)
     .fetch_optional(pool)
     .await
+}
+
+pub async fn migrate_agent_tokens(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let agents = sqlx::query("SELECT id, agent_token FROM agents")
+        .fetch_all(pool)
+        .await?;
+
+    for row in agents {
+        use sqlx::Row;
+        let id: String = row.get("id");
+        let token: String = row.get("agent_token");
+
+        let is_hash = token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit());
+        if !is_hash {
+            let hashed = hash_token(&token);
+            sqlx::query("UPDATE agents SET agent_token = ? WHERE id = ?")
+                .bind(hashed)
+                .bind(id)
+                .execute(pool)
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 pub async fn get_agent_by_key(
