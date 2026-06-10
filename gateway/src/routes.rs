@@ -3937,6 +3937,24 @@ pub async fn get_tenant_stats(
     }
 }
 
+/// GET /v1/admin/db-stats (#949, #950): operational, whole-database
+/// monitoring snapshot — on-disk size and per-table row counts. Not
+/// tenant-scoped (reflects the single SQLite file shared by all tenants);
+/// intended for ops dashboards on the local-only gateway listener.
+pub async fn get_db_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::get_db_stats(&state.pool).await {
+        Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
+        Err(e) => {
+            error!("Failed to get db stats: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn get_openapi_spec() -> impl IntoResponse {
     let spec = json!({
         "openapi": "3.1.0",
@@ -4337,6 +4355,14 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Get tenant statistics summary",
                     "responses": {
                         "200": { "description": "Tenant stats" }
+                    }
+                }
+            },
+            "/v1/admin/db-stats": {
+                "get": {
+                    "summary": "Get whole-database operational stats (size, per-table row counts)",
+                    "responses": {
+                        "200": { "description": "DB stats" }
                     }
                 }
             }
@@ -8143,6 +8169,60 @@ mod tests {
         assert_eq!(stats.total_decisions, 1);
         assert_eq!(stats.decisions_allow, 1);
         assert_eq!(stats.total_agents, 1);
+    }
+
+    /// #949, #950: GET /v1/admin/db-stats reports a non-zero on-disk size and
+    /// includes a row-count entry for every core table, with `decisions`
+    /// reflecting at least the one row written above.
+    #[tokio::test]
+    async fn test_db_stats_route() {
+        let (state, tenant_id, agent_token) = setup_state("db_stats_route").await;
+
+        let auth_payload = AuthorizeRequest {
+            request_id: None,
+            agent: AuthorizeAgentContext {
+                id: "routes-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "github".to_string(),
+                action: "read_file".to_string(),
+                resource: Some("README.md".to_string()),
+                mutates_state: false,
+                parameters: json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            axum::http::HeaderValue::from_str(&format!("Bearer {}", agent_token)).unwrap(),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
+        );
+
+        let _ = authorize_action(State(state.clone()), headers, Json(auth_payload)).await;
+
+        let resp = get_db_stats(State(state.clone())).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let stats: DbStats = serde_json::from_slice(&body).unwrap();
+
+        assert!(stats.size_bytes > 0);
+        let decisions = stats
+            .tables
+            .iter()
+            .find(|t| t.table == "decisions")
+            .expect("decisions table present in db-stats");
+        assert!(decisions.row_count >= 1);
     }
 
     #[tokio::test]

@@ -506,3 +506,19 @@ pub struct TenantStats {
     pub total_agents: i64,
     pub total_receipts: i64,
 }
+
+/// Row count for a single table, part of `DbStats` (#950).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableRowCount {
+    pub table: String,
+    pub row_count: i64,
+}
+
+/// Operational database-level monitoring stats (#949, #950): on-disk size of
+/// the SQLite database file, and a per-table row count breakdown. Global
+/// (not tenant-scoped) — reflects the whole DB file shared by all tenants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbStats {
+    pub size_bytes: i64,
+    pub tables: Vec<TableRowCount>,
+}
