@@ -203,6 +203,19 @@ pub struct AgentRecord {
     pub purpose: Option<String>,
     pub risk_tier: String,
     pub status: String,
+    /// Timestamp of the most recent successful `/v1/authorize` call by this agent
+    /// (heartbeat). NULL if the agent has never made a request. Additive (#0080).
+    #[serde(default)]
+    pub last_seen_at: Option<DateTime<Utc>>,
+    /// Operator-supplied reason for the most recent freeze, surfaced in the SOC UI
+    /// and audit trail. Cleared on unfreeze. Additive (#0079).
+    #[serde(default)]
+    pub frozen_reason: Option<String>,
+    /// Timestamp the agent was placed into `quarantined` status. NULL while not
+    /// quarantined; cleared when the status changes away from `quarantined`.
+    /// Additive (#0078).
+    #[serde(default)]
+    pub quarantined_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
