@@ -71,6 +71,48 @@ async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
     }
 }
 
+/// GET /livez — Kubernetes liveness probe (#1208). Always returns 200 if the
+/// HTTP server is able to handle requests at all; an orchestrator should
+/// restart the pod if this stops responding. Deliberately does no I/O (no DB,
+/// no locks) so a wedged dependency cannot make a healthy process look dead.
+async fn livez_handler() -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({"status": "alive"})))
+}
+
+/// GET /readyz — Kubernetes readiness probe (#1208). Returns 200 only when the
+/// database is reachable, so an orchestrator stops routing traffic to a
+/// gateway that can't serve requests (fail-closed).
+async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::health_check(&state.pool).await {
+        Ok(()) => (StatusCode::OK, Json(json!({"status": "ready", "db": "up"}))),
+        Err(e) => {
+            tracing::warn!("readyz check DB ping failed: {:?}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"status": "not_ready", "db": "down"})),
+            )
+        }
+    }
+}
+
+/// GET /startupz — Kubernetes startup probe (#1208). Returns 200 once initial
+/// startup (DB pool + migrations + policy engine + background jobs) has
+/// completed; until then returns 503 so slow-starting instances aren't killed
+/// by the liveness probe before they finish initializing.
+async fn startupz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if state
+        .startup_complete
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        (StatusCode::OK, Json(json!({"status": "started"})))
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "starting"})),
+        )
+    }
+}
+
 /// GET /v1/version — build metadata for deployment verification.
 async fn version_handler() -> impl IntoResponse {
     (
@@ -664,6 +706,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rate_limiter,
         quota_manager,
         skill_cache,
+        startup_complete: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Read request body size limit (default 1MB)
@@ -782,6 +825,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/openapi.json", get(routes::get_openapi_spec))
         // Health and version
         .route("/health", get(health_handler))
+        // Kubernetes-native probes (#1208): liveness, readiness, startup
+        .route("/livez", get(livez_handler))
+        .route("/readyz", get(readyz_handler))
+        .route("/startupz", get(startupz_handler))
         .route("/v1/version", get(version_handler))
         // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
         .route("/metrics", get(metrics_handler))
@@ -812,6 +859,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     info!("AegisAgent Listening on http://{}", listener.local_addr()?);
+
+    // Startup is complete: DB pool + migrations, policy engine, and background
+    // jobs are all initialized and the listener is bound. /startupz now reports
+    // ready (#1208).
+    state
+        .startup_complete
+        .store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Graceful shutdown: listen for SIGTERM (container orchestrators) and Ctrl-C.
     // In-flight requests are drained before the process exits.
@@ -1015,6 +1069,7 @@ mod tests {
             rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
             quota_manager: routes::QuotaManager::new(0, 86400),
             skill_cache: routes::SkillActionCache::new(1024),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
         });
 
         let app = Router::new()
@@ -1053,5 +1108,147 @@ mod tests {
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(format!("{}-shm", db_path));
         let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+
+    /// Build a minimal AppState + Router exposing only the /livez, /readyz,
+    /// and /startupz probes (#1208), with a fresh SQLite DB. Returns the
+    /// router, the state (so tests can flip `startup_complete`), and the
+    /// db_url for cleanup.
+    async fn probe_test_app(test_name: &str) -> (Router, Arc<routes::AppState>, String) {
+        let db_url = format!(
+            "sqlite://target/test_probes_{}_{}.db",
+            test_name,
+            Uuid::new_v4().simple()
+        );
+        let pool = db::init_db(&db_url).await.unwrap();
+        let policy_engine = crate::policy::PolicyEngine::init("policies.cedar")
+            .await
+            .unwrap();
+        let (events, _events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
+        let state = Arc::new(routes::AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
+            quota_manager: routes::QuotaManager::new(0, 86400),
+            skill_cache: routes::SkillActionCache::new(1024),
+            startup_complete: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        let app = Router::new()
+            .route("/livez", get(livez_handler))
+            .route("/readyz", get(readyz_handler))
+            .route("/startupz", get(startupz_handler))
+            .with_state(state.clone());
+
+        (app, state, db_url)
+    }
+
+    fn cleanup_db(db_url: &str) {
+        let db_path = db_url.strip_prefix("sqlite://").unwrap_or(db_url);
+        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_file(format!("{}-shm", db_path));
+        let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+
+    #[tokio::test]
+    async fn livez_always_returns_200() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("livez").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/livez")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "alive");
+
+        cleanup_db(&db_url);
+    }
+
+    #[tokio::test]
+    async fn readyz_returns_200_when_db_reachable() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("readyz").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "ready");
+        assert_eq!(parsed["db"], "up");
+
+        cleanup_db(&db_url);
+    }
+
+    #[tokio::test]
+    async fn startupz_returns_503_until_marked_complete_then_200() {
+        use tower::ServiceExt;
+
+        let (app, state, db_url) = probe_test_app("startupz").await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/startupz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "starting");
+
+        state
+            .startup_complete
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/startupz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "started");
+
+        cleanup_db(&db_url);
     }
 }
