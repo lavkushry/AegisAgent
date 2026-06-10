@@ -522,3 +522,17 @@ pub struct DbStats {
     pub size_bytes: i64,
     pub tables: Vec<TableRowCount>,
 }
+
+/// Request body for `POST /v1/admin/backup` (#945). `filename` is a bare
+/// filename (no path separators) for the backup copy, written under the
+/// directory configured by `AEGIS_BACKUP_DIR` (default `backups`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBackupRequest {
+    pub filename: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBackupResponse {
+    pub path: String,
+    pub size_bytes: i64,
+}

@@ -2300,6 +2300,17 @@ pub async fn get_db_stats(pool: &SqlitePool) -> Result<crate::models::DbStats, s
     Ok(crate::models::DbStats { size_bytes, tables })
 }
 
+/// Write a consistent point-in-time copy of the database to `dest_path`
+/// (#945) using SQLite's `VACUUM INTO`, which also compacts the copy. The
+/// live database is untouched and remains available throughout.
+pub async fn backup_database_to(pool: &SqlitePool, dest_path: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("VACUUM INTO ?")
+        .bind(dest_path)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2456,6 +2467,39 @@ mod tests {
         // Sanity-check a couple of other core tables are present.
         assert!(stats.tables.iter().any(|t| t.table == "decisions"));
         assert!(stats.tables.iter().any(|t| t.table == "approvals"));
+    }
+
+    /// #945: `backup_database_to` writes a consistent point-in-time copy of
+    /// the database via `VACUUM INTO`. The copy is a standalone, openable
+    /// SQLite file containing the same tenant rows as the live database.
+    #[tokio::test]
+    async fn backup_database_to_writes_openable_copy() {
+        let pool = setup_pool("db_backup").await;
+        register_tenant(&pool, "tenant_backup", "Backup Tenant", "developer")
+            .await
+            .unwrap();
+
+        let dest_path = format!("target/backup_{}.db", Uuid::new_v4().simple());
+        // VACUUM INTO refuses to overwrite an existing file.
+        let _ = std::fs::remove_file(&dest_path);
+
+        backup_database_to(&pool, &dest_path).await.unwrap();
+
+        assert!(std::path::Path::new(&dest_path).exists());
+
+        let backup_pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(&format!("sqlite://{}", dest_path))
+            .await
+            .unwrap();
+        let tenants: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM tenants WHERE id = 'tenant_backup'")
+                .fetch_all(&backup_pool)
+                .await
+                .unwrap();
+        assert_eq!(tenants.len(), 1);
+
+        backup_pool.close().await;
+        let _ = std::fs::remove_file(&dest_path);
     }
 
     /// #0105: `delete_expired_approvals_older_than` removes approvals that are
