@@ -17,6 +17,7 @@ use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
+mod baseline;
 mod correlate;
 mod db;
 mod detect;
@@ -1029,13 +1030,18 @@ mod tests {
             other => panic!("Drain task failed to finish gracefully: {:?}", other),
         }
 
-        // Verify that the event was persisted to the database as an alert
+        // Verify that the event was persisted to the database as an alert.
+        // SOC-007 (#1190) also fires a `behavioral_anomaly_new_tool` info
+        // alert for this agent's first-ever call, alongside `critical_deny`.
         let alerts = db::list_soc_alerts(&pool, "tenant_shutdown_test", 10, 0, None, None)
             .await
             .unwrap();
-        assert_eq!(alerts.len(), 1);
-        assert_eq!(alerts[0].rule, "critical_deny");
-        assert_eq!(alerts[0].source_event_id, "evt_test_shutdown");
+        assert_eq!(alerts.len(), 2);
+        let critical_deny = alerts
+            .iter()
+            .find(|a| a.rule == "critical_deny")
+            .expect("expected a critical_deny alert");
+        assert_eq!(critical_deny.source_event_id, "evt_test_shutdown");
 
         // Clean up DB file
         let db_path = db_url.strip_prefix("sqlite://").unwrap_or(&db_url);
