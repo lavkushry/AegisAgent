@@ -19,6 +19,12 @@ pub const DEFAULT_AUDIT_ARCHIVAL_INTERVAL_SECS: u64 = 86400;
 /// Default audit_events retention window before rows are archived.
 pub const DEFAULT_AUDIT_RETENTION_DAYS: i64 = 90;
 
+/// Default interval between approval cleanup sweeps.
+pub const DEFAULT_APPROVAL_CLEANUP_INTERVAL_SECS: u64 = 86400;
+
+/// Default approvals retention window before stale rows are deleted.
+pub const DEFAULT_APPROVAL_RETENTION_DAYS: i64 = 30;
+
 /// Walk a single tenant's receipt chain (oldest-first) and verify that every
 /// `receipt_hash` matches its recomputed value and that `prev_receipt_hash`
 /// links form a single unbroken chain starting from the empty string. Returns
@@ -103,6 +109,23 @@ pub async fn run_audit_event_archival_job(
             Ok(0) => {}
             Ok(n) => info!("archived {} audit_events rows older than {}", n, cutoff),
             Err(e) => error!("audit event archival job failed: {:?}", e),
+        }
+    }
+}
+
+/// Run `db::delete_expired_approvals_older_than` on a fixed interval until the
+/// process exits, removing decided or expired-and-stale `approvals` rows
+/// older than `retention_days` (#0105). Intended to be `tokio::spawn`ed once
+/// at startup.
+pub async fn run_approval_cleanup_job(pool: SqlitePool, interval_secs: u64, retention_days: i64) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        let cutoff = Utc::now() - Duration::days(retention_days);
+        match db::delete_expired_approvals_older_than(&pool, cutoff).await {
+            Ok(0) => {}
+            Ok(n) => info!("deleted {} stale approvals rows older than {}", n, cutoff),
+            Err(e) => error!("approval cleanup job failed: {:?}", e),
         }
     }
 }

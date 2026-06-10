@@ -1659,6 +1659,28 @@ pub async fn archive_audit_events_older_than(
     Ok(result.rows_affected())
 }
 
+/// Delete `approvals` rows older than `cutoff` whose status is no longer
+/// actionable: already decided (`APPROVED`/`REJECTED`/`EDITED`) or still
+/// `created` but past `expires_at` (#0105). Returns the number of rows
+/// deleted. This keeps the `approvals` table bounded without removing
+/// approvals a reviewer might still need to act on.
+pub async fn delete_expired_approvals_older_than(
+    pool: &SqlitePool,
+    cutoff: DateTime<Utc>,
+) -> Result<u64, sqlx::Error> {
+    let now = Utc::now();
+    let result = sqlx::query(
+        "DELETE FROM approvals
+         WHERE created_at < ?
+           AND (status != 'created' OR (expires_at IS NOT NULL AND expires_at < ?))",
+    )
+    .bind(cutoff)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Atomically append a receipt to a tenant's hash chain (T-D hardening).
 ///
 /// Reading the chain head and inserting the new (head-referencing) receipt happen
@@ -2371,6 +2393,134 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(still_present.0, 1);
+    }
+
+    /// #0105: `delete_expired_approvals_older_than` removes approvals that are
+    /// either already decided or pending-but-past-`expires_at`, as long as
+    /// they were created before the cutoff. A still-pending, unexpired
+    /// approval older than the cutoff is preserved (a reviewer might still
+    /// act on it).
+    #[tokio::test]
+    async fn delete_expired_approvals_older_than_removes_stale_rows() {
+        let pool = setup_pool("approval_cleanup").await;
+        register_tenant(&pool, "tenant_cleanup", "Cleanup Tenant", "developer")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_cleanup', 'tenant_cleanup', 'agent_cleanup', 'token_cleanup', 'Cleanup Agent', 'dev', 'low', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let make_decision = |id: &str| DecisionRecord {
+            id: id.to_string(),
+            tenant_id: "tenant_cleanup".to_string(),
+            agent_id: "agent_cleanup".to_string(),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "github".to_string(),
+            action: "merge_pull_request".to_string(),
+            resource: None,
+            input_json: "{}".to_string(),
+            decision: "require_approval".to_string(),
+            risk_score: Some(75),
+            reason: None,
+            matched_policy_ids: None,
+            request_id: None,
+            latency_ms: None,
+            created_at: Utc::now(),
+        };
+
+        for id in [
+            "dec_old_decided",
+            "dec_old_expired",
+            "dec_old_pending",
+            "dec_new_decided",
+        ] {
+            insert_decision(&pool, &make_decision(id)).await.unwrap();
+        }
+
+        let make_approval =
+            |id: &str, decision_id: &str, status: &str, expires_at: Option<DateTime<Utc>>| {
+                ApprovalRecord {
+                    id: id.to_string(),
+                    tenant_id: "tenant_cleanup".to_string(),
+                    decision_id: decision_id.to_string(),
+                    status: status.to_string(),
+                    approver_group: None,
+                    approver_user_id: None,
+                    reason: None,
+                    original_skill_call: "{}".to_string(),
+                    original_call_hash: "sha256:deadbeef".to_string(),
+                    edited_skill_call: None,
+                    expires_at,
+                    decided_at: None,
+                    created_at: Utc::now(),
+                }
+            };
+
+        // Old + already decided -> should be deleted.
+        insert_approval(
+            &pool,
+            &make_approval("appr_old_decided", "dec_old_decided", "APPROVED", None),
+        )
+        .await
+        .unwrap();
+        // Old + still "created" but past expires_at -> should be deleted.
+        insert_approval(
+            &pool,
+            &make_approval(
+                "appr_old_expired",
+                "dec_old_expired",
+                "created",
+                Some(Utc::now() - chrono::Duration::days(1)),
+            ),
+        )
+        .await
+        .unwrap();
+        // Old + still "created" and not expired -> must be preserved.
+        insert_approval(
+            &pool,
+            &make_approval(
+                "appr_old_pending",
+                "dec_old_pending",
+                "created",
+                Some(Utc::now() + chrono::Duration::days(1)),
+            ),
+        )
+        .await
+        .unwrap();
+        // Recently decided -> must be preserved (not old enough).
+        insert_approval(
+            &pool,
+            &make_approval("appr_new_decided", "dec_new_decided", "APPROVED", None),
+        )
+        .await
+        .unwrap();
+
+        // Backdate everything except appr_new_decided so they fall before the cutoff.
+        for id in ["appr_old_decided", "appr_old_expired", "appr_old_pending"] {
+            sqlx::query("UPDATE approvals SET created_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let cutoff = Utc::now() - chrono::Duration::days(30);
+        let deleted = delete_expired_approvals_older_than(&pool, cutoff)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2);
+
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM approvals ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, vec!["appr_new_decided", "appr_old_pending"]);
     }
 
     /// #0108: re-applying migrations to an already-migrated database (e.g.
