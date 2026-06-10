@@ -23,7 +23,12 @@ pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let connection_options = sqlx::sqlite::SqliteConnectOptions::from_str(db_url)?
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .busy_timeout(std::time::Duration::from_secs(5));
+        .busy_timeout(std::time::Duration::from_secs(5))
+        // #0098: enforce FK constraints on every connection (SQLite defaults
+        // this off per-connection; without it, ON DELETE/UPDATE actions and
+        // referential integrity checks declared in the schema are silently
+        // not enforced).
+        .foreign_keys(true);
 
     let max_connections = std::env::var("AEGIS_DB_MAX_CONNECTIONS")
         .ok()
@@ -2267,6 +2272,36 @@ mod tests {
                     .unwrap();
             assert!(found.is_some(), "composite index {name} must be created");
         }
+    }
+
+    /// #0098: foreign key enforcement is enabled on every pooled connection,
+    /// so an INSERT referencing a non-existent parent row (e.g. a skill under
+    /// a tenant that doesn't exist) is rejected rather than silently allowed.
+    #[tokio::test]
+    async fn foreign_keys_pragma_is_enabled_and_enforced() {
+        let pool = setup_pool("fk_pragma").await;
+
+        let fk_enabled: (i64,) = sqlx::query_as("PRAGMA foreign_keys")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(fk_enabled.0, 1, "foreign_keys pragma must be ON");
+
+        let result = sqlx::query(
+            "INSERT INTO skills (id, tenant_id, skill_key, name, type) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind("nonexistent_tenant")
+        .bind("orphan_skill")
+        .bind("Orphan Skill")
+        .bind("static")
+        .execute(&pool)
+        .await;
+
+        assert!(
+            result.is_err(),
+            "insert referencing a non-existent tenant must violate the FK constraint"
+        );
     }
 
     /// #0106: rows older than the cutoff are moved to audit_events_archive
