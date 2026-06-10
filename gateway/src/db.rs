@@ -1447,6 +1447,33 @@ pub async fn list_pending_approvals(
     .await
 }
 
+/// All tenant IDs, for jobs (e.g. the receipt chain integrity check, #0107)
+/// that must run per-tenant rather than globally.
+pub async fn list_all_tenant_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM tenants")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Every receipt for a tenant, oldest-first (chain order). Unlike
+/// `list_action_receipts`, this is unpaginated — used by the receipt chain
+/// integrity check (#0107), which must walk the whole chain.
+pub async fn list_action_receipts_chain_order(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ActionReceiptRecord>(
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
+         FROM action_receipts
+         WHERE tenant_id = ?
+         ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn list_action_receipts(
     pool: &SqlitePool,
     tenant_id: &str,
