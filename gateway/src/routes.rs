@@ -7649,6 +7649,56 @@ mod tests {
         assert_eq!(list[0]["approval_id"].as_str(), Some(approval_id1.as_str()));
     }
 
+    /// #0145: tenant isolation — an approval created under tenant A is invisible
+    /// (404) to tenant B via GET /v1/approvals/:id, and is excluded from
+    /// tenant B's GET /v1/approvals listing.
+    #[tokio::test]
+    async fn get_approval_returns_404_cross_tenant() {
+        let (state, tenant_a, agent_token) = setup_state("approval_cross_tenant").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_a, &agent_token, "40").await;
+
+        let tenant_b = format!("tenant_b_{}", Uuid::new_v4().simple());
+        db::register_tenant(&state.pool, &tenant_b, "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // Owning tenant can fetch it.
+        let own = get_approval(
+            State(state.clone()),
+            TenantId(tenant_a.clone()),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        assert_eq!(own.status(), StatusCode::OK);
+
+        // Cross-tenant fetch returns 404, not the other tenant's approval.
+        let cross = get_approval(
+            State(state.clone()),
+            TenantId(tenant_b.clone()),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        assert_eq!(cross.status(), StatusCode::NOT_FOUND);
+
+        // Cross-tenant listing must not include tenant A's approval.
+        let list_response = list_approvals(
+            State(state.clone()),
+            TenantId(tenant_b),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn test_list_and_get_receipts_route() {
         let (state, tenant_id, _) = setup_state("list_get_receipts").await;
