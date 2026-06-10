@@ -190,6 +190,37 @@ pub fn slack_body(msg: &NotifyMessage) -> serde_json::Value {
     })
 }
 
+/// Compute HMAC-SHA256 of `message` using `key`.
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut key_block = [0u8; 64];
+    if key.len() > 64 {
+        let hash = Sha256::digest(key);
+        key_block[..hash.len()].copy_from_slice(&hash);
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= key_block[i];
+        opad[i] ^= key_block[i];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(message);
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner_hash);
+    let outer_hash = outer.finalize();
+
+    hex::encode(outer_hash)
+}
+
 impl NotifySink for WebhookSink {
     fn notify(&self, msg: NotifyMessage) {
         let now = std::time::Instant::now();
@@ -224,14 +255,25 @@ impl NotifySink for WebhookSink {
         let body = slack_body(&msg);
         let breaker = self.breaker.clone();
 
+        let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+        let signature = std::env::var("AEGIS_WEBHOOK_SECRET")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|secret| format!("sha256={}", hmac_sha256(secret.as_bytes(), &body_bytes)));
+
         // Fire-and-forget: spawn a task; a slow/failing webhook never blocks
         // the drain. The spawned task cannot propagate a panic to the drain.
         tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                client.post(&url).json(&body).send(),
-            )
-            .await;
+            let mut req = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .body(body_bytes);
+
+            if let Some(sig) = signature {
+                req = req.header("X-Aegis-Signature", sig);
+            }
+
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), req.send()).await;
 
             match result {
                 Ok(Ok(resp)) if resp.status().is_success() => {
@@ -621,5 +663,163 @@ mod tests {
         // Clean up env vars
         std::env::remove_var("AEGIS_WEBHOOK_FAILURE_THRESHOLD");
         std::env::remove_var("AEGIS_WEBHOOK_COOLDOWN_SECS");
+    }
+
+    #[test]
+    fn test_hmac_sha256_vectors() {
+        assert_eq!(
+            hmac_sha256(b"key", b"The quick brown fox jumps over the lazy dog"),
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
+        assert_eq!(
+            hmac_sha256(b"secret", b"hello world"),
+            "734cc62f32841568f45715aeb9f4d7891324e6d948e4c6c60c0621cdac48623a"
+        );
+        let long_key = vec![b'a'; 80];
+        assert_eq!(
+            hmac_sha256(&long_key, b"test"),
+            "a7eb161e0bd8fdc1b9787a37dc51f16f821e7142dc4d865358ba2ea39d38fc0c"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_webhook_signature_header_sent() {
+        use axum::{routing::post, Json, Router};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let received_headers = Arc::new(Mutex::new(None));
+        let received_body = Arc::new(Mutex::new(None));
+
+        let headers_clone = received_headers.clone();
+        let body_clone = received_body.clone();
+
+        let app = Router::new().route(
+            "/webhook",
+            post(
+                move |headers: axum::http::HeaderMap, Json(body): Json<serde_json::Value>| {
+                    let h_clone = headers_clone.clone();
+                    let b_clone = body_clone.clone();
+                    async move {
+                        let sig = headers
+                            .get("X-Aegis-Signature")
+                            .map(|v| v.to_str().unwrap_or("").to_string());
+                        let content_type = headers
+                            .get("Content-Type")
+                            .map(|v| v.to_str().unwrap_or("").to_string());
+                        *h_clone.lock().await = Some((sig, content_type));
+                        *b_clone.lock().await = Some(body);
+                        "ok"
+                    }
+                },
+            ),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        std::env::set_var("AEGIS_WEBHOOK_SECRET", "super-secret-key");
+
+        let webhook_url = format!("http://{}/webhook", addr);
+        let sink = WebhookSink::new(webhook_url);
+        let msg = make_msg("alert", "high", "test-signature");
+
+        sink.notify(msg.clone());
+
+        let mut delivered = false;
+        for _ in 0..10 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if received_headers.lock().await.is_some() {
+                delivered = true;
+                break;
+            }
+        }
+
+        std::env::remove_var("AEGIS_WEBHOOK_SECRET");
+
+        assert!(delivered, "Webhook notification was not delivered in time");
+
+        let (sig_opt, content_type_opt) = received_headers.lock().await.as_ref().cloned().unwrap();
+        let body_val = received_body.lock().await.as_ref().cloned().unwrap();
+
+        assert_eq!(content_type_opt.as_deref(), Some("application/json"));
+
+        let expected_body_bytes = serde_json::to_vec(&body_val).unwrap();
+        let expected_sig = format!(
+            "sha256={}",
+            hmac_sha256(b"super-secret-key", &expected_body_bytes)
+        );
+
+        assert_eq!(sig_opt, Some(expected_sig));
+    }
+
+    #[tokio::test]
+    async fn test_webhook_signature_header_not_sent_when_secret_absent() {
+        use axum::{routing::post, Json, Router};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let received_headers = Arc::new(Mutex::new(None));
+        let received_body = Arc::new(Mutex::new(None));
+
+        let headers_clone = received_headers.clone();
+        let body_clone = received_body.clone();
+
+        let app = Router::new().route(
+            "/webhook",
+            post(
+                move |headers: axum::http::HeaderMap, Json(body): Json<serde_json::Value>| {
+                    let h_clone = headers_clone.clone();
+                    let b_clone = body_clone.clone();
+                    async move {
+                        let sig = headers
+                            .get("X-Aegis-Signature")
+                            .map(|v| v.to_str().unwrap_or("").to_string());
+                        let content_type = headers
+                            .get("Content-Type")
+                            .map(|v| v.to_str().unwrap_or("").to_string());
+                        *h_clone.lock().await = Some((sig, content_type));
+                        *b_clone.lock().await = Some(body);
+                        "ok"
+                    }
+                },
+            ),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        std::env::remove_var("AEGIS_WEBHOOK_SECRET");
+
+        let webhook_url = format!("http://{}/webhook", addr);
+        let sink = WebhookSink::new(webhook_url);
+        let msg = make_msg("alert", "high", "test-no-signature");
+
+        sink.notify(msg.clone());
+
+        let mut delivered = false;
+        for _ in 0..10 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if received_headers.lock().await.is_some() {
+                delivered = true;
+                break;
+            }
+        }
+
+        assert!(delivered, "Webhook notification was not delivered");
+
+        let (sig_opt, _) = received_headers.lock().await.as_ref().cloned().unwrap();
+        assert!(
+            sig_opt.is_none(),
+            "X-Aegis-Signature header should not be present"
+        );
     }
 }
