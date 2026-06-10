@@ -1,9 +1,9 @@
-//! Background jobs (#0107): periodic integrity checks that run independently
-//! of the request path.
+//! Background jobs (#0107, #0106): periodic integrity checks and maintenance
+//! tasks that run independently of the request path.
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use sqlx::SqlitePool;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::db;
@@ -12,6 +12,12 @@ use crate::routes::compute_receipt_hash;
 
 /// Default interval between receipt chain integrity sweeps.
 pub const DEFAULT_INTERVAL_SECS: u64 = 3600;
+
+/// Default interval between audit event archival sweeps.
+pub const DEFAULT_AUDIT_ARCHIVAL_INTERVAL_SECS: u64 = 86400;
+
+/// Default audit_events retention window before rows are archived.
+pub const DEFAULT_AUDIT_RETENTION_DAYS: i64 = 90;
 
 /// Walk a single tenant's receipt chain (oldest-first) and verify that every
 /// `receipt_hash` matches its recomputed value and that `prev_receipt_hash`
@@ -76,6 +82,27 @@ pub async fn run_receipt_chain_integrity_job(pool: SqlitePool, interval_secs: u6
         interval.tick().await;
         if let Err(e) = check_all_tenant_receipt_chains(&pool).await {
             error!("receipt chain integrity job failed: {:?}", e);
+        }
+    }
+}
+
+/// Run `db::archive_audit_events_older_than` on a fixed interval until the
+/// process exits, moving `audit_events` rows older than `retention_days` into
+/// `audit_events_archive` (#0106). Intended to be `tokio::spawn`ed once at
+/// startup.
+pub async fn run_audit_event_archival_job(
+    pool: SqlitePool,
+    interval_secs: u64,
+    retention_days: i64,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        let cutoff = Utc::now() - Duration::days(retention_days);
+        match db::archive_audit_events_older_than(&pool, cutoff).await {
+            Ok(0) => {}
+            Ok(n) => info!("archived {} audit_events rows older than {}", n, cutoff),
+            Err(e) => error!("audit event archival job failed: {:?}", e),
         }
     }
 }

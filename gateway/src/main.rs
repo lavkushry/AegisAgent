@@ -398,6 +398,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         receipt_integrity_interval_secs,
     ));
 
+    // #0106: periodically archive old audit_events rows into
+    // audit_events_archive to keep the live table bounded.
+    let audit_archival_interval_secs: u64 = std::env::var("AEGIS_AUDIT_ARCHIVAL_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_AUDIT_ARCHIVAL_INTERVAL_SECS);
+    let audit_retention_days: i64 = std::env::var("AEGIS_AUDIT_RETENTION_DAYS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_AUDIT_RETENTION_DAYS);
+    tokio::spawn(jobs::run_audit_event_archival_job(
+        pool.clone(),
+        audit_archival_interval_secs,
+        audit_retention_days,
+    ));
+
     // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
     let approval_ttl_secs: i64 = std::env::var("AEGIS_APPROVAL_TTL_SECS")
         .ok()
