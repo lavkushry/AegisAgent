@@ -5051,6 +5051,41 @@ mod tests {
             .contains(&"mcp_unknown_tool".to_string()));
     }
 
+    /// #0117: a non-mutating ("read-only") action on a registered low-risk
+    /// skill is allowed, with the registered risk level/score reflected back.
+    #[tokio::test]
+    async fn authorize_allows_read_only_action() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_read_only").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+
+        assert_eq!(response.decision, "allow");
+        assert_eq!(response.risk_level, "low");
+        assert_eq!(response.risk_score, 10);
+    }
+
+    /// #0118: a mutating action whose triggering content has untrusted
+    /// provenance is denied outright (anti-confused-deputy gate), regardless
+    /// of the registered action's risk level.
+    #[tokio::test]
+    async fn authorize_denies_untrusted_mutation() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_untrusted_mutation").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "untrusted_external".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+
+        assert_eq!(response.decision, "deny");
+    }
+
     #[tokio::test]
     async fn approval_flow_binds_original_action_hash() {
         let (state, tenant_id, agent_token) = setup_state("approval_action_hash").await;
