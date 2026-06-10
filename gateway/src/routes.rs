@@ -4981,6 +4981,60 @@ mod tests {
         assert_eq!(second.status(), StatusCode::CONFLICT);
     }
 
+    /// #1004: two concurrent `consume_approval` calls for the same approved,
+    /// single-use approval race against each other. The atomic
+    /// `UPDATE ... WHERE consumed_at IS NULL` in `db::consume_approval`
+    /// guarantees exactly one wins (200 OK) and the other is rejected (409
+    /// CONFLICT) — never both succeeding (which would allow replay).
+    #[tokio::test]
+    async fn consume_approval_concurrent_race_only_one_succeeds() {
+        let (state, tenant_id, agent_token) = setup_state("consume_concurrent_race").await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/77".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let (a, b) = tokio::join!(
+            consume_approval(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Path(approval_id),
+                None,
+            ),
+            consume_approval(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Path(approval_id),
+                None,
+            ),
+        );
+
+        let statuses = [a.into_response().status(), b.into_response().status()];
+        let ok_count = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+        let conflict_count = statuses
+            .iter()
+            .filter(|s| **s == StatusCode::CONFLICT)
+            .count();
+        assert_eq!(ok_count, 1, "exactly one consume must succeed");
+        assert_eq!(conflict_count, 1, "exactly one consume must be rejected");
+    }
+
     /// Shared helper for the approval-lifecycle tests below: triggers a
     /// require_approval decision (a production GitHub merge) and returns its
     /// approval id plus the bound `action_hash`.
