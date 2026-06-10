@@ -324,6 +324,13 @@ pub struct DecisionRecord {
     /// request_id)` returns this decision unchanged instead of re-evaluating.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Wall-clock time in milliseconds spent evaluating this `/v1/authorize`
+    /// call, from agent resolution through the final decision (excludes the
+    /// HTTP framing itself). NULL on rows written before this column existed,
+    /// and on idempotent replays (#0072), which intentionally skip
+    /// re-evaluation. Additive (#0081) — surfaced for SOC/perf dashboards.
+    #[serde(default)]
+    pub latency_ms: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 

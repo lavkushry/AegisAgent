@@ -232,6 +232,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     ensure_decisions_request_id_column(pool).await?;
+    ensure_decisions_latency_ms_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS approvals (
@@ -455,6 +456,26 @@ async fn ensure_decisions_request_id_column(pool: &SqlitePool) -> Result<(), sql
     )
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Additive migration (#0081): per-decision evaluation latency, in
+/// milliseconds, for SOC/perf dashboards. NULL on legacy rows and on
+/// idempotent replays (#0072), which don't re-evaluate.
+async fn ensure_decisions_latency_ms_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(decisions)")
+            .fetch_all(pool)
+            .await?;
+
+    if !columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "latency_ms")
+    {
+        sqlx::query("ALTER TABLE decisions ADD COLUMN latency_ms INTEGER")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1268,8 +1289,8 @@ pub async fn insert_decision(
     record: &DecisionRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -1286,6 +1307,7 @@ pub async fn insert_decision(
     .bind(&record.reason)
     .bind(&record.matched_policy_ids)
     .bind(&record.request_id)
+    .bind(record.latency_ms)
     .execute(pool)
     .await?;
     Ok(())
@@ -1302,7 +1324,7 @@ pub async fn get_decision_by_request_id(
     request_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, created_at
          FROM decisions
          WHERE tenant_id = ? AND agent_id = ? AND request_id = ?",
     )
@@ -1340,7 +1362,7 @@ pub async fn list_decisions(
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, created_at
          FROM decisions
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
@@ -1365,7 +1387,7 @@ pub async fn get_decision_by_id(
     decision_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, created_at
          FROM decisions
          WHERE tenant_id = ? AND id = ?",
     )
