@@ -3,6 +3,16 @@ use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::str::FromStr;
 
+/// The schema version this binary expects (DB-005, #1195).
+///
+/// Bumped whenever a migration changes the schema in a way that an older
+/// binary could not safely operate on. [`run_migrations`] writes this value
+/// into `schema_meta` after migrations run; [`check_schema_version`] refuses
+/// to start (fail closed) if the on-disk version is *newer* than this binary
+/// understands — running an older binary against a newer DB has undefined
+/// results.
+pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+
 /// Liveness/readiness ping for the `/health` endpoint: a trivial `SELECT 1`
 /// that confirms the pool can acquire a connection and the store answers.
 /// Returns `Err` (fail-closed) on any pool/query failure.
@@ -108,6 +118,8 @@ pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     run_migrations(&pool).await?;
 
     migrate_agent_tokens(&pool).await?;
+
+    check_schema_version(&pool).await?;
 
     Ok(pool)
 }
@@ -506,7 +518,60 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Idempotent ALTER TABLE for existing DBs that pre-date optional receipt signing.
     ensure_action_receipt_signature_columns(pool).await?;
 
+    // DB-005 (#1195): single-row table tracking the schema version this DB
+    // was last migrated to. Created here so a fresh DB starts at version 0
+    // before `check_schema_version` bumps it to `CURRENT_SCHEMA_VERSION`.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS schema_meta (
+            id      INTEGER PRIMARY KEY CHECK (id = 1),
+            version INTEGER NOT NULL
+        );",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
+}
+
+/// DB-005 (#1195): verify the on-disk schema version is one this binary
+/// understands.
+///
+/// - No row yet (fresh DB, or a DB that pre-dates `schema_meta`): insert
+///   [`CURRENT_SCHEMA_VERSION`] — migrations above have already brought the
+///   schema up to date.
+/// - On-disk version <= `CURRENT_SCHEMA_VERSION`: this binary's migrations
+///   (already applied above) cover the gap; bump the stored version.
+/// - On-disk version > `CURRENT_SCHEMA_VERSION`: a *newer* binary already
+///   migrated this DB further than this binary knows how to handle. Refuse
+///   to start (fail closed) with a clear error rather than risk undefined
+///   behaviour against unrecognized schema.
+async fn check_schema_version(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let existing: Option<i64> = sqlx::query_scalar("SELECT version FROM schema_meta WHERE id = 1")
+        .fetch_optional(pool)
+        .await?;
+
+    match existing {
+        Some(v) if v > CURRENT_SCHEMA_VERSION => Err(sqlx::Error::Protocol(format!(
+            "database schema version {v} is newer than this binary supports \
+             (max supported: {CURRENT_SCHEMA_VERSION}); refusing to start. \
+             Upgrade the gateway binary before connecting to this database."
+        ))),
+        Some(v) if v < CURRENT_SCHEMA_VERSION => {
+            sqlx::query("UPDATE schema_meta SET version = ? WHERE id = 1")
+                .bind(CURRENT_SCHEMA_VERSION)
+                .execute(pool)
+                .await?;
+            Ok(())
+        }
+        Some(_) => Ok(()),
+        None => {
+            sqlx::query("INSERT INTO schema_meta (id, version) VALUES (1, ?)")
+                .bind(CURRENT_SCHEMA_VERSION)
+                .execute(pool)
+                .await?;
+            Ok(())
+        }
+    }
 }
 
 /// Additive migration (#0072): caller-supplied idempotency key on each decision.
@@ -3840,5 +3905,84 @@ mod tests {
         assert_eq!(b_summary.incidents_total, 1);
         assert_eq!(b_summary.incidents_open, 1);
         assert_eq!(b_summary.incidents_closed, 0);
+    }
+
+    /// DB-005 (#1195): a fresh database is initialized at the current schema
+    /// version.
+    #[tokio::test]
+    async fn fresh_db_is_stamped_with_current_schema_version() {
+        let pool = setup_pool("schema_version_fresh").await;
+
+        let version: i64 = sqlx::query_scalar("SELECT version FROM schema_meta WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// DB-005 (#1195): re-opening an up-to-date DB is a no-op (idempotent).
+    #[tokio::test]
+    async fn reopening_current_db_keeps_schema_version() {
+        let db_url = format!(
+            "sqlite://target/schema_version_reopen_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let pool = init_db(&db_url).await.unwrap();
+        drop(pool);
+
+        let pool = init_db(&db_url).await.unwrap();
+        let version: i64 = sqlx::query_scalar("SELECT version FROM schema_meta WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// DB-005 (#1195): a DB stamped with a schema version *newer* than this
+    /// binary supports must refuse to start (fail closed) with a clear error.
+    #[tokio::test]
+    async fn newer_schema_version_refuses_to_start() {
+        let db_url = format!(
+            "sqlite://target/schema_version_future_{}.db",
+            Uuid::new_v4().simple()
+        );
+        // Bring the DB up to today's schema first.
+        let pool = init_db(&db_url).await.unwrap();
+        sqlx::query("UPDATE schema_meta SET version = ? WHERE id = 1")
+            .bind(CURRENT_SCHEMA_VERSION + 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        drop(pool);
+
+        let result = init_db(&db_url).await;
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("schema version"),
+            "expected a schema version error, got: {err}"
+        );
+    }
+
+    /// DB-005 (#1195): a DB created before `schema_meta` existed (no row) is
+    /// transparently stamped with the current version on next open.
+    #[tokio::test]
+    async fn db_without_schema_meta_row_is_backfilled() {
+        let pool = setup_pool("schema_version_backfill").await;
+
+        // Simulate a pre-#1195 DB: drop the row that init_db just inserted.
+        sqlx::query("DELETE FROM schema_meta WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        check_schema_version(&pool).await.unwrap();
+
+        let version: i64 = sqlx::query_scalar("SELECT version FROM schema_meta WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 }
