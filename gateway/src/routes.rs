@@ -51,7 +51,7 @@ impl RateLimiter {
             return true;
         }
 
-        let mut buckets = self.buckets.lock().unwrap();
+        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 
         let bucket = buckets
@@ -95,7 +95,7 @@ impl QuotaManager {
             return true;
         }
 
-        let mut quotas = self.quotas.lock().unwrap();
+        let mut quotas = self.quotas.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 
         let (count, window_start) = quotas

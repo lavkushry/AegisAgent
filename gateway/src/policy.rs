@@ -38,7 +38,10 @@ impl PolicyEngine {
     }
 
     pub fn has_tenant(&self, tenant_id: &str) -> bool {
-        let sets = self.tenant_policy_sets.read().unwrap();
+        let sets = self
+            .tenant_policy_sets
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         sets.contains_key(tenant_id)
     }
 
@@ -54,7 +57,10 @@ impl PolicyEngine {
         // Rebuild policy set for this tenant.
         // Start with the base policy set
         let mut policy_set = {
-            let base = self.base_policy_set.read().unwrap();
+            let base = self
+                .base_policy_set
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             base.clone()
         };
 
@@ -83,7 +89,10 @@ impl PolicyEngine {
         }
 
         // Write the rebuilt policy set to our thread-safe map
-        let mut sets = self.tenant_policy_sets.write().unwrap();
+        let mut sets = self
+            .tenant_policy_sets
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         sets.insert(tenant_id.to_string(), policy_set);
 
         Ok(())
@@ -99,13 +108,19 @@ impl PolicyEngine {
 
         // Update the base policy set
         {
-            let mut base = self.base_policy_set.write().unwrap();
+            let mut base = self
+                .base_policy_set
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             *base = policy_set;
         }
 
         // Clear cached tenant policy sets as base policies changed
         {
-            let mut sets = self.tenant_policy_sets.write().unwrap();
+            let mut sets = self
+                .tenant_policy_sets
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             sets.clear();
         }
 
@@ -159,9 +174,15 @@ impl PolicyEngine {
         let entities = Entities::empty();
 
         // Read lock to get this tenant's policy set
-        let sets = self.tenant_policy_sets.read().unwrap();
+        let sets = self
+            .tenant_policy_sets
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         let policy_set = sets.get(tenant_id).cloned().unwrap_or_else(|| {
-            let base = self.base_policy_set.read().unwrap();
+            let base = self
+                .base_policy_set
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             base.clone()
         });
 
