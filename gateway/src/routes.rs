@@ -256,12 +256,13 @@ pub struct TenantId(pub String);
 impl<S> axum::extract::FromRequestParts<S> for TenantId
 where
     S: Send + Sync,
+    Arc<AppState>: axum::extract::FromRef<S>,
 {
     type Rejection = (StatusCode, Json<serde_json::Value>);
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
-        _state: &S,
+        state: &S,
     ) -> Result<Self, Self::Rejection> {
         let auth_header = parts
             .headers
@@ -282,32 +283,49 @@ where
         let token = &auth_header["Bearer ".len()..];
 
         // Try proper JWT validation first
-        if let Some(tenant_id) = validate_jwt(token) {
-            return Ok(TenantId(tenant_id));
-        }
-
-        // If JWT validation failed or it is not a valid JWT:
-        // Check if JWT validation is strictly required
-        if std::env::var("AEGIS_JWT_REQUIRED")
-            .map(|v| v == "true")
-            .unwrap_or(false)
-        {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid or expired JWT token"})),
-            ));
-        }
-
-        // Fallback to old heuristic
-        if token.starts_with("tenant_") {
-            Ok(TenantId(token.to_string()))
+        let tenant_id = if let Some(t_id) = validate_jwt(token) {
+            t_id
         } else {
-            Err((
-                StatusCode::UNAUTHORIZED,
-                Json(
-                    json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"}),
-                ),
-            ))
+            // Check if JWT validation is strictly required
+            if std::env::var("AEGIS_JWT_REQUIRED")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+            {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "Invalid or expired JWT token"})),
+                ));
+            }
+
+            // Fallback to old heuristic
+            if token.starts_with("tenant_") {
+                token.to_string()
+            } else {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(
+                        json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"}),
+                    ),
+                ));
+            }
+        };
+
+        // Extract AppState to verify tenant existence in DB
+        let app_state = <Arc<AppState> as axum::extract::FromRef<S>>::from_ref(state);
+
+        match db::get_tenant_by_id(&app_state.pool, &tenant_id).await {
+            Ok(Some(_)) => Ok(TenantId(tenant_id)),
+            Ok(None) => Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("Tenant '{}' not found", tenant_id)})),
+            )),
+            Err(e) => {
+                error!("Database error checking tenant: {:?}", e);
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error checking tenant"})),
+                ))
+            }
         }
     }
 }
@@ -319,13 +337,6 @@ fn get_runtime_tenant_from_headers(headers: &HeaderMap) -> Option<String> {
         .and_then(|h| h.to_str().ok())
         .filter(|tenant_id| !tenant_id.trim().is_empty())
         .map(str::to_string)
-}
-
-async fn ensure_tenant_exists(pool: &sqlx::SqlitePool, tenant_id: &str) -> Result<(), sqlx::Error> {
-    if db::get_tenant_by_id(pool, tenant_id).await?.is_none() {
-        db::register_tenant(pool, tenant_id, "Default Org", "developer").await?;
-    }
-    Ok(())
 }
 
 fn risk_score_for_level(risk_level: &str) -> i32 {
@@ -799,28 +810,6 @@ pub async fn register_agent(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterAgentRequest>,
 ) -> impl IntoResponse {
-    // Ensure tenant exists in database, auto-create if missing for developer onboarding convenience
-    if let Err(e) = db::get_tenant_by_id(&state.pool, &tenant_id).await {
-        error!("Database lookup error: {:?}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Database error"})),
-        )
-            .into_response();
-    }
-    if let Ok(None) = db::get_tenant_by_id(&state.pool, &tenant_id).await {
-        if let Err(e) =
-            db::register_tenant(&state.pool, &tenant_id, "Default Org", "developer").await
-        {
-            error!("Failed to auto-register tenant: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to initialize tenant"})),
-            )
-                .into_response();
-        }
-    }
-
     // Check if agent already exists
     match db::get_agent_by_key(&state.pool, &tenant_id, &payload.agent_key).await {
         Ok(Some(agent)) => {
@@ -1138,15 +1127,6 @@ pub async fn register_mcp_server(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterMcpServerRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = ensure_tenant_exists(&state.pool, &tenant_id).await {
-        error!("Failed to initialize tenant for MCP server: {:?}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Failed to initialize tenant"})),
-        )
-            .into_response();
-    }
-
     let server_id = match db::upsert_mcp_server(
         &state.pool,
         &tenant_id,
@@ -4510,8 +4490,15 @@ mod tests {
     use axum::extract::FromRequestParts;
     use tokio::sync::mpsc;
 
+    static ENV_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+    fn get_env_lock() -> &'static tokio::sync::Mutex<()> {
+        ENV_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
     #[tokio::test]
     async fn test_jwt_tenant_extraction() {
+        let _guard = get_env_lock().lock().await;
         use jsonwebtoken::{encode, EncodingKey, Header};
 
         let secret = "test_jwt_secret_1234567890";
@@ -4559,6 +4546,11 @@ mod tests {
         .unwrap();
         assert_eq!(validate_jwt(&wrong_token), None);
 
+        let (state, _, _) = setup_state("jwt_tenant_extraction").await;
+        db::register_tenant(&state.pool, "tenant_from_claim", "JWT Tenant", "developer")
+            .await
+            .unwrap();
+
         // Test extractor
         let request = axum::http::Request::builder()
             .header("Authorization", format!("Bearer {}", token))
@@ -4566,7 +4558,9 @@ mod tests {
             .unwrap();
 
         let (mut parts, _) = request.into_parts();
-        let tenant = TenantId::from_request_parts(&mut parts, &()).await.unwrap();
+        let tenant = TenantId::from_request_parts(&mut parts, &state)
+            .await
+            .unwrap();
         assert_eq!(tenant.0, "tenant_from_claim");
 
         // Test extractor with invalid token when JWT is required
@@ -4575,7 +4569,7 @@ mod tests {
             .body(())
             .unwrap();
         let (mut parts_invalid, _) = request_invalid.into_parts();
-        let res = TenantId::from_request_parts(&mut parts_invalid, &()).await;
+        let res = TenantId::from_request_parts(&mut parts_invalid, &state).await;
         assert!(res.is_err());
         let (status, _) = res.unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -4587,6 +4581,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_hardened_tenant_and_jwt_rules() {
+        let _guard = get_env_lock().lock().await;
+        let (state, _, _) = setup_state("hardened_tenant").await;
+        db::register_tenant(
+            &state.pool,
+            "tenant_custom_id",
+            "Custom Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
+
         // 1. Ensure validate_jwt returns None when AEGIS_JWT_SECRET is unset
         std::env::remove_var("AEGIS_JWT_SECRET");
         assert_eq!(validate_jwt("any_token"), None);
@@ -4603,7 +4608,7 @@ mod tests {
             .body(())
             .unwrap();
         let (mut parts_bad, _) = request_bad_heuristic.into_parts();
-        let res_bad = TenantId::from_request_parts(&mut parts_bad, &()).await;
+        let res_bad = TenantId::from_request_parts(&mut parts_bad, &state).await;
         assert!(res_bad.is_err());
         let (status, body) = res_bad.unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -4618,7 +4623,7 @@ mod tests {
             .body(())
             .unwrap();
         let (mut parts_good, _) = request_good_heuristic.into_parts();
-        let res_good = TenantId::from_request_parts(&mut parts_good, &()).await;
+        let res_good = TenantId::from_request_parts(&mut parts_good, &state).await;
         assert!(res_good.is_ok());
         assert_eq!(res_good.unwrap().0, "tenant_custom_id");
     }
@@ -8477,6 +8482,7 @@ mod tests {
     /// request for the same filename (VACUUM INTO refuses to overwrite).
     #[tokio::test]
     async fn test_create_db_backup_route() {
+        let _guard = get_env_lock().lock().await;
         let (state, _tenant_id, _agent_token) = setup_state("db_backup_route").await;
 
         let backup_dir = format!("target/backup_route_{}", Uuid::new_v4().simple());
@@ -9073,6 +9079,35 @@ mod tests {
 
         assert_eq!(second_parsed.id, first_parsed.id);
         assert_eq!(second_parsed.agent_token, first_parsed.agent_token);
+    }
+
+    #[tokio::test]
+    async fn test_unregistered_tenant_returns_404() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, _tenant_id, _) = setup_state("unregistered_tenant").await;
+        let app = register_agent_router(state);
+
+        // Make a request with a tenant ID that does not exist in the database
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/agents/register")
+            .header("content-type", "application/json")
+            .header("Authorization", "Bearer tenant_nonexistent_xyz")
+            .body(axum::body::Body::from(
+                register_agent_payload("new-agent").to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "Tenant 'tenant_nonexistent_xyz' not found");
     }
 
     /// #0113: a payload missing the required agent_key field is rejected
