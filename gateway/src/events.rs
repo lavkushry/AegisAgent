@@ -116,7 +116,7 @@ impl EventSink {
 /// and discarded; the drain loop never panics or aborts on a DB failure (design
 /// law 3 — out-of-band best-effort). Secrets are never stored: only ids,
 /// summaries, and severity (redaction invariant).
-pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) {
+pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize {
     let detector = Detector::default();
     // Phase 2: construct the notify sink once from env; NullSink when
     // AEGIS_WEBHOOK_URL is absent (safe default — no network calls in tests).
@@ -124,8 +124,10 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) {
     // Phase 3: one Correlator per drain task — mutable, bounded-memory sliding
     // windows keyed by (tenant_id, agent_id). Never touches the inline path.
     let mut correlator = Correlator::default();
+    let mut count = 0;
 
     while let Some(ev) = rx.recv().await {
+        count += 1;
         debug!(
             event_id = %ev.event_id,
             tenant = %ev.tenant_id,
@@ -273,4 +275,5 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) {
             }
         }
     }
+    count
 }
