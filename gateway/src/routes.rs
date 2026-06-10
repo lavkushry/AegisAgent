@@ -9529,4 +9529,76 @@ mod tests {
             assert_eq!(receipts[0]["tenant_id"], json!(tenant_id));
         }
     }
+
+    /// #1169: a real WebSocket client connects to `/v1/ws/events`, receives
+    /// `authorize_decision` events emitted for its own tenant within 100ms,
+    /// and never receives events emitted for a different tenant.
+    #[tokio::test]
+    async fn ws_events_stream_is_tenant_scoped() {
+        use axum::routing::get;
+        use axum::Router;
+        use futures_util::StreamExt;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        let (state, _tenant_id, _agent_token) = setup_state("ws_events_stream").await;
+
+        let app = Router::new()
+            .route("/v1/ws/events", get(ws_events))
+            .with_state(state.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("ws://{addr}/v1/ws/events?token=tenant_a");
+        let (mut ws_stream, _resp) = connect_async(url).await.unwrap();
+
+        // Give the server a moment to register the subscription before emitting.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        fn make_event(tenant_id: &str, event_id: &str) -> AseEvent {
+            AseEvent {
+                event_id: event_id.to_string(),
+                occurred_at: Utc::now().to_rfc3339(),
+                tenant_id: tenant_id.to_string(),
+                kind: "authorize_decision".to_string(),
+                agent_id: "agent_ws_test".to_string(),
+                decision: "allow".to_string(),
+                tool: "github".to_string(),
+                action: "read_file".to_string(),
+                resource: None,
+                risk_score: 10,
+                reason: "policy_allow".to_string(),
+                run_id: None,
+                trace_id: None,
+                matched_policies: vec![],
+            }
+        }
+
+        // Event for a different tenant must NOT be delivered to tenant_a's socket.
+        state
+            .events
+            .emit(make_event("tenant_b", "evt_other_tenant"));
+        // Event for tenant_a must be delivered within 100ms.
+        state.events.emit(make_event("tenant_a", "evt_own_tenant"));
+
+        let msg = tokio::time::timeout(std::time::Duration::from_millis(100), ws_stream.next())
+            .await
+            .expect("event must arrive within 100ms")
+            .expect("stream must not close")
+            .expect("message must not be an error");
+
+        let text = match msg {
+            WsMessage::Text(t) => t,
+            other => panic!("expected text message, got {other:?}"),
+        };
+        let received: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(received["event_id"], "evt_own_tenant");
+        assert_eq!(received["tenant_id"], "tenant_a");
+
+        let _ = ws_stream.close(None).await;
+    }
 }

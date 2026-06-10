@@ -32,3 +32,7 @@ reqwest = { version = "0.12.28", default-features = false, features = ["rustls-t
 tower-http = { version = "0.5", features = ["cors", "request-id", "propagate-header", "set-header", "util", "compression-full", "limit", "timeout", "catch-panic"] }
 tower = { version = "0.4", features = ["util"] }
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
