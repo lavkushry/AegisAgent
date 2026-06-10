@@ -7363,6 +7363,67 @@ mod tests {
         assert!(agent.quarantined_at.is_none());
     }
 
+    /// #0141: revoke_agent permanently sets the agent's status to "revoked".
+    #[tokio::test]
+    async fn revoke_agent_sets_status_to_revoked() {
+        let (state, tenant_id, agent_token) = setup_state("revoke_agent_status").await;
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_id = agent.id;
+
+        let resp = revoke_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent.status, "revoked");
+    }
+
+    /// #0142: quarantine_mcp_server sets the MCP server's status to
+    /// "quarantined", retrievable via db::get_mcp_server_by_key.
+    #[tokio::test]
+    async fn quarantine_mcp_server_sets_status_to_quarantined() {
+        let (state, tenant_id, _agent_token) = setup_state("quarantine_mcp_server_status").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        let resp = quarantine_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let server = db::get_mcp_server_by_key(&state.pool, &tenant_id, "github-mcp")
+            .await
+            .unwrap()
+            .expect("server should exist");
+        assert_eq!(server.status, "quarantined");
+    }
+
     #[tokio::test]
     async fn test_list_and_get_decisions_route() {
         let (state, tenant_id, agent_token) = setup_state("list_get_decisions").await;
