@@ -424,7 +424,7 @@ fn canonicalize_json(value: Value) -> Value {
     }
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{:02x}", byte)).collect()
 }
@@ -492,7 +492,7 @@ fn compute_mcp_manifest_hash(tools: &[McpToolManifestItem]) -> String {
 /// Canonical (scheme `aegis-jcs-1`) string for an arbitrary JSON value. Used for
 /// action-receipt hashing; MUST match the SDK's `canonicalize()` byte-for-byte
 /// (see `docs/action-receipt-spec.md` and `tests/receipt_chain_vectors.json`).
-fn canonical_value_string(value: &Value) -> String {
+pub(crate) fn canonical_value_string(value: &Value) -> String {
     serde_json::to_string(&canonicalize_json(value.clone())).unwrap_or_default()
 }
 
@@ -500,7 +500,7 @@ fn canonical_value_string(value: &Value) -> String {
 /// link, excluding `receipt_hash` and the volatile DB `created_at`. Built
 /// identically at emit time and verify time so the hash is reproducible. All
 /// fields are strings/null (no round-trip drift). Scheme aegis-jcs-1.
-fn receipt_body_value(rec: &ActionReceiptRecord) -> Value {
+pub(crate) fn receipt_body_value(rec: &ActionReceiptRecord) -> Value {
     json!({
         "event_id": rec.id,
         "ts": rec.ts,
@@ -519,7 +519,7 @@ fn receipt_body_value(rec: &ActionReceiptRecord) -> Value {
     })
 }
 
-fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
+pub(crate) fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
     sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
 }
 

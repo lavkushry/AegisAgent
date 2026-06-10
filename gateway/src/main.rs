@@ -20,6 +20,7 @@ mod correlate;
 mod db;
 mod detect;
 mod events;
+mod jobs;
 mod metrics;
 mod models;
 mod narrate;
@@ -384,6 +385,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
     tokio::spawn(events::drain(events_rx, pool.clone()));
+
+    // #0107: periodic receipt chain integrity check across all tenants. Any
+    // broken link or hash mismatch is recorded as a critical SOC alert.
+    let receipt_integrity_interval_secs: u64 =
+        std::env::var("AEGIS_RECEIPT_INTEGRITY_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(jobs::DEFAULT_INTERVAL_SECS);
+    tokio::spawn(jobs::run_receipt_chain_integrity_job(
+        pool.clone(),
+        receipt_integrity_interval_secs,
+    ));
 
     // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
     let approval_ttl_secs: i64 = std::env::var("AEGIS_APPROVAL_TTL_SECS")
