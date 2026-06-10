@@ -134,6 +134,20 @@ pub struct AuthorizeTraceContext {
     pub trace_id: String,
 }
 
+/// Optional webhook callback (#1187/TASK-0082-0083) requested by the caller
+/// for a `require_approval` decision. If set, the resulting approval row
+/// stores `callback_url` verbatim and `sha256(secret)` as
+/// `callback_secret_hash` — the plaintext secret is never persisted
+/// (redaction invariant). A future dispatcher can sign callback payloads with
+/// `sha256(secret)` as the HMAC key, which the receiver can re-derive from
+/// the secret it already holds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalCallback {
+    pub url: String,
+    #[serde(default)]
+    pub secret: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizeRequest {
     pub request_id: Option<String>,
@@ -142,6 +156,9 @@ pub struct AuthorizeRequest {
     pub tool_call: AuthorizeToolCall,
     pub context: AuthorizeDynamicContext,
     pub trace: Option<AuthorizeTraceContext>,
+    /// Optional approval-callback registration (#1187/TASK-0082-0083).
+    #[serde(default)]
+    pub callback: Option<ApprovalCallback>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,6 +379,15 @@ pub struct ApprovalRecord {
     pub edited_skill_call: Option<String>, // JSON
     pub expires_at: Option<DateTime<Utc>>,
     pub decided_at: Option<DateTime<Utc>>,
+    /// Optional webhook URL to notify when this approval is decided
+    /// (#1187/TASK-0082). `#[sqlx(default)]` so existing `SELECT` column
+    /// lists that predate this column still deserialize.
+    #[sqlx(default)]
+    pub callback_url: Option<String>,
+    /// `sha256(secret)` for the callback above — the plaintext secret is
+    /// never stored (#1187/TASK-0083).
+    #[sqlx(default)]
+    pub callback_secret_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

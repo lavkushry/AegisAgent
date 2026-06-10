@@ -321,6 +321,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     ensure_approval_original_call_hash_column(pool).await?;
     ensure_approval_consumed_at_column(pool).await?;
+    ensure_approval_callback_columns(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_events (
@@ -847,6 +848,30 @@ async fn ensure_approval_consumed_at_column(pool: &SqlitePool) -> Result<(), sql
     sqlx::query("ALTER TABLE approvals ADD COLUMN consumed_at DATETIME")
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Idempotent migration: add `callback_url` (#1187/TASK-0082) and
+/// `callback_secret_hash` (#1187/TASK-0083) to `approvals`. Both are
+/// nullable — most approvals have no callback registered.
+async fn ensure_approval_callback_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(approvals)")
+            .fetch_all(pool)
+            .await?;
+
+    let has = |name: &str| columns.iter().any(|(_, n, _, _, _, _)| n == name);
+
+    if !has("callback_url") {
+        sqlx::query("ALTER TABLE approvals ADD COLUMN callback_url TEXT")
+            .execute(pool)
+            .await?;
+    }
+    if !has("callback_secret_hash") {
+        sqlx::query("ALTER TABLE approvals ADD COLUMN callback_secret_hash TEXT")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1721,8 +1746,8 @@ pub async fn insert_approval(
     record: &ApprovalRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, callback_url, callback_secret_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -1736,6 +1761,8 @@ pub async fn insert_approval(
     .bind(&record.edited_skill_call)
     .bind(record.expires_at)
     .bind(record.decided_at)
+    .bind(&record.callback_url)
+    .bind(&record.callback_secret_hash)
     .execute(pool)
     .await?;
     Ok(())
@@ -1750,7 +1777,7 @@ pub async fn list_pending_approvals(
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let now = Utc::now();
     sqlx::query_as::<_, ApprovalRecord>(
-        "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, created_at
+        "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, callback_url, callback_secret_hash, created_at
          FROM approvals
          WHERE tenant_id = ?
            AND status = 'created'
@@ -3093,6 +3120,8 @@ mod tests {
                     edited_skill_call: None,
                     expires_at,
                     decided_at: None,
+                    callback_url: None,
+                    callback_secret_hash: None,
                     created_at: Utc::now(),
                 }
             };
