@@ -5086,6 +5086,44 @@ mod tests {
         assert_eq!(response.decision, "deny");
     }
 
+    /// #0122: every authorize decision writes a corresponding row to
+    /// `audit_events`, retrievable via `GET /v1/audit/events` with the
+    /// matching tool/action/decision details embedded in `event_json`.
+    #[tokio::test]
+    async fn authorize_emits_audit_event() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_audit_event").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "allow");
+
+        let audit_response = get_audit_events(State(state), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(audit_response.status(), StatusCode::OK);
+
+        let body = to_bytes(audit_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let events: Vec<AuditEventRecord> = serde_json::from_slice(&body).unwrap();
+
+        let event = events
+            .iter()
+            .find(|e| e.event_type == "tool_call_intercepted")
+            .expect("authorize must write a tool_call_intercepted audit event");
+        assert_eq!(event.tenant_id, tenant_id);
+        assert_eq!(event.skill.as_deref(), Some("deployer"));
+        assert_eq!(event.action.as_deref(), Some("ship"));
+
+        let event_json: serde_json::Value = serde_json::from_str(&event.event_json).unwrap();
+        assert_eq!(event_json["decision"], "allow");
+        assert_eq!(event_json["id"], response.decision_id.to_string());
+    }
+
     /// #0119: a mutating action whose triggering content has
     /// `semi_trusted_customer` provenance is paused for human review rather
     /// than auto-allowed or auto-denied.
