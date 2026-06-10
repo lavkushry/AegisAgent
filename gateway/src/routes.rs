@@ -873,6 +873,7 @@ pub async fn register_agent(
         status: "active".to_string(),
         last_seen_at: None,
         frozen_reason: None,
+        force_approval: false,
         quarantined_at: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
@@ -1922,6 +1923,16 @@ pub async fn authorize_action(
         decision_str = "require_approval".to_string();
         reason = "Critical-risk action requires approval by default.".to_string();
         matched_policies.push("critical_risk_requires_approval".to_string());
+    }
+
+    // SOC Response Engine (#1184, Phase 4): a prior trust_escalation incident
+    // set agents.force_approval for this agent. Downgrade allow -> require_approval
+    // for every subsequent action until an operator clears it.
+    if decision_str == "allow" && agent.force_approval {
+        decision_str = "require_approval".to_string();
+        reason = "Agent requires approval for all actions following a trust escalation incident."
+            .to_string();
+        matched_policies.push("soc_response_force_approval".to_string());
     }
 
     let audit_event_type = if is_mcp_call {
@@ -3719,6 +3730,7 @@ pub async fn create_tenant(
                 name: payload.name.clone(),
                 plan: payload.plan.clone(),
                 created_at: Utc::now(),
+                auto_respond_enabled: true,
             };
             (StatusCode::CREATED, Json(record)).into_response()
         }
@@ -4803,6 +4815,7 @@ mod tests {
             status: "active".to_string(),
             last_seen_at: None,
             frozen_reason: None,
+            force_approval: false,
             quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -6635,6 +6648,7 @@ mod tests {
                 status: "active".to_string(),
                 last_seen_at: None,
                 frozen_reason: None,
+                force_approval: false,
                 quarantined_at: None,
                 created_at: Utc::now() - Duration::hours(idx), // older first
                 updated_at: Utc::now(),
@@ -6664,6 +6678,7 @@ mod tests {
             status: "active".to_string(),
             last_seen_at: None,
             frozen_reason: None,
+            force_approval: false,
             quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -6723,6 +6738,7 @@ mod tests {
             status: "active".to_string(),
             last_seen_at: None,
             frozen_reason: None,
+            force_approval: false,
             quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -6787,6 +6803,7 @@ mod tests {
             status: "active".to_string(),
             last_seen_at: None,
             frozen_reason: None,
+            force_approval: false,
             quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -6877,6 +6894,7 @@ mod tests {
             status: "active".to_string(),
             last_seen_at: None,
             frozen_reason: None,
+            force_approval: false,
             quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -7622,6 +7640,48 @@ mod tests {
             .contains(&"agent_revoked".to_string()));
     }
 
+    /// #1184 (Phase 4 response engine completion): once `agents.force_approval`
+    /// is set (e.g. by the SOC Response Engine after a `trust_escalation`
+    /// incident), every otherwise-`allow` decision for that agent is downgraded
+    /// to `require_approval` until an operator clears it.
+    #[tokio::test]
+    async fn force_approval_agent_downgrades_allow_to_require_approval() {
+        let (state, tenant_id, agent_token) = setup_state("agent_force_approval").await;
+
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_id = agent.id;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+
+        // Baseline: active agent, normally-allowed action.
+        let allowed =
+            call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        assert_eq!(allowed.decision, "allow");
+
+        // Simulate the Response Engine setting force_approval after a
+        // trust_escalation incident.
+        db::set_agent_force_approval(&state.pool, &tenant_id, &agent_id, true)
+            .await
+            .unwrap();
+
+        let downgraded =
+            call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        assert_eq!(downgraded.decision, "require_approval");
+        assert!(downgraded
+            .matched_policies
+            .contains(&"soc_response_force_approval".to_string()));
+
+        // Clearing force_approval restores the normal allow decision.
+        db::set_agent_force_approval(&state.pool, &tenant_id, &agent_id, false)
+            .await
+            .unwrap();
+        let restored = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(restored.decision, "allow");
+    }
+
     /// #0078-#0080: agent lifecycle columns. `last_seen_at` is a heartbeat updated
     /// on every authorize call; `freeze_agent` records an operator-supplied
     /// `frozen_reason` that is cleared on unfreeze; `quarantined_at` is set when
@@ -7795,6 +7855,7 @@ mod tests {
             status: "active".to_string(),
             last_seen_at: None,
             frozen_reason: None,
+            force_approval: false,
             quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -9440,6 +9501,7 @@ mod tests {
                     status: "active".to_string(),
                     last_seen_at: None,
                     frozen_reason: None,
+                    force_approval: false,
                     quarantined_at: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),

@@ -185,6 +185,15 @@ pub struct TenantRecord {
     pub name: String,
     pub plan: String,
     pub created_at: DateTime<Utc>,
+    /// Whether the SOC Response Engine (Phase 4, #1184) may automatically
+    /// take containment actions (freeze agents, force approval) for this
+    /// tenant's incidents. Defaults to `true` (additive migration).
+    #[serde(default = "default_true")]
+    pub auto_respond_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
@@ -216,6 +225,11 @@ pub struct AgentRecord {
     /// Additive (#0078).
     #[serde(default)]
     pub quarantined_at: Option<DateTime<Utc>>,
+    /// Set by the SOC Response Engine (Phase 4, #1184) when a `trust_escalation`
+    /// incident is detected: forces every subsequent `allow` decision for this
+    /// agent into `require_approval` until an operator clears it. Additive.
+    #[serde(default)]
+    pub force_approval: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -27,6 +27,7 @@ mod models;
 mod narrate;
 mod notify;
 mod policy;
+mod respond;
 mod routes;
 mod sign;
 
