@@ -4800,6 +4800,184 @@ mod tests {
         assert_eq!(second.status(), StatusCode::CONFLICT);
     }
 
+    /// Shared helper for the approval-lifecycle tests below: triggers a
+    /// require_approval decision (a production GitHub merge) and returns its
+    /// approval id plus the bound `action_hash`.
+    async fn create_pending_approval(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        agent_token: &str,
+        pr_number: &str,
+    ) -> (Uuid, String) {
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some(format!("repo/example/pull/{pr_number}"));
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), tenant_id, agent_token, request).await;
+        let approval = response.approval.expect("approval created");
+        (approval.approval_id, approval.action_hash)
+    }
+
+    /// #0127: approve_approval transitions a pending approval to APPROVED.
+    #[tokio::test]
+    async fn approve_approval_changes_status_to_approved() {
+        let (state, tenant_id, agent_token) = setup_state("approve_sets_status").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "20").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(stored.status, "APPROVED");
+    }
+
+    /// #0128: approve_approval records the approver_user_id on the approval.
+    #[tokio::test]
+    async fn approve_approval_sets_approver_user_id() {
+        let (state, tenant_id, agent_token) = setup_state("approve_sets_approver").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "21").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer-42".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(stored.approver_user_id.as_deref(), Some("reviewer-42"));
+    }
+
+    /// #0129: reject_approval transitions a pending approval to REJECTED.
+    #[tokio::test]
+    async fn reject_approval_changes_status_to_rejected() {
+        let (state, tenant_id, agent_token) = setup_state("reject_sets_status").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "22").await;
+
+        let reject = reject_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: Some("not safe to ship".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(reject.status(), StatusCode::OK);
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(stored.status, "REJECTED");
+        assert_eq!(stored.reason.as_deref(), Some("not safe to ship"));
+    }
+
+    /// #0133: consume_approval rejects an APPROVED approval whose expiry window
+    /// has already passed (fail-closed) — a single-use approval that ages out
+    /// before execution must not be consumable.
+    #[tokio::test]
+    async fn consume_approval_rejects_expired_approval() {
+        let (state, tenant_id, agent_token) = setup_state("consume_rejects_expired").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "23").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        // Age the approval out after it was granted.
+        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
+            .bind(Utc::now() - Duration::minutes(5))
+            .bind(tenant_id.as_str())
+            .bind(approval_id.to_string())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let consume = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(consume.status(), StatusCode::CONFLICT);
+    }
+
+    /// #0134: consume_approval returns the original action_hash that the
+    /// approval was bound to, so the SDK can re-verify it before executing.
+    #[tokio::test]
+    async fn consume_approval_returns_bound_action_hash() {
+        let (state, tenant_id, agent_token) = setup_state("consume_returns_hash").await;
+        let (approval_id, bound_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "24").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let consume = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(consume.status(), StatusCode::OK);
+
+        let body = to_bytes(consume.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["action_hash"].as_str(), Some(bound_hash.as_str()));
+    }
+
     #[tokio::test]
     async fn authorize_emits_verifiable_receipt() {
         let (state, tenant_id, agent_token) = setup_state("emit_receipt").await;
