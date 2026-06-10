@@ -3660,6 +3660,36 @@ pub async fn export_tenant(
     }
 }
 
+/// DELETE /v1/tenants/:id (#947, GDPR right to erasure): permanently delete
+/// every row owned by the tenant, including the tenant itself. Irreversible —
+/// callers should fetch `GET /v1/tenants/:id/export` first if a portability
+/// copy is needed.
+pub async fn delete_tenant(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if tenant_id != id {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Tenant not found"})),
+        )
+            .into_response();
+    }
+
+    match db::delete_tenant_data(&state.pool, &tenant_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            error!("Failed to delete tenant data: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn create_tenant(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTenantRequest>,
@@ -4407,6 +4437,13 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Get tenant info details",
                     "responses": {
                         "200": { "description": "Tenant info details" }
+                    }
+                },
+                "delete": {
+                    "summary": "Permanently delete a tenant and all owned data (GDPR right to erasure)",
+                    "responses": {
+                        "204": { "description": "Tenant and all owned data deleted" },
+                        "404": { "description": "Tenant not found" }
                     }
                 }
             },
@@ -8352,6 +8389,93 @@ mod tests {
 
         std::env::remove_var("AEGIS_BACKUP_DIR");
         let _ = std::fs::remove_dir_all(&backup_dir);
+    }
+
+    /// #947 (GDPR right to erasure): DELETE /v1/tenants/:id removes the
+    /// tenant row plus every owned row across decisions, approvals,
+    /// receipts, audit events, and MCP servers/tools — without touching a
+    /// second tenant's data, and a cross-tenant request 404s.
+    #[tokio::test]
+    async fn test_delete_tenant_route_removes_all_owned_data() {
+        let (state, tenant_id, agent_token) = setup_state("delete_tenant_route").await;
+
+        // Populate decisions/audit_events/action_receipts via authorize.
+        let read_request = mcp_authorize_request("github", "read_file");
+        let _ = call_authorize(state.clone(), &tenant_id, &agent_token, read_request).await;
+
+        // Populate an approval (require_approval decision).
+        let _ = create_pending_approval(&state, &tenant_id, &agent_token, "99").await;
+
+        // Populate an MCP server.
+        let _ = register_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(RegisterMcpServerRequest {
+                server_key: "gdpr-test-server".to_string(),
+                name: "GDPR Test Server".to_string(),
+                owner_team: None,
+                transport: "stdio".to_string(),
+                source: None,
+                trust_level: "trusted_internal_signed".to_string(),
+                endpoint: "stdio://test".to_string(),
+            }),
+        )
+        .await;
+
+        // A second tenant with its own data must be unaffected.
+        let tenant_b = format!("tenant_b_{}", Uuid::new_v4().simple());
+        db::register_tenant(&state.pool, &tenant_b, "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // Sanity check: tenant_id has rows before deletion.
+        let stats_before = db::get_tenant_stats(&state.pool, &tenant_id).await.unwrap();
+        assert!(stats_before.total_decisions >= 1);
+
+        let resp = delete_tenant(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(tenant_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        // The tenant and all owned rows are gone.
+        assert!(db::get_tenant_by_id(&state.pool, &tenant_id)
+            .await
+            .unwrap()
+            .is_none());
+        let stats_after = db::get_tenant_stats(&state.pool, &tenant_id).await.unwrap();
+        assert_eq!(stats_after.total_decisions, 0);
+        assert_eq!(stats_after.total_agents, 0);
+        assert_eq!(stats_after.total_receipts, 0);
+
+        let remaining_approvals = db::list_pending_approvals(&state.pool, &tenant_id, 50, 0)
+            .await
+            .unwrap();
+        assert!(remaining_approvals.is_empty());
+
+        let remaining_servers = db::list_mcp_servers(&state.pool, &tenant_id, 50, 0)
+            .await
+            .unwrap();
+        assert!(remaining_servers.is_empty());
+
+        // tenant_b is untouched.
+        assert!(db::get_tenant_by_id(&state.pool, &tenant_b)
+            .await
+            .unwrap()
+            .is_some());
+
+        // A cross-tenant delete (now that tenant_id is gone) reports 404.
+        let cross = delete_tenant(
+            State(state.clone()),
+            TenantId(tenant_b.clone()),
+            Path(tenant_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(cross.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

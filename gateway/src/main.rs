@@ -592,7 +592,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         // Tenants
         .route("/v1/tenants", post(routes::create_tenant))
-        .route("/v1/tenants/:id", get(routes::get_tenant))
+        .route(
+            "/v1/tenants/:id",
+            get(routes::get_tenant).delete(routes::delete_tenant),
+        )
         .route("/v1/tenants/:id/export", get(routes::export_tenant))
         // WebSocket live event stream
         .route("/v1/ws/events", get(routes::ws_events))
