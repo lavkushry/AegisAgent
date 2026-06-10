@@ -5119,6 +5119,64 @@ mod tests {
         assert_eq!(conflict_count, 1, "exactly one consume must be rejected");
     }
 
+    /// #1168: 50 concurrent `consume_approval` calls for the same approved,
+    /// single-use approval. Exactly one must win (200 OK) and the other 49
+    /// must be rejected (409 CONFLICT) — and the receipt chain produced by
+    /// the resulting tamper-attempt receipts must remain a single unbroken
+    /// chain (no fork), per `crate::jobs::verify_tenant_receipt_chain`.
+    #[tokio::test]
+    async fn consume_approval_50_concurrent_only_one_succeeds_and_chain_unforked() {
+        let (state, tenant_id, agent_token) = setup_state("consume_concurrent_50").await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/78".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let mut handles = Vec::new();
+        for _ in 0..50 {
+            let state = state.clone();
+            let tenant_id = tenant_id.clone();
+            handles.push(tokio::spawn(async move {
+                consume_approval(State(state), TenantId(tenant_id), Path(approval_id), None)
+                    .await
+                    .into_response()
+                    .status()
+            }));
+        }
+
+        let mut ok_count = 0;
+        let mut conflict_count = 0;
+        for handle in handles {
+            match handle.await.unwrap() {
+                StatusCode::OK => ok_count += 1,
+                StatusCode::CONFLICT => conflict_count += 1,
+                other => panic!("unexpected status: {other}"),
+            }
+        }
+        assert_eq!(ok_count, 1, "exactly one of 50 consumes must succeed");
+        assert_eq!(conflict_count, 49, "the other 49 consumes must be rejected");
+
+        crate::jobs::verify_tenant_receipt_chain(&state.pool, &tenant_id)
+            .await
+            .expect("receipt chain must remain a single unbroken chain (no fork)");
+    }
+
     /// Shared helper for the approval-lifecycle tests below: triggers a
     /// require_approval decision (a production GitHub merge) and returns its
     /// approval id plus the bound `action_hash`.
