@@ -9391,4 +9391,142 @@ mod tests {
             "duplicate registration must not create a second skill row"
         );
     }
+
+    /// #1167: 100 tenants are created concurrently, each with its own agent,
+    /// decision, pending approval, and action receipt. No tenant's list
+    /// endpoints (`/v1/agents`, `/v1/decisions`, `/v1/approvals`,
+    /// `/v1/receipts`) may return another tenant's rows.
+    #[tokio::test]
+    async fn cross_tenant_isolation_stress_100_tenants() {
+        const N: usize = 100;
+        let (state, _tenant_id, _agent_token) = setup_state("cross_tenant_stress").await;
+
+        let mut handles = Vec::new();
+        for i in 0..N {
+            let state = state.clone();
+            handles.push(tokio::spawn(async move {
+                let tenant_id = format!("tenant_stress_{i}");
+                db::register_tenant(
+                    &state.pool,
+                    &tenant_id,
+                    &format!("Stress Tenant {i}"),
+                    "developer",
+                )
+                .await
+                .unwrap();
+
+                let agent_token = format!("agent_tok_stress_{i}_{}", Uuid::new_v4().simple());
+                let agent = AgentRecord {
+                    id: Uuid::new_v4().to_string(),
+                    tenant_id: tenant_id.clone(),
+                    agent_key: "routes-agent".to_string(),
+                    agent_token: db::hash_token(&agent_token),
+                    name: format!("Stress Agent {i}"),
+                    owner_team: Some("platform".to_string()),
+                    owner_email: None,
+                    environment: "production".to_string(),
+                    framework: None,
+                    model_provider: None,
+                    model_name: None,
+                    purpose: None,
+                    risk_tier: "high".to_string(),
+                    status: "active".to_string(),
+                    last_seen_at: None,
+                    frozen_reason: None,
+                    quarantined_at: None,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                };
+                db::insert_agent(&state.pool, &agent).await.unwrap();
+
+                // Creates a decision row, a pending approval, and an action receipt
+                // all bound to this tenant.
+                create_pending_approval(&state, &tenant_id, &agent_token, &format!("{i}")).await;
+
+                tenant_id
+            }));
+        }
+
+        let mut tenant_ids = Vec::with_capacity(N);
+        for handle in handles {
+            tenant_ids.push(handle.await.unwrap());
+        }
+
+        for tenant_id in &tenant_ids {
+            let agents: Vec<serde_json::Value> = serde_json::from_slice(
+                &to_bytes(
+                    list_agents(
+                        State(state.clone()),
+                        TenantId(tenant_id.clone()),
+                        axum::extract::RawQuery(None),
+                    )
+                    .await
+                    .into_response()
+                    .into_body(),
+                    usize::MAX,
+                )
+                .await
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(agents.len(), 1, "tenant {tenant_id} sees != 1 agent");
+            assert_eq!(agents[0]["tenant_id"], json!(tenant_id));
+
+            let decisions: Vec<serde_json::Value> = serde_json::from_slice(
+                &to_bytes(
+                    list_decisions(
+                        State(state.clone()),
+                        TenantId(tenant_id.clone()),
+                        axum::extract::RawQuery(None),
+                    )
+                    .await
+                    .into_response()
+                    .into_body(),
+                    usize::MAX,
+                )
+                .await
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(decisions.len(), 1, "tenant {tenant_id} sees != 1 decision");
+            assert_eq!(decisions[0]["tenant_id"], json!(tenant_id));
+
+            let approvals: Vec<serde_json::Value> = serde_json::from_slice(
+                &to_bytes(
+                    list_approvals(
+                        State(state.clone()),
+                        TenantId(tenant_id.clone()),
+                        axum::extract::RawQuery(None),
+                    )
+                    .await
+                    .into_response()
+                    .into_body(),
+                    usize::MAX,
+                )
+                .await
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(approvals.len(), 1, "tenant {tenant_id} sees != 1 approval");
+
+            let receipts: Vec<serde_json::Value> = serde_json::from_slice(
+                &to_bytes(
+                    list_receipts(
+                        State(state.clone()),
+                        TenantId(tenant_id.clone()),
+                        axum::extract::RawQuery(None),
+                    )
+                    .await
+                    .into_response()
+                    .into_body(),
+                    usize::MAX,
+                )
+                .await
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(receipts.len(), 1, "tenant {tenant_id} sees != 1 receipt");
+            assert_eq!(receipts[0]["tenant_id"], json!(tenant_id));
+        }
+    }
 }
