@@ -724,6 +724,7 @@ async fn write_decision_and_audit(
     reason: &str,
     matched_policies: &[String],
     audit_event_type: &str,
+    started_at: std::time::Instant,
 ) -> Result<(), sqlx::Error> {
     let decision_record = DecisionRecord {
         id: decision_id.to_string(),
@@ -741,6 +742,7 @@ async fn write_decision_and_audit(
         reason: Some(reason.to_string()),
         matched_policy_ids: Some(matched_policies.join(",")),
         request_id: payload.request_id.clone(),
+        latency_ms: Some(started_at.elapsed().as_millis() as i64),
         created_at: Utc::now(),
     };
 
@@ -1495,6 +1497,9 @@ pub async fn authorize_action(
     headers: HeaderMap,
     Json(payload): Json<AuthorizeRequest>,
 ) -> impl IntoResponse {
+    // #0081: wall-clock time for this evaluation, persisted on the decision row
+    // for SOC/perf dashboards. Captured first so it covers agent resolution too.
+    let started_at = std::time::Instant::now();
     // Resolve agent from Bearer agent_token
     let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
         Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
@@ -1601,6 +1606,7 @@ pub async fn authorize_action(
             &reason,
             &matched_policies,
             audit_event_type,
+            started_at,
         )
         .await
         {
@@ -1708,6 +1714,7 @@ pub async fn authorize_action(
                     &reason,
                     &matched_policies,
                     "mcp_tool_called",
+                    started_at,
                 )
                 .await
                 {
@@ -1777,6 +1784,7 @@ pub async fn authorize_action(
                         &reason,
                         &matched_policies,
                         "mcp_tool_called",
+                        started_at,
                     )
                     .await
                     {
@@ -1825,6 +1833,7 @@ pub async fn authorize_action(
                     &reason,
                     &matched_policies,
                     "mcp_tool_called",
+                    started_at,
                 )
                 .await
                 {
@@ -1934,6 +1943,7 @@ pub async fn authorize_action(
         &reason,
         &matched_policies,
         audit_event_type,
+        started_at,
     )
     .await
     {
@@ -5149,6 +5159,30 @@ mod tests {
         );
     }
 
+    /// #0081: every decision row records the wall-clock time spent evaluating
+    /// the `/v1/authorize` request, for SOC/perf dashboards.
+    #[tokio::test]
+    async fn authorize_records_decision_latency_ms() {
+        let (state, tenant_id, agent_token) = setup_state("decision_latency_ms").await;
+
+        let response = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+        assert_eq!(response.decision, "allow");
+
+        let stored =
+            db::get_decision_by_id(&state.pool, &tenant_id, &response.decision_id.to_string())
+                .await
+                .unwrap()
+                .unwrap();
+        let latency = stored.latency_ms.expect("latency_ms should be populated");
+        assert!(latency >= 0);
+    }
+
     #[tokio::test]
     async fn authorize_requires_mcp_tool_approval() {
         let (state, tenant_id, agent_token) = setup_state("mcp_tool_approval").await;
@@ -6899,6 +6933,7 @@ mod tests {
             reason: Some("ok".to_string()),
             matched_policy_ids: None,
             request_id: None,
+            latency_ms: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record1).await.unwrap();
@@ -6920,6 +6955,7 @@ mod tests {
             reason: Some("bad site".to_string()),
             matched_policy_ids: None,
             request_id: None,
+            latency_ms: None,
             created_at: Utc::now() - Duration::seconds(10),
         };
         db::insert_decision(&state.pool, &record2).await.unwrap();
@@ -7014,6 +7050,7 @@ mod tests {
             reason: None,
             matched_policy_ids: None,
             request_id: None,
+            latency_ms: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record_dec).await.unwrap();
