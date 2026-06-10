@@ -8070,4 +8070,123 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
+
+    fn register_tool_router(state: Arc<AppState>) -> axum::Router {
+        use axum::routing::post;
+        axum::Router::new()
+            .route("/v1/tools", post(register_tool))
+            .with_state(state)
+    }
+
+    fn register_tool_payload(skill_key: &str, risk: &str) -> serde_json::Value {
+        json!({
+            "skill_key": skill_key,
+            "name": "Deployer",
+            "type": "static",
+            "auth_type": null,
+            "owner_team": "platform",
+            "default_risk": "medium",
+            "actions": [
+                {
+                    "action_key": "ship",
+                    "description": "Ship a release",
+                    "risk": risk,
+                    "mutates_state": true,
+                    "data_access": "write",
+                    "approval_required": false,
+                    "default_decision": "policy"
+                }
+            ]
+        })
+    }
+
+    /// #0115: POST /v1/tools with a valid payload creates the skill and its
+    /// actions, retrievable via `db::get_skill_action`.
+    #[tokio::test]
+    async fn register_tool_creates_skill_with_actions() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, tenant_id, _agent_token) = setup_state("register_tool_creates").await;
+        let pool = state.pool.clone();
+        let app = register_tool_router(state);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/tools")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", tenant_id))
+            .body(axum::body::Body::from(
+                register_tool_payload("deployer", "low").to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let action = db::get_skill_action(&pool, &tenant_id, "deployer", "ship")
+            .await
+            .unwrap()
+            .expect("registered action should be queryable");
+        let (risk, mutates_state, approval_required, default_decision) = action;
+        assert_eq!(risk, "low");
+        assert!(mutates_state);
+        assert!(!approval_required);
+        assert_eq!(default_decision, "policy");
+    }
+
+    /// #0116: re-registering the same skill_key with a different action risk
+    /// upserts in place rather than creating a duplicate skill/action.
+    #[tokio::test]
+    async fn register_tool_upserts_on_duplicate_skill_key() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (state, tenant_id, _agent_token) = setup_state("register_tool_dup").await;
+        let pool = state.pool.clone();
+        let app = register_tool_router(state);
+
+        let first = Request::builder()
+            .method("POST")
+            .uri("/v1/tools")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", tenant_id))
+            .body(axum::body::Body::from(
+                register_tool_payload("deployer", "low").to_string(),
+            ))
+            .unwrap();
+        let first_response = app.clone().oneshot(first).await.unwrap();
+        assert_eq!(first_response.status(), StatusCode::OK);
+
+        let second = Request::builder()
+            .method("POST")
+            .uri("/v1/tools")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", tenant_id))
+            .body(axum::body::Body::from(
+                register_tool_payload("deployer", "high").to_string(),
+            ))
+            .unwrap();
+        let second_response = app.oneshot(second).await.unwrap();
+        assert_eq!(second_response.status(), StatusCode::OK);
+
+        let action = db::get_skill_action(&pool, &tenant_id, "deployer", "ship")
+            .await
+            .unwrap()
+            .expect("registered action should be queryable");
+        let (risk, _mutates_state, _approval_required, _default_decision) = action;
+        assert_eq!(risk, "high", "second registration should upsert risk");
+
+        let skill_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM skills WHERE tenant_id = ? AND skill_key = 'deployer'",
+        )
+        .bind(&tenant_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            skill_count, 1,
+            "duplicate registration must not create a second skill row"
+        );
+    }
 }
