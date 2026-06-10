@@ -102,6 +102,8 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    ensure_agents_lifecycle_columns(pool).await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS skills (
             id TEXT PRIMARY KEY,
@@ -420,6 +422,38 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Idempotent ALTER TABLE for existing DBs that pre-date optional receipt signing.
     ensure_action_receipt_signature_columns(pool).await?;
 
+    Ok(())
+}
+
+/// Additive migration (#0078-#0080): agent lifecycle columns surfaced in the SOC
+/// UI and audit trail. `quarantined_at` records when an agent entered the
+/// `quarantined` status (cleared on any other status change); `frozen_reason`
+/// holds the operator-supplied reason for the most recent freeze (cleared on
+/// unfreeze); `last_seen_at` is a heartbeat updated on every successful
+/// `/v1/authorize` call. All three are nullable — NULL means "never set".
+async fn ensure_agents_lifecycle_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(agents)")
+            .fetch_all(pool)
+            .await?;
+
+    let has = |name: &str| columns.iter().any(|(_, n, _, _, _, _)| n == name);
+
+    if !has("quarantined_at") {
+        sqlx::query("ALTER TABLE agents ADD COLUMN quarantined_at DATETIME")
+            .execute(pool)
+            .await?;
+    }
+    if !has("frozen_reason") {
+        sqlx::query("ALTER TABLE agents ADD COLUMN frozen_reason TEXT")
+            .execute(pool)
+            .await?;
+    }
+    if !has("last_seen_at") {
+        sqlx::query("ALTER TABLE agents ADD COLUMN last_seen_at DATETIME")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1536,6 +1570,10 @@ pub async fn get_all_audit_events(
 /// Frozen agents are denied on the next authorize call automatically (the
 /// authorize handler re-reads `agents.status` on every request).
 /// Parameterized and tenant-scoped — never touches another tenant's row.
+/// Updates `agents.status` and the lifecycle columns (#0078-#0080) it implies:
+/// `quarantined_at` is set to now when entering `quarantined` and cleared on any
+/// other status; `frozen_reason` is cleared whenever the new status isn't
+/// `frozen` (set separately via [`set_agent_frozen_reason`]).
 pub async fn set_agent_status(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -1543,15 +1581,54 @@ pub async fn set_agent_status(
     status: &str,
 ) -> Result<bool, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP
+        "UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP,
+         quarantined_at = CASE WHEN ? = 'quarantined' THEN CURRENT_TIMESTAMP ELSE NULL END,
+         frozen_reason = CASE WHEN ? = 'frozen' THEN frozen_reason ELSE NULL END
          WHERE tenant_id = ? AND id = ?",
     )
+    .bind(status)
+    .bind(status)
     .bind(status)
     .bind(tenant_id)
     .bind(agent_id)
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Records the operator-supplied reason for a freeze (#0079). Tenant-scoped;
+/// no-op if the agent doesn't belong to this tenant.
+pub async fn set_agent_frozen_reason(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    reason: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE agents SET frozen_reason = ? WHERE tenant_id = ? AND id = ?")
+        .bind(reason)
+        .bind(tenant_id)
+        .bind(agent_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Heartbeat (#0080): records the timestamp of an agent's most recent successful
+/// `/v1/authorize` call. Tenant-scoped, parameterized, best-effort (callers
+/// should not fail the request if this errors).
+pub async fn touch_agent_last_seen(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE agents SET last_seen_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Check whether an agent is currently active (not frozen or revoked).

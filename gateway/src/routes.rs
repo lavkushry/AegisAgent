@@ -800,6 +800,9 @@ pub async fn register_agent(
         purpose: payload.purpose,
         risk_tier: payload.risk_tier,
         status: "active".to_string(),
+        last_seen_at: None,
+        frozen_reason: None,
+        quarantined_at: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -1456,6 +1459,10 @@ pub async fn authorize_action(
 
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
+
+    // Heartbeat (#0080): record this contact as the agent's most recent activity.
+    // Best-effort — never fails the request.
+    let _ = db::touch_agent_last_seen(&state.pool, &tenant_id, &agent_id).await;
 
     // Check Rate Limiting (TASK-0012)
     if !state.rate_limiter.check_rate_limit(&tenant_id) {
@@ -3281,14 +3288,31 @@ pub async fn narrate_incident(
 
 // ── SOC Phase 4: Response API ─────────────────────────────────────────────────
 
+/// Optional request body for `POST /v1/agents/:id/freeze` (#0079) — an
+/// operator-supplied reason recorded on `agents.frozen_reason` and surfaced in
+/// the audit trail / SOC UI. Omit the body (or `reason`) to freeze without one.
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct FreezeAgentRequest {
+    pub reason: Option<String>,
+}
+
 /// Freeze an agent: all subsequent /v1/authorize calls for this agent will be
 /// denied immediately without Cedar evaluation. Reversible via /unfreeze.
 pub async fn freeze_agent(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
+    body: Option<Json<FreezeAgentRequest>>,
 ) -> impl IntoResponse {
-    set_agent_operational_status(state, tenant_id, agent_id, "frozen").await
+    let reason = body.and_then(|Json(b)| b.reason);
+    let resp =
+        set_agent_operational_status(state.clone(), tenant_id.clone(), agent_id.clone(), "frozen")
+            .await;
+    if resp.status() == StatusCode::OK {
+        let _ = db::set_agent_frozen_reason(&state.pool, &tenant_id, &agent_id, reason.as_deref())
+            .await;
+    }
+    resp
 }
 
 /// Restore a frozen agent to active status.
@@ -4406,6 +4430,9 @@ mod tests {
             purpose: None,
             risk_tier: "high".to_string(),
             status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -5584,6 +5611,9 @@ mod tests {
                 purpose: None,
                 risk_tier: "high".to_string(),
                 status: "active".to_string(),
+                last_seen_at: None,
+                frozen_reason: None,
+                quarantined_at: None,
                 created_at: Utc::now() - Duration::hours(idx), // older first
                 updated_at: Utc::now(),
             };
@@ -5610,6 +5640,9 @@ mod tests {
             purpose: None,
             risk_tier: "high".to_string(),
             status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -5666,6 +5699,9 @@ mod tests {
             purpose: None,
             risk_tier: "high".to_string(),
             status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -5727,6 +5763,9 @@ mod tests {
             purpose: None,
             risk_tier: "high".to_string(),
             status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -5814,6 +5853,9 @@ mod tests {
             purpose: None,
             risk_tier: "high".to_string(),
             status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -6558,6 +6600,91 @@ mod tests {
             .contains(&"agent_revoked".to_string()));
     }
 
+    /// #0078-#0080: agent lifecycle columns. `last_seen_at` is a heartbeat updated
+    /// on every authorize call; `freeze_agent` records an operator-supplied
+    /// `frozen_reason` that is cleared on unfreeze; `quarantined_at` is set when
+    /// status transitions to `quarantined` and cleared on any other transition.
+    #[tokio::test]
+    async fn agent_lifecycle_columns_are_populated_and_cleared() {
+        let (state, tenant_id, agent_token) = setup_state("agent_lifecycle").await;
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_id = agent.id.clone();
+        assert!(agent.last_seen_at.is_none());
+
+        // last_seen_at: populated by a successful authorize call.
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(agent.last_seen_at.is_some());
+
+        // frozen_reason: set via freeze_agent's optional body, cleared on unfreeze.
+        let resp = freeze_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent_id.clone()),
+            Some(Json(FreezeAgentRequest {
+                reason: Some("compromised credentials".to_string()),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent.status, "frozen");
+        assert_eq!(
+            agent.frozen_reason.as_deref(),
+            Some("compromised credentials")
+        );
+
+        let _ = unfreeze_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent_id.clone()),
+        )
+        .await
+        .into_response();
+        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent.status, "active");
+        assert!(agent.frozen_reason.is_none());
+
+        // quarantined_at: set on transition to quarantined, cleared on transition out.
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "quarantined")
+                .await
+                .unwrap()
+        );
+        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent.status, "quarantined");
+        assert!(agent.quarantined_at.is_some());
+
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "active")
+                .await
+                .unwrap()
+        );
+        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent.status, "active");
+        assert!(agent.quarantined_at.is_none());
+    }
+
     #[tokio::test]
     async fn test_list_and_get_decisions_route() {
         let (state, tenant_id, agent_token) = setup_state("list_get_decisions").await;
@@ -6583,6 +6710,9 @@ mod tests {
             purpose: None,
             risk_tier: "high".to_string(),
             status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            quarantined_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
