@@ -1538,6 +1538,38 @@ pub async fn get_approval_by_id(
         .await
 }
 
+/// Apply an edit to a pending approval (#0130): the edited tool call is
+/// re-hashed and that new hash becomes the approval's bound `action_hash`, so
+/// any subsequent approve/consume is bound to the edited action, not the
+/// original one.
+pub async fn update_approval_edit(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    approval_id: &str,
+    user_id: &str,
+    reason: Option<&str>,
+    edited_call: &str,
+    new_action_hash: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE approvals
+         SET status = 'EDITED', approver_user_id = ?, reason = ?, edited_skill_call = ?,
+             original_call_hash = ?, decided_at = ?
+         WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(user_id)
+    .bind(reason)
+    .bind(edited_call)
+    .bind(new_action_hash)
+    .bind(now)
+    .bind(tenant_id)
+    .bind(approval_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn update_approval_status(
     pool: &SqlitePool,
     tenant_id: &str,
