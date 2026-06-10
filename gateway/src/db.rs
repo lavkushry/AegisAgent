@@ -231,6 +231,8 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    ensure_decisions_request_id_column(pool).await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS approvals (
             id TEXT PRIMARY KEY,
@@ -422,6 +424,37 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Idempotent ALTER TABLE for existing DBs that pre-date optional receipt signing.
     ensure_action_receipt_signature_columns(pool).await?;
 
+    Ok(())
+}
+
+/// Additive migration (#0072): caller-supplied idempotency key on each decision.
+/// A repeat `POST /v1/authorize` with the same `(tenant_id, agent_id,
+/// request_id)` is detected via [`get_decision_by_request_id`] and short-circuits
+/// to the original decision instead of re-evaluating Cedar / writing a duplicate
+/// audit event, approval, or receipt. The partial unique index only applies to
+/// non-NULL request_ids, so callers that omit it are unaffected.
+async fn ensure_decisions_request_id_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(decisions)")
+            .fetch_all(pool)
+            .await?;
+
+    if !columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "request_id")
+    {
+        sqlx::query("ALTER TABLE decisions ADD COLUMN request_id TEXT")
+            .execute(pool)
+            .await?;
+    }
+
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_tenant_agent_request_id
+         ON decisions (tenant_id, agent_id, request_id)
+         WHERE request_id IS NOT NULL",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -1235,8 +1268,8 @@ pub async fn insert_decision(
     record: &DecisionRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -1252,9 +1285,49 @@ pub async fn insert_decision(
     .bind(record.risk_score)
     .bind(&record.reason)
     .bind(&record.matched_policy_ids)
+    .bind(&record.request_id)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Idempotency lookup (#0072): find a previously-recorded decision for the same
+/// `(tenant_id, agent_id, request_id)`. Used by `/v1/authorize` to short-circuit
+/// repeat requests instead of re-evaluating Cedar / writing duplicate side
+/// effects (audit events, approvals, receipts).
+pub async fn get_decision_by_request_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    request_id: &str,
+) -> Result<Option<DecisionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND agent_id = ? AND request_id = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(request_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Fetch the approval record (if any) created for a given decision. Used by the
+/// idempotency replay path (#0072) to reconstruct `ApprovalResponseInfo` for a
+/// `require_approval` decision without creating a second approval row.
+pub async fn get_approval_by_decision_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_id: &str,
+) -> Result<Option<ApprovalRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ApprovalRecord>(
+        "SELECT * FROM approvals WHERE tenant_id = ? AND decision_id = ?",
+    )
+    .bind(tenant_id)
+    .bind(decision_id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn list_decisions(
@@ -1267,7 +1340,7 @@ pub async fn list_decisions(
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, created_at
          FROM decisions
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
@@ -1292,7 +1365,7 @@ pub async fn get_decision_by_id(
     decision_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, created_at
          FROM decisions
          WHERE tenant_id = ? AND id = ?",
     )
