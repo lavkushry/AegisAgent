@@ -5208,6 +5208,47 @@ mod tests {
         }
     }
 
+    /// #0136: verify_receipt detects a receipt whose stored `receipt_hash` no
+    /// longer matches its recomputed value (tamper detection).
+    #[tokio::test]
+    async fn verify_receipt_detects_tampered_receipt() {
+        let (state, tenant_id, _agent_token) = setup_state("tampered_single_receipt").await;
+
+        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
+            let mut r = unsigned_receipt_template(&tenant_id);
+            r.prev_receipt_hash = prev;
+            r.receipt_hash = compute_receipt_hash(&r);
+            r
+        })
+        .await
+        .expect("receipt insert");
+
+        sqlx::query("UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE tenant_id = ? AND id = ?")
+            .bind(tenant_id.as_str())
+            .bind(&rec.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let response = verify_receipt(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(rec.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["verified"].as_bool(), Some(false));
+        assert_eq!(json["receipt_hash"].as_str(), Some("sha256:tampered"));
+        assert_ne!(
+            json["recomputed_hash"].as_str(),
+            json["receipt_hash"].as_str()
+        );
+    }
+
     #[tokio::test]
     async fn verify_reports_signature_for_a_signed_receipt() {
         let (state, tenant_id, _agent_token) = setup_state("signed_receipt").await;
