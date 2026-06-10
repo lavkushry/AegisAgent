@@ -23,6 +23,10 @@ pub struct SecurityMetrics {
     /// Number of mutating-action denials due to untrusted/malicious/unknown
     /// source provenance.
     pub provenance_denials_total: AtomicU64,
+    /// Number of handler panics caught by the CatchPanic layer (#1153).
+    /// A non-zero value indicates a bug that would otherwise have dropped
+    /// the client's TCP connection without a response.
+    pub handler_panics_total: AtomicU64,
 }
 
 impl SecurityMetrics {
@@ -45,12 +49,19 @@ impl SecurityMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment `handler_panics_total` by 1.
+    #[inline]
+    pub fn inc_handler_panic(&self) {
+        self.handler_panics_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Render the current counter values as a Prometheus text exposition (v0.0.4).
-    /// Only the two security counters are exposed; no labels containing
+    /// Only the security counters are exposed; no labels containing
     /// tenant/agent/payload data (redaction by design).
     pub fn render_prometheus(&self) -> String {
         let mismatch = self.approval_hash_mismatch_total.load(Ordering::Relaxed);
         let provenance = self.provenance_denials_total.load(Ordering::Relaxed);
+        let panics = self.handler_panics_total.load(Ordering::Relaxed);
 
         format!(
             "# HELP approval_hash_mismatch_total Number of approve-then-swap / hash-mismatch events detected\n\
@@ -58,7 +69,10 @@ impl SecurityMetrics {
              approval_hash_mismatch_total {mismatch}\n\
              # HELP provenance_denials_total Number of mutating-action denials due to untrusted/malicious/unknown source provenance\n\
              # TYPE provenance_denials_total counter\n\
-             provenance_denials_total {provenance}\n"
+             provenance_denials_total {provenance}\n\
+             # HELP aegis_handler_panics_total Number of handler panics caught by the CatchPanic layer\n\
+             # TYPE aegis_handler_panics_total counter\n\
+             aegis_handler_panics_total {panics}\n"
         )
     }
 }
@@ -84,6 +98,15 @@ mod tests {
         let m = SecurityMetrics::new();
         assert_eq!(m.approval_hash_mismatch_total.load(Ordering::Relaxed), 0);
         assert_eq!(m.provenance_denials_total.load(Ordering::Relaxed), 0);
+        assert_eq!(m.handler_panics_total.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn inc_handler_panic_increments() {
+        let m = SecurityMetrics::new();
+        m.inc_handler_panic();
+        m.inc_handler_panic();
+        assert_eq!(m.handler_panics_total.load(Ordering::Relaxed), 2);
     }
 
     #[test]
@@ -107,11 +130,14 @@ mod tests {
         m.inc_hash_mismatch();
         m.inc_provenance_denial();
         m.inc_provenance_denial();
+        m.inc_handler_panic();
         let out = m.render_prometheus();
         assert!(out.contains("approval_hash_mismatch_total 1\n"));
         assert!(out.contains("provenance_denials_total 2\n"));
+        assert!(out.contains("aegis_handler_panics_total 1\n"));
         assert!(out.contains("# TYPE approval_hash_mismatch_total counter"));
         assert!(out.contains("# TYPE provenance_denials_total counter"));
+        assert!(out.contains("# TYPE aegis_handler_panics_total counter"));
     }
 
     #[test]
