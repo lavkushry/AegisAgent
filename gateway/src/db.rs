@@ -848,6 +848,87 @@ pub async fn export_tenant_data(
     })
 }
 
+/// Permanently delete every row owned by `tenant_id` (#947, GDPR right to
+/// erasure), including the `tenants` row itself. Runs in a single
+/// transaction, deleting child tables before their parents so that the
+/// `FOREIGN KEY` constraints enforced by [`init_db`] are satisfied
+/// throughout. Callers should call [`export_tenant_data`] first if a
+/// portability copy is needed — this is irreversible.
+pub async fn delete_tenant_data(pool: &SqlitePool, tenant_id: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    // action_receipts, audit_events*, soc_alerts/incidents, approvals
+    // reference decisions/tenants but nothing references them.
+    sqlx::query("DELETE FROM action_receipts WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM audit_events WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM audit_events_archive WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM soc_alerts WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM soc_incidents WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM approvals WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // decisions reference agents; agents and decisions both reference tenants.
+    sqlx::query("DELETE FROM decisions WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // mcp_tools references mcp_servers.
+    sqlx::query("DELETE FROM mcp_tools WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM mcp_servers WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // skill_actions references skills (no direct tenant_id column).
+    sqlx::query(
+        "DELETE FROM skill_actions WHERE skill_id IN (SELECT id FROM skills WHERE tenant_id = ?)",
+    )
+    .bind(tenant_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM skills WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM policies WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM agents WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM tenants WHERE id = ?")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn register_tenant(
     pool: &SqlitePool,
     id: &str,
