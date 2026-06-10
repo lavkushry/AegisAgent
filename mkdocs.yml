@@ -88,3 +88,4 @@ nav:
       - Operational design: AegisAgent_Operational_Design.md
   - Reference:
       - Action receipt spec: action-receipt-spec.md
+      - Database schema (ERD): database-schema.md
