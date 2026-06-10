@@ -249,51 +249,215 @@ where
 }
 
 fn redact_secrets(input: &str) -> String {
+    // 1. Try to parse the entire input as JSON.
+    if let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(input) {
+        redact_json_value(&mut json_val);
+        if let Ok(serialized) = serde_json::to_string(&json_val) {
+            return serialized;
+        }
+    }
+
+    // 2. If it is not valid JSON, or JSON serialization/parsing failed,
+    // do plain text / URL / pattern redaction.
+    redact_plain_text(input)
+}
+
+fn redact_json_value(val: &mut serde_json::Value) {
+    match val {
+        serde_json::Value::Object(obj) => {
+            for (key, value) in obj.iter_mut() {
+                let key_lower = key.to_lowercase();
+                if is_sensitive_key(&key_lower) {
+                    redact_sensitive_json_value(value);
+                } else {
+                    redact_json_value(value);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                redact_json_value(item);
+            }
+        }
+        serde_json::Value::String(s) => {
+            // Even if the key was not sensitive, the string itself might contain
+            // Bearer tokens or URL query parameters (e.g., in a URL string or log message).
+            *s = redact_plain_text(s);
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    matches!(
+        key,
+        "agent_token"
+            | "api_key"
+            | "password"
+            | "secret_key"
+            | "client_secret"
+            | "authorization"
+            | "token"
+    )
+}
+
+fn redact_sensitive_json_value(val: &mut serde_json::Value) {
+    *val = serde_json::Value::String("[REDACTED]".to_string());
+}
+
+fn redact_plain_text(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
 
+    let sensitive_keys = [
+        "client_secret",
+        "agent_token",
+        "secret_key",
+        "authorization",
+        "api_key",
+        "password",
+        "token",
+    ];
+
     while i < chars.len() {
-        // 1. Check for "Bearer "
-        if i + 7 <= chars.len() && chars[i..i + 7].iter().collect::<String>() == "Bearer " {
-            output.push_str("Bearer ");
-            i += 7;
-            let mut skipped = false;
+        // 1. Check for "Bearer " or "Basic " (case-insensitive)
+        let mut is_auth_prefix = false;
+        let mut prefix_len = 0;
+        if i + 7 <= chars.len()
+            && chars[i..i + 7].iter().collect::<String>().to_lowercase() == "bearer "
+        {
+            is_auth_prefix = true;
+            prefix_len = 7;
+        } else if i + 6 <= chars.len()
+            && chars[i..i + 6].iter().collect::<String>().to_lowercase() == "basic "
+        {
+            is_auth_prefix = true;
+            prefix_len = 6;
+        }
+
+        if is_auth_prefix {
+            output.push_str(&chars[i..i + prefix_len].iter().collect::<String>());
+            i += prefix_len;
+            // Skip spaces/quotes
+            while i < chars.len()
+                && (chars[i] == ' ' || chars[i] == '\t' || chars[i] == '"' || chars[i] == '\'')
+            {
+                output.push(chars[i]);
+                i += 1;
+            }
+            let mut redacted = false;
             while i < chars.len() {
                 let c = chars[i];
                 if c == ' '
+                    || c == '\t'
                     || c == ','
                     || c == '"'
+                    || c == '\''
                     || c == '\n'
                     || c == '\r'
                     || c == '}'
-                    || c == '\\'
                     || c == ']'
+                    || c == ')'
+                    || c == '\\'
                 {
                     break;
                 }
-                if !skipped {
+                if !redacted {
                     output.push_str("[REDACTED]");
-                    skipped = true;
+                    redacted = true;
                 }
                 i += 1;
             }
             continue;
         }
 
-        // 2. Check for "agent_token"
-        if i + 11 <= chars.len() && chars[i..i + 11].iter().collect::<String>() == "agent_token" {
-            output.push_str("agent_token");
-            i += 11;
-            redact_next_word(&chars, &mut i, &mut output);
-            continue;
+        // 2. Check for sensitive keys
+        let mut matched = false;
+        for key in &sensitive_keys {
+            if let Some(after_key) = match_key_at(&chars, i, key) {
+                // We found a match for the key. Let's see if it's followed by : or =
+                let mut j = after_key;
+                // Skip spaces or closing quotes
+                while j < chars.len()
+                    && (chars[j] == ' ' || chars[j] == '\t' || chars[j] == '"' || chars[j] == '\'')
+                {
+                    j += 1;
+                }
+                if j < chars.len() && (chars[j] == ':' || chars[j] == '=') {
+                    // It is followed by a separator! Let's find the value
+                    j += 1; // skip separator
+                    let mut value_start = j;
+                    // Skip spaces or opening quotes/backslashes
+                    while value_start < chars.len() {
+                        let c = chars[value_start];
+                        if c == ' ' || c == '\t' || c == '"' || c == '\'' || c == '\\' {
+                            value_start += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Check if value starts with bearer or basic (case-insensitive)
+                    if value_start + 7 <= chars.len()
+                        && chars[value_start..value_start + 7]
+                            .iter()
+                            .collect::<String>()
+                            .to_lowercase()
+                            == "bearer "
+                    {
+                        value_start += 7;
+                        while value_start < chars.len() && chars[value_start] == ' ' {
+                            value_start += 1;
+                        }
+                    } else if value_start + 6 <= chars.len()
+                        && chars[value_start..value_start + 6]
+                            .iter()
+                            .collect::<String>()
+                            .to_lowercase()
+                            == "basic "
+                    {
+                        value_start += 6;
+                        while value_start < chars.len() && chars[value_start] == ' ' {
+                            value_start += 1;
+                        }
+                    }
+
+                    let mut value_end = value_start;
+                    while value_end < chars.len() {
+                        let c = chars[value_end];
+                        if c == ' '
+                            || c == '\t'
+                            || c == '&'
+                            || c == '#'
+                            || c == ','
+                            || c == '}'
+                            || c == ']'
+                            || c == ')'
+                            || c == '"'
+                            || c == '\''
+                            || c == '\n'
+                            || c == '\r'
+                            || c == '\\'
+                        {
+                            break;
+                        }
+                        value_end += 1;
+                    }
+
+                    if value_end > value_start {
+                        // Push key and separators/quotes up to value_start
+                        output.push_str(&chars[i..value_start].iter().collect::<String>());
+                        output.push_str("[REDACTED]");
+                        i = value_end;
+                        matched = true;
+                        break;
+                    }
+                }
+            }
         }
 
-        // 3. Check for "api_key"
-        if i + 7 <= chars.len() && chars[i..i + 7].iter().collect::<String>() == "api_key" {
-            output.push_str("api_key");
-            i += 7;
-            redact_next_word(&chars, &mut i, &mut output);
+        if matched {
             continue;
         }
 
@@ -303,49 +467,16 @@ fn redact_secrets(input: &str) -> String {
     output
 }
 
-fn redact_next_word(chars: &[char], i: &mut usize, output: &mut String) {
-    let mut j = *i;
-    let mut found_colon = false;
-    while j < chars.len() {
-        let c = chars[j];
-        if c == ':' {
-            found_colon = true;
-            break;
-        }
-        if c == '\n' || c == '\r' || c == '}' {
-            break;
-        }
-        j += 1;
+fn match_key_at(chars: &[char], i: usize, key: &str) -> Option<usize> {
+    if i + key.len() > chars.len() {
+        return None;
     }
-
-    if found_colon {
-        output.push_str(&chars[*i..=j].iter().collect::<String>());
-        *i = j + 1;
-
-        while *i < chars.len() {
-            let c = chars[*i];
-            if c == ' ' || c == '"' || c == '\\' || c == '\'' {
-                output.push(c);
-                *i += 1;
-            } else {
-                break;
-            }
-        }
-
-        let mut redacted = false;
-        while *i < chars.len() {
-            let c = chars[*i];
-            if c.is_alphanumeric() || c == '_' || c == '-' {
-                if !redacted {
-                    output.push_str("[REDACTED]");
-                    redacted = true;
-                }
-                *i += 1;
-            } else {
-                break;
-            }
+    for (offset, c) in key.chars().enumerate() {
+        if chars[i + offset].to_lowercase().next() != c.to_lowercase().next() {
+            return None;
         }
     }
+    Some(i + key.len())
 }
 
 #[tokio::main]
@@ -729,6 +860,46 @@ mod tests {
         assert_eq!(
             redacted,
             r#"{"agent_token":"[REDACTED]","api_key":"[REDACTED]","other":"field"}"#
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_bearer_basic_case_insensitive() {
+        let log = "Authorization: bearer Token_123, auth: Basic base64_data_here";
+        let redacted = redact_secrets(log);
+        assert_eq!(
+            redacted,
+            "Authorization: bearer [REDACTED], auth: Basic [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_nested_json() {
+        let log = r#"{"level":"info","fields":{"nested":{"password":"my_pwd","secret_key":"k1"},"client_secret":"cs_val","authorization":"Bearer super_secret","message":"some auth: Bearer normal_token"}}"#;
+        let redacted = redact_secrets(log);
+        assert_eq!(
+            redacted,
+            r#"{"level":"info","fields":{"nested":{"password":"[REDACTED]","secret_key":"[REDACTED]"},"client_secret":"[REDACTED]","authorization":"[REDACTED]","message":"some auth: Bearer [REDACTED]"}}"#
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_url_query_parameters() {
+        let log = "http://localhost/path?api_key=my_key&token=my_token&normal=123";
+        let redacted = redact_secrets(log);
+        assert_eq!(
+            redacted,
+            "http://localhost/path?api_key=[REDACTED]&token=[REDACTED]&normal=123"
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_various_casings_and_formats() {
+        let log = "Password=supersecret, CLIENT_SECRET : \"my-secret\", secret_key=some-key";
+        let redacted = redact_secrets(log);
+        assert_eq!(
+            redacted,
+            "Password=[REDACTED], CLIENT_SECRET : \"[REDACTED]\", secret_key=[REDACTED]"
         );
     }
 
