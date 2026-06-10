@@ -333,6 +333,75 @@ fn risk_score_for_level(risk_level: &str) -> i32 {
     }
 }
 
+/// Inverse of [`risk_score_for_level`] — used to reconstruct `risk_level` for an
+/// idempotent replay (#0072), where only `risk_score` was persisted on the
+/// original [`DecisionRecord`]. Bucketed by threshold so it tolerates any score
+/// `risk_score_for_level` could have produced.
+fn risk_level_for_score(risk_score: i32) -> String {
+    match risk_score {
+        s if s >= 95 => "critical",
+        s if s >= 75 => "high",
+        s if s >= 40 => "medium",
+        _ => "low",
+    }
+    .to_string()
+}
+
+/// Idempotent replay (#0072): rebuild the `AuthorizeResponse` for a previously
+/// recorded decision instead of re-evaluating Cedar / writing duplicate audit
+/// events, approvals, or receipts. For `require_approval` decisions, the
+/// associated approval (if any) is looked up so the caller still sees its
+/// current `status` (e.g. an approval created by the first call may since have
+/// been approved/rejected).
+async fn idempotent_replay_response(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+    record: DecisionRecord,
+) -> axum::response::Response {
+    let decision_id = match Uuid::parse_str(&record.id) {
+        Ok(id) => id,
+        Err(_) => Uuid::nil(),
+    };
+    let risk_score = record.risk_score.unwrap_or(0);
+    let matched_policies: Vec<String> = record
+        .matched_policy_ids
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+
+    let mut approval = None;
+    if record.decision == "require_approval" {
+        if let Ok(Some(app)) =
+            db::get_approval_by_decision_id(&state.pool, tenant_id, &record.id).await
+        {
+            approval = Some(ApprovalResponseInfo {
+                approval_id: Uuid::parse_str(&app.id).unwrap_or(Uuid::nil()),
+                status: app.status,
+                approver_group: app.approver_group,
+                expires_at: app.expires_at.unwrap_or(record.created_at),
+                action_hash: app.original_call_hash,
+            });
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(AuthorizeResponse {
+            decision_id,
+            decision: record.decision,
+            risk_score,
+            risk_level: risk_level_for_score(risk_score),
+            reason: record.reason.unwrap_or_default(),
+            matched_policies,
+            approval,
+        }),
+    )
+        .into_response()
+}
+
 fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
     tool.strip_prefix("mcp:")
         .filter(|server_key| !server_key.is_empty())
@@ -671,6 +740,7 @@ async fn write_decision_and_audit(
         risk_score: Some(risk_score),
         reason: Some(reason.to_string()),
         matched_policy_ids: Some(matched_policies.join(",")),
+        request_id: payload.request_id.clone(),
         created_at: Utc::now(),
     };
 
@@ -1459,6 +1529,26 @@ pub async fn authorize_action(
 
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
+
+    // Idempotency (#0072): a repeat call with the same request_id returns the
+    // original decision unchanged instead of re-evaluating Cedar and writing
+    // duplicate audit events / approvals / receipts.
+    if let Some(request_id) = payload.request_id.as_deref().filter(|r| !r.is_empty()) {
+        match db::get_decision_by_request_id(&state.pool, &tenant_id, &agent_id, request_id).await {
+            Ok(Some(record)) => {
+                return idempotent_replay_response(&state, &tenant_id, record).await;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!("Idempotency lookup failed: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        }
+    }
 
     // Heartbeat (#0080): record this contact as the agent's most recent activity.
     // Best-effort — never fails the request.
@@ -4985,6 +5075,80 @@ mod tests {
         assert_eq!(status_json["action_hash"], approval.action_hash);
     }
 
+    /// #0072: a repeat `/v1/authorize` call with the same `request_id` returns the
+    /// original decision unchanged — for an `allow` decision, and for a
+    /// `require_approval` decision it must NOT create a second approval (the
+    /// replayed response carries the same `approval_id`/`action_hash`).
+    #[tokio::test]
+    async fn authorize_is_idempotent_for_repeated_request_id() {
+        let (state, tenant_id, agent_token) = setup_state("idempotency_key").await;
+
+        // Allow path
+        let mut allow_request = mcp_authorize_request("filesystem", "read_file");
+        allow_request.request_id = Some("req-allow-1".to_string());
+        let first = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            allow_request.clone(),
+        )
+        .await;
+        assert_eq!(first.decision, "allow");
+
+        let second = call_authorize(state.clone(), &tenant_id, &agent_token, allow_request).await;
+        assert_eq!(second.decision, first.decision);
+        assert_eq!(second.decision_id, first.decision_id);
+        assert_eq!(second.risk_score, first.risk_score);
+
+        // Only one decision row was written for this request_id.
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let stored =
+            db::get_decision_by_request_id(&state.pool, &tenant_id, &agent.id, "req-allow-1")
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(stored.id, first.decision_id.to_string());
+
+        // require_approval path: the second call must replay the SAME approval.
+        let mut approval_request = mcp_authorize_request("github", "merge_pull_request");
+        approval_request.tool_call.mutates_state = true;
+        approval_request.tool_call.resource = Some("repo/example/pull/7".to_string());
+        approval_request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        approval_request.request_id = Some("req-approval-1".to_string());
+
+        let first = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            approval_request.clone(),
+        )
+        .await;
+        assert_eq!(first.decision, "require_approval");
+        let first_approval = first.approval.expect("approval info expected");
+
+        let second =
+            call_authorize(state.clone(), &tenant_id, &agent_token, approval_request).await;
+        assert_eq!(second.decision, "require_approval");
+        let second_approval = second.approval.expect("approval info expected on replay");
+        assert_eq!(second_approval.approval_id, first_approval.approval_id);
+        assert_eq!(second_approval.action_hash, first_approval.action_hash);
+
+        // Still exactly one pending approval for this decision.
+        let approvals = db::list_pending_approvals(&state.pool, &tenant_id, 50, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            approvals
+                .iter()
+                .filter(|a| a.id == first_approval.approval_id.to_string())
+                .count(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn authorize_requires_mcp_tool_approval() {
         let (state, tenant_id, agent_token) = setup_state("mcp_tool_approval").await;
@@ -6734,6 +6898,7 @@ mod tests {
             risk_score: Some(1),
             reason: Some("ok".to_string()),
             matched_policy_ids: None,
+            request_id: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record1).await.unwrap();
@@ -6754,6 +6919,7 @@ mod tests {
             risk_score: Some(10),
             reason: Some("bad site".to_string()),
             matched_policy_ids: None,
+            request_id: None,
             created_at: Utc::now() - Duration::seconds(10),
         };
         db::insert_decision(&state.pool, &record2).await.unwrap();
@@ -6847,6 +7013,7 @@ mod tests {
             risk_score: None,
             reason: None,
             matched_policy_ids: None,
+            request_id: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record_dec).await.unwrap();

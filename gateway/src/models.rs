@@ -318,6 +318,12 @@ pub struct DecisionRecord {
     pub risk_score: Option<i32>,
     pub reason: Option<String>,
     pub matched_policy_ids: Option<String>, // Serialized comma-separated or JSON
+    /// Caller-supplied idempotency key (#0072), copied from
+    /// `AuthorizeRequest.request_id`. NULL if the caller didn't supply one. A
+    /// repeat `/v1/authorize` call with the same `(tenant_id, agent_id,
+    /// request_id)` returns this decision unchanged instead of re-evaluating.
+    #[serde(default)]
+    pub request_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
