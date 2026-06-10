@@ -22,6 +22,7 @@ mod correlate;
 mod db;
 mod detect;
 mod events;
+mod ingest;
 mod jobs;
 mod metrics;
 mod models;
@@ -759,6 +760,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         // Policy / Interception
         .route("/v1/authorize", post(routes::authorize_action))
+        // SOC-004 (#1187): agentless ingestion of external event sources
+        .route("/v1/ingest", post(routes::ingest_event))
         .route("/v1/decisions", get(routes::list_decisions))
         .route("/v1/decisions/:id", get(routes::get_decision))
         .route(

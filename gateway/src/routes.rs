@@ -2911,6 +2911,58 @@ pub struct UpdatePolicyRequest {
     pub status: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct IngestRequest {
+    /// One of [`crate::ingest::SUPPORTED_SOURCES`].
+    pub source: String,
+    /// The raw event payload from the external system, in that system's
+    /// native shape (e.g. a GitHub webhook body, an OpenAI trace entry).
+    pub payload: serde_json::Value,
+}
+
+/// `POST /v1/ingest` (SOC-004, #1187) — agentless event ingestion.
+///
+/// Tenant-scoped (via [`TenantId`]) and authenticated like every other
+/// management endpoint. Normalizes `payload` per `source` (see
+/// [`crate::ingest`]) and emits the result onto the same
+/// [`crate::events::EventSink`] the inline `/v1/authorize` path uses, so it
+/// flows through the identical detect -> correlate -> respond pipeline.
+/// Never touches the authorize hot path itself (Law 3) — this is its own
+/// request/response cycle.
+pub async fn ingest_event(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<IngestRequest>,
+) -> impl IntoResponse {
+    match crate::ingest::normalize(&tenant_id, &payload.source, &payload.payload) {
+        Err(()) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "unsupported ingest source '{}'; supported: {:?}",
+                    payload.source,
+                    crate::ingest::SUPPORTED_SOURCES
+                )
+            })),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "payload could not be normalized for this source"})),
+        )
+            .into_response(),
+        Ok(Some(event)) => {
+            let event_id = event.event_id.clone();
+            state.events.emit(event);
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({"status": "accepted", "event_id": event_id})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn list_policies(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -8330,6 +8382,87 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// SOC-004 (#1187): `POST /v1/ingest` normalizes a GitHub webhook payload,
+    /// emits it onto the SOC event stream, and the drain task's behavioral
+    /// baseline records it as the agent's first-ever (tool, action) — proving
+    /// the ingested event flows through the same pipeline as `/v1/authorize`.
+    #[tokio::test]
+    async fn test_ingest_github_webhook_route() {
+        let (state, tenant_id, _) = setup_state("ingest_github_webhook").await;
+
+        let payload = IngestRequest {
+            source: "github_webhook".to_string(),
+            payload: serde_json::json!({
+                "action": "opened",
+                "repository": {"full_name": "lavkushry/AegisAgent"},
+                "sender": {"login": "alice"}
+            }),
+        };
+
+        let response = ingest_event(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        // Give the background drain task a moment to persist the alert.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let alerts = db::list_soc_alerts(&state.pool, &tenant_id, 10, 0, None, None)
+            .await
+            .unwrap();
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.rule == "behavioral_anomaly_new_tool" && a.agent_id == "alice"),
+            "expected the ingested github event to flow through the SOC pipeline, got: {alerts:?}"
+        );
+    }
+
+    /// SOC-004 (#1187): an unsupported `source` is rejected with 400.
+    #[tokio::test]
+    async fn test_ingest_rejects_unsupported_source() {
+        let (state, tenant_id, _) = setup_state("ingest_unsupported_source").await;
+
+        let payload = IngestRequest {
+            source: "slack_webhook".to_string(),
+            payload: serde_json::json!({}),
+        };
+
+        let response = ingest_event(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// SOC-004 (#1187): a payload missing required fields for the chosen
+    /// source is rejected with 400 rather than emitting a malformed event.
+    #[tokio::test]
+    async fn test_ingest_rejects_unnormalizable_payload() {
+        let (state, tenant_id, _) = setup_state("ingest_bad_payload").await;
+
+        let payload = IngestRequest {
+            source: "github_webhook".to_string(),
+            payload: serde_json::json!({"foo": "bar"}),
+        };
+
+        let response = ingest_event(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
