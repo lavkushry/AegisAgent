@@ -11,8 +11,9 @@
 use crate::correlate::Correlator;
 use crate::db;
 use crate::detect::Detector;
-use crate::models::{SocAlertRecord, SocIncidentRecord};
+use crate::models::{AuditEventRecord, SocAlertRecord, SocIncidentRecord};
 use crate::notify::{self, NotifyMessage, NotifySink};
+use crate::respond;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
@@ -272,6 +273,62 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
                     incident_id = %incident.incident_id,
                     "Phase 5: failed to persist SOC incident: {:?}", e
                 );
+            }
+
+            // Phase 4 — Response Engine auto-dispatch (#1184). Best-effort:
+            // a DB error here is logged and never panics or aborts the drain
+            // loop (design law 3, out-of-band).
+            match respond::dispatch(&pool, &incident).await {
+                Ok(Some(action)) => {
+                    warn!(
+                        incident_id = %incident.incident_id,
+                        action = %action.action,
+                        "SOC response: {}", action.description,
+                    );
+
+                    if action.critical_notify {
+                        sink.notify(NotifyMessage {
+                            kind: "response".to_string(),
+                            severity: "critical".to_string(),
+                            tenant_id: incident.tenant_id.clone(),
+                            agent_id: incident.agent_id.clone(),
+                            summary: action.description.clone(),
+                            alert_or_incident_id: Some(incident.incident_id.clone()),
+                            occurred_at: incident.opened_at.clone(),
+                        });
+                    }
+
+                    let audit_record = AuditEventRecord {
+                        id: Uuid::new_v4().to_string(),
+                        tenant_id: incident.tenant_id.clone(),
+                        event_type: "soc_response".to_string(),
+                        agent_id: Some(incident.agent_id.clone()),
+                        user_id: None,
+                        run_id: None,
+                        trace_id: None,
+                        span_id: None,
+                        skill: None,
+                        action: Some(action.action.clone()),
+                        resource: Some(incident.incident_id.clone()),
+                        event_json: action.description.clone(),
+                        input_hash: None,
+                        output_hash: None,
+                        created_at: chrono::Utc::now(),
+                    };
+                    if let Err(e) = db::insert_audit_event(&pool, &audit_record).await {
+                        error!(
+                            incident_id = %incident.incident_id,
+                            "Phase 4: failed to persist SOC response audit event: {:?}", e
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!(
+                        incident_id = %incident.incident_id,
+                        "Phase 4: response dispatch failed: {:?}", e
+                    );
+                }
             }
         }
     }

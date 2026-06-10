@@ -124,6 +124,8 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    ensure_tenants_auto_respond_column(pool).await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agents (
             id TEXT PRIMARY KEY,
@@ -587,6 +589,34 @@ async fn ensure_agents_lifecycle_columns(pool: &SqlitePool) -> Result<(), sqlx::
             .execute(pool)
             .await?;
     }
+    if !has("force_approval") {
+        sqlx::query("ALTER TABLE agents ADD COLUMN force_approval INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Additive migration (#1184): per-tenant kill switch for the SOC Response
+/// Engine's auto-dispatch (Phase 4 completion). Defaults to enabled (`1`) so
+/// the containment behaviour described in `respond.rs` is on by default;
+/// tenants can opt out via `PATCH`-style tenant config.
+async fn ensure_tenants_auto_respond_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(tenants)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "auto_respond_enabled")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE tenants ADD COLUMN auto_respond_enabled INTEGER NOT NULL DEFAULT 1")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -2011,6 +2041,41 @@ pub async fn set_agent_frozen_reason(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Set or clear `agents.force_approval` (#1184, Phase 4 response engine).
+/// While `true`, the authorize handler downgrades every otherwise-`allow`
+/// decision for this agent to `require_approval` (set in `routes.rs`).
+/// Tenant-scoped; no-op if the agent doesn't belong to this tenant.
+pub async fn set_agent_force_approval(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    value: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE agents SET force_approval = ? WHERE tenant_id = ? AND id = ?")
+        .bind(value)
+        .bind(tenant_id)
+        .bind(agent_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Returns `true` if the SOC Response Engine's auto-dispatch (#1184) is
+/// enabled for `tenant_id`. Defaults to `true` (the column is `NOT NULL
+/// DEFAULT 1`); an unknown tenant is treated as disabled (fail-safe — no
+/// automated containment for a tenant the gateway can't find).
+pub async fn is_auto_respond_enabled(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let row: Option<(bool,)> =
+        sqlx::query_as("SELECT auto_respond_enabled FROM tenants WHERE id = ?")
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(v,)| v).unwrap_or(false))
 }
 
 /// Heartbeat (#0080): records the timestamp of an agent's most recent successful
