@@ -90,21 +90,22 @@ action references that action's `action_hash` and `receipt_hash` as immutable ev
 | Wazuh component | Purpose | Agent SOC equivalent | Status in repo |
 |---|---|---|---|
 | Wazuh Agent | Collect endpoint telemetry | `@protect_tool` SDK + Gateway interceptor | ✅ `sdk-python/`, `gateway/src/routes.rs` |
-| Wazuh Server/Manager | Decode → rules → alerts | **Aegis Analysis Engine** (async daemon) | ❌ to build |
-| Decoders | Normalise raw logs → fields | **Event Normalizer** (tool call → ASE, §7) | 🟡 `canon.py` does the hashing half |
-| Rules | Detect + correlate | **Detection Rule Engine** (atomic + correlation, §9) | ❌ to build |
-| Active Response | Run response scripts | **Response Engine** (freeze/revoke/quarantine, §15) | 🟡 `tool/disable` + fail-closed only |
-| Wazuh Indexer | Store/search alerts | **Event Indexer** (SQLite now → ClickHouse, §21) | 🟡 `decisions`/`audit_events`/`action_receipts` |
-| Filebeat | Ship to indexer | **Event Shipper** (stream consumer) | ❌ to build |
-| Wazuh Dashboard | Visualise | **SOC Console** | 🟡 `docs/dashboard-mock.html` stub |
+| Wazuh Server/Manager | Decode → rules → alerts | **Aegis Analysis Engine** (async daemon) | ✅ `gateway/src/{events,detect,correlate}.rs` |
+| Decoders | Normalise raw logs → fields | **Event Normalizer** (tool call → ASE, §7) | ✅ `events.rs` ASE + `canon.py` hashing |
+| Rules | Detect + correlate | **Detection Rule Engine** (atomic + correlation, §9) | ✅ `detect.rs`, `correlate.rs` |
+| Active Response | Run response scripts | **Response Engine** (freeze/revoke/quarantine, §15) | 🟡 manual freeze/revoke/quarantine APIs done; auto-dispatch pending (#1184) |
+| Wazuh Indexer | Store/search alerts | **Event Indexer** (SQLite now → ClickHouse, §21) | ✅ `decisions`/`audit_events`/`action_receipts`/`alerts`/`incidents` |
+| Filebeat | Ship to indexer | **Event Shipper** (stream consumer) | ✅ `events::drain` background task |
+| Wazuh Dashboard | Visualise | **SOC Console** | 🟡 `/v1/soc/summary` + `/v1/ws/events` live feed; dashboard UI still a mock |
 | MITRE ATT&CK tags | Technique mapping | **MITRE ATLAS + OWASP LLM Top 10** (§25) | ❌ to build |
 | FIM (file integrity) | Detect file tampering | **MCP manifest drift** detection (§9.4) | 🟡 Cedar stub + `mcp_tools` table |
 | Compliance modules | PCI/GDPR mapping | **SOC 2 / EU AI Act Art.14** via receipts (§12) | ✅ hash-chained `action_receipts` |
-| Agentless monitoring | Syslog/SSH/API | **Agentless ingestion** (webhooks/traces, §20) | ❌ to build |
+| Agentless monitoring | Syslog/SSH/API | **Agentless ingestion** (webhooks/traces, §20) | ❌ to build (#1187) |
 
-**Honest read:** AegisAgent is strong on the two *hardest* ends — the cryptographic **collection
-integrity** and the **compliance ledger**. The entire **analysis → correlation → response → console**
-middle is greenfield. That middle is the SOC.
+**Honest read (updated 2026-06-10):** the **collection integrity** and **compliance ledger** remain
+the strongest pieces. The **analysis → correlation → response → console** middle (Phases 0–3, 5, 6)
+is now implemented and tested; the remaining gaps are the Phase 4 auto-dispatch responder (#1184),
+a real SOC Console UI, and Phase 7 agentless ingestion + baselining (#1187, #1190).
 
 ---
 
@@ -706,22 +707,26 @@ Two new gateway pieces this needs (plan the Rust):
 
 ## 28. Status: have vs. build (honest, tied to files)
 
+> Updated 2026-06-10 — Phases 0–3, 5, and 6 are implemented and covered by tests; the
+> remaining gaps are Phase 4's auto-dispatch responder (#1184) and Phase 7 (agentless
+> ingestion + behavioural baselining, #1187/#1190).
+
 | Capability | State | Where |
 |---|---|---|
 | Inline authorize + Cedar gate | ✅ | `gateway/src/{routes,policy}.rs`, `policies.cedar` |
 | Trust-provenance (6 levels, deterministic) | ✅ | `policies.cedar`, `cedar_policy_authoring.md` |
 | Approval integrity (hash-bound, single-use, expiry) | ✅ | `routes.rs`, `approvals` table, `decorator.py` |
 | Hash-chained receipts + verifier + CLI | ✅ | `receipts.py`, `verify_receipts.py`, `action_receipts` |
-| Canonicalization `aegis-jcs-1` (cross-lang lock) | ✅ Py / 🟡 Rust | `canon.py`, `tests/*_vectors.json` |
+| Canonicalization `aegis-jcs-1` (cross-lang lock) | ✅ | `canon.py`, Rust + Go + TS, `tests/*_vectors.json` |
 | Tenant isolation + parameterized SQLx | ✅ | `db.rs` (every query binds `tenant_id`) |
-| Async event emission (ASE stream) | ❌ | **Phase 0** |
-| Detection rule engine (atomic) | ❌ | **Phase 1** |
-| Notify sink (Slack/webhook) | ❌ | **Phase 2** |
-| Correlation / incidents | ❌ | **Phase 3** |
-| Response control (freeze/revoke/quarantine) | 🟡 disable only | **Phase 4** |
-| Event indexer (ClickHouse) + Console | 🟡 SQLite + mock html | **Phase 5** |
-| RCA narrator (sandboxed LLM) | ❌ | **Phase 6** |
-| Agentless ingestion · baselining | ❌ | **Phase 7** |
+| Async event emission (ASE stream) | ✅ | **Phase 0** — `gateway/src/events.rs` |
+| Detection rule engine (atomic) | ✅ | **Phase 1** — `gateway/src/detect.rs` |
+| Notify sink (Slack/webhook) | ✅ | **Phase 2** — `gateway/src/notify.rs` |
+| Correlation / incidents | ✅ | **Phase 3** — `gateway/src/correlate.rs` |
+| Response control (freeze/revoke/quarantine) | 🟡 manual API done, auto-dispatch pending | **Phase 4** — `routes.rs` (`freeze_agent`/`revoke_agent`/`quarantine_mcp_server`); see #1184 |
+| Event indexer (SQLite) + Console | ✅ SQLite + WS live stream, 🟡 console UI | **Phase 5** — `/v1/soc/summary`, `/v1/ws/events` |
+| RCA narrator (sandboxed LLM) | ✅ | **Phase 6** — `gateway/src/narrate.rs` |
+| Agentless ingestion · baselining | ❌ | **Phase 7** — see #1187, #1190 |
 
 ---
 
