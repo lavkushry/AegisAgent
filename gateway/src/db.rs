@@ -2306,6 +2306,36 @@ mod tests {
         assert_eq!(still_present.0, 1);
     }
 
+    /// #0108: re-applying migrations to an already-migrated database (e.g.
+    /// after a restart, or a rollback to an older binary followed by an
+    /// upgrade back) must not error and must preserve existing data. Every
+    /// `ensure_*_column` migration checks `PRAGMA table_info` before
+    /// `ALTER TABLE ... ADD COLUMN`, so re-running them is a no-op.
+    #[tokio::test]
+    async fn migrations_are_idempotent_on_existing_database() {
+        let db_url = format!(
+            "sqlite://target/migration_idempotent_{}.db",
+            Uuid::new_v4().simple()
+        );
+        std::fs::create_dir_all("target").unwrap();
+
+        let pool1 = init_db(&db_url).await.unwrap();
+        register_tenant(&pool1, "tenant_mig", "Mig Tenant", "developer")
+            .await
+            .unwrap();
+        pool1.close().await;
+
+        // Re-run init_db (and thus run_migrations) against the same database
+        // file, simulating a process restart against an already-migrated DB.
+        let pool2 = init_db(&db_url).await.unwrap();
+        let tenant = get_tenant_by_id(&pool2, "tenant_mig").await.unwrap();
+        assert!(tenant.is_some(), "data must survive re-applied migrations");
+
+        // Running the migration set a third time on the live pool must also
+        // be a no-op (no duplicate-column or duplicate-table errors).
+        run_migrations(&pool2).await.unwrap();
+    }
+
     #[tokio::test]
     async fn health_check_succeeds_on_live_pool() {
         let pool = setup_pool("health_check").await;
