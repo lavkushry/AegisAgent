@@ -237,7 +237,10 @@ struct Claims {
 }
 
 fn validate_jwt(token: &str) -> Option<String> {
-    let secret = std::env::var("AEGIS_JWT_SECRET").unwrap_or_else(|_| "default_secret".to_string());
+    let secret = std::env::var("AEGIS_JWT_SECRET").ok()?;
+    if secret.trim().is_empty() || secret == "default_secret" {
+        return None;
+    }
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let validation = jsonwebtoken::Validation::default();
     jsonwebtoken::decode::<Claims>(token, &key, &validation)
@@ -296,24 +299,26 @@ where
         }
 
         // Fallback to old heuristic
-        let tenant_id = if token.starts_with("tenant_") {
-            token.to_string()
+        if token.starts_with("tenant_") {
+            Ok(TenantId(token.to_string()))
         } else {
-            "tenant_123".to_string()
-        };
-
-        Ok(TenantId(tenant_id))
+            Err((
+                StatusCode::UNAUTHORIZED,
+                Json(
+                    json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"}),
+                ),
+            ))
+        }
     }
 }
 
-fn get_runtime_tenant_from_headers(headers: &HeaderMap) -> String {
+fn get_runtime_tenant_from_headers(headers: &HeaderMap) -> Option<String> {
     headers
         .get("X-Aegis-Tenant-ID")
         .or_else(|| headers.get("X-Tenant-ID"))
         .and_then(|h| h.to_str().ok())
         .filter(|tenant_id| !tenant_id.trim().is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| "tenant_123".to_string())
 }
 
 async fn ensure_tenant_exists(pool: &sqlx::SqlitePool, tenant_id: &str) -> Result<(), sqlx::Error> {
@@ -1512,7 +1517,16 @@ pub async fn authorize_action(
         }
     };
 
-    let runtime_tenant_id = get_runtime_tenant_from_headers(&headers);
+    let runtime_tenant_id = match get_runtime_tenant_from_headers(&headers) {
+        Some(tid) => tid,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Missing X-Aegis-Tenant-ID or X-Tenant-ID header"})),
+            )
+                .into_response()
+        }
+    };
     let agent = match db::get_agent_by_token(&state.pool, &runtime_tenant_id, auth_header).await {
         Ok(Some(a)) => a,
         Ok(None) => {
@@ -3865,7 +3879,11 @@ pub async fn ws_events(
             if token.starts_with("tenant_") {
                 token.to_string()
             } else {
-                "tenant_123".to_string()
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
+                )
+                    .into_response();
             }
         }
     } else {
@@ -3887,7 +3905,11 @@ pub async fn ws_events(
                     if token.starts_with("tenant_") {
                         token.to_string()
                     } else {
-                        "tenant_123".to_string()
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
+                        )
+                            .into_response();
                     }
                 }
             } else {
@@ -3898,18 +3920,11 @@ pub async fn ws_events(
                     .into_response();
             }
         } else {
-            if std::env::var("AEGIS_JWT_REQUIRED")
-                .map(|v| v == "true")
-                .unwrap_or(false)
-            {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Missing authentication"})),
-                )
-                    .into_response();
-            } else {
-                "tenant_123".to_string()
-            }
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Missing authentication. A valid token or JWT must be provided."})),
+            )
+                .into_response();
         }
     };
 
@@ -4568,6 +4583,69 @@ mod tests {
         // Clean up env vars
         std::env::remove_var("AEGIS_JWT_SECRET");
         std::env::remove_var("AEGIS_JWT_REQUIRED");
+    }
+
+    #[tokio::test]
+    async fn test_hardened_tenant_and_jwt_rules() {
+        // 1. Ensure validate_jwt returns None when AEGIS_JWT_SECRET is unset
+        std::env::remove_var("AEGIS_JWT_SECRET");
+        assert_eq!(validate_jwt("any_token"), None);
+
+        // 2. Ensure validate_jwt returns None when AEGIS_JWT_SECRET is "default_secret"
+        std::env::set_var("AEGIS_JWT_SECRET", "default_secret");
+        assert_eq!(validate_jwt("any_token"), None);
+
+        // 3. Ensure TenantId extractor rejects token not starting with "tenant_" when JWT not required
+        std::env::remove_var("AEGIS_JWT_SECRET"); // make sure validate_jwt fails
+        std::env::remove_var("AEGIS_JWT_REQUIRED");
+        let request_bad_heuristic = axum::http::Request::builder()
+            .header("Authorization", "Bearer not_starting_with_tenant")
+            .body(())
+            .unwrap();
+        let (mut parts_bad, _) = request_bad_heuristic.into_parts();
+        let res_bad = TenantId::from_request_parts(&mut parts_bad, &()).await;
+        assert!(res_bad.is_err());
+        let (status, body) = res_bad.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            body["error"],
+            "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"
+        );
+
+        // 4. Ensure TenantId extractor allows token starting with "tenant_" when JWT not required
+        let request_good_heuristic = axum::http::Request::builder()
+            .header("Authorization", "Bearer tenant_custom_id")
+            .body(())
+            .unwrap();
+        let (mut parts_good, _) = request_good_heuristic.into_parts();
+        let res_good = TenantId::from_request_parts(&mut parts_good, &()).await;
+        assert!(res_good.is_ok());
+        assert_eq!(res_good.unwrap().0, "tenant_custom_id");
+    }
+
+    #[tokio::test]
+    async fn test_authorize_action_requires_tenant_header() {
+        let (state, _tenant_id, agent_token) = setup_state("missing_header_test").await;
+        let request = mcp_authorize_request("filesystem", "read_file");
+
+        // Build headers with ONLY Authorization and NO X-Aegis-Tenant-ID / X-Tenant-ID
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", agent_token).parse().unwrap(),
+        );
+
+        let response = authorize_action(State(state), headers, Json(request))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(
+            json["error"],
+            "Missing X-Aegis-Tenant-ID or X-Tenant-ID header"
+        );
     }
 
     #[tokio::test]
