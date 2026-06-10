@@ -227,6 +227,10 @@ pub struct AppState {
     pub quota_manager: QuotaManager,
     /// Read-through cache for registered-action metadata (#899).
     pub skill_cache: SkillActionCache,
+    /// Set to `true` once startup initialization (DB pool, migrations, policy
+    /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
+    /// so orchestrators can distinguish "still starting" from "ready".
+    pub startup_complete: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -4702,6 +4706,7 @@ mod tests {
             rate_limiter: RateLimiter::new(1.0, 1.0),
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
             skill_cache: SkillActionCache::new(1024),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -4732,6 +4737,7 @@ mod tests {
             rate_limiter: RateLimiter::new(100.0, 100.0), // high rate limit
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
             skill_cache: SkillActionCache::new(1024),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
         });
 
         // First request is allowed through quota
@@ -4814,6 +4820,7 @@ mod tests {
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
             skill_cache: SkillActionCache::new(1024),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
         });
 
         (state, tenant_id, agent_token, events_rx)

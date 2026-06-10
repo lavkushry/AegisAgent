@@ -1,0 +1,569 @@
+239	[TASK-0223] Python SDK Test Task 223 — see implementation_plan.md
+240	[TASK-0225] Python SDK Test Task 225 — see implementation_plan.md
+241	[TASK-0224] Python SDK Test Task 224 — see implementation_plan.md
+242	[TASK-0226] Python SDK Test Task 226 — see implementation_plan.md
+243	[TASK-0227] Python SDK Test Task 227 — see implementation_plan.md
+244	[TASK-0228] Python SDK Test Task 228 — see implementation_plan.md
+245	[TASK-0229] Python SDK Test Task 229 — see implementation_plan.md
+246	[TASK-0230] Python SDK Test Task 230 — see implementation_plan.md
+247	[TASK-0232] Python SDK Test Task 232 — see implementation_plan.md
+248	[TASK-0231] Python SDK Test Task 231 — see implementation_plan.md
+249	[TASK-0233] Python SDK Test Task 233 — see implementation_plan.md
+250	[TASK-0234] Python SDK Test Task 234 — see implementation_plan.md
+251	[TASK-0235] Python SDK Test Task 235 — see implementation_plan.md
+252	[TASK-0237] Python SDK Test Task 237 — see implementation_plan.md
+253	[TASK-0236] Python SDK Test Task 236 — see implementation_plan.md
+254	[TASK-0238] Python SDK Test Task 238 — see implementation_plan.md
+255	[TASK-0239] Python SDK Test Task 239 — see implementation_plan.md
+256	[TASK-0240] Python SDK Test Task 240 — see implementation_plan.md
+257	[TASK-0241] Python SDK Test Task 241 — see implementation_plan.md
+258	[TASK-0243] Python SDK Test Task 243 — see implementation_plan.md
+259	[TASK-0242] Python SDK Test Task 242 — see implementation_plan.md
+260	[TASK-0244] Python SDK Test Task 244 — see implementation_plan.md
+261	[TASK-0245] Python SDK Test Task 245 — see implementation_plan.md
+262	[TASK-0246] Python Integration Task 246 — see implementation_plan.md
+263	[TASK-0247] Python Integration Task 247 — see implementation_plan.md
+264	[TASK-0249] Python Integration Task 249 — see implementation_plan.md
+265	[TASK-0248] Python Integration Task 248 — see implementation_plan.md
+266	[TASK-0250] Python Integration Task 250 — see implementation_plan.md
+267	[TASK-0251] Python Integration Task 251 — see implementation_plan.md
+268	[TASK-0252] Python Integration Task 252 — see implementation_plan.md
+269	[TASK-0253] Python Integration Task 253 — see implementation_plan.md
+270	[TASK-0254] Python Integration Task 254 — see implementation_plan.md
+271	[TASK-0255] Python Integration Task 255 — see implementation_plan.md
+272	[TASK-0256] Python Integration Task 256 — see implementation_plan.md
+273	[TASK-0257] Python Integration Task 257 — see implementation_plan.md
+274	[TASK-0258] Python Integration Task 258 — see implementation_plan.md
+275	[TASK-0259] Python Integration Task 259 — see implementation_plan.md
+276	[TASK-0260] Python Integration Task 260 — see implementation_plan.md
+277	[TASK-0261] Python Integration Task 261 — see implementation_plan.md
+278	[TASK-0262] Python Integration Task 262 — see implementation_plan.md
+279	[TASK-0264] Python Integration Task 264 — see implementation_plan.md
+280	[TASK-0265] Python Integration Task 265 — see implementation_plan.md
+281	[TASK-0263] Python Integration Task 263 — see implementation_plan.md
+282	[TASK-0266] Python Integration Task 266 — see implementation_plan.md
+283	[TASK-0267] Python Integration Task 267 — see implementation_plan.md
+284	[TASK-0268] Python Integration Task 268 — see implementation_plan.md
+285	[TASK-0269] Python Integration Task 269 — see implementation_plan.md
+286	[TASK-0270] Python Integration Task 270 — see implementation_plan.md
+287	[TASK-0272] Python Integration Task 272 — see implementation_plan.md
+288	[TASK-0273] Python Integration Task 273 — see implementation_plan.md
+289	[TASK-0271] Python Integration Task 271 — see implementation_plan.md
+290	[TASK-0274] Python Integration Task 274 — see implementation_plan.md
+291	[TASK-0275] Python Integration Task 275 — see implementation_plan.md
+292	[TASK-0276] Python Integration Task 276 — see implementation_plan.md
+293	[TASK-0278] Python Integration Task 278 — see implementation_plan.md
+294	[TASK-0277] Python Integration Task 277 — see implementation_plan.md
+295	[TASK-0279] Python Integration Task 279 — see implementation_plan.md
+296	[TASK-0280] Python Integration Task 280 — see implementation_plan.md
+351	[TASK-0335] Go SDK Task 335 — see implementation_plan.md
+352	[TASK-0336] Go SDK Task 336 — see implementation_plan.md
+353	[TASK-0337] Go SDK Task 337 — see implementation_plan.md
+354	[TASK-0338] Go SDK Task 338 — see implementation_plan.md
+355	[TASK-0339] Go SDK Task 339 — see implementation_plan.md
+356	[TASK-0340] Go SDK Task 340 — see implementation_plan.md
+357	[TASK-0341] Go SDK Task 341 — see implementation_plan.md
+358	[TASK-0342] Go SDK Task 342 — see implementation_plan.md
+359	[TASK-0343] Go SDK Task 343 — see implementation_plan.md
+360	[TASK-0344] Go SDK Task 344 — see implementation_plan.md
+361	[TASK-0346] Go SDK Task 346 — see implementation_plan.md
+362	[TASK-0345] Go SDK Task 345 — see implementation_plan.md
+363	[TASK-0347] Go SDK Task 347 — see implementation_plan.md
+364	[TASK-0348] Go SDK Task 348 — see implementation_plan.md
+365	[TASK-0349] Go SDK Task 349 — see implementation_plan.md
+366	[TASK-0350] Go SDK Task 350 — see implementation_plan.md
+367	[TASK-0351] Go SDK Task 351 — see implementation_plan.md
+368	[TASK-0352] Go SDK Task 352 — see implementation_plan.md
+369	[TASK-0353] Go SDK Task 353 — see implementation_plan.md
+370	[TASK-0354] Go SDK Task 354 — see implementation_plan.md
+371	[TASK-0355] Go SDK Task 355 — see implementation_plan.md
+372	[TASK-0356] Go SDK Task 356 — see implementation_plan.md
+373	[TASK-0357] Go SDK Task 357 — see implementation_plan.md
+374	[TASK-0358] Go SDK Task 358 — see implementation_plan.md
+375	[TASK-0359] Go SDK Task 359 — see implementation_plan.md
+376	[TASK-0361] Go SDK Task 361 — see implementation_plan.md
+377	[TASK-0360] Go SDK Task 360 — see implementation_plan.md
+378	[TASK-0363] Go SDK Task 363 — see implementation_plan.md
+379	[TASK-0364] Go SDK Task 364 — see implementation_plan.md
+380	[TASK-0362] Go SDK Task 362 — see implementation_plan.md
+381	[TASK-0366] Go SDK Task 366 — see implementation_plan.md
+382	[TASK-0365] Go SDK Task 365 — see implementation_plan.md
+383	[TASK-0367] Go SDK Task 367 — see implementation_plan.md
+384	[TASK-0368] Go SDK Task 368 — see implementation_plan.md
+385	[TASK-0369] Go SDK Task 369 — see implementation_plan.md
+386	[TASK-0370] Go SDK Task 370 — see implementation_plan.md
+387	[TASK-0371] Go SDK Task 371 — see implementation_plan.md
+388	[TASK-0372] Go SDK Task 372 — see implementation_plan.md
+389	[TASK-0373] Go SDK Task 373 — see implementation_plan.md
+390	[TASK-0374] Go SDK Task 374 — see implementation_plan.md
+391	[TASK-0375] Go SDK Task 375 — see implementation_plan.md
+392	[TASK-0376] Go SDK Task 376 — see implementation_plan.md
+393	[TASK-0377] Go SDK Task 377 — see implementation_plan.md
+394	[TASK-0378] Go SDK Task 378 — see implementation_plan.md
+395	[TASK-0379] Go SDK Task 379 — see implementation_plan.md
+396	[TASK-0381] Cedar Policy Task 381 — see implementation_plan.md
+397	[TASK-0380] Go SDK Task 380 — see implementation_plan.md
+398	[TASK-0382] Cedar Policy Task 382 — see implementation_plan.md
+399	[TASK-0384] Cedar Policy Task 384 — see implementation_plan.md
+400	[TASK-0383] Cedar Policy Task 383 — see implementation_plan.md
+401	[TASK-0385] Cedar Policy Task 385 — see implementation_plan.md
+402	[TASK-0387] Cedar Policy Task 387 — see implementation_plan.md
+403	[TASK-0386] Cedar Policy Task 386 — see implementation_plan.md
+404	[TASK-0388] Cedar Policy Task 388 — see implementation_plan.md
+405	[TASK-0390] Cedar Policy Task 390 — see implementation_plan.md
+406	[TASK-0391] Cedar Policy Task 391 — see implementation_plan.md
+407	[TASK-0389] Cedar Policy Task 389 — see implementation_plan.md
+408	[TASK-0392] Cedar Policy Task 392 — see implementation_plan.md
+409	[TASK-0394] Cedar Policy Task 394 — see implementation_plan.md
+410	[TASK-0393] Cedar Policy Task 393 — see implementation_plan.md
+411	[TASK-0395] Cedar Policy Task 395 — see implementation_plan.md
+412	[TASK-0396] Cedar Policy Task 396 — see implementation_plan.md
+413	[TASK-0397] Cedar Policy Task 397 — see implementation_plan.md
+414	[TASK-0398] Cedar Policy Task 398 — see implementation_plan.md
+415	[TASK-0399] Cedar Policy Task 399 — see implementation_plan.md
+416	[TASK-0400] Cedar Policy Task 400 — see implementation_plan.md
+417	[TASK-0401] Cedar Policy Task 401 — see implementation_plan.md
+418	[TASK-0402] Cedar Policy Task 402 — see implementation_plan.md
+419	[TASK-0403] Cedar Policy Task 403 — see implementation_plan.md
+420	[TASK-0404] Cedar Policy Task 404 — see implementation_plan.md
+421	[TASK-0405] Cedar Policy Task 405 — see implementation_plan.md
+422	[TASK-0406] Cedar Policy Task 406 — see implementation_plan.md
+423	[TASK-0407] Cedar Policy Task 407 — see implementation_plan.md
+424	[TASK-0408] Cedar Policy Task 408 — see implementation_plan.md
+425	[TASK-0409] Cedar Policy Task 409 — see implementation_plan.md
+426	[TASK-0410] Cedar Policy Task 410 — see implementation_plan.md
+427	[TASK-0411] Cedar Policy Task 411 — see implementation_plan.md
+428	[TASK-0412] Cedar Policy Task 412 — see implementation_plan.md
+429	[TASK-0413] Cedar Policy Task 413 — see implementation_plan.md
+430	[TASK-0414] Cedar Policy Task 414 — see implementation_plan.md
+431	[TASK-0415] Cedar Policy Task 415 — see implementation_plan.md
+432	[TASK-0416] Security Audit Task 416 — see implementation_plan.md
+433	[TASK-0417] Security Audit Task 417 — see implementation_plan.md
+434	[TASK-0418] Security Audit Task 418 — see implementation_plan.md
+435	[TASK-0419] Security Audit Task 419 — see implementation_plan.md
+436	[TASK-0420] Security Audit Task 420 — see implementation_plan.md
+437	[TASK-0421] Security Audit Task 421 — see implementation_plan.md
+438	[TASK-0422] Security Audit Task 422 — see implementation_plan.md
+439	[TASK-0423] Security Audit Task 423 — see implementation_plan.md
+440	[TASK-0424] Security Audit Task 424 — see implementation_plan.md
+441	[TASK-0425] Security Audit Task 425 — see implementation_plan.md
+442	[TASK-0426] Security Audit Task 426 — see implementation_plan.md
+443	[TASK-0427] Security Audit Task 427 — see implementation_plan.md
+444	[TASK-0428] Security Audit Task 428 — see implementation_plan.md
+445	[TASK-0429] Security Audit Task 429 — see implementation_plan.md
+446	[TASK-0430] Security Audit Task 430 — see implementation_plan.md
+447	[TASK-0431] Security Audit Task 431 — see implementation_plan.md
+448	[TASK-0432] Security Audit Task 432 — see implementation_plan.md
+449	[TASK-0433] Security Audit Task 433 — see implementation_plan.md
+450	[TASK-0434] Security Audit Task 434 — see implementation_plan.md
+451	[TASK-0435] Security Audit Task 435 — see implementation_plan.md
+452	[TASK-0436] Security Audit Task 436 — see implementation_plan.md
+453	[TASK-0437] Security Audit Task 437 — see implementation_plan.md
+454	[TASK-0438] Security Audit Task 438 — see implementation_plan.md
+455	[TASK-0439] Security Audit Task 439 — see implementation_plan.md
+456	[TASK-0440] Security Audit Task 440 — see implementation_plan.md
+457	[TASK-0441] Security Audit Task 441 — see implementation_plan.md
+458	[TASK-0442] Security Audit Task 442 — see implementation_plan.md
+459	[TASK-0443] Security Audit Task 443 — see implementation_plan.md
+460	[TASK-0444] Security Audit Task 444 — see implementation_plan.md
+461	[TASK-0445] Security Audit Task 445 — see implementation_plan.md
+462	[TASK-0446] Security Audit Task 446 — see implementation_plan.md
+463	[TASK-0447] Security Audit Task 447 — see implementation_plan.md
+464	[TASK-0448] Security Audit Task 448 — see implementation_plan.md
+465	[TASK-0449] Security Audit Task 449 — see implementation_plan.md
+466	[TASK-0450] Security Audit Task 450 — see implementation_plan.md
+467	[TASK-0451] Security Audit Task 451 — see implementation_plan.md
+468	[TASK-0452] Security Audit Task 452 — see implementation_plan.md
+469	[TASK-0453] Security Audit Task 453 — see implementation_plan.md
+470	[TASK-0454] Security Audit Task 454 — see implementation_plan.md
+471	[TASK-0455] Security Audit Task 455 — see implementation_plan.md
+472	[TASK-0456] Security Audit Task 456 — see implementation_plan.md
+473	[TASK-0457] Security Audit Task 457 — see implementation_plan.md
+474	[TASK-0458] Security Audit Task 458 — see implementation_plan.md
+475	[TASK-0459] Security Audit Task 459 — see implementation_plan.md
+476	[TASK-0460] Security Audit Task 460 — see implementation_plan.md
+477	[TASK-0461] Security Audit Task 461 — see implementation_plan.md
+478	[TASK-0462] Security Audit Task 462 — see implementation_plan.md
+479	[TASK-0463] Security Audit Task 463 — see implementation_plan.md
+480	[TASK-0464] Security Audit Task 464 — see implementation_plan.md
+481	[TASK-0465] Security Audit Task 465 — see implementation_plan.md
+482	[TASK-0466] Agent SOC Task 466 — see implementation_plan.md
+483	[TASK-0467] Agent SOC Task 467 — see implementation_plan.md
+484	[TASK-0468] Agent SOC Task 468 — see implementation_plan.md
+485	[TASK-0469] Agent SOC Task 469 — see implementation_plan.md
+486	[TASK-0470] Agent SOC Task 470 — see implementation_plan.md
+487	[TASK-0471] Agent SOC Task 471 — see implementation_plan.md
+488	[TASK-0472] Agent SOC Task 472 — see implementation_plan.md
+489	[TASK-0473] Agent SOC Task 473 — see implementation_plan.md
+490	[TASK-0474] Agent SOC Task 474 — see implementation_plan.md
+491	[TASK-0475] Agent SOC Task 475 — see implementation_plan.md
+492	[TASK-0476] Agent SOC Task 476 — see implementation_plan.md
+493	[TASK-0477] Agent SOC Task 477 — see implementation_plan.md
+494	[TASK-0478] Agent SOC Task 478 — see implementation_plan.md
+495	[TASK-0479] Agent SOC Task 479 — see implementation_plan.md
+496	[TASK-0480] Agent SOC Task 480 — see implementation_plan.md
+497	[TASK-0481] Agent SOC Task 481 — see implementation_plan.md
+498	[TASK-0482] Agent SOC Task 482 — see implementation_plan.md
+499	[TASK-0483] Agent SOC Task 483 — see implementation_plan.md
+500	[TASK-0484] Agent SOC Task 484 — see implementation_plan.md
+501	[TASK-0485] Agent SOC Task 485 — see implementation_plan.md
+502	[TASK-0486] Agent SOC Task 486 — see implementation_plan.md
+503	[TASK-0487] Agent SOC Task 487 — see implementation_plan.md
+504	[TASK-0488] Agent SOC Task 488 — see implementation_plan.md
+505	[TASK-0489] Agent SOC Task 489 — see implementation_plan.md
+506	[TASK-0490] Agent SOC Task 490 — see implementation_plan.md
+507	[TASK-0491] Agent SOC Task 491 — see implementation_plan.md
+508	[TASK-0492] Agent SOC Task 492 — see implementation_plan.md
+509	[TASK-0493] Agent SOC Task 493 — see implementation_plan.md
+510	[TASK-0494] Agent SOC Task 494 — see implementation_plan.md
+511	[TASK-0495] Agent SOC Task 495 — see implementation_plan.md
+512	[TASK-0496] Agent SOC Task 496 — see implementation_plan.md
+513	[TASK-0497] Agent SOC Task 497 — see implementation_plan.md
+514	[TASK-0498] Agent SOC Task 498 — see implementation_plan.md
+515	[TASK-0499] Agent SOC Task 499 — see implementation_plan.md
+519	[TASK-0518] Agent SOC Task 518 — see implementation_plan.md
+521	[TASK-0519] Agent SOC Task 519 — see implementation_plan.md
+522	[TASK-0520] Agent SOC Task 520 — see implementation_plan.md
+524	[TASK-0521] Agent SOC Task 521 — see implementation_plan.md
+526	[TASK-0522] Agent SOC Task 522 — see implementation_plan.md
+527	[TASK-0523] Agent SOC Task 523 — see implementation_plan.md
+528	[TASK-0524] Agent SOC Task 524 — see implementation_plan.md
+529	[TASK-0525] Agent SOC Task 525 — see implementation_plan.md
+530	[TASK-0526] Agent SOC Task 526 — see implementation_plan.md
+531	[TASK-0527] Agent SOC Task 527 — see implementation_plan.md
+532	[TASK-0528] Agent SOC Task 528 — see implementation_plan.md
+533	[TASK-0529] Agent SOC Task 529 — see implementation_plan.md
+534	[TASK-0530] Agent SOC Task 530 — see implementation_plan.md
+535	[TASK-0531] Agent SOC Task 531 — see implementation_plan.md
+536	[TASK-0532] Agent SOC Task 532 — see implementation_plan.md
+537	[TASK-0533] Agent SOC Task 533 — see implementation_plan.md
+538	[TASK-0534] Agent SOC Task 534 — see implementation_plan.md
+539	[TASK-0535] Agent SOC Task 535 — see implementation_plan.md
+541	[TASK-0536] Agent SOC Task 536 — see implementation_plan.md
+542	[TASK-0537] Agent SOC Task 537 — see implementation_plan.md
+544	[TASK-0538] Agent SOC Task 538 — see implementation_plan.md
+546	[TASK-0539] Agent SOC Task 539 — see implementation_plan.md
+547	[TASK-0540] Agent SOC Task 540 — see implementation_plan.md
+548	[TASK-0541] Agent SOC Task 541 — see implementation_plan.md
+549	[TASK-0542] Agent SOC Task 542 — see implementation_plan.md
+550	[TASK-0543] Agent SOC Task 543 — see implementation_plan.md
+551	[TASK-0544] Agent SOC Task 544 — see implementation_plan.md
+552	[TASK-0545] Agent SOC Task 545 — see implementation_plan.md
+553	[TASK-0546] Agent SOC Task 546 — see implementation_plan.md
+554	[TASK-0547] Agent SOC Task 547 — see implementation_plan.md
+555	[TASK-0549] Agent SOC Task 549 — see implementation_plan.md
+556	[TASK-0548] Agent SOC Task 548 — see implementation_plan.md
+557	[TASK-0550] Agent SOC Task 550 — see implementation_plan.md
+559	[TASK-0551] Agent SOC Task 551 — see implementation_plan.md
+560	[TASK-0552] Agent SOC Task 552 — see implementation_plan.md
+561	[TASK-0553] Agent SOC Task 553 — see implementation_plan.md
+563	[TASK-0554] Agent SOC Task 554 — see implementation_plan.md
+565	[TASK-0555] Agent SOC Task 555 — see implementation_plan.md
+566	[TASK-0556] Agent SOC Task 556 — see implementation_plan.md
+567	[TASK-0557] Agent SOC Task 557 — see implementation_plan.md
+568	[TASK-0558] Agent SOC Task 558 — see implementation_plan.md
+569	[TASK-0559] Agent SOC Task 559 — see implementation_plan.md
+570	[TASK-0560] Agent SOC Task 560 — see implementation_plan.md
+571	[TASK-0561] Agent SOC Task 561 — see implementation_plan.md
+572	[TASK-0562] Agent SOC Task 562 — see implementation_plan.md
+573	[TASK-0563] Agent SOC Task 563 — see implementation_plan.md
+574	[TASK-0565] Agent SOC Task 565 — see implementation_plan.md
+575	[TASK-0564] Agent SOC Task 564 — see implementation_plan.md
+576	[TASK-0566] Agent SOC Task 566 — see implementation_plan.md
+577	[TASK-0567] Agent SOC Task 567 — see implementation_plan.md
+579	[TASK-0568] Agent SOC Task 568 — see implementation_plan.md
+580	[TASK-0569] Agent SOC Task 569 — see implementation_plan.md
+581	[TASK-0570] Agent SOC Task 570 — see implementation_plan.md
+583	[TASK-0571] Agent SOC Task 571 — see implementation_plan.md
+585	[TASK-0572] Agent SOC Task 572 — see implementation_plan.md
+586	[TASK-0573] Agent SOC Task 573 — see implementation_plan.md
+587	[TASK-0574] Agent SOC Task 574 — see implementation_plan.md
+588	[TASK-0575] Agent SOC Task 575 — see implementation_plan.md
+589	[TASK-0576] Agent SOC Task 576 — see implementation_plan.md
+590	[TASK-0577] Agent SOC Task 577 — see implementation_plan.md
+591	[TASK-0578] Agent SOC Task 578 — see implementation_plan.md
+592	[TASK-0579] Agent SOC Task 579 — see implementation_plan.md
+593	[TASK-0580] Agent SOC Task 580 — see implementation_plan.md
+594	[TASK-0581] SOC Console UI Task 581 — see implementation_plan.md
+595	[TASK-0582] SOC Console UI Task 582 — see implementation_plan.md
+596	[TASK-0583] SOC Console UI Task 583 — see implementation_plan.md
+598	[TASK-0584] SOC Console UI Task 584 — see implementation_plan.md
+599	[TASK-0585] SOC Console UI Task 585 — see implementation_plan.md
+600	[TASK-0586] SOC Console UI Task 586 — see implementation_plan.md
+603	[TASK-0587] SOC Console UI Task 587 — see implementation_plan.md
+604	[TASK-0588] SOC Console UI Task 588 — see implementation_plan.md
+605	[TASK-0589] SOC Console UI Task 589 — see implementation_plan.md
+606	[TASK-0591] SOC Console UI Task 591 — see implementation_plan.md
+607	[TASK-0590] SOC Console UI Task 590 — see implementation_plan.md
+608	[TASK-0592] SOC Console UI Task 592 — see implementation_plan.md
+609	[TASK-0593] SOC Console UI Task 593 — see implementation_plan.md
+610	[TASK-0595] SOC Console UI Task 595 — see implementation_plan.md
+611	[TASK-0594] SOC Console UI Task 594 — see implementation_plan.md
+612	[TASK-0596] SOC Console UI Task 596 — see implementation_plan.md
+613	[TASK-0597] SOC Console UI Task 597 — see implementation_plan.md
+614	[TASK-0598] SOC Console UI Task 598 — see implementation_plan.md
+615	[TASK-0599] SOC Console UI Task 599 — see implementation_plan.md
+616	[TASK-0600] SOC Console UI Task 600 — see implementation_plan.md
+617	[TASK-0601] SOC Console UI Task 601 — see implementation_plan.md
+618	[TASK-0602] SOC Console UI Task 602 — see implementation_plan.md
+619	[TASK-0603] SOC Console UI Task 603 — see implementation_plan.md
+620	[TASK-0604] SOC Console UI Task 604 — see implementation_plan.md
+621	[TASK-0605] SOC Console UI Task 605 — see implementation_plan.md
+622	[TASK-0606] SOC Console UI Task 606 — see implementation_plan.md
+623	[TASK-0607] SOC Console UI Task 607 — see implementation_plan.md
+624	[TASK-0608] SOC Console UI Task 608 — see implementation_plan.md
+625	[TASK-0610] SOC Console UI Task 610 — see implementation_plan.md
+626	[TASK-0609] SOC Console UI Task 609 — see implementation_plan.md
+627	[TASK-0611] SOC Console UI Task 611 — see implementation_plan.md
+628	[TASK-0612] SOC Console UI Task 612 — see implementation_plan.md
+629	[TASK-0614] SOC Console UI Task 614 — see implementation_plan.md
+630	[TASK-0613] SOC Console UI Task 613 — see implementation_plan.md
+631	[TASK-0616] SOC Console UI Task 616 — see implementation_plan.md
+632	[TASK-0615] SOC Console UI Task 615 — see implementation_plan.md
+633	[TASK-0617] SOC Console UI Task 617 — see implementation_plan.md
+634	[TASK-0618] SOC Console UI Task 618 — see implementation_plan.md
+635	[TASK-0619] SOC Console UI Task 619 — see implementation_plan.md
+636	[TASK-0620] SOC Console UI Task 620 — see implementation_plan.md
+637	[TASK-0621] SOC Console UI Task 621 — see implementation_plan.md
+638	[TASK-0622] SOC Console UI Task 622 — see implementation_plan.md
+639	[TASK-0623] SOC Console UI Task 623 — see implementation_plan.md
+640	[TASK-0625] SOC Console UI Task 625 — see implementation_plan.md
+641	[TASK-0624] SOC Console UI Task 624 — see implementation_plan.md
+642	[TASK-0626] SOC Console UI Task 626 — see implementation_plan.md
+643	[TASK-0628] SOC Console UI Task 628 — see implementation_plan.md
+644	[TASK-0627] SOC Console UI Task 627 — see implementation_plan.md
+645	[TASK-0629] SOC Console UI Task 629 — see implementation_plan.md
+646	[TASK-0630] SOC Console UI Task 630 — see implementation_plan.md
+647	[TASK-0631] SOC Console UI Task 631 — see implementation_plan.md
+648	[TASK-0632] SOC Console UI Task 632 — see implementation_plan.md
+649	[TASK-0633] SOC Console UI Task 633 — see implementation_plan.md
+650	[TASK-0634] SOC Console UI Task 634 — see implementation_plan.md
+651	[TASK-0635] SOC Console UI Task 635 — see implementation_plan.md
+652	[TASK-0637] SOC Console UI Task 637 — see implementation_plan.md
+653	[TASK-0636] SOC Console UI Task 636 — see implementation_plan.md
+654	[TASK-0638] SOC Console UI Task 638 — see implementation_plan.md
+655	[TASK-0640] SOC Console UI Task 640 — see implementation_plan.md
+656	[TASK-0639] SOC Console UI Task 639 — see implementation_plan.md
+657	[TASK-0641] SOC Console UI Task 641 — see implementation_plan.md
+658	[TASK-0642] SOC Console UI Task 642 — see implementation_plan.md
+659	[TASK-0643] SOC Console UI Task 643 — see implementation_plan.md
+660	[TASK-0644] SOC Console UI Task 644 — see implementation_plan.md
+661	[TASK-0645] SOC Console UI Task 645 — see implementation_plan.md
+662	[TASK-0646] SOC Console UI Task 646 — see implementation_plan.md
+663	[TASK-0647] SOC Console UI Task 647 — see implementation_plan.md
+664	[TASK-0648] SOC Console UI Task 648 — see implementation_plan.md
+665	[TASK-0649] SOC Console UI Task 649 — see implementation_plan.md
+666	[TASK-0650] SOC Console UI Task 650 — see implementation_plan.md
+667	[TASK-0651] SOC Console UI Task 651 — see implementation_plan.md
+668	[TASK-0653] SOC Console UI Task 653 — see implementation_plan.md
+669	[TASK-0652] SOC Console UI Task 652 — see implementation_plan.md
+670	[TASK-0654] SOC Console UI Task 654 — see implementation_plan.md
+671	[TASK-0655] SOC Console UI Task 655 — see implementation_plan.md
+672	[TASK-0656] SOC Console UI Task 656 — see implementation_plan.md
+673	[TASK-0657] SOC Console UI Task 657 — see implementation_plan.md
+674	[TASK-0658] SOC Console UI Task 658 — see implementation_plan.md
+675	[TASK-0659] SOC Console UI Task 659 — see implementation_plan.md
+676	[TASK-0660] SOC Console UI Task 660 — see implementation_plan.md
+677	[TASK-0661] SOC Console UI Task 661 — see implementation_plan.md
+678	[TASK-0662] SOC Console UI Task 662 — see implementation_plan.md
+679	[TASK-0663] SOC Console UI Task 663 — see implementation_plan.md
+680	[TASK-0664] SOC Console UI Task 664 — see implementation_plan.md
+681	[TASK-0665] SOC Console UI Task 665 — see implementation_plan.md
+682	[TASK-0666] SOC Console UI Task 666 — see implementation_plan.md
+683	[TASK-0667] SOC Console UI Task 667 — see implementation_plan.md
+684	[TASK-0668] SOC Console UI Task 668 — see implementation_plan.md
+685	[TASK-0669] SOC Console UI Task 669 — see implementation_plan.md
+686	[TASK-0670] SOC Console UI Task 670 — see implementation_plan.md
+687	[TASK-0671] SOC Console UI Task 671 — see implementation_plan.md
+688	[TASK-0672] SOC Console UI Task 672 — see implementation_plan.md
+689	[TASK-0674] SOC Console UI Task 674 — see implementation_plan.md
+690	[TASK-0675] SOC Console UI Task 675 — see implementation_plan.md
+691	[TASK-0673] SOC Console UI Task 673 — see implementation_plan.md
+692	[TASK-0676] SOC Console UI Task 676 — see implementation_plan.md
+693	[TASK-0677] SOC Console UI Task 677 — see implementation_plan.md
+694	[TASK-0678] SOC Console UI Task 678 — see implementation_plan.md
+695	[TASK-0679] SOC Console UI Task 679 — see implementation_plan.md
+696	[TASK-0680] SOC Console UI Task 680 — see implementation_plan.md
+697	[TASK-0681] CI/CD Task 681 — see implementation_plan.md
+698	[TASK-0682] CI/CD Task 682 — see implementation_plan.md
+699	[TASK-0683] CI/CD Task 683 — see implementation_plan.md
+700	[TASK-0684] CI/CD Task 684 — see implementation_plan.md
+701	[TASK-0685] CI/CD Task 685 — see implementation_plan.md
+702	[TASK-0686] CI/CD Task 686 — see implementation_plan.md
+703	[TASK-0687] CI/CD Task 687 — see implementation_plan.md
+704	[TASK-0688] CI/CD Task 688 — see implementation_plan.md
+705	[TASK-0689] CI/CD Task 689 — see implementation_plan.md
+706	[TASK-0690] CI/CD Task 690 — see implementation_plan.md
+707	[TASK-0692] CI/CD Task 692 — see implementation_plan.md
+708	[TASK-0691] CI/CD Task 691 — see implementation_plan.md
+709	[TASK-0693] CI/CD Task 693 — see implementation_plan.md
+710	[TASK-0694] CI/CD Task 694 — see implementation_plan.md
+711	[TASK-0696] CI/CD Task 696 — see implementation_plan.md
+712	[TASK-0695] CI/CD Task 695 — see implementation_plan.md
+713	[TASK-0697] CI/CD Task 697 — see implementation_plan.md
+714	[TASK-0698] CI/CD Task 698 — see implementation_plan.md
+715	[TASK-0699] CI/CD Task 699 — see implementation_plan.md
+716	[TASK-0700] CI/CD Task 700 — see implementation_plan.md
+717	[TASK-0701] CI/CD Task 701 — see implementation_plan.md
+718	[TASK-0702] CI/CD Task 702 — see implementation_plan.md
+719	[TASK-0703] CI/CD Task 703 — see implementation_plan.md
+720	[TASK-0704] CI/CD Task 704 — see implementation_plan.md
+721	[TASK-0706] CI/CD Task 706 — see implementation_plan.md
+722	[TASK-0705] CI/CD Task 705 — see implementation_plan.md
+723	[TASK-0707] CI/CD Task 707 — see implementation_plan.md
+724	[TASK-0708] CI/CD Task 708 — see implementation_plan.md
+725	[TASK-0709] CI/CD Task 709 — see implementation_plan.md
+726	[TASK-0710] CI/CD Task 710 — see implementation_plan.md
+727	[TASK-0711] CI/CD Task 711 — see implementation_plan.md
+728	[TASK-0712] CI/CD Task 712 — see implementation_plan.md
+729	[TASK-0713] CI/CD Task 713 — see implementation_plan.md
+730	[TASK-0714] CI/CD Task 714 — see implementation_plan.md
+731	[TASK-0715] CI/CD Task 715 — see implementation_plan.md
+732	[TASK-0716] CI/CD Task 716 — see implementation_plan.md
+733	[TASK-0717] CI/CD Task 717 — see implementation_plan.md
+734	[TASK-0718] CI/CD Task 718 — see implementation_plan.md
+735	[TASK-0719] CI/CD Task 719 — see implementation_plan.md
+736	[TASK-0720] CI/CD Task 720 — see implementation_plan.md
+737	[TASK-0721] Docker/Helm Task 721 — see implementation_plan.md
+738	[TASK-0723] Docker/Helm Task 723 — see implementation_plan.md
+739	[TASK-0722] Docker/Helm Task 722 — see implementation_plan.md
+740	[TASK-0724] Docker/Helm Task 724 — see implementation_plan.md
+741	[TASK-0726] Docker/Helm Task 726 — see implementation_plan.md
+742	[TASK-0725] Docker/Helm Task 725 — see implementation_plan.md
+743	[TASK-0727] Docker/Helm Task 727 — see implementation_plan.md
+744	[TASK-0728] Docker/Helm Task 728 — see implementation_plan.md
+745	[TASK-0729] Docker/Helm Task 729 — see implementation_plan.md
+746	[TASK-0730] Docker/Helm Task 730 — see implementation_plan.md
+747	[TASK-0731] Docker/Helm Task 731 — see implementation_plan.md
+748	[TASK-0732] Docker/Helm Task 732 — see implementation_plan.md
+749	[TASK-0733] Docker/Helm Task 733 — see implementation_plan.md
+750	[TASK-0734] Docker/Helm Task 734 — see implementation_plan.md
+751	[TASK-0735] Docker/Helm Task 735 — see implementation_plan.md
+752	[TASK-0736] Docker/Helm Task 736 — see implementation_plan.md
+753	[TASK-0737] Docker/Helm Task 737 — see implementation_plan.md
+754	[TASK-0738] Docker/Helm Task 738 — see implementation_plan.md
+755	[TASK-0739] Docker/Helm Task 739 — see implementation_plan.md
+756	[TASK-0741] Docker/Helm Task 741 — see implementation_plan.md
+757	[TASK-0740] Docker/Helm Task 740 — see implementation_plan.md
+758	[TASK-0742] Docker/Helm Task 742 — see implementation_plan.md
+759	[TASK-0743] Docker/Helm Task 743 — see implementation_plan.md
+760	[TASK-0744] Docker/Helm Task 744 — see implementation_plan.md
+761	[TASK-0745] Docker/Helm Task 745 — see implementation_plan.md
+762	[TASK-0747] Docker/Helm Task 747 — see implementation_plan.md
+763	[TASK-0748] Docker/Helm Task 748 — see implementation_plan.md
+764	[TASK-0746] Docker/Helm Task 746 — see implementation_plan.md
+765	[TASK-0749] Docker/Helm Task 749 — see implementation_plan.md
+766	[TASK-0750] Docker/Helm Task 750 — see implementation_plan.md
+767	[TASK-0751] Docker/Helm Task 751 — see implementation_plan.md
+768	[TASK-0752] Docker/Helm Task 752 — see implementation_plan.md
+769	[TASK-0753] Docker/Helm Task 753 — see implementation_plan.md
+770	[TASK-0754] Docker/Helm Task 754 — see implementation_plan.md
+771	[TASK-0755] Docker/Helm Task 755 — see implementation_plan.md
+772	[TASK-0756] Docker/Helm Task 756 — see implementation_plan.md
+773	[TASK-0757] Docker/Helm Task 757 — see implementation_plan.md
+774	[TASK-0758] Docker/Helm Task 758 — see implementation_plan.md
+775	[TASK-0759] Docker/Helm Task 759 — see implementation_plan.md
+776	[TASK-0760] Docker/Helm Task 760 — see implementation_plan.md
+777	[TASK-0761] Documentation Task 761 — see implementation_plan.md
+778	[TASK-0762] Documentation Task 762 — see implementation_plan.md
+779	[TASK-0763] Documentation Task 763 — see implementation_plan.md
+780	[TASK-0764] Documentation Task 764 — see implementation_plan.md
+781	[TASK-0765] Documentation Task 765 — see implementation_plan.md
+782	[TASK-0766] Documentation Task 766 — see implementation_plan.md
+783	[TASK-0767] Documentation Task 767 — see implementation_plan.md
+784	[TASK-0768] Documentation Task 768 — see implementation_plan.md
+785	[TASK-0769] Documentation Task 769 — see implementation_plan.md
+786	[TASK-0770] Documentation Task 770 — see implementation_plan.md
+787	[TASK-0771] Documentation Task 771 — see implementation_plan.md
+788	[TASK-0772] Documentation Task 772 — see implementation_plan.md
+789	[TASK-0773] Documentation Task 773 — see implementation_plan.md
+790	[TASK-0775] Documentation Task 775 — see implementation_plan.md
+791	[TASK-0776] Documentation Task 776 — see implementation_plan.md
+792	[TASK-0774] Documentation Task 774 — see implementation_plan.md
+793	[TASK-0778] Documentation Task 778 — see implementation_plan.md
+794	[TASK-0777] Documentation Task 777 — see implementation_plan.md
+795	[TASK-0779] Documentation Task 779 — see implementation_plan.md
+796	[TASK-0781] Documentation Task 781 — see implementation_plan.md
+797	[TASK-0780] Documentation Task 780 — see implementation_plan.md
+798	[TASK-0782] Documentation Task 782 — see implementation_plan.md
+799	[TASK-0783] Documentation Task 783 — see implementation_plan.md
+800	[TASK-0784] Documentation Task 784 — see implementation_plan.md
+801	[TASK-0786] Documentation Task 786 — see implementation_plan.md
+802	[TASK-0785] Documentation Task 785 — see implementation_plan.md
+803	[TASK-0787] Documentation Task 787 — see implementation_plan.md
+804	[TASK-0788] Documentation Task 788 — see implementation_plan.md
+805	[TASK-0789] Documentation Task 789 — see implementation_plan.md
+806	[TASK-0790] Documentation Task 790 — see implementation_plan.md
+807	[TASK-0792] Documentation Task 792 — see implementation_plan.md
+808	[TASK-0791] Documentation Task 791 — see implementation_plan.md
+809	[TASK-0793] Documentation Task 793 — see implementation_plan.md
+810	[TASK-0795] Documentation Task 795 — see implementation_plan.md
+811	[TASK-0794] Documentation Task 794 — see implementation_plan.md
+812	[TASK-0796] Documentation Task 796 — see implementation_plan.md
+813	[TASK-0798] Documentation Task 798 — see implementation_plan.md
+814	[TASK-0797] Documentation Task 797 — see implementation_plan.md
+815	[TASK-0799] Documentation Task 799 — see implementation_plan.md
+816	[TASK-0800] Documentation Task 800 — see implementation_plan.md
+817	[TASK-0801] Documentation Task 801 — see implementation_plan.md
+818	[TASK-0802] Documentation Task 802 — see implementation_plan.md
+819	[TASK-0804] Documentation Task 804 — see implementation_plan.md
+820	[TASK-0803] Documentation Task 803 — see implementation_plan.md
+821	[TASK-0805] Documentation Task 805 — see implementation_plan.md
+822	[TASK-0806] Documentation Task 806 — see implementation_plan.md
+823	[TASK-0807] Documentation Task 807 — see implementation_plan.md
+824	[TASK-0808] Documentation Task 808 — see implementation_plan.md
+825	[TASK-0809] Documentation Task 809 — see implementation_plan.md
+826	[TASK-0810] Documentation Task 810 — see implementation_plan.md
+827	[TASK-0811] Documentation Task 811 — see implementation_plan.md
+828	[TASK-0812] Documentation Task 812 — see implementation_plan.md
+829	[TASK-0813] Documentation Task 813 — see implementation_plan.md
+830	[TASK-0814] Documentation Task 814 — see implementation_plan.md
+831	[TASK-0815] Documentation Task 815 — see implementation_plan.md
+832	[TASK-0816] Documentation Task 816 — see implementation_plan.md
+833	[TASK-0817] Documentation Task 817 — see implementation_plan.md
+834	[TASK-0818] Documentation Task 818 — see implementation_plan.md
+835	[TASK-0820] Documentation Task 820 — see implementation_plan.md
+836	[TASK-0819] Documentation Task 819 — see implementation_plan.md
+837	[TASK-0821] Documentation Task 821 — see implementation_plan.md
+838	[TASK-0822] Documentation Task 822 — see implementation_plan.md
+839	[TASK-0823] Documentation Task 823 — see implementation_plan.md
+840	[TASK-0824] Documentation Task 824 — see implementation_plan.md
+841	[TASK-0825] Documentation Task 825 — see implementation_plan.md
+842	[TASK-0826] Documentation Task 826 — see implementation_plan.md
+843	[TASK-0827] Documentation Task 827 — see implementation_plan.md
+844	[TASK-0830] Documentation Task 830 — see implementation_plan.md
+845	[TASK-0831] Documentation Task 831 — see implementation_plan.md
+846	[TASK-0832] Documentation Task 832 — see implementation_plan.md
+847	[TASK-0833] Documentation Task 833 — see implementation_plan.md
+848	[TASK-0834] Documentation Task 834 — see implementation_plan.md
+849	[TASK-0835] Documentation Task 835 — see implementation_plan.md
+850	[TASK-0836] Documentation Task 836 — see implementation_plan.md
+851	[TASK-0837] Documentation Task 837 — see implementation_plan.md
+852	[TASK-0838] Documentation Task 838 — see implementation_plan.md
+853	[TASK-0839] Documentation Task 839 — see implementation_plan.md
+854	[TASK-0840] Documentation Task 840 — see implementation_plan.md
+855	[TASK-0841] Documentation Task 841 — see implementation_plan.md
+856	[TASK-0842] Documentation Task 842 — see implementation_plan.md
+857	[TASK-0843] Documentation Task 843 — see implementation_plan.md
+858	[TASK-0844] Documentation Task 844 — see implementation_plan.md
+859	[TASK-0845] Documentation Task 845 — see implementation_plan.md
+860	[TASK-0846] Documentation Task 846 — see implementation_plan.md
+861	[TASK-0847] Documentation Task 847 — see implementation_plan.md
+862	[TASK-0848] Documentation Task 848 — see implementation_plan.md
+863	[TASK-0849] Documentation Task 849 — see implementation_plan.md
+864	[TASK-0850] Documentation Task 850 — see implementation_plan.md
+865	[TASK-0851] Documentation Task 851 — see implementation_plan.md
+866	[TASK-0852] Documentation Task 852 — see implementation_plan.md
+867	[TASK-0853] Documentation Task 853 — see implementation_plan.md
+868	[TASK-0854] Documentation Task 854 — see implementation_plan.md
+869	[TASK-0855] Documentation Task 855 — see implementation_plan.md
+870	[TASK-0856] Documentation Task 856 — see implementation_plan.md
+871	[TASK-0857] Documentation Task 857 — see implementation_plan.md
+872	[TASK-0858] Documentation Task 858 — see implementation_plan.md
+873	[TASK-0859] Documentation Task 859 — see implementation_plan.md
+874	[TASK-0860] Documentation Task 860 — see implementation_plan.md
+875	[TASK-0861] Documentation Task 861 — see implementation_plan.md
+876	[TASK-0862] Documentation Task 862 — see implementation_plan.md
+877	[TASK-0863] Documentation Task 863 — see implementation_plan.md
+878	[TASK-0828] Documentation Task 828 — see implementation_plan.md
+879	[TASK-0829] Documentation Task 829 — see implementation_plan.md
