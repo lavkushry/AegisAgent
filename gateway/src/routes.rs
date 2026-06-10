@@ -2432,17 +2432,57 @@ pub async fn edit_approval(
     Path(approval_id): Path<Uuid>,
     Json(payload): Json<EditApprovalRequest>,
 ) -> impl IntoResponse {
-    let edited_call_str = serde_json::to_string(&payload.edited_tool_call).unwrap_or_default();
+    // Load the approval first so we can fail closed on stale or already-decided
+    // requests instead of blindly transitioning to EDITED (#0131).
+    let approval =
+        match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
+            Ok(Some(app)) => app,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "Approval request not found"})),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Database lookup error: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
 
-    // Update approval status to EDITED
-    if let Err(e) = db::update_approval_status(
+    // Only a pending approval may be edited (no editing an APPROVED/REJECTED/
+    // already-EDITED/consumed one).
+    if approval.status != "created" {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Approval already decided",
+                "status": approval.status,
+                "approval_id": approval_id,
+            })),
+        )
+            .into_response();
+    }
+
+    let edited_call_str = serde_json::to_string(&payload.edited_tool_call).unwrap_or_default();
+    // Re-hash the edited call (#0130): the approval is now bound to the edited
+    // action, so a subsequent approve/consume re-verifies against this hash,
+    // not the original.
+    let new_action_hash = hash_tool_call(&payload.edited_tool_call);
+
+    // Update approval status to EDITED, re-binding the action_hash.
+    if let Err(e) = db::update_approval_edit(
         &state.pool,
         &tenant_id,
         &approval_id.to_string(),
-        "EDITED",
         &payload.approver_user_id,
         payload.reason.as_deref(),
-        Some(&edited_call_str),
+        &edited_call_str,
+        &new_action_hash,
     )
     .await
     {
@@ -4976,6 +5016,94 @@ mod tests {
         let body = to_bytes(consume.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["action_hash"].as_str(), Some(bound_hash.as_str()));
+    }
+
+    /// #0130: edit_approval re-hashes the edited tool call and binds the
+    /// approval to the new action_hash (not the original).
+    #[tokio::test]
+    async fn edit_approval_rehashes_and_stores_edited_call() {
+        let (state, tenant_id, agent_token) = setup_state("edit_rehashes").await;
+        let (approval_id, original_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "30").await;
+
+        let mut edited_tool_call = mcp_authorize_request("github", "merge_pull_request").tool_call;
+        edited_tool_call.resource = Some("repo/example/pull/30".to_string());
+        edited_tool_call.parameters = serde_json::json!({"base_branch": "release"});
+        let expected_hash = hash_tool_call(&edited_tool_call);
+        assert_ne!(expected_hash, original_hash);
+
+        let edit = edit_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                edited_tool_call: edited_tool_call.clone(),
+                reason: Some("changed target branch".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit.status(), StatusCode::OK);
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(stored.status, "EDITED");
+        assert_eq!(stored.original_call_hash, expected_hash);
+        let stored_edited: AuthorizeToolCall =
+            serde_json::from_str(stored.edited_skill_call.as_deref().unwrap()).unwrap();
+        assert_eq!(stored_edited.parameters, edited_tool_call.parameters);
+    }
+
+    /// #0131: edit_approval rejects an approval that has already been decided
+    /// (e.g. already consumed/approved) — no re-deciding a decided approval.
+    #[tokio::test]
+    async fn edit_approval_rejects_if_already_consumed() {
+        let (state, tenant_id, agent_token) = setup_state("edit_rejects_consumed").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "31").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let consume = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(consume.status(), StatusCode::OK);
+
+        let mut edited_tool_call = mcp_authorize_request("github", "merge_pull_request").tool_call;
+        edited_tool_call.resource = Some("repo/example/pull/31".to_string());
+
+        let edit = edit_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                edited_tool_call,
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
