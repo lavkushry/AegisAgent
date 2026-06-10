@@ -2262,6 +2262,44 @@ pub async fn get_tenant_stats(
     })
 }
 
+/// On-disk size of the SQLite database file in bytes (#949), computed as
+/// `page_count * page_size` via the corresponding `PRAGMA`s.
+pub async fn get_database_size_bytes(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    let (page_count,): (i64,) = sqlx::query_as("PRAGMA page_count").fetch_one(pool).await?;
+    let (page_size,): (i64,) = sqlx::query_as("PRAGMA page_size").fetch_one(pool).await?;
+    Ok(page_count * page_size)
+}
+
+/// Row count for every user table in the database (#950), ordered by table
+/// name. Reads table names from `sqlite_master`, excluding internal
+/// `sqlite_*` tables.
+pub async fn get_table_row_counts(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::models::TableRowCount>, sqlx::Error> {
+    let tables: Vec<(String,)> = sqlx::query_as(
+        "SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+         ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut counts = Vec::with_capacity(tables.len());
+    for (table,) in tables {
+        let query = format!("SELECT COUNT(*) FROM \"{}\"", table);
+        let (row_count,): (i64,) = sqlx::query_as(&query).fetch_one(pool).await?;
+        counts.push(crate::models::TableRowCount { table, row_count });
+    }
+    Ok(counts)
+}
+
+/// Combined database-level monitoring snapshot (#949, #950).
+pub async fn get_db_stats(pool: &SqlitePool) -> Result<crate::models::DbStats, sqlx::Error> {
+    let size_bytes = get_database_size_bytes(pool).await?;
+    let tables = get_table_row_counts(pool).await?;
+    Ok(crate::models::DbStats { size_bytes, tables })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2393,6 +2431,31 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(still_present.0, 1);
+    }
+
+    /// #949, #950: `get_db_stats` reports a non-zero on-disk database size
+    /// and a row count entry for every core table, with `tenants` reflecting
+    /// the one tenant registered below.
+    #[tokio::test]
+    async fn get_db_stats_reports_size_and_table_row_counts() {
+        let pool = setup_pool("db_stats").await;
+        register_tenant(&pool, "tenant_dbstats", "DB Stats Tenant", "developer")
+            .await
+            .unwrap();
+
+        let stats = get_db_stats(&pool).await.unwrap();
+        assert!(stats.size_bytes > 0);
+
+        let tenants = stats
+            .tables
+            .iter()
+            .find(|t| t.table == "tenants")
+            .expect("tenants table present in db-stats");
+        assert_eq!(tenants.row_count, 1);
+
+        // Sanity-check a couple of other core tables are present.
+        assert!(stats.tables.iter().any(|t| t.table == "decisions"));
+        assert!(stats.tables.iter().any(|t| t.table == "approvals"));
     }
 
     /// #0105: `delete_expired_approvals_older_than` removes approvals that are
