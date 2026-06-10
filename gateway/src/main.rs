@@ -414,6 +414,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_retention_days,
     ));
 
+    // #0105: periodically delete stale approvals (decided, or expired and
+    // never decided) to keep the approvals table bounded.
+    let approval_cleanup_interval_secs: u64 = std::env::var("AEGIS_APPROVAL_CLEANUP_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_APPROVAL_CLEANUP_INTERVAL_SECS);
+    let approval_retention_days: i64 = std::env::var("AEGIS_APPROVAL_RETENTION_DAYS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_APPROVAL_RETENTION_DAYS);
+    tokio::spawn(jobs::run_approval_cleanup_job(
+        pool.clone(),
+        approval_cleanup_interval_secs,
+        approval_retention_days,
+    ));
+
     // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
     let approval_ttl_secs: i64 = std::env::var("AEGIS_APPROVAL_TTL_SECS")
         .ok()
