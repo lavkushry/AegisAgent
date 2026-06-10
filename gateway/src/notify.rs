@@ -352,6 +352,15 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    /// Serializes tests that mutate process-wide `AEGIS_WEBHOOK_*` env vars.
+    /// `std::env::set_var`/`remove_var` affect the whole process, so without
+    /// this lock these tests are flaky under the default multi-threaded test
+    /// runner (each `#[tokio::test]` gets its own thread/runtime, and two
+    /// tests can interleave their env mutations and assertions). A
+    /// `tokio::sync::Mutex` is used (rather than `std::sync::Mutex`) because
+    /// the guard is held across `.await` points.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     // ── Recording mock sink ──────────────────────────────────────────────────
 
     /// A [`NotifySink`] that records every message into a shared vec for
@@ -621,8 +630,9 @@ mod tests {
 
     // ── from_env: NullSink when env var absent ────────────────────────────────
 
-    #[test]
-    fn from_env_returns_null_sink_when_env_var_absent() {
+    #[tokio::test]
+    async fn from_env_returns_null_sink_when_env_var_absent() {
+        let _guard = ENV_LOCK.lock().await;
         std::env::remove_var("AEGIS_WEBHOOK_URL");
         let sink = from_env();
         // NullSink must not panic when called.
@@ -631,6 +641,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_circuit_breaker_trips_after_failures() {
+        let _guard = ENV_LOCK.lock().await;
         // Set threshold to 2 for quick tripping
         std::env::set_var("AEGIS_WEBHOOK_FAILURE_THRESHOLD", "2");
         std::env::set_var("AEGIS_WEBHOOK_COOLDOWN_SECS", "5");
@@ -684,6 +695,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_webhook_signature_header_sent() {
+        let _guard = ENV_LOCK.lock().await;
         use axum::{routing::post, Json, Router};
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -759,6 +771,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_webhook_signature_header_not_sent_when_secret_absent() {
+        let _guard = ENV_LOCK.lock().await;
         use axum::{routing::post, Json, Router};
         use std::sync::Arc;
         use tokio::sync::Mutex;
