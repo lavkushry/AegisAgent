@@ -405,7 +405,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stream and never touches the inline path.
     // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
-    tokio::spawn(events::drain(events_rx, pool.clone()));
+    let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone()));
 
     // #0107: periodic receipt chain integrity check across all tenants. Any
     // broken link or hash mismatch is recorded as a critical SOC alert.
@@ -631,7 +631,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/version", get(version_handler))
         // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
         .route("/metrics", get(metrics_handler))
-        .with_state(state)
+        .with_state(state.clone())
         // Middleware stack (outermost = first to run):
         // 1. CORS — must be outermost to handle preflight OPTIONS
         .layer(cors_layer())
@@ -661,6 +661,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    info!("AegisAgent HTTP server stopped. Draining background event channel...");
+    drop(state);
+
+    // Wait for the drain task to finish with a timeout (default 10s)
+    let drain_timeout = std::env::var("AEGIS_DRAIN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    match tokio::time::timeout(std::time::Duration::from_secs(drain_timeout), drain_handle).await {
+        Ok(Ok(n)) => info!("Drained {} events during shutdown", n),
+        Ok(Err(e)) => tracing::error!("SOC event channel drain task panicked: {:?}", e),
+        Err(_) => {
+            tracing::warn!("SOC event channel drain timed out. Some events may have been lost.")
+        }
+    }
 
     info!("AegisAgent shut down gracefully.");
     Ok(())
@@ -714,5 +730,65 @@ mod tests {
             redacted,
             r#"{"agent_token":"[REDACTED]","api_key":"[REDACTED]","other":"field"}"#
         );
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_drains_events() {
+        let db_url = format!(
+            "sqlite://target/test_shutdown_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let pool = db::init_db(&db_url).await.unwrap();
+
+        // Setup the channel
+        let (events_sink, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
+        let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone()));
+
+        // Emit an event
+        let event = events::AseEvent {
+            event_id: "evt_test_shutdown".to_string(),
+            occurred_at: "2026-06-10T12:00:00Z".to_string(),
+            tenant_id: "tenant_shutdown_test".to_string(),
+            kind: "authorize_decision".to_string(),
+            agent_id: "agent_shutdown_test".to_string(),
+            decision: "deny".to_string(),
+            tool: "some_tool".to_string(),
+            action: "some_action".to_string(),
+            resource: None,
+            risk_score: 100,
+            reason: "policy_denied".to_string(),
+            run_id: None,
+            trace_id: None,
+            matched_policies: vec!["critical_policy".to_string()],
+        };
+        events_sink.emit(event);
+
+        // Drop the events sink (closing the sender)
+        drop(events_sink);
+
+        // Await the drain task to complete (should finish and return the count of processed events)
+        let drain_timeout = std::time::Duration::from_secs(5);
+        let run_result = tokio::time::timeout(drain_timeout, drain_handle).await;
+
+        match run_result {
+            Ok(Ok(count)) => {
+                assert_eq!(count, 1);
+            }
+            other => panic!("Drain task failed to finish gracefully: {:?}", other),
+        }
+
+        // Verify that the event was persisted to the database as an alert
+        let alerts = db::list_soc_alerts(&pool, "tenant_shutdown_test", 10, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule, "critical_deny");
+        assert_eq!(alerts[0].source_event_id, "evt_test_shutdown");
+
+        // Clean up DB file
+        let db_path = db_url.strip_prefix("sqlite://").unwrap_or(&db_url);
+        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_file(format!("{}-shm", db_path));
+        let _ = std::fs::remove_file(format!("{}-wal", db_path));
     }
 }
