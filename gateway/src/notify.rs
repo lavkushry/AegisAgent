@@ -117,6 +117,13 @@ pub struct WebhookSink {
     url: String,
     /// Shared reqwest client (keep-alive, TLS reuse).
     client: reqwest::Client,
+    /// Thread-safe circuit breaker to prevent task accumulation during outages.
+    breaker: std::sync::Arc<std::sync::Mutex<CircuitBreaker>>,
+}
+
+struct CircuitBreaker {
+    consecutive_failures: u32,
+    tripped_at: Option<std::time::Instant>,
 }
 
 impl WebhookSink {
@@ -126,6 +133,10 @@ impl WebhookSink {
             url: url.into(),
             // Default client with rustls-tls: no proxy env leakage, strict TLS.
             client: reqwest::Client::new(),
+            breaker: std::sync::Arc::new(std::sync::Mutex::new(CircuitBreaker {
+                consecutive_failures: 0,
+                tripped_at: None,
+            })),
         }
     }
 }
@@ -181,9 +192,37 @@ pub fn slack_body(msg: &NotifyMessage) -> serde_json::Value {
 
 impl NotifySink for WebhookSink {
     fn notify(&self, msg: NotifyMessage) {
+        let now = std::time::Instant::now();
+        let threshold: u32 = std::env::var("AEGIS_WEBHOOK_FAILURE_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+        let cooldown_secs: u64 = std::env::var("AEGIS_WEBHOOK_COOLDOWN_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        // Check if circuit breaker is open
+        {
+            let mut breaker = self.breaker.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(tripped_at) = breaker.tripped_at {
+                if now.duration_since(tripped_at) < std::time::Duration::from_secs(cooldown_secs) {
+                    // Circuit is open and cooldown not yet elapsed — drop notification
+                    warn!("SOC notify webhook circuit breaker is OPEN — dropping notification");
+                    return;
+                }
+                // Cooldown elapsed, transition to Half-Open (letting this probe request through)
+                breaker.tripped_at = None;
+                tracing::info!(
+                    "SOC notify webhook circuit breaker entering HALF-OPEN — sending probe"
+                );
+            }
+        }
+
         let url = self.url.clone();
         let client = self.client.clone();
         let body = slack_body(&msg);
+        let breaker = self.breaker.clone();
 
         // Fire-and-forget: spawn a task; a slow/failing webhook never blocks
         // the drain. The spawned task cannot propagate a panic to the drain.
@@ -196,19 +235,45 @@ impl NotifySink for WebhookSink {
 
             match result {
                 Ok(Ok(resp)) if resp.status().is_success() => {
-                    // Notification delivered — nothing to log (avoid noise).
+                    // Notification delivered — reset consecutive failures
+                    let mut b = breaker.lock().unwrap_or_else(|e| e.into_inner());
+                    if b.consecutive_failures > 0 {
+                        tracing::info!(
+                            "SOC notify webhook delivered successfully — resetting circuit breaker"
+                        );
+                        b.consecutive_failures = 0;
+                    }
+                    b.tripped_at = None;
                 }
-                Ok(Ok(resp)) => {
-                    warn!(
-                        status = %resp.status(),
-                        "notify webhook returned non-2xx — discarding"
-                    );
-                }
-                Ok(Err(err)) => {
-                    warn!(error = %err, "notify webhook request failed — discarding");
-                }
-                Err(_elapsed) => {
-                    warn!("notify webhook timed out after 5s — discarding");
+                _ => {
+                    // Handle failure
+                    let mut b = breaker.lock().unwrap_or_else(|e| e.into_inner());
+                    b.consecutive_failures += 1;
+                    if b.consecutive_failures >= threshold {
+                        if b.tripped_at.is_none() {
+                            warn!(
+                                threshold = threshold,
+                                "SOC notify webhook consecutive failures reached threshold — TRIPPING circuit breaker"
+                            );
+                        }
+                        b.tripped_at = Some(std::time::Instant::now());
+                    }
+
+                    // Log the specific failure for debuggability
+                    match result {
+                        Ok(Ok(resp)) => {
+                            warn!(
+                                status = %resp.status(),
+                                "notify webhook returned non-2xx — discarding"
+                            );
+                        }
+                        Ok(Err(err)) => {
+                            warn!(error = %err, "notify webhook request failed — discarding");
+                        }
+                        Err(_elapsed) => {
+                            warn!("notify webhook timed out after 5s — discarding");
+                        }
+                    }
                 }
             }
         });
@@ -516,11 +581,45 @@ mod tests {
 
     #[test]
     fn from_env_returns_null_sink_when_env_var_absent() {
-        // Unset the env var for this test (best-effort; env is per-process not
-        // per-thread, but for a unit test the absence is the normal state).
         std::env::remove_var("AEGIS_WEBHOOK_URL");
         let sink = from_env();
         // NullSink must not panic when called.
         sink.notify(make_msg("authorize_decision", "high", "test"));
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_trips_after_failures() {
+        // Set threshold to 2 for quick tripping
+        std::env::set_var("AEGIS_WEBHOOK_FAILURE_THRESHOLD", "2");
+        std::env::set_var("AEGIS_WEBHOOK_COOLDOWN_SECS", "5");
+
+        let sink = WebhookSink::new("http://127.0.0.1:9999/invalid");
+        let msg = make_msg("alert", "high", "test");
+
+        // First notification: will fail but should be processed (circuit closed)
+        sink.notify(msg.clone());
+
+        // Wait a bit for the spawned task to fail and update the breaker
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        {
+            let b = sink.breaker.lock().unwrap();
+            assert_eq!(b.consecutive_failures, 1);
+            assert!(b.tripped_at.is_none());
+        }
+
+        // Second notification: will fail and trip the circuit (consecutive failures = 2)
+        sink.notify(msg.clone());
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        {
+            let b = sink.breaker.lock().unwrap();
+            assert_eq!(b.consecutive_failures, 2);
+            assert!(b.tripped_at.is_some());
+        }
+
+        // Clean up env vars
+        std::env::remove_var("AEGIS_WEBHOOK_FAILURE_THRESHOLD");
+        std::env::remove_var("AEGIS_WEBHOOK_COOLDOWN_SECS");
     }
 }
