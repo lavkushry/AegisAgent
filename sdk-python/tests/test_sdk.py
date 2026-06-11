@@ -385,6 +385,39 @@ class TestAegisSDK(unittest.TestCase):
             timeout=5,
         )
 
+    @patch("requests.Session.get")
+    def test_get_soc_summary(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "alerts_total": 2,
+            "alerts_high": 1,
+            "incidents_total": 2,
+            "incidents_open": 1,
+        }
+        mock_get.return_value = mock_response
+
+        res = self.client.get_soc_summary()
+        self.assertEqual(res["alerts_total"], 2)
+        mock_get.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/soc/summary",
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            timeout=5,
+        )
+
+    @patch("requests.Session.get")
+    def test_get_soc_summary_returns_none_on_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+        mock_get.return_value = mock_response
+
+        res = self.client.get_soc_summary()
+        self.assertIsNone(res)
+
     @patch("requests.Session.post")
     def test_verify_receipt_chain(self, mock_post):
         mock_response = MagicMock()

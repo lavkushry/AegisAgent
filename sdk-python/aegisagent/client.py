@@ -484,6 +484,22 @@ class AegisClient(AegisBaseClient):
         """Lists verifiable action receipts for the tenant."""
         return self._get_list("/v1/receipts", params={"limit": limit, "offset": offset})
 
+    def get_soc_summary(self) -> Optional[Dict[str, Any]]:
+        """Retrieves aggregate SOC summary counts (alerts, incidents, etc.)."""
+        try:
+            response = self._request(
+                "GET", "/v1/soc/summary", headers=self._headers(), timeout=5
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"GET /v1/soc/summary failed: {response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Connection error on GET /v1/soc/summary: {e}")
+            return None
+
     def verify_receipt_chain(self, receipts: list) -> Dict[str, Any]:
         """Verifies the cryptographic integrity of a chain of receipts."""
         payload = {"receipts": receipts}
@@ -910,6 +926,22 @@ class AegisAsyncClient(AegisBaseClient):
         return await self._get_list(
             "/v1/receipts", params={"limit": limit, "offset": offset}
         )
+
+    async def get_soc_summary(self) -> Optional[Dict[str, Any]]:
+        """Retrieves aggregate SOC summary counts (alerts, incidents, etc.)."""
+        try:
+            response = await self._request(
+                "GET", "/v1/soc/summary", headers=self._headers(), timeout=5.0
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"GET /v1/soc/summary failed: {response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Connection error on GET /v1/soc/summary: {e}")
+            return None
 
     async def verify_receipt_chain(self, receipts: list) -> Dict[str, Any]:
         """Verifies the cryptographic integrity of a chain of receipts."""
