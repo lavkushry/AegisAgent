@@ -229,6 +229,14 @@ class TestAegisAsyncClientMethods(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(res), 1)
 
     @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_get_soc_summary(self, mock_request):
+        mock_request.return_value = _make_mock_response(
+            status_code=200, json_data={"alerts_total": 2, "incidents_total": 2}
+        )
+        res = await self.client.get_soc_summary()
+        self.assertEqual(res["alerts_total"], 2)
+
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
     async def test_verify_receipt_chain(self, mock_request):
         mock_request.return_value = _make_mock_response(
             status_code=200, json_data={"verified": True}
