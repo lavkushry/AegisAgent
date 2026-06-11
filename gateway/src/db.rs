@@ -2392,6 +2392,84 @@ pub async fn insert_soc_incident(
     Ok(())
 }
 
+/// Outcome of [`upsert_soc_incident`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IncidentUpsertResult {
+    /// A new `soc_incidents` row was created.
+    Inserted,
+    /// `record` was merged into the existing open incident `id` instead of
+    /// creating a new row.
+    Merged { id: String },
+}
+
+/// Default deduplication window for [`upsert_soc_incident`] (#1188, SOC-005):
+/// repeat incidents of the same `(tenant_id, agent_id, kind)` within this
+/// window are merged into the most recent open incident rather than creating
+/// a new row. Configurable via `AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS`.
+const DEFAULT_INCIDENT_DEDUP_WINDOW_SECS: i64 = 3600;
+
+/// Insert `record` as a new `soc_incidents` row, unless an **open** incident
+/// with the same `(tenant_id, agent_id, kind)` was opened within the
+/// deduplication window (#1188, SOC-005) — in which case `record` is merged
+/// into that incident: `source_event_ids` is the union of both (de-duplicated,
+/// order-preserving), and `summary`/`opened_at` are bumped to `record`'s
+/// values (so the row reflects the most recent activity).
+///
+/// Tenant-scoped and parameterized throughout (CWE-284 / CWE-89).
+pub async fn upsert_soc_incident(
+    pool: &SqlitePool,
+    record: &SocIncidentRecord,
+) -> Result<IncidentUpsertResult, sqlx::Error> {
+    let window_secs: i64 = std::env::var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&v: &i64| v > 0)
+        .unwrap_or(DEFAULT_INCIDENT_DEDUP_WINDOW_SECS);
+    let cutoff = (Utc::now() - chrono::Duration::seconds(window_secs)).to_rfc3339();
+
+    let existing: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, source_event_ids FROM soc_incidents
+         WHERE tenant_id = ? AND agent_id = ? AND kind = ? AND status = 'open' AND opened_at >= ?
+         ORDER BY opened_at DESC LIMIT 1",
+    )
+    .bind(&record.tenant_id)
+    .bind(&record.agent_id)
+    .bind(&record.kind)
+    .bind(&cutoff)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some((id, existing_ids_json)) = existing {
+        let mut merged_ids: Vec<String> =
+            serde_json::from_str(&existing_ids_json).unwrap_or_default();
+        let new_ids: Vec<String> =
+            serde_json::from_str(&record.source_event_ids).unwrap_or_default();
+        for new_id in new_ids {
+            if !merged_ids.contains(&new_id) {
+                merged_ids.push(new_id);
+            }
+        }
+        let merged_json = serde_json::to_string(&merged_ids).unwrap_or_else(|_| "[]".to_string());
+
+        sqlx::query(
+            "UPDATE soc_incidents SET source_event_ids = ?, opened_at = ?, summary = ?
+             WHERE id = ? AND tenant_id = ?",
+        )
+        .bind(&merged_json)
+        .bind(&record.opened_at)
+        .bind(&record.summary)
+        .bind(&id)
+        .bind(&record.tenant_id)
+        .execute(pool)
+        .await?;
+
+        return Ok(IncidentUpsertResult::Merged { id });
+    }
+
+    insert_soc_incident(pool, record).await?;
+    Ok(IncidentUpsertResult::Inserted)
+}
+
 /// List alerts for a tenant, newest-first, with pagination and optional equality filters.
 /// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
 /// `severity` and `agent_id` are optional equality filters.  The SQL string is
@@ -4149,5 +4227,119 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// Serializes tests that mutate the process-wide
+    /// `AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS` env var.
+    static DEDUP_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn upsert_soc_incident_merges_repeat_incident_within_window() {
+        let _guard = DEDUP_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS");
+
+        let pool = setup_pool("upsert_dedup").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let first = make_incident("inc_first", "tenant_a");
+        let result = upsert_soc_incident(&pool, &first).await.unwrap();
+        assert_eq!(result, IncidentUpsertResult::Inserted);
+
+        let mut second = make_incident("inc_second", "tenant_a");
+        second.source_event_ids = serde_json::json!(["evt_2", "evt_3"]).to_string();
+        second.summary = "Updated summary".to_string();
+        let result = upsert_soc_incident(&pool, &second).await.unwrap();
+        assert_eq!(
+            result,
+            IncidentUpsertResult::Merged {
+                id: "inc_first".to_string()
+            }
+        );
+
+        let incidents =
+            list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0, None, None, None)
+                .await
+                .unwrap();
+        assert_eq!(incidents.len(), 1, "no new row should be created on merge");
+        assert_eq!(incidents[0].id, "inc_first");
+        assert_eq!(incidents[0].summary, "Updated summary");
+
+        let merged_ids: Vec<String> = serde_json::from_str(&incidents[0].source_event_ids).unwrap();
+        assert_eq!(merged_ids, vec!["evt_1", "evt_2", "evt_3"]);
+    }
+
+    #[tokio::test]
+    async fn upsert_soc_incident_does_not_merge_across_tenants_or_kinds() {
+        let _guard = DEDUP_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS");
+
+        let pool = setup_pool("upsert_no_merge").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        let first = make_incident("inc_a", "tenant_a");
+        assert_eq!(
+            upsert_soc_incident(&pool, &first).await.unwrap(),
+            IncidentUpsertResult::Inserted
+        );
+
+        // Different tenant — must not merge.
+        let other_tenant = make_incident("inc_b", "tenant_b");
+        assert_eq!(
+            upsert_soc_incident(&pool, &other_tenant).await.unwrap(),
+            IncidentUpsertResult::Inserted
+        );
+
+        // Same tenant/agent, different kind — must not merge.
+        let mut other_kind = make_incident("inc_c", "tenant_a");
+        other_kind.kind = "runaway".to_string();
+        assert_eq!(
+            upsert_soc_incident(&pool, &other_kind).await.unwrap(),
+            IncidentUpsertResult::Inserted
+        );
+
+        let a_incs = list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(a_incs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn upsert_soc_incident_does_not_merge_outside_window() {
+        let _guard = DEDUP_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS", "1");
+
+        let pool = setup_pool("upsert_window").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let first = make_incident("inc_first", "tenant_a");
+        assert_eq!(
+            upsert_soc_incident(&pool, &first).await.unwrap(),
+            IncidentUpsertResult::Inserted
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        let second = make_incident("inc_second", "tenant_a");
+        assert_eq!(
+            upsert_soc_incident(&pool, &second).await.unwrap(),
+            IncidentUpsertResult::Inserted
+        );
+
+        let incidents =
+            list_soc_incidents(&pool, "tenant_a", SOC_DEFAULT_LIMIT, 0, None, None, None)
+                .await
+                .unwrap();
+        assert_eq!(incidents.len(), 2);
+
+        std::env::remove_var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS");
     }
 }
