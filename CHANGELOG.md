@@ -20,6 +20,11 @@ reaches 1.0.
   `aegis-verify-receipts` CLI, gateway emission, and `GET /v1/receipts/:id/verify`.
 - **Deterministic trust-provenance gating**: 6-level model in the default Cedar
   policy pack; classifiers may only tighten a label, never loosen it.
+- **SOC Response Engine autonomy levels (SOC-002)**: configurable `L0`-`L4`
+  autonomy for the Phase 4 Response Engine (`L0`=log only, `L1`=notify only
+  (default), `L2`=notify + recommend (logged, not executed), `L3`=auto-respond
+  + notify, `L4`=auto-respond + silent), via `AEGIS_SOC_AUTONOMY_LEVEL` env var
+  with a per-tenant `tenants.soc_autonomy_level` override.
 - Self-contained, zero-setup integrity demo (`examples/integrity_demo.py`).
 - OSS project scaffolding: MIT `LICENSE`, `CODE_OF_CONDUCT.md`, issue/PR
   templates, Dependabot, and hardened CI.

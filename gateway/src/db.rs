@@ -137,6 +137,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     ensure_tenants_auto_respond_column(pool).await?;
+    ensure_tenants_soc_autonomy_level_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agents (
@@ -711,6 +712,29 @@ async fn ensure_tenants_auto_respond_column(pool: &SqlitePool) -> Result<(), sql
     }
 
     sqlx::query("ALTER TABLE tenants ADD COLUMN auto_respond_enabled INTEGER NOT NULL DEFAULT 1")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Additive migration (#1185, SOC-002): per-tenant override for the SOC
+/// Response Engine's autonomy level (`L0`-`L4`). `NULL` means "no override —
+/// fall back to `AEGIS_SOC_AUTONOMY_LEVEL` (default `L1`)" — see
+/// [`get_soc_autonomy_level`].
+async fn ensure_tenants_soc_autonomy_level_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(tenants)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "soc_autonomy_level")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE tenants ADD COLUMN soc_autonomy_level TEXT")
         .execute(pool)
         .await?;
     Ok(())
@@ -2198,6 +2222,49 @@ pub async fn is_auto_respond_enabled(
             .fetch_optional(pool)
             .await?;
     Ok(row.map(|(v,)| v).unwrap_or(false))
+}
+
+/// Resolves the SOC Response Engine's autonomy level (#1185, SOC-002) for
+/// `tenant_id`:
+///
+/// - `L0` — log only: no notify, no auto-respond.
+/// - `L1` — notify only (default): decision/alert/incident notify as today,
+///   but auto-respond is skipped.
+/// - `L2` — notify + recommend: like `L1`, plus a logged "would respond
+///   with..." recommendation (never executed).
+/// - `L3` — auto-respond + notify: full Phase 4 behaviour (incl. auto-freeze
+///   on `deny_storm`/`runaway`/`data_exfil_pattern`).
+/// - `L4` — auto-respond + silent: Phase 4 actions execute, but the
+///   resulting notifications are suppressed.
+///
+/// Precedence: per-tenant `tenants.soc_autonomy_level` override (if set to a
+/// recognised `L0`-`L4` value) > `AEGIS_SOC_AUTONOMY_LEVEL` env var (if set
+/// to a recognised value) > default `"L1"`. An unrecognised value at either
+/// level is ignored (falls through), keeping the default fail-safe.
+pub async fn get_soc_autonomy_level(pool: &SqlitePool, tenant_id: &str) -> String {
+    const LEVELS: [&str; 5] = ["L0", "L1", "L2", "L3", "L4"];
+
+    let row: Result<Option<(Option<String>,)>, sqlx::Error> =
+        sqlx::query_as("SELECT soc_autonomy_level FROM tenants WHERE id = ?")
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await;
+
+    if let Ok(Some((Some(level),))) = row {
+        let upper = level.to_uppercase();
+        if LEVELS.contains(&upper.as_str()) {
+            return upper;
+        }
+    }
+
+    if let Ok(level) = std::env::var("AEGIS_SOC_AUTONOMY_LEVEL") {
+        let upper = level.to_uppercase();
+        if LEVELS.contains(&upper.as_str()) {
+            return upper;
+        }
+    }
+
+    "L1".to_string()
 }
 
 /// Heartbeat (#0080): records the timestamp of an agent's most recent successful
@@ -4149,5 +4216,106 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// Serializes tests that mutate the process-wide `AEGIS_SOC_AUTONOMY_LEVEL`
+    /// env var (see `notify::tests::ENV_LOCK` for the same rationale).
+    static AUTONOMY_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn soc_autonomy_level_defaults_to_l1() {
+        let _guard = AUTONOMY_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_SOC_AUTONOMY_LEVEL");
+
+        let pool = setup_pool("autonomy_default").await;
+        register_tenant(&pool, "tenant_autonomy_default", "Tenant", "developer")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_soc_autonomy_level(&pool, "tenant_autonomy_default").await,
+            "L1"
+        );
+    }
+
+    #[tokio::test]
+    async fn soc_autonomy_level_falls_back_to_env_var() {
+        let _guard = AUTONOMY_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_SOC_AUTONOMY_LEVEL", "l3");
+
+        let pool = setup_pool("autonomy_env").await;
+        register_tenant(&pool, "tenant_autonomy_env", "Tenant", "developer")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_soc_autonomy_level(&pool, "tenant_autonomy_env").await,
+            "L3"
+        );
+
+        std::env::remove_var("AEGIS_SOC_AUTONOMY_LEVEL");
+    }
+
+    #[tokio::test]
+    async fn soc_autonomy_level_per_tenant_override_wins_over_env() {
+        let _guard = AUTONOMY_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_SOC_AUTONOMY_LEVEL", "L1");
+
+        let pool = setup_pool("autonomy_override").await;
+        register_tenant(&pool, "tenant_autonomy_override", "Tenant", "developer")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE tenants SET soc_autonomy_level = ? WHERE id = ?")
+            .bind("L0")
+            .bind("tenant_autonomy_override")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_soc_autonomy_level(&pool, "tenant_autonomy_override").await,
+            "L0"
+        );
+
+        std::env::remove_var("AEGIS_SOC_AUTONOMY_LEVEL");
+    }
+
+    #[tokio::test]
+    async fn soc_autonomy_level_unrecognised_values_fall_back_to_default() {
+        let _guard = AUTONOMY_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_SOC_AUTONOMY_LEVEL", "L99");
+
+        let pool = setup_pool("autonomy_invalid").await;
+        register_tenant(&pool, "tenant_autonomy_invalid", "Tenant", "developer")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE tenants SET soc_autonomy_level = ? WHERE id = ?")
+            .bind("not_a_level")
+            .bind("tenant_autonomy_invalid")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Both the per-tenant override and the env var are invalid, so this
+        // falls all the way back to the hardcoded default "L1".
+        assert_eq!(
+            get_soc_autonomy_level(&pool, "tenant_autonomy_invalid").await,
+            "L1"
+        );
+
+        std::env::remove_var("AEGIS_SOC_AUTONOMY_LEVEL");
+    }
+
+    #[tokio::test]
+    async fn soc_autonomy_level_unknown_tenant_falls_back_to_default() {
+        let _guard = AUTONOMY_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_SOC_AUTONOMY_LEVEL");
+
+        let pool = setup_pool("autonomy_unknown_tenant").await;
+
+        assert_eq!(
+            get_soc_autonomy_level(&pool, "tenant_does_not_exist").await,
+            "L1"
+        );
     }
 }
