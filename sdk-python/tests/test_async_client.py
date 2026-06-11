@@ -237,6 +237,29 @@ class TestAegisAsyncClientMethods(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["alerts_total"], 2)
 
     @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_close_incident(self, mock_request):
+        mock_request.return_value = _make_mock_response(status_code=200)
+        res = await self.client.close_incident("incident-1")
+        self.assertTrue(res)
+
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_close_incident_returns_false_on_error(self, mock_request):
+        mock_request.return_value = _make_mock_response(
+            status_code=404, text="Incident not found"
+        )
+        res = await self.client.close_incident("incident-1")
+        self.assertFalse(res)
+
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_narrate_incident(self, mock_request):
+        mock_request.return_value = _make_mock_response(
+            status_code=200,
+            json_data={"incident_id": "incident-1", "narrative": "Root cause: X."},
+        )
+        res = await self.client.narrate_incident("incident-1")
+        self.assertEqual(res, "Root cause: X.")
+
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
     async def test_verify_receipt_chain(self, mock_request):
         mock_request.return_value = _make_mock_response(
             status_code=200, json_data={"verified": True}

@@ -500,6 +500,50 @@ class AegisClient(AegisBaseClient):
             logger.error(f"Connection error on GET /v1/soc/summary: {e}")
             return None
 
+    def close_incident(self, incident_id: str) -> bool:
+        """Closes a SOC incident. Returns True on success (200), False otherwise."""
+        try:
+            response = self._request(
+                "POST",
+                f"/v1/incidents/{incident_id}/close",
+                headers=self._headers(),
+                timeout=5,
+            )
+            if response.status_code == 200:
+                return True
+            logger.error(
+                f"POST /v1/incidents/{incident_id}/close failed: "
+                f"{response.status_code} - {response.text}"
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                f"Connection error on POST /v1/incidents/{incident_id}/close: {e}"
+            )
+            return False
+
+    def narrate_incident(self, incident_id: str) -> Optional[str]:
+        """Retrieves the on-demand RCA narrative for an incident."""
+        try:
+            response = self._request(
+                "GET",
+                f"/v1/incidents/{incident_id}/narrate",
+                headers=self._headers(),
+                timeout=5,
+            )
+            if response.status_code == 200:
+                return response.json().get("narrative")
+            logger.error(
+                f"GET /v1/incidents/{incident_id}/narrate failed: "
+                f"{response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                f"Connection error on GET /v1/incidents/{incident_id}/narrate: {e}"
+            )
+            return None
+
     def verify_receipt_chain(self, receipts: list) -> Dict[str, Any]:
         """Verifies the cryptographic integrity of a chain of receipts."""
         payload = {"receipts": receipts}
@@ -941,6 +985,50 @@ class AegisAsyncClient(AegisBaseClient):
             return None
         except Exception as e:
             logger.error(f"Connection error on GET /v1/soc/summary: {e}")
+            return None
+
+    async def close_incident(self, incident_id: str) -> bool:
+        """Closes a SOC incident. Returns True on success (200), False otherwise."""
+        try:
+            response = await self._request(
+                "POST",
+                f"/v1/incidents/{incident_id}/close",
+                headers=self._headers(),
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                return True
+            logger.error(
+                f"POST /v1/incidents/{incident_id}/close failed: "
+                f"{response.status_code} - {response.text}"
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                f"Connection error on POST /v1/incidents/{incident_id}/close: {e}"
+            )
+            return False
+
+    async def narrate_incident(self, incident_id: str) -> Optional[str]:
+        """Retrieves the on-demand RCA narrative for an incident."""
+        try:
+            response = await self._request(
+                "GET",
+                f"/v1/incidents/{incident_id}/narrate",
+                headers=self._headers(),
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                return response.json().get("narrative")
+            logger.error(
+                f"GET /v1/incidents/{incident_id}/narrate failed: "
+                f"{response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                f"Connection error on GET /v1/incidents/{incident_id}/narrate: {e}"
+            )
             return None
 
     async def verify_receipt_chain(self, receipts: list) -> Dict[str, Any]:
