@@ -9,6 +9,15 @@ printf '==> Checking AegisAgent gateway at %s\n' "$AEGIS_URL"
 curl -fsS "$AEGIS_URL/health" >/dev/null
 printf '==> Gateway is healthy\n'
 
+printf '==> Ensuring tenant (%s) exists\n' "$TENANT_ID"
+tenant_status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$AEGIS_URL/v1/tenants" \
+  -H "Content-Type: application/json" \
+  -d "{\"id\": \"$TENANT_ID\", \"name\": \"Demo Tenant\", \"plan\": \"free\"}")
+if [ "$tenant_status" != "201" ] && [ "$tenant_status" != "409" ]; then
+  printf 'Failed to create tenant %s (HTTP %s)\n' "$TENANT_ID" "$tenant_status" >&2
+  exit 1
+fi
+
 printf '==> Registering demo agent (%s)\n' "$AGENT_KEY"
 curl -fsS -X POST "$AEGIS_URL/v1/agents/register" \
   -H "Authorization: Bearer $TENANT_ID" \
