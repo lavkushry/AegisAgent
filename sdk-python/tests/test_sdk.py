@@ -510,6 +510,64 @@ class TestAegisSDK(unittest.TestCase):
         )
 
     @patch("requests.Session.post")
+    def test_close_incident(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        res = self.client.close_incident("incident-1")
+        self.assertTrue(res)
+        mock_post.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/incidents/incident-1/close",
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            timeout=5,
+        )
+
+    @patch("requests.Session.post")
+    def test_close_incident_returns_false_on_error(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "Incident not found"
+        mock_post.return_value = mock_response
+
+        res = self.client.close_incident("incident-1")
+        self.assertFalse(res)
+
+    @patch("requests.Session.get")
+    def test_narrate_incident(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "incident_id": "incident-1",
+            "narrative": "Agent X performed Y, triggering Z.",
+        }
+        mock_get.return_value = mock_response
+
+        res = self.client.narrate_incident("incident-1")
+        self.assertEqual(res, "Agent X performed Y, triggering Z.")
+        mock_get.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/incidents/incident-1/narrate",
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            timeout=5,
+        )
+
+    @patch("requests.Session.get")
+    def test_narrate_incident_returns_none_on_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+        mock_get.return_value = mock_response
+
+        res = self.client.narrate_incident("incident-1")
+        self.assertIsNone(res)
+
+    @patch("requests.Session.post")
     def test_verify_receipt_chain(self, mock_post):
         mock_response = MagicMock()
         mock_response.status_code = 200
