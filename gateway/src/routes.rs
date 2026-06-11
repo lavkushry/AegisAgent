@@ -1983,6 +1983,18 @@ pub async fn authorize_action(
         let expires_at = Utc::now() + Duration::seconds(state.approval_ttl_secs);
         let original_call_hash = hash_tool_call(&payload.tool_call);
 
+        // #1187/TASK-0082-0083: optional approval-callback registration. The
+        // plaintext secret is hashed immediately and never persisted
+        // (redaction invariant) — only `callback_url` and
+        // `sha256(secret)` are stored.
+        let (callback_url, callback_secret_hash) = match &payload.callback {
+            Some(cb) => (
+                Some(cb.url.clone()),
+                cb.secret.as_ref().map(|s| sha256_hex(s.as_bytes())),
+            ),
+            None => (None, None),
+        };
+
         let approval_record = ApprovalRecord {
             id: approval_id.to_string(),
             tenant_id: tenant_id.clone(),
@@ -1996,6 +2008,8 @@ pub async fn authorize_action(
             edited_skill_call: None,
             expires_at: Some(expires_at),
             decided_at: None,
+            callback_url,
+            callback_secret_hash,
             created_at: Utc::now(),
         };
 
@@ -4904,6 +4918,7 @@ mod tests {
     fn mcp_authorize_request(tool: &str, action: &str) -> AuthorizeRequest {
         AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),
@@ -5029,6 +5044,8 @@ mod tests {
             edited_skill_call: None,
             expires_at,
             decided_at: None,
+            callback_url: None,
+            callback_secret_hash: None,
             created_at: Utc::now(),
         }
     }
@@ -5900,6 +5917,44 @@ mod tests {
             approval.approver_group.as_deref(),
             Some("security-reviewers")
         );
+    }
+
+    /// #1187/TASK-0082-0083: an optional `callback` on the authorize request
+    /// is persisted on the resulting approval as `callback_url` (verbatim)
+    /// and `callback_secret_hash` (sha256 of the secret) — the plaintext
+    /// secret itself is never stored.
+    #[tokio::test]
+    async fn authorize_persists_approval_callback_with_hashed_secret() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_callback").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "semi_trusted_customer".to_string();
+        request.callback = Some(crate::models::ApprovalCallback {
+            url: "https://example.com/aegis-callback".to_string(),
+            secret: Some("topsecret".to_string()),
+        });
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "require_approval");
+        let approval_id = response.approval.expect("approval info").approval_id;
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval row should exist");
+
+        assert_eq!(
+            stored.callback_url.as_deref(),
+            Some("https://example.com/aegis-callback")
+        );
+        assert_eq!(
+            stored.callback_secret_hash.as_deref(),
+            Some(sha256_hex(b"topsecret").as_str())
+        );
+        // The plaintext secret never appears in the persisted row.
+        assert_ne!(stored.callback_secret_hash.as_deref(), Some("topsecret"));
     }
 
     /// #0120: the `risk_score` returned by `/v1/authorize` matches the
@@ -8067,6 +8122,8 @@ mod tests {
             edited_skill_call: None,
             expires_at: Some(Utc::now() + Duration::minutes(10)),
             decided_at: None,
+            callback_url: None,
+            callback_secret_hash: None,
             created_at: Utc::now(),
         };
         db::insert_approval(&state.pool, &record1).await.unwrap();
@@ -8086,6 +8143,8 @@ mod tests {
             edited_skill_call: None,
             expires_at: Some(Utc::now() - Duration::minutes(10)),
             decided_at: None,
+            callback_url: None,
+            callback_secret_hash: None,
             created_at: Utc::now() - Duration::minutes(10),
         };
         db::insert_approval(&state.pool, &record2).await.unwrap();
@@ -8640,6 +8699,7 @@ mod tests {
 
         let auth_payload = AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),
@@ -8692,6 +8752,7 @@ mod tests {
 
         let auth_payload = AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),

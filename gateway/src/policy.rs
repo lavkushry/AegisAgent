@@ -253,6 +253,7 @@ mod tests {
     fn mutating_request_at_trust(trust_level: &str) -> AuthorizeRequest {
         AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -326,6 +327,7 @@ mod tests {
         let engine = setup_engine().await;
         let request = AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -354,6 +356,7 @@ mod tests {
         let engine = setup_engine().await;
         let request = AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -385,6 +388,7 @@ mod tests {
         let engine = setup_engine().await;
         let request = AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -413,6 +417,7 @@ mod tests {
         let engine = setup_engine().await;
         let request = AuthorizeRequest {
             request_id: None,
+            callback: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
