@@ -500,6 +500,39 @@ class AegisClient(AegisBaseClient):
             logger.error(f"Connection error on GET /v1/soc/summary: {e}")
             return None
 
+    def list_alerts(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        severity: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional[list]:
+        """Lists SOC detection alerts for the tenant, with optional filters."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if severity:
+            params["severity"] = severity
+        if agent_id:
+            params["agent_id"] = agent_id
+        return self._get_list("/v1/alerts", params=params)
+
+    def list_incidents(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+        severity: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional[list]:
+        """Lists SOC correlation incidents for the tenant, with optional filters."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
+        if severity:
+            params["severity"] = severity
+        if agent_id:
+            params["agent_id"] = agent_id
+        return self._get_list("/v1/incidents", params=params)
+
     def verify_receipt_chain(self, receipts: list) -> Dict[str, Any]:
         """Verifies the cryptographic integrity of a chain of receipts."""
         payload = {"receipts": receipts}
@@ -942,6 +975,39 @@ class AegisAsyncClient(AegisBaseClient):
         except Exception as e:
             logger.error(f"Connection error on GET /v1/soc/summary: {e}")
             return None
+
+    async def list_alerts(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        severity: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional[list]:
+        """Lists SOC detection alerts for the tenant, with optional filters."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if severity:
+            params["severity"] = severity
+        if agent_id:
+            params["agent_id"] = agent_id
+        return await self._get_list("/v1/alerts", params=params)
+
+    async def list_incidents(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+        severity: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Optional[list]:
+        """Lists SOC correlation incidents for the tenant, with optional filters."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
+        if severity:
+            params["severity"] = severity
+        if agent_id:
+            params["agent_id"] = agent_id
+        return await self._get_list("/v1/incidents", params=params)
 
     async def verify_receipt_chain(self, receipts: list) -> Dict[str, Any]:
         """Verifies the cryptographic integrity of a chain of receipts."""

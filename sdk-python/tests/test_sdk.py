@@ -418,6 +418,97 @@ class TestAegisSDK(unittest.TestCase):
         res = self.client.get_soc_summary()
         self.assertIsNone(res)
 
+    @patch("requests.Session.get")
+    def test_list_alerts(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [{"id": "alert_1"}]
+        mock_get.return_value = mock_response
+
+        res = self.client.list_alerts(
+            limit=10, offset=5, severity="high", agent_id="agent_1"
+        )
+        self.assertEqual(res, [{"id": "alert_1"}])
+        mock_get.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/alerts",
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            params={
+                "limit": 10,
+                "offset": 5,
+                "severity": "high",
+                "agent_id": "agent_1",
+            },
+            timeout=5,
+        )
+
+    @patch("requests.Session.get")
+    def test_list_alerts_defaults(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [{"id": "alert_1"}]
+        mock_get.return_value = mock_response
+
+        res = self.client.list_alerts()
+        self.assertEqual(res, [{"id": "alert_1"}])
+        mock_get.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/alerts",
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            params={"limit": 50, "offset": 0},
+            timeout=5,
+        )
+
+    @patch("requests.Session.get")
+    def test_list_incidents(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [{"id": "incident_1"}]
+        mock_get.return_value = mock_response
+
+        res = self.client.list_incidents(
+            limit=10, offset=5, status="open", severity="high", agent_id="agent_1"
+        )
+        self.assertEqual(res, [{"id": "incident_1"}])
+        mock_get.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/incidents",
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            params={
+                "limit": 10,
+                "offset": 5,
+                "status": "open",
+                "severity": "high",
+                "agent_id": "agent_1",
+            },
+            timeout=5,
+        )
+
+    @patch("requests.Session.get")
+    def test_list_incidents_defaults(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [{"id": "incident_1"}]
+        mock_get.return_value = mock_response
+
+        res = self.client.list_incidents()
+        self.assertEqual(res, [{"id": "incident_1"}])
+        mock_get.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/incidents",
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            params={"limit": 50, "offset": 0},
+            timeout=5,
+        )
+
     @patch("requests.Session.post")
     def test_verify_receipt_chain(self, mock_post):
         mock_response = MagicMock()

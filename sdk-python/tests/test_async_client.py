@@ -237,6 +237,29 @@ class TestAegisAsyncClientMethods(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["alerts_total"], 2)
 
     @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_list_alerts(self, mock_request):
+        mock_request.return_value = _make_mock_response(
+            status_code=200, json_data=[{"id": "alert-1"}]
+        )
+        res = await self.client.list_alerts(severity="high", agent_id="agent-1")
+        self.assertEqual(len(res), 1)
+        _, kwargs = mock_request.call_args
+        self.assertEqual(
+            kwargs["params"],
+            {"limit": 50, "offset": 0, "severity": "high", "agent_id": "agent-1"},
+        )
+
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_list_incidents(self, mock_request):
+        mock_request.return_value = _make_mock_response(
+            status_code=200, json_data=[{"id": "incident-1"}]
+        )
+        res = await self.client.list_incidents(status="open")
+        self.assertEqual(len(res), 1)
+        _, kwargs = mock_request.call_args
+        self.assertEqual(kwargs["params"], {"limit": 50, "offset": 0, "status": "open"})
+
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
     async def test_verify_receipt_chain(self, mock_request):
         mock_request.return_value = _make_mock_response(
             status_code=200, json_data={"verified": True}
