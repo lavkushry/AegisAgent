@@ -9,6 +9,14 @@ reaches 1.0.
 
 ### Added
 
+- **Fuzz testing for `aegis-jcs-1` canonicalization** (TEST-002, #1162): the
+  canonicalization logic was extracted into a new `aegis-canon` crate
+  (`gateway/canon/`), shared by the gateway (via path dependency, delegated
+  from `routes::canonicalize_json`/`canonical_action_string`) and two new
+  `cargo-fuzz` targets in `gateway/fuzz/` — `canonicalize_json` (arbitrary
+  JSON) and `canonical_value_string` (arbitrary `AuthorizeToolCall`-shaped
+  input). A 60s smoke run gates PRs (`canon-fuzz` job in `ci.yml`); a nightly
+  workflow (`canon-fuzz.yml`) runs each target for 1 hour.
 - **Canonicalization scheme `aegis-jcs-1`** shared byte-identically between the
   Python SDK, Go SDK, TypeScript SDK, and the Rust gateway, locked by shared test
   corpora (`tests/canonical_action_vectors.json`, `tests/receipt_chain_vectors.json`)

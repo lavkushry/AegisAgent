@@ -10,6 +10,9 @@ readme = "../README.md"
 publish = false
 
 [dependencies]
+# aegis-jcs-1 canonicalization (TEST-002, #1162): shared with the cargo-fuzz
+# targets in fuzz/ via this path dependency.
+aegis-canon = { path = "canon" }
 axum = { version = "0.7.5", features = ["macros", "ws"] }
 tokio = { version = "1.38", features = ["full"] }
 sqlx = { version = "0.8.1", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "json"] }
