@@ -185,24 +185,30 @@ jobs:
         if: always()
         run: docker compose down
 
-  # ── Dependency audit (informational) ─────────────────────────────────────────
+  # ── Dependency audit (blocking) ───────────────────────────────────────────────
   security-audit:
-    name: Dependency audit (informational)
+    name: Dependency audit
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
-      - name: cargo audit (report-only)
+      - name: cargo audit
         working-directory: gateway
-        run: cargo audit || true
+        # RUSTSEC-2023-0071 (rsa "Marvin Attack" timing side-channel, no fixed
+        # upgrade available): transitive via jsonwebtoken's `rust_crypto`
+        # feature, which only provides RSA-family JWT algorithms. The gateway
+        # only verifies HS256 (HMAC) tokens (see main.rs `AEGIS_JWT_SECRET`
+        # handling) and never exercises the RSA path. Acknowledged and ignored
+        # until upstream ships a fix.
+        run: cargo audit --ignore RUSTSEC-2023-0071
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: pip-audit (report-only)
+      - name: pip-audit
         run: |
+          python -m pip install -U pip setuptools
           python -m pip install pip-audit
           python -m pip install -e sdk-python
-          pip-audit --progress-spinner off || true
+          pip-audit --progress-spinner off

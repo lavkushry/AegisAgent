@@ -38,6 +38,44 @@ pub struct ResponseAction {
     pub critical_notify: bool,
 }
 
+/// Pure mapping from `incident.kind` to the [`ResponseAction`] the Response
+/// Engine would take, with no database side effects. Used by:
+/// - [`dispatch`], which executes the corresponding mutation, and
+/// - the SOC-002 (#1185) `L2` "notify + recommend" autonomy level, which
+///   logs this recommendation without ever calling [`dispatch`].
+///
+/// Returns `None` if `incident.kind` has no mapped response (e.g.
+/// `repeated_approval`).
+pub fn recommended_action(incident: &Incident) -> Option<ResponseAction> {
+    match incident.kind.as_str() {
+        "deny_storm" | "runaway" => Some(ResponseAction {
+            action: "agent_frozen".to_string(),
+            description: format!(
+                "Auto-froze agent {} in response to {} incident {}: {}",
+                incident.agent_id, incident.kind, incident.incident_id, incident.summary
+            ),
+            critical_notify: false,
+        }),
+        "data_exfil_pattern" => Some(ResponseAction {
+            action: "agent_frozen".to_string(),
+            description: format!(
+                "Auto-froze agent {} in response to data_exfil_pattern incident {}: {}",
+                incident.agent_id, incident.incident_id, incident.summary
+            ),
+            critical_notify: true,
+        }),
+        "trust_escalation" => Some(ResponseAction {
+            action: "force_approval_enabled".to_string(),
+            description: format!(
+                "Enabled force_approval for agent {} in response to trust_escalation incident {}: {}",
+                incident.agent_id, incident.incident_id, incident.summary
+            ),
+            critical_notify: false,
+        }),
+        _ => None,
+    }
+}
+
 /// Dispatch the deterministic response for `incident`, if any.
 ///
 /// Returns `Ok(None)` if:
@@ -54,43 +92,21 @@ pub async fn dispatch(
         return Ok(None);
     }
 
-    match incident.kind.as_str() {
-        "deny_storm" | "runaway" => {
-            freeze_agent(pool, incident).await?;
-            Ok(Some(ResponseAction {
-                action: "agent_frozen".to_string(),
-                description: format!(
-                    "Auto-froze agent {} in response to {} incident {}: {}",
-                    incident.agent_id, incident.kind, incident.incident_id, incident.summary
-                ),
-                critical_notify: false,
-            }))
-        }
-        "data_exfil_pattern" => {
-            freeze_agent(pool, incident).await?;
-            Ok(Some(ResponseAction {
-                action: "agent_frozen".to_string(),
-                description: format!(
-                    "Auto-froze agent {} in response to data_exfil_pattern incident {}: {}",
-                    incident.agent_id, incident.incident_id, incident.summary
-                ),
-                critical_notify: true,
-            }))
-        }
-        "trust_escalation" => {
+    let action = match recommended_action(incident) {
+        Some(action) => action,
+        None => return Ok(None),
+    };
+
+    match action.action.as_str() {
+        "agent_frozen" => freeze_agent(pool, incident).await?,
+        "force_approval_enabled" => {
             db::set_agent_force_approval(pool, &incident.tenant_id, &incident.agent_id, true)
                 .await?;
-            Ok(Some(ResponseAction {
-                action: "force_approval_enabled".to_string(),
-                description: format!(
-                    "Enabled force_approval for agent {} in response to trust_escalation incident {}: {}",
-                    incident.agent_id, incident.incident_id, incident.summary
-                ),
-                critical_notify: false,
-            }))
         }
-        _ => Ok(None),
+        _ => {}
     }
+
+    Ok(Some(action))
 }
 
 async fn freeze_agent(pool: &SqlitePool, incident: &Incident) -> Result<(), sqlx::Error> {
@@ -263,5 +279,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(agent.status, "active");
+    }
+
+    /// SOC-002 (#1185): `recommended_action` is the pure mapping used by the
+    /// `L2` ("notify + recommend") autonomy level. It must report the same
+    /// action `dispatch` would take, without performing any DB mutation.
+    #[tokio::test]
+    async fn recommended_action_matches_dispatch_without_side_effects() {
+        let (pool, tenant_id, agent_id) = setup("recommend_only").await;
+        let incident = make_incident(&tenant_id, &agent_id, "deny_storm");
+
+        let recommended = recommended_action(&incident).unwrap();
+        assert_eq!(recommended.action, "agent_frozen");
+
+        let agent = db::get_agent_by_id(&pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            agent.status, "active",
+            "recommend-only must not mutate state"
+        );
+    }
+
+    #[test]
+    fn recommended_action_unmapped_incident_kind_returns_none() {
+        let incident = make_incident("tenant_x", "agent_x", "repeated_approval");
+        assert!(recommended_action(&incident).is_none());
     }
 }
