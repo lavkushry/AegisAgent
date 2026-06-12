@@ -22,55 +22,12 @@ reaches 1.0.
   and optional **Ed25519 receipt signing** with `sign.rs`.
 - **Deterministic trust-provenance gating**: 6-level model in the default Cedar
   policy pack; classifiers may only tighten a label, never loosen it.
-- **Go SDK** (`sdk-go/`): `aegis-jcs-1` canonicalizer, `aegis.Client`,
-  `aegis.Protect`, receipt chain verifier — full parity with the Python reference,
-  cross-language corpus CI gate.
-- **TypeScript SDK** (`sdk-typescript/`): `aegis-jcs-1` canonicalizer,
-  `AegisClient`, `protect()`, strict `tsc` build, `node --test` suite,
-  cross-language corpus CI gate — full parity.
-- **Agent SOC — Phase 0**: async Agent Security Event emitter (`events.rs`),
-  non-blocking `tokio::mpsc` channel drained by background task.
-- **Agent SOC — Phase 1**: deterministic detection rules (`detect.rs`), single-event
-  matches for confused-deputy, MCP drift, approval tamper.
-- **Agent SOC — Phase 2**: notify sink (`notify.rs`) — Slack / webhook consumer on
-  deny + approval events, with **HMAC-SHA256 webhook signatures** and a
-  **circuit breaker** for transient failures.
-- **Agent SOC — Phase 3**: correlation engine + incidents (`correlate.rs`) — frequency,
-  sequence, and time-window correlation rules (deny-storm, read-sensitive → egress,
-  runaway-agent); incident model with `evidence_receipts`.
-- **Agent SOC — Phase 4**: response engine (`respond.rs`) — manual
-  `freeze`/`revoke`/`quarantine` APIs + **auto-dispatch responder** with configurable
-  autonomy levels (`L0`-`L4`) via `AEGIS_SOC_AUTONOMY_LEVEL` env var and per-tenant
-  `tenants.soc_autonomy_level` override.
-- **Agent SOC — Phase 5**: SQLite event indexer + `/v1/ws/events` WebSocket live
-  feed + `/v1/soc/summary` SOC overview endpoint.
-- **Agent SOC — Phase 6**: RCA narrator (`narrate.rs`) — sandboxed LLM that
-  summarises closed incidents as markdown reports; no path to enforcement.
-- **Agentless ingestion** (`ingest.rs`): `POST /v1/ingest` accepting
-  `github_webhook` and `openai_trace` sources, normalizing into the same
-  detect→correlate→respond pipeline.
-- **Behavioral baselining** (`baseline.rs`): per-agent action frequency baselines
-  with anomaly detection, feeding the correlation engine.
-- **Kubernetes probes**: `/livez` (liveness, no I/O), `/readyz` (readiness, pings
-  DB), `/startupz` (startup probe) (#1225).
-- **Schema meta table** (`schema_meta`) and startup version check (#1228).
-- **Hashed agent tokens**: agent tokens stored as SHA-256 hashes, not plaintext
-  (#1137).
-- **Tenant validation**: reject requests for non-existent tenants with 404 (#1136).
-- **Graceful shutdown**: drain SOC event channel before exit (#1148).
-- **CatchPanic layer**: handler panic recovery to prevent process crash (#1222).
-- **Retry with backoff**: transient `SQLITE_BUSY` retry wrapper (#1223).
-- **Approval callback columns**: `callback_url` + `callback_secret_hash` on
-  approvals (#1231).
-- **Python SDK — async client**: `AegisAsyncClient` with `httpx` backend and
-  `async_protect_tool` decorator.
-- **Python SDK — CLI tools**: `aegis-status`, `aegis-freeze-agent`,
-  `aegis-export-audit` entry points.
-- **Python SDK — SOC client methods**: `get_soc_summary()`, `list_alerts()`,
-  `list_incidents()`, `close_incident()`, `narrate_incident()`.
-- **Python SDK — evidence packs**: `create_evidence_pack()` for bundling receipts.
-- **Python SDK — webhook handler**: `WebhookHandler` + `verify_slack_signature()`.
-- **Python SDK — structured logging**: `StructuredJSONFormatter`.
+- **SOC incident deduplication (SOC-005)**: repeat incidents for the same
+  `(tenant_id, agent_id, kind)` within a configurable window (default 1 hour,
+  `AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS`) are merged into the existing open
+  `soc_incidents` row (`db::upsert_soc_incident`) instead of creating a new
+  one — `source_event_ids` are unioned and `summary`/`opened_at` are bumped to
+  the latest occurrence, suppressing duplicate Phase 2 incident notifications.
 - Self-contained, zero-setup integrity demo (`examples/integrity_demo.py`).
 - OSS project scaffolding: MIT `LICENSE`, `CODE_OF_CONDUCT.md`, issue/PR
   templates, Dependabot, and hardened CI.
