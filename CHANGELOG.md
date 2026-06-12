@@ -20,6 +20,12 @@ reaches 1.0.
   `aegis-verify-receipts` CLI, gateway emission, and `GET /v1/receipts/:id/verify`.
 - **Deterministic trust-provenance gating**: 6-level model in the default Cedar
   policy pack; classifiers may only tighten a label, never loosen it.
+- **SOC incident deduplication (SOC-005)**: repeat incidents for the same
+  `(tenant_id, agent_id, kind)` within a configurable window (default 1 hour,
+  `AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS`) are merged into the existing open
+  `soc_incidents` row (`db::upsert_soc_incident`) instead of creating a new
+  one — `source_event_ids` are unioned and `summary`/`opened_at` are bumped to
+  the latest occurrence, suppressing duplicate Phase 2 incident notifications.
 - Self-contained, zero-setup integrity demo (`examples/integrity_demo.py`).
 - OSS project scaffolding: MIT `LICENSE`, `CODE_OF_CONDUCT.md`, issue/PR
   templates, Dependabot, and hardened CI.

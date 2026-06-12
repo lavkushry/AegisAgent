@@ -239,44 +239,12 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
         // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
         for incident in correlator.observe(&ev) {
-            match incident.severity.as_str() {
-                "high" => {
-                    warn!(
-                        incident_id = %incident.incident_id,
-                        kind = %incident.kind,
-                        severity = %incident.severity,
-                        tenant = %incident.tenant_id,
-                        agent = %incident.agent_id,
-                        contributing_events = ?incident.source_event_ids.len(),
-                        summary = %incident.summary,
-                        "SOC incident",
-                    );
-                    // Phase 2 — incident notify: HIGH incidents only.
-                    sink.notify(NotifyMessage {
-                        kind: "incident".to_string(),
-                        severity: incident.severity.clone(),
-                        tenant_id: incident.tenant_id.clone(),
-                        agent_id: incident.agent_id.clone(),
-                        summary: incident.summary.clone(),
-                        alert_or_incident_id: Some(incident.incident_id.clone()),
-                        occurred_at: incident.opened_at.clone(),
-                    });
-                }
-                _ => info!(
-                    incident_id = %incident.incident_id,
-                    kind = %incident.kind,
-                    severity = %incident.severity,
-                    tenant = %incident.tenant_id,
-                    agent = %incident.agent_id,
-                    contributing_events = ?incident.source_event_ids.len(),
-                    summary = %incident.summary,
-                    "SOC incident",
-                ),
-            }
-
             // Phase 5 — persist the incident (best-effort; never panics on failure).
             // source_event_ids is serialised to JSON so the column stores structured
             // evidence without SQL concatenation (redaction + parameterization).
+            // SOC-005 (#1188): repeat incidents for the same (tenant, agent, kind)
+            // within the dedup window are merged into the existing open incident
+            // rather than creating a new row.
             let source_ids_json = serde_json::to_string(&incident.source_event_ids)
                 .unwrap_or_else(|_| "[]".to_string());
             let incident_record = SocIncidentRecord {
@@ -293,11 +261,64 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
                 status: "open".to_string(),
                 closed_at: None,
             };
-            if let Err(e) = db::insert_soc_incident(&pool, &incident_record).await {
-                error!(
+            let mut was_merged = false;
+            match db::upsert_soc_incident(&pool, &incident_record).await {
+                Ok(db::IncidentUpsertResult::Merged { id }) => {
+                    was_merged = true;
+                    debug!(
+                        incident_id = %incident.incident_id,
+                        merged_into = %id,
+                        "SOC-005: merged repeat incident into existing open incident",
+                    );
+                }
+                Ok(db::IncidentUpsertResult::Inserted) => {}
+                Err(e) => {
+                    error!(
+                        incident_id = %incident.incident_id,
+                        "Phase 5: failed to persist SOC incident: {:?}", e
+                    );
+                }
+            }
+
+            match incident.severity.as_str() {
+                "high" => {
+                    warn!(
+                        incident_id = %incident.incident_id,
+                        kind = %incident.kind,
+                        severity = %incident.severity,
+                        tenant = %incident.tenant_id,
+                        agent = %incident.agent_id,
+                        contributing_events = ?incident.source_event_ids.len(),
+                        summary = %incident.summary,
+                        merged = was_merged,
+                        "SOC incident",
+                    );
+                    // Phase 2 — incident notify: HIGH incidents only. SOC-005
+                    // (#1188): suppressed for repeat incidents merged into an
+                    // already-notified open incident (no alert fatigue).
+                    if !was_merged {
+                        sink.notify(NotifyMessage {
+                            kind: "incident".to_string(),
+                            severity: incident.severity.clone(),
+                            tenant_id: incident.tenant_id.clone(),
+                            agent_id: incident.agent_id.clone(),
+                            summary: incident.summary.clone(),
+                            alert_or_incident_id: Some(incident.incident_id.clone()),
+                            occurred_at: incident.opened_at.clone(),
+                        });
+                    }
+                }
+                _ => info!(
                     incident_id = %incident.incident_id,
-                    "Phase 5: failed to persist SOC incident: {:?}", e
-                );
+                    kind = %incident.kind,
+                    severity = %incident.severity,
+                    tenant = %incident.tenant_id,
+                    agent = %incident.agent_id,
+                    contributing_events = ?incident.source_event_ids.len(),
+                    summary = %incident.summary,
+                    merged = was_merged,
+                    "SOC incident",
+                ),
             }
 
             // Phase 4 — Response Engine auto-dispatch (#1184). Best-effort:
