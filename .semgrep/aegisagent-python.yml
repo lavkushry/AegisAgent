@@ -1,0 +1,35 @@
+rules:
+  - id: python-sql-string-formatting
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Possible SQL injection (CWE-89): a SQL statement appears to be built
+      with an f-string, `%`, `.format()`, or string concatenation. Use
+      parameterized queries.
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(f"...")
+          - pattern: $CURSOR.execute("..." % ...)
+          - pattern: $CURSOR.execute("...".format(...))
+          - pattern: $CURSOR.execute("..." + ...)
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+
+  - id: python-unredacted-secret-logging
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Logging a value whose name suggests it carries a secret/token/credential
+      (CWE-532). Redact it before logging, or log only a hash/id.
+    patterns:
+      - pattern-either:
+          - pattern: logging.$LEVEL(..., $SECRET, ...)
+          - pattern: logger.$LEVEL(..., $SECRET, ...)
+          - pattern: print(..., $SECRET, ...)
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: ^(?i).*(secret|token|password|api_key|apikey|credential)s?$
+    metadata:
+      category: security
+      cwe: "CWE-532: Insertion of Sensitive Information into Log File"

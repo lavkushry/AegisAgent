@@ -9,6 +9,13 @@ reaches 1.0.
 
 ### Added
 
+- **SAST scanning with semgrep** (CI-002, #1171): new blocking `sast.yml`
+  workflow runs `semgrep scan` on every PR with custom rules
+  (`.semgrep/aegisagent-rust.yml`, `.semgrep/aegisagent-python.yml`) for raw
+  string-built SQL (CWE-89), `.unwrap()`/`.expect()` in production gateway
+  code (CWE-391/397), and unredacted secret/token logging (CWE-532), plus the
+  community `p/rust`, `p/python`, and `p/secrets` rulesets. Any finding fails
+  the job.
 - **Canonicalization scheme `aegis-jcs-1`** shared byte-identically between the
   Python SDK, Go SDK, TypeScript SDK, and the Rust gateway, locked by shared test
   corpora (`tests/canonical_action_vectors.json`, `tests/receipt_chain_vectors.json`)
