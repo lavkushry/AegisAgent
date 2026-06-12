@@ -1,0 +1,102 @@
+{
+  "title": "AegisAgent — Authorize Latency (p50/p95/p99)",
+  "description": "Inline /v1/authorize latency from the aegis_authorize_duration_seconds histogram (OBS-001, #1154). Design law 3 budget is 75ms.",
+  "schemaVersion": 39,
+  "editable": true,
+  "tags": ["aegisagent", "gateway", "latency"],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Authorize latency — p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2 }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(aegis_authorize_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(aegis_authorize_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(aegis_authorize_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Authorize requests — rate by latency bucket",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(aegis_authorize_duration_seconds_bucket[5m])) by (le)",
+          "legendFormat": "le={{le}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Average authorize latency",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.075 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(aegis_authorize_duration_seconds_sum[5m])) / sum(rate(aegis_authorize_duration_seconds_count[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Authorize request rate",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(aegis_authorize_duration_seconds_count[5m]))"
+        }
+      ]
+    }
+  ]
+}

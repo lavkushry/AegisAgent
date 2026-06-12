@@ -735,6 +735,7 @@ fn approval_is_expired(app: &ApprovalRecord) -> bool {
 async fn write_decision_and_audit(
     pool: &sqlx::SqlitePool,
     events: &EventSink,
+    metrics: &SecurityMetrics,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -746,6 +747,12 @@ async fn write_decision_and_audit(
     audit_event_type: &str,
     started_at: std::time::Instant,
 ) -> Result<(), sqlx::Error> {
+    // OBS-001 (#1154): record the inline /v1/authorize latency on the
+    // Prometheus histogram. Recorded here (once per decision write) rather
+    // than as middleware, so it shares the exact `started_at` already used
+    // for `decision_record.latency_ms`.
+    metrics.authorize_duration.observe(started_at.elapsed());
+
     let decision_record = DecisionRecord {
         id: decision_id.to_string(),
         tenant_id: tenant_id.to_string(),
@@ -1597,6 +1604,7 @@ pub async fn authorize_action(
         if let Err(e) = write_decision_and_audit(
             &state.pool,
             &state.events,
+            &state.metrics,
             &tenant_id,
             &agent_id,
             &payload,
@@ -1705,6 +1713,7 @@ pub async fn authorize_action(
                 if let Err(e) = write_decision_and_audit(
                     &state.pool,
                     &state.events,
+                    &state.metrics,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -1775,6 +1784,7 @@ pub async fn authorize_action(
                     if let Err(e) = write_decision_and_audit(
                         &state.pool,
                         &state.events,
+                        &state.metrics,
                         &tenant_id,
                         &agent_id,
                         &payload,
@@ -1824,6 +1834,7 @@ pub async fn authorize_action(
                 if let Err(e) = write_decision_and_audit(
                     &state.pool,
                     &state.events,
+                    &state.metrics,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -1944,6 +1955,7 @@ pub async fn authorize_action(
     if let Err(e) = write_decision_and_audit(
         &state.pool,
         &state.events,
+        &state.metrics,
         &tenant_id,
         &agent_id,
         &payload,
@@ -6490,6 +6502,47 @@ mod tests {
         assert_eq!(
             count, 1,
             "an expired-approval grant attempt must be recorded"
+        );
+    }
+
+    /// OBS-001 (#1154): every `/v1/authorize` call records one observation on
+    /// `aegis_authorize_duration_seconds`, exposed as a Prometheus histogram
+    /// with `_bucket`/`_sum`/`_count` series.
+    #[tokio::test]
+    async fn authorize_records_duration_histogram() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_duration_histogram").await;
+
+        assert_eq!(
+            state.metrics.authorize_duration.count(),
+            0,
+            "histogram count must start at zero"
+        );
+
+        let request = mcp_authorize_request("github", "read_file");
+        let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        assert_eq!(
+            state.metrics.authorize_duration.count(),
+            1,
+            "one authorize call must record exactly one observation"
+        );
+
+        let metrics_text = state.metrics.render_prometheus();
+        assert!(
+            metrics_text.contains("# TYPE aegis_authorize_duration_seconds histogram"),
+            "metrics text must declare the histogram TYPE"
+        );
+        assert!(
+            metrics_text.contains("aegis_authorize_duration_seconds_bucket{le=\"+Inf\"} 1"),
+            "the +Inf bucket must include the one observation"
+        );
+        assert!(
+            metrics_text.contains("aegis_authorize_duration_seconds_count 1"),
+            "metrics text must include the observation count"
+        );
+        assert!(
+            metrics_text.contains("aegis_authorize_duration_seconds_sum "),
+            "metrics text must include the cumulative sum"
         );
     }
 

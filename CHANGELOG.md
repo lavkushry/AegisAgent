@@ -23,6 +23,10 @@ reaches 1.0.
 - Self-contained, zero-setup integrity demo (`examples/integrity_demo.py`).
 - OSS project scaffolding: MIT `LICENSE`, `CODE_OF_CONDUCT.md`, issue/PR
   templates, Dependabot, and hardened CI.
+- **`aegis_authorize_duration_seconds` Prometheus histogram** (OBS-001, #1154):
+  records inline `/v1/authorize` latency with buckets at 5/10/25/50/75/100/250/
+  500/1000ms, exposed on `GET /metrics`. Includes a Grafana dashboard template
+  (`grafana/dashboards/aegis-authorize-latency.json`) with p50/p95/p99 panels.
 
 ### Changed
 
