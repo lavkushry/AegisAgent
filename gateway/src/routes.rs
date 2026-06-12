@@ -5033,6 +5033,54 @@ mod tests {
         }
     }
 
+    /// TASK-0156 (#1001): `aegis-jcs-1` canonicalization must recurse into
+    /// objects nested arbitrarily deep, sorting keys at every level
+    /// independently — not just the top level or one level of nesting.
+    #[test]
+    fn canonicalization_sorts_keys_three_levels_deep() {
+        let input = json!({
+            "z_top": {
+                "z_mid": {
+                    "z_leaf": 1,
+                    "a_leaf": 2,
+                },
+                "a_mid": {
+                    "b_leaf": 3,
+                    "a_leaf": 4,
+                },
+            },
+            "a_top": "value",
+        });
+
+        let canonical = canonicalize_json(input);
+        assert_eq!(
+            serde_json::to_string(&canonical).unwrap(),
+            r#"{"a_top":"value","z_top":{"a_mid":{"a_leaf":4,"b_leaf":3},"z_mid":{"a_leaf":2,"z_leaf":1}}}"#
+        );
+
+        // Also exercise via the full AuthorizeToolCall/hash path with a
+        // 3-level-deep `parameters` object.
+        let tool_call = AuthorizeToolCall {
+            tool: "t".to_string(),
+            action: "x".to_string(),
+            resource: None,
+            mutates_state: false,
+            parameters: json!({
+                "level1": {
+                    "level2": {
+                        "level3": {
+                            "z": 1,
+                            "a": 2,
+                        }
+                    }
+                }
+            }),
+        };
+        let canonical_str = canonical_action_string(&tool_call);
+        assert!(canonical_str.contains(r#""level3":{"a":2,"z":1}"#));
+        assert_eq!(hash_tool_call(&tool_call), hash_tool_call(&tool_call));
+    }
+
     fn make_test_approval(
         expires_at: Option<chrono::DateTime<Utc>>,
         status: &str,
