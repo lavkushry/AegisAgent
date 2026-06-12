@@ -48,6 +48,20 @@ reaches 1.0.
   persist → notify), asserting a `confused_deputy_block` alert and a
   `deny_storm` incident are persisted to `soc_alerts`/`soc_incidents` and a
   HIGH notification is delivered to a mock webhook sink.
+- **DB-001 (#1191): versioned `sqlx` migrations**. New `gateway/migrations/`
+  directory (starting with `0001_baseline.sql`, the full current schema written
+  with `IF NOT EXISTS`) applied via `sqlx::migrate!("./migrations")`, tracked in
+  `_sqlx_migrations`. The legacy ad-hoc inline schema bootstrap
+  (`db::bootstrap_legacy_schema`, formerly `run_migrations`) still runs first on
+  every startup for backward compatibility with pre-existing databases, so the
+  baseline migration is a no-op there too. All future schema changes ship as new
+  numbered files via `sqlx migrate add`.
+- **DB-007 (#932): `mcp_servers.last_discovery_at`**. New migration
+  `0002_mcp_servers_last_discovery_at.sql` adds a nullable timestamp column,
+  stamped via `db::touch_mcp_server_discovery` on every
+  `POST /v1/mcp/servers/:server_key/tools` discovery call, surfaced on
+  `McpServerRecord`/`GET /v1/mcp/servers` so operators can see manifest
+  staleness alongside `manifest_hash`.
 
 ### Changed
 

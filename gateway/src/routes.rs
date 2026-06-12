@@ -1337,6 +1337,12 @@ pub async fn discover_mcp_tools(
         Err(e) => error!("Failed to read pinned MCP manifest hash: {:?}", e),
     }
 
+    // DB-007 (#932): record discovery timestamp regardless of drift outcome.
+    // Best-effort: a DB error here never blocks the discovery response.
+    if let Err(e) = db::touch_mcp_server_discovery(&state.pool, &tenant_id, &server_key).await {
+        error!("Failed to record MCP discovery timestamp: {:?}", e);
+    }
+
     let tools = match db::list_mcp_tools(&state.pool, &tenant_id, &server_key).await {
         Ok(tools) => tools,
         Err(e) => {
@@ -7669,6 +7675,56 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(server.status, "quarantined");
+    }
+
+    /// DB-007 (#932): `last_discovery_at` is `None` until the first discovery
+    /// call, then set (and bumped on every subsequent discovery).
+    #[tokio::test]
+    async fn discover_sets_last_discovery_at_timestamp() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_last_discovery_at").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        let before = db::get_mcp_server_by_key(&state.pool, &tenant_id, "github-mcp")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            before.last_discovery_at.is_none(),
+            "no discovery has run yet"
+        );
+
+        let req = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "medium")],
+        };
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(req),
+        )
+        .await;
+
+        let after = db::get_mcp_server_by_key(&state.pool, &tenant_id, "github-mcp")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            after.last_discovery_at.is_some(),
+            "discovery must stamp last_discovery_at"
+        );
     }
 
     /// A quarantined MCP server must deny an otherwise-approved tool inline

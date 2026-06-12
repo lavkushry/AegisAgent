@@ -298,6 +298,10 @@ pub struct McpServerRecord {
     /// the current manifest fingerprint alongside the server's status.
     #[serde(default)]
     pub manifest_hash: String,
+    /// Timestamp of the most recent `POST /v1/mcp/servers/:server_key/tools`
+    /// discovery call. `None` if the server has never had a discovery run.
+    #[serde(default)]
+    pub last_discovery_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
