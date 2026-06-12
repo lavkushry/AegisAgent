@@ -114,8 +114,22 @@ pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await?;
 
-    // Run migrations
-    run_migrations(&pool).await?;
+    // Bring any pre-existing database (created by older binaries via the
+    // legacy ad-hoc bootstrap, before DB-001/#1191) up to the schema that
+    // `migrations/0001_baseline.sql` expects. On a fresh database this also
+    // creates the full schema. Either way, every table/column/index this
+    // function creates is also declared (with `IF NOT EXISTS`) in
+    // `migrations/0001_baseline.sql`, so the migration below is a no-op that
+    // simply records "0001_baseline" as applied.
+    bootstrap_legacy_schema(&pool).await?;
+
+    // DB-001 (#1191): sqlx versioned migrations, tracked in `_sqlx_migrations`.
+    // All schema changes from here on ship as new files in `gateway/migrations/`
+    // (via `sqlx migrate add`) rather than new `ensure_*` helpers above.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| sqlx::Error::Protocol(format!("migration failed: {e}")))?;
 
     migrate_agent_tokens(&pool).await?;
 
@@ -124,7 +138,14 @@ pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     Ok(pool)
 }
 
-async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+/// Legacy ad-hoc schema bootstrap (pre-DB-001/#1191). Brings any database —
+/// fresh or pre-existing — up to the schema captured in
+/// `migrations/0001_baseline.sql`, so that `sqlx::migrate!()` (called right
+/// after this in [`init_db`]) is always a no-op for the baseline migration.
+/// Kept for backward compatibility with databases created by older binaries
+/// that predate the `_sqlx_migrations` table; do not add new schema changes
+/// here — add a new file under `gateway/migrations/` instead.
+async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS tenants (
             id TEXT PRIMARY KEY,
@@ -3359,7 +3380,32 @@ mod tests {
 
         // Running the migration set a third time on the live pool must also
         // be a no-op (no duplicate-column or duplicate-table errors).
-        run_migrations(&pool2).await.unwrap();
+        bootstrap_legacy_schema(&pool2).await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool2).await.unwrap();
+    }
+
+    /// DB-001 (#1191): `init_db` must record the baseline migration in
+    /// `_sqlx_migrations`, including for a database that was brought to the
+    /// baseline schema by [`bootstrap_legacy_schema`] (i.e. every table
+    /// already existed before `sqlx::migrate!()` ran).
+    #[tokio::test]
+    async fn init_db_records_baseline_migration() {
+        let pool = setup_pool("sqlx_migrations_baseline").await;
+
+        let rows: Vec<(i64, String, bool)> = sqlx::query_as(
+            "SELECT version, description, success FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), 1, "expected exactly one applied migration");
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[0].1, "baseline");
+        assert!(
+            rows[0].2,
+            "baseline migration must be recorded as successful"
+        );
     }
 
     #[tokio::test]
