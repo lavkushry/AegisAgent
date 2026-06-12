@@ -137,6 +137,7 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     ensure_tenants_auto_respond_column(pool).await?;
+    ensure_tenants_soc_autonomy_level_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agents (
@@ -711,6 +712,29 @@ async fn ensure_tenants_auto_respond_column(pool: &SqlitePool) -> Result<(), sql
     }
 
     sqlx::query("ALTER TABLE tenants ADD COLUMN auto_respond_enabled INTEGER NOT NULL DEFAULT 1")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Additive migration (#1185, SOC-002): per-tenant override for the SOC
+/// Response Engine's autonomy level (`L0`-`L4`). `NULL` means "no override —
+/// fall back to `AEGIS_SOC_AUTONOMY_LEVEL` (default `L1`)" — see
+/// [`get_soc_autonomy_level`].
+async fn ensure_tenants_soc_autonomy_level_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(tenants)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "soc_autonomy_level")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE tenants ADD COLUMN soc_autonomy_level TEXT")
         .execute(pool)
         .await?;
     Ok(())
@@ -2198,6 +2222,49 @@ pub async fn is_auto_respond_enabled(
             .fetch_optional(pool)
             .await?;
     Ok(row.map(|(v,)| v).unwrap_or(false))
+}
+
+/// Resolves the SOC Response Engine's autonomy level (#1185, SOC-002) for
+/// `tenant_id`:
+///
+/// - `L0` — log only: no notify, no auto-respond.
+/// - `L1` — notify only (default): decision/alert/incident notify as today,
+///   but auto-respond is skipped.
+/// - `L2` — notify + recommend: like `L1`, plus a logged "would respond
+///   with..." recommendation (never executed).
+/// - `L3` — auto-respond + notify: full Phase 4 behaviour (incl. auto-freeze
+///   on `deny_storm`/`runaway`/`data_exfil_pattern`).
+/// - `L4` — auto-respond + silent: Phase 4 actions execute, but the
+///   resulting notifications are suppressed.
+///
+/// Precedence: per-tenant `tenants.soc_autonomy_level` override (if set to a
+/// recognised `L0`-`L4` value) > `AEGIS_SOC_AUTONOMY_LEVEL` env var (if set
+/// to a recognised value) > default `"L1"`. An unrecognised value at either
+/// level is ignored (falls through), keeping the default fail-safe.
+pub async fn get_soc_autonomy_level(pool: &SqlitePool, tenant_id: &str) -> String {
+    const LEVELS: [&str; 5] = ["L0", "L1", "L2", "L3", "L4"];
+
+    let row: Result<Option<(Option<String>,)>, sqlx::Error> =
+        sqlx::query_as("SELECT soc_autonomy_level FROM tenants WHERE id = ?")
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await;
+
+    if let Ok(Some((Some(level),))) = row {
+        let upper = level.to_uppercase();
+        if LEVELS.contains(&upper.as_str()) {
+            return upper;
+        }
+    }
+
+    if let Ok(level) = std::env::var("AEGIS_SOC_AUTONOMY_LEVEL") {
+        let upper = level.to_uppercase();
+        if LEVELS.contains(&upper.as_str()) {
+            return upper;
+        }
+    }
+
+    "L1".to_string()
 }
 
 /// Heartbeat (#0080): records the timestamp of an agent's most recent successful
