@@ -1,0 +1,45 @@
+name: Canonicalization fuzz (nightly)
+
+# TEST-002 (#1162): runs each cargo-fuzz target for 1 hour, satisfying the
+# acceptance criteria ("Run for minimum 1 hour in CI without crashes")
+# without making every PR wait 2+ hours. The PR-blocking smoke run (60s per
+# target) lives in ci.yml.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  canon-fuzz-hour:
+    name: Canonicalization fuzz 1h (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [canonicalize_json, canonical_value_string]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gateway/fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Fuzz ${{ matrix.target }} for 1 hour
+        working-directory: gateway
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: gateway/fuzz/artifacts/${{ matrix.target }}/

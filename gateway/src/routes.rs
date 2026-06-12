@@ -427,21 +427,11 @@ fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
         .filter(|server_key| !server_key.is_empty())
 }
 
+/// Recursively sort JSON object keys by Unicode code point (`aegis-jcs-1`).
+/// Delegates to `aegis_canon` (TEST-002, #1162) so the fuzz targets in
+/// `fuzz/` exercise the exact same implementation as the gateway.
 fn canonicalize_json(value: Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(canonicalize_json).collect()),
-        Value::Object(map) => {
-            let mut entries: Vec<_> = map.into_iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-            let mut sorted = serde_json::Map::new();
-            for (key, value) in entries {
-                sorted.insert(key, canonicalize_json(value));
-            }
-            Value::Object(sorted)
-        }
-        primitive => primitive,
-    }
+    aegis_canon::canonicalize_json(value)
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -460,9 +450,7 @@ pub const CANON_VERSION: &str = "aegis-jcs-1";
 /// Deterministic canonical string for a tool call. The SDK hashes the exact same
 /// string; byte-equality here is the foundation of the fail-closed approval guarantee.
 fn canonical_action_string(tool_call: &AuthorizeToolCall) -> String {
-    let value = serde_json::to_value(tool_call).unwrap_or(Value::Null);
-    let canonical = canonicalize_json(value);
-    serde_json::to_string(&canonical).unwrap_or_default()
+    aegis_canon::canonical_value_string(tool_call)
 }
 
 fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
