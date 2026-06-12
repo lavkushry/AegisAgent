@@ -427,21 +427,11 @@ fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
         .filter(|server_key| !server_key.is_empty())
 }
 
+/// Recursively sort JSON object keys by Unicode code point (`aegis-jcs-1`).
+/// Delegates to `aegis_canon` (TEST-002, #1162) so the fuzz targets in
+/// `fuzz/` exercise the exact same implementation as the gateway.
 fn canonicalize_json(value: Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(canonicalize_json).collect()),
-        Value::Object(map) => {
-            let mut entries: Vec<_> = map.into_iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-            let mut sorted = serde_json::Map::new();
-            for (key, value) in entries {
-                sorted.insert(key, canonicalize_json(value));
-            }
-            Value::Object(sorted)
-        }
-        primitive => primitive,
-    }
+    aegis_canon::canonicalize_json(value)
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -460,9 +450,7 @@ pub const CANON_VERSION: &str = "aegis-jcs-1";
 /// Deterministic canonical string for a tool call. The SDK hashes the exact same
 /// string; byte-equality here is the foundation of the fail-closed approval guarantee.
 fn canonical_action_string(tool_call: &AuthorizeToolCall) -> String {
-    let value = serde_json::to_value(tool_call).unwrap_or(Value::Null);
-    let canonical = canonicalize_json(value);
-    serde_json::to_string(&canonical).unwrap_or_default()
+    aegis_canon::canonical_value_string(tool_call)
 }
 
 fn hash_tool_call(tool_call: &AuthorizeToolCall) -> String {
@@ -735,6 +723,7 @@ fn approval_is_expired(app: &ApprovalRecord) -> bool {
 async fn write_decision_and_audit(
     pool: &sqlx::SqlitePool,
     events: &EventSink,
+    metrics: &SecurityMetrics,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -746,6 +735,12 @@ async fn write_decision_and_audit(
     audit_event_type: &str,
     started_at: std::time::Instant,
 ) -> Result<(), sqlx::Error> {
+    // OBS-001 (#1154): record the inline /v1/authorize latency on the
+    // Prometheus histogram. Recorded here (once per decision write) rather
+    // than as middleware, so it shares the exact `started_at` already used
+    // for `decision_record.latency_ms`.
+    metrics.authorize_duration.observe(started_at.elapsed());
+
     let decision_record = DecisionRecord {
         id: decision_id.to_string(),
         tenant_id: tenant_id.to_string(),
@@ -1597,6 +1592,7 @@ pub async fn authorize_action(
         if let Err(e) = write_decision_and_audit(
             &state.pool,
             &state.events,
+            &state.metrics,
             &tenant_id,
             &agent_id,
             &payload,
@@ -1705,6 +1701,7 @@ pub async fn authorize_action(
                 if let Err(e) = write_decision_and_audit(
                     &state.pool,
                     &state.events,
+                    &state.metrics,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -1775,6 +1772,7 @@ pub async fn authorize_action(
                     if let Err(e) = write_decision_and_audit(
                         &state.pool,
                         &state.events,
+                        &state.metrics,
                         &tenant_id,
                         &agent_id,
                         &payload,
@@ -1824,6 +1822,7 @@ pub async fn authorize_action(
                 if let Err(e) = write_decision_and_audit(
                     &state.pool,
                     &state.events,
+                    &state.metrics,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -1944,6 +1943,7 @@ pub async fn authorize_action(
     if let Err(e) = write_decision_and_audit(
         &state.pool,
         &state.events,
+        &state.metrics,
         &tenant_id,
         &agent_id,
         &payload,
@@ -6490,6 +6490,47 @@ mod tests {
         assert_eq!(
             count, 1,
             "an expired-approval grant attempt must be recorded"
+        );
+    }
+
+    /// OBS-001 (#1154): every `/v1/authorize` call records one observation on
+    /// `aegis_authorize_duration_seconds`, exposed as a Prometheus histogram
+    /// with `_bucket`/`_sum`/`_count` series.
+    #[tokio::test]
+    async fn authorize_records_duration_histogram() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_duration_histogram").await;
+
+        assert_eq!(
+            state.metrics.authorize_duration.count(),
+            0,
+            "histogram count must start at zero"
+        );
+
+        let request = mcp_authorize_request("github", "read_file");
+        let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        assert_eq!(
+            state.metrics.authorize_duration.count(),
+            1,
+            "one authorize call must record exactly one observation"
+        );
+
+        let metrics_text = state.metrics.render_prometheus();
+        assert!(
+            metrics_text.contains("# TYPE aegis_authorize_duration_seconds histogram"),
+            "metrics text must declare the histogram TYPE"
+        );
+        assert!(
+            metrics_text.contains("aegis_authorize_duration_seconds_bucket{le=\"+Inf\"} 1"),
+            "the +Inf bucket must include the one observation"
+        );
+        assert!(
+            metrics_text.contains("aegis_authorize_duration_seconds_count 1"),
+            "metrics text must include the observation count"
+        );
+        assert!(
+            metrics_text.contains("aegis_authorize_duration_seconds_sum "),
+            "metrics text must include the cumulative sum"
         );
     }
 

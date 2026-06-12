@@ -1,0 +1,31 @@
+[package]
+name = "gateway-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.aegis-canon]
+path = "../canon"
+
+[[bin]]
+name = "canonicalize_json"
+path = "fuzz_targets/canonicalize_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonical_value_string"
+path = "fuzz_targets/canonical_value_string.rs"
+test = false
+doc = false
+bench = false

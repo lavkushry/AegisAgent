@@ -15,6 +15,79 @@
 ///   or unknown (confused-deputy defence, CLAUDE.md critical invariant).
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Upper bounds (in seconds) of the `aegis_authorize_duration_seconds`
+/// histogram buckets (OBS-001, #1154): 5ms, 10ms, 25ms, 50ms, 75ms, 100ms,
+/// 250ms, 500ms, 1s. The inline `/v1/authorize` budget is 75ms (design law 3),
+/// so buckets are concentrated below and around that threshold.
+pub const AUTHORIZE_DURATION_BUCKETS_SECONDS: [f64; 9] =
+    [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1.0];
+
+/// A minimal Prometheus-style cumulative histogram backed by atomics — no
+/// extra crate dependencies, non-blocking, safe to share via `Arc`.
+///
+/// `bucket_counts[i]` counts observations `<= AUTHORIZE_DURATION_BUCKETS_SECONDS[i]`
+/// (cumulative, per Prometheus convention); `+Inf` is tracked separately via
+/// `count`.
+#[derive(Debug)]
+pub struct DurationHistogram {
+    bucket_counts: [AtomicU64; AUTHORIZE_DURATION_BUCKETS_SECONDS.len()],
+    sum_micros: AtomicU64,
+    count: AtomicU64,
+}
+
+impl Default for DurationHistogram {
+    fn default() -> Self {
+        Self {
+            bucket_counts: Default::default(),
+            sum_micros: AtomicU64::new(0),
+            count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl DurationHistogram {
+    /// Record one observation. `duration` is converted to fractional seconds
+    /// for bucket comparison and to microseconds (rounded) for the running sum.
+    pub fn observe(&self, duration: std::time::Duration) {
+        let seconds = duration.as_secs_f64();
+        for (i, bound) in AUTHORIZE_DURATION_BUCKETS_SECONDS.iter().enumerate() {
+            if seconds <= *bound {
+                self.bucket_counts[i].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.sum_micros
+            .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Total number of observations recorded.
+    pub fn count(&self) -> u64 {
+        self.count.load(Ordering::Relaxed)
+    }
+
+    /// Render as Prometheus text exposition lines for metric `name`. No labels
+    /// containing tenant/agent/payload data (redaction by design).
+    fn render(&self, name: &str) -> String {
+        let mut out = format!(
+            "# HELP {name} Authorize request duration in seconds\n# TYPE {name} histogram\n"
+        );
+        let mut cumulative = 0u64;
+        for (bound, bucket) in AUTHORIZE_DURATION_BUCKETS_SECONDS
+            .iter()
+            .zip(self.bucket_counts.iter())
+        {
+            cumulative += bucket.load(Ordering::Relaxed);
+            out.push_str(&format!("{name}_bucket{{le=\"{bound}\"}} {cumulative}\n"));
+        }
+        let total = self.count();
+        out.push_str(&format!("{name}_bucket{{le=\"+Inf\"}} {total}\n"));
+        let sum_seconds = self.sum_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        out.push_str(&format!("{name}_sum {sum_seconds}\n"));
+        out.push_str(&format!("{name}_count {total}\n"));
+        out
+    }
+}
+
 /// Process-wide security counters. Held in `AppState` (via `Arc<AppState>`).
 #[derive(Debug, Default)]
 pub struct SecurityMetrics {
@@ -27,6 +100,8 @@ pub struct SecurityMetrics {
     /// A non-zero value indicates a bug that would otherwise have dropped
     /// the client's TCP connection without a response.
     pub handler_panics_total: AtomicU64,
+    /// `/v1/authorize` request duration histogram (OBS-001, #1154).
+    pub authorize_duration: DurationHistogram,
 }
 
 impl SecurityMetrics {
@@ -63,7 +138,7 @@ impl SecurityMetrics {
         let provenance = self.provenance_denials_total.load(Ordering::Relaxed);
         let panics = self.handler_panics_total.load(Ordering::Relaxed);
 
-        format!(
+        let mut out = format!(
             "# HELP approval_hash_mismatch_total Number of approve-then-swap / hash-mismatch events detected\n\
              # TYPE approval_hash_mismatch_total counter\n\
              approval_hash_mismatch_total {mismatch}\n\
@@ -73,7 +148,13 @@ impl SecurityMetrics {
              # HELP aegis_handler_panics_total Number of handler panics caught by the CatchPanic layer\n\
              # TYPE aegis_handler_panics_total counter\n\
              aegis_handler_panics_total {panics}\n"
-        )
+        );
+        out.push_str(
+            &self
+                .authorize_duration
+                .render("aegis_authorize_duration_seconds"),
+        );
+        out
     }
 }
 

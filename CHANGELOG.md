@@ -9,6 +9,14 @@ reaches 1.0.
 
 ### Added
 
+- **Fuzz testing for `aegis-jcs-1` canonicalization** (TEST-002, #1162): the
+  canonicalization logic was extracted into a new `aegis-canon` crate
+  (`gateway/canon/`), shared by the gateway (via path dependency, delegated
+  from `routes::canonicalize_json`/`canonical_action_string`) and two new
+  `cargo-fuzz` targets in `gateway/fuzz/` — `canonicalize_json` (arbitrary
+  JSON) and `canonical_value_string` (arbitrary `AuthorizeToolCall`-shaped
+  input). A 60s smoke run gates PRs (`canon-fuzz` job in `ci.yml`); a nightly
+  workflow (`canon-fuzz.yml`) runs each target for 1 hour.
 - **Canonicalization scheme `aegis-jcs-1`** shared byte-identically between the
   Python SDK, Go SDK, TypeScript SDK, and the Rust gateway, locked by shared test
   corpora (`tests/canonical_action_vectors.json`, `tests/receipt_chain_vectors.json`)
@@ -35,14 +43,11 @@ reaches 1.0.
   TypeScript SDK, cross-language corpus byte-equality gate, Docker Compose E2E,
   blocking dependency audits (cargo-audit + pip-audit) (#1170).
 - **MkDocs Material docs site**: auto-deployed to GitHub Pages on push to `main`.
-- **DB-001 (#1191): versioned `sqlx` migrations**. New `gateway/migrations/`
-  directory (starting with `0001_baseline.sql`, the full current schema written
-  with `IF NOT EXISTS`) applied via `sqlx::migrate!("./migrations")`, tracked in
-  `_sqlx_migrations`. The legacy ad-hoc inline schema bootstrap
-  (`db::bootstrap_legacy_schema`, formerly `run_migrations`) still runs first on
-  every startup for backward compatibility with pre-existing databases, so the
-  baseline migration is a no-op there too. All future schema changes ship as new
-  numbered files via `sqlx migrate add`.
+- **End-to-end SOC pipeline test** (TEST-001, #1161): a single test feeds
+  events through the full Phase 0-3/5 pipeline (emit → detect → correlate →
+  persist → notify), asserting a `confused_deputy_block` alert and a
+  `deny_storm` incident are persisted to `soc_alerts`/`soc_incidents` and a
+  HIGH notification is delivered to a mock webhook sink.
 
 ### Changed
 

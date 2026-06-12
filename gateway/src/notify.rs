@@ -40,6 +40,16 @@
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+/// Serializes tests (in this module and `events::tests`) that mutate
+/// process-wide `AEGIS_WEBHOOK_*` env vars. `std::env::set_var`/`remove_var`
+/// affect the whole process, so without this lock such tests are flaky under
+/// the default multi-threaded test runner (each `#[tokio::test]` gets its own
+/// thread/runtime, and two tests can interleave their env mutations and
+/// assertions). A `tokio::sync::Mutex` is used (rather than
+/// `std::sync::Mutex`) because the guard is held across `.await` points.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 // ─────────────────────────────────────────────────────────────────────────────
 // NotifyMessage — the redacted, serialisable envelope sent to the webhook.
 // Contains identifiers and metadata only; never secrets or raw payloads.
@@ -352,14 +362,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    /// Serializes tests that mutate process-wide `AEGIS_WEBHOOK_*` env vars.
-    /// `std::env::set_var`/`remove_var` affect the whole process, so without
-    /// this lock these tests are flaky under the default multi-threaded test
-    /// runner (each `#[tokio::test]` gets its own thread/runtime, and two
-    /// tests can interleave their env mutations and assertions). A
-    /// `tokio::sync::Mutex` is used (rather than `std::sync::Mutex`) because
-    /// the guard is held across `.await` points.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    use super::ENV_LOCK;
 
     // ── Recording mock sink ──────────────────────────────────────────────────
 

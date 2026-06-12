@@ -396,3 +396,146 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
     }
     count
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST-001 (#1161): end-to-end SOC pipeline test
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use axum::{routing::post, Json, Router};
+    use std::sync::Arc as StdArc;
+    use std::sync::Mutex as StdMutex;
+
+    use crate::notify::ENV_LOCK;
+
+    /// Build an `AseEvent` for a mutating action denied due to untrusted
+    /// provenance — matches `detect::confused_deputy_block` (HIGH alert) and,
+    /// after 5 occurrences within 60s, `correlate::rule_deny_storm` (HIGH
+    /// incident).
+    fn deny_event(tenant_id: &str, agent_id: &str, event_id: &str) -> AseEvent {
+        AseEvent {
+            event_id: event_id.to_string(),
+            occurred_at: "2026-06-12T12:00:00Z".to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: "authorize_decision".to_string(),
+            agent_id: agent_id.to_string(),
+            decision: "deny".to_string(),
+            tool: "github".to_string(),
+            action: "merge_pr".to_string(),
+            resource: None,
+            risk_score: 80,
+            reason: "Mutating action denied: untrusted_external provenance (mutation forbidden)"
+                .to_string(),
+            run_id: None,
+            trace_id: None,
+            matched_policies: vec!["untrusted-mutation-forbid".to_string()],
+        }
+    }
+
+    /// TEST-001 (#1161): exercises the full SOC pipeline — emit event →
+    /// Phase 1 detect → Phase 3 correlate → Phase 5 persist → Phase 2 notify.
+    ///
+    /// Feeds 5 `deny` events (same tenant/agent, untrusted-provenance mutation)
+    /// through [`drain`]:
+    /// * Each event matches `confused_deputy_block` (HIGH alert) — persisted to
+    ///   `soc_alerts` and notified.
+    /// * The 5th event crosses `DENY_STORM_N`, firing `deny_storm` (HIGH
+    ///   incident) — persisted to `soc_incidents` and notified.
+    /// * The mock webhook sink records every HIGH notification dispatched.
+    #[tokio::test]
+    async fn e2e_soc_pipeline_detect_correlate_persist_notify() {
+        let _guard = ENV_LOCK.lock().await;
+
+        // Mock webhook receiver: records every POSTed notification body.
+        let received: StdArc<StdMutex<Vec<serde_json::Value>>> =
+            StdArc::new(StdMutex::new(Vec::new()));
+        let received_clone = received.clone();
+        let app = Router::new().route(
+            "/webhook",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let received = received_clone.clone();
+                async move {
+                    received.lock().expect("lock").push(body);
+                    "ok"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        std::env::set_var("AEGIS_WEBHOOK_URL", format!("http://{}/webhook", addr));
+
+        // Fresh tenant-scoped SQLite DB.
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/test_e2e_soc_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let pool = db::init_db(&db_url).await.unwrap();
+        let tenant_id = "tenant_e2e_soc";
+        db::register_tenant(&pool, tenant_id, "E2E SOC Tenant", "developer")
+            .await
+            .unwrap();
+        let agent_id = "agent_e2e_soc";
+
+        // Spawn the drain task (Phase 0 consumer + Phases 1/2/3/5).
+        let (tx, rx) = mpsc::channel(16);
+        let drain_handle = tokio::spawn(drain(rx, pool.clone()));
+
+        // Emit DENY_STORM_N (5) deny events for the same (tenant, agent).
+        for i in 0..crate::correlate::DENY_STORM_N {
+            let ev = deny_event(tenant_id, agent_id, &format!("evt_e2e_{i}"));
+            tx.send(ev).await.unwrap();
+        }
+        drop(tx);
+        let processed = drain_handle.await.unwrap();
+        assert_eq!(processed, crate::correlate::DENY_STORM_N);
+
+        // Phase 1 + 5: confused_deputy_block alerts persisted to soc_alerts.
+        let alerts = db::list_soc_alerts(&pool, tenant_id, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.rule == "confused_deputy_block" && a.severity == "high"),
+            "expected a persisted confused_deputy_block alert, got {alerts:?}"
+        );
+
+        // Phase 3 + 5: deny_storm incident persisted to soc_incidents.
+        let incidents = db::list_soc_incidents(&pool, tenant_id, 50, 0, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            incidents
+                .iter()
+                .any(|i| i.kind == "deny_storm" && i.severity == "high"),
+            "expected a persisted deny_storm incident, got {incidents:?}"
+        );
+
+        // Phase 2: HIGH alerts/incidents/decisions were notified via the
+        // mock webhook (deny decision notify + confused_deputy_block alerts +
+        // deny_storm incident).
+        let mut delivered = false;
+        for _ in 0..20 {
+            if !received.lock().expect("lock").is_empty() {
+                delivered = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(delivered, "expected at least one webhook notification");
+
+        std::env::remove_var("AEGIS_WEBHOOK_URL");
+
+        let db_path = db_url.strip_prefix("sqlite://").unwrap_or(&db_url);
+        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_file(format!("{}-shm", db_path));
+        let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+}

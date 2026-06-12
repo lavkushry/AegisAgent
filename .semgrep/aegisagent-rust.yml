@@ -1,0 +1,77 @@
+rules:
+  - id: rust-sql-string-formatting
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      Possible SQL injection (CWE-89): a SQL query string appears to be built
+      with `format!`/string concatenation instead of SQLx bind parameters.
+      Use `sqlx::query(...).bind(...)` / `sqlx::query!` placeholders for any
+      dynamic value — never interpolate identifiers or values into the query
+      string.
+    patterns:
+      - pattern-either:
+          - pattern: sqlx::query(format!(...))
+          - pattern: sqlx::query_as(format!(...))
+          - pattern: sqlx::query($SQL + $REST)
+          - pattern: sqlx::query_as($SQL + $REST)
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+      references:
+        - .claude/rules/security_scan.md
+
+  - id: rust-unwrap-expect-in-production
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      `.unwrap()` / `.expect()` panics the worker thread on error (CWE-391 /
+      CWE-397). Production gateway code must propagate errors with `?` or
+      `.map_err(...)` instead. If this is genuinely test-only code, move it
+      under `#[cfg(test)] mod tests { ... }`.
+    patterns:
+      - pattern-either:
+          - pattern: $X.unwrap()
+          - pattern: $X.expect($MSG)
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $TESTMOD { ... }
+      - pattern-not-inside: |
+          #[tokio::test]
+          $RET fn $TESTFN(...) { ... }
+      - pattern-not-inside: |
+          #[test]
+          $RET fn $TESTFN(...) { ... }
+      # lock().unwrap() on a non-poisonable std Mutex/RwLock is a common,
+      # narrowly-scoped exception already reviewed for the redaction /
+      # metrics paths; flag everything else.
+      - pattern-not: $X.lock().unwrap()
+      - pattern-not: $X.read().unwrap()
+      - pattern-not: $X.write().unwrap()
+    paths:
+      include:
+        - "**/gateway/src/**/*.rs"
+      exclude:
+        - "**/gateway/src/**/tests.rs"
+    metadata:
+      category: security
+      cwe: "CWE-391/CWE-397: Unchecked Error Condition / Panic"
+      references:
+        - .claude/rules/rust_standards.md
+
+  - id: rust-unredacted-secret-logging
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Logging a field whose name suggests it carries a secret/token/credential
+      (CWE-532). Redact via `redact_secrets(...)` (see main.rs) before logging,
+      or log only a hash/id.
+    paths:
+      include:
+        - "**/gateway/src/**/*.rs"
+    patterns:
+      - pattern-regex: '(?i)\b(tracing::)?(info|warn|error|debug|trace)!\([^)]*\b(secret|token|password|api_?key|credential|bearer)s?\s*='
+    metadata:
+      category: security
+      cwe: "CWE-532: Insertion of Sensitive Information into Log File"
+      references:
+        - .claude/rules/security_scan.md

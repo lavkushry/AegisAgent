@@ -51,6 +51,31 @@ jobs:
       - name: Tests
         run: cargo test --manifest-path gateway/Cargo.toml
 
+  # ── TEST-002 (#1162): canonicalization fuzz smoke gate ───────────────────────
+  # Fuzzes aegis-canon::canonicalize_json / canonical_value_string (the
+  # aegis-jcs-1 implementation shared with the gateway via a path dependency)
+  # with cargo-fuzz on nightly. PR-blocking smoke run is short (catches build
+  # breaks / quick crashes); the full 1-hour-per-target run required by the
+  # TEST-002 acceptance criteria runs nightly — see canon-fuzz.yml.
+  canon-fuzz:
+    name: Canonicalization fuzz smoke (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [canonicalize_json, canonical_value_string]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gateway/fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Fuzz ${{ matrix.target }} for 60 seconds
+        working-directory: gateway
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60
+
   # ── PR-050: Python test matrix (3.9 → 3.12) ──────────────────────────────────
   python-sdk:
     name: Python SDK (${{ matrix.python }})

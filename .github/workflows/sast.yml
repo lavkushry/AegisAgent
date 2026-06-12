@@ -1,0 +1,31 @@
+name: SAST
+
+# CI-002 (#1171): static analysis for SQL injection (raw string SQL),
+# unsafe unwrap/expect in production gateway code, and unredacted secret
+# logging, on top of community Rust/Python security rulesets. Blocking:
+# any finding fails the job (default semgrep exit code 1 on findings).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run semgrep (custom rules + Rust/Python security rulesets)
+        run: |
+          semgrep scan \
+            --config .semgrep/ \
+            --config p/rust \
+            --config p/python \
+            --config p/secrets \
+            --error
