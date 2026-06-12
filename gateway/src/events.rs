@@ -122,7 +122,12 @@ impl EventSink {
 /// shared by Phase 1 ([`Detector`]) and SOC-007 ([`baseline`]) alerts.
 /// Best-effort: a persistence error is logged and never panics or aborts the
 /// drain loop (design law 3).
-async fn handle_alert(alert: &crate::detect::Alert, sink: &dyn NotifySink, pool: &SqlitePool) {
+async fn handle_alert(
+    alert: &crate::detect::Alert,
+    sink: &dyn NotifySink,
+    pool: &SqlitePool,
+    notify_enabled: bool,
+) {
     match alert.severity.as_str() {
         "high" => {
             warn!(
@@ -135,16 +140,19 @@ async fn handle_alert(alert: &crate::detect::Alert, sink: &dyn NotifySink, pool:
                 summary = %alert.summary,
                 "SOC alert",
             );
-            // Phase 2 — alert notify: HIGH alerts only.
-            sink.notify(NotifyMessage {
-                kind: "alert".to_string(),
-                severity: alert.severity.clone(),
-                tenant_id: alert.tenant_id.clone(),
-                agent_id: alert.agent_id.clone(),
-                summary: alert.summary.clone(),
-                alert_or_incident_id: Some(alert.alert_id.clone()),
-                occurred_at: alert.occurred_at.clone(),
-            });
+            // Phase 2 — alert notify: HIGH alerts only. SOC-002 (#1185): suppressed
+            // entirely at autonomy level L0 (log-only).
+            if notify_enabled {
+                sink.notify(NotifyMessage {
+                    kind: "alert".to_string(),
+                    severity: alert.severity.clone(),
+                    tenant_id: alert.tenant_id.clone(),
+                    agent_id: alert.agent_id.clone(),
+                    summary: alert.summary.clone(),
+                    alert_or_incident_id: Some(alert.alert_id.clone()),
+                    occurred_at: alert.occurred_at.clone(),
+                });
+            }
         }
         _ => info!(
             alert_id = %alert.alert_id,
@@ -198,9 +206,16 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
             "ASE",
         );
 
+        // SOC-002 (#1185): resolve the SOC Response Engine's autonomy level for
+        // this event's tenant. L0 (log-only) suppresses all notifications and
+        // auto-response below; L1-L2 suppress auto-response (dispatch); L3-L4
+        // run dispatch, with L4 suppressing the resulting notifications.
+        let autonomy = db::get_soc_autonomy_level(&pool, &ev.tenant_id).await;
+        let notify_enabled = autonomy != "L0";
+
         // Phase 2 — decision notify: deny and require_approval are high-signal.
         // allow is intentionally excluded to avoid alert fatigue.
-        if ev.decision == "deny" || ev.decision == "require_approval" {
+        if notify_enabled && (ev.decision == "deny" || ev.decision == "require_approval") {
             sink.notify(NotifyMessage {
                 kind: ev.kind.clone(),
                 severity: "high".to_string(),
@@ -217,7 +232,7 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
 
         // Phase 1: deterministic, atomic detection over the single event.
         for alert in detector.evaluate(&ev) {
-            handle_alert(&alert, sink.as_ref(), &pool).await;
+            handle_alert(&alert, sink.as_ref(), &pool, notify_enabled).await;
         }
 
         // SOC-007 (#1190): per-agent behavioral baselining (rate anomaly +
@@ -225,7 +240,7 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         match baseline::evaluate(&pool, &ev).await {
             Ok(baseline_alerts) => {
                 for alert in baseline_alerts {
-                    handle_alert(&alert, sink.as_ref(), &pool).await;
+                    handle_alert(&alert, sink.as_ref(), &pool, notify_enabled).await;
                 }
             }
             Err(e) => {
@@ -239,44 +254,12 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
         // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
         for incident in correlator.observe(&ev) {
-            match incident.severity.as_str() {
-                "high" => {
-                    warn!(
-                        incident_id = %incident.incident_id,
-                        kind = %incident.kind,
-                        severity = %incident.severity,
-                        tenant = %incident.tenant_id,
-                        agent = %incident.agent_id,
-                        contributing_events = ?incident.source_event_ids.len(),
-                        summary = %incident.summary,
-                        "SOC incident",
-                    );
-                    // Phase 2 — incident notify: HIGH incidents only.
-                    sink.notify(NotifyMessage {
-                        kind: "incident".to_string(),
-                        severity: incident.severity.clone(),
-                        tenant_id: incident.tenant_id.clone(),
-                        agent_id: incident.agent_id.clone(),
-                        summary: incident.summary.clone(),
-                        alert_or_incident_id: Some(incident.incident_id.clone()),
-                        occurred_at: incident.opened_at.clone(),
-                    });
-                }
-                _ => info!(
-                    incident_id = %incident.incident_id,
-                    kind = %incident.kind,
-                    severity = %incident.severity,
-                    tenant = %incident.tenant_id,
-                    agent = %incident.agent_id,
-                    contributing_events = ?incident.source_event_ids.len(),
-                    summary = %incident.summary,
-                    "SOC incident",
-                ),
-            }
-
             // Phase 5 — persist the incident (best-effort; never panics on failure).
             // source_event_ids is serialised to JSON so the column stores structured
             // evidence without SQL concatenation (redaction + parameterization).
+            // SOC-005 (#1188): repeat incidents for the same (tenant, agent, kind)
+            // within the dedup window are merged into the existing open incident
+            // rather than creating a new row.
             let source_ids_json = serde_json::to_string(&incident.source_event_ids)
                 .unwrap_or_else(|_| "[]".to_string());
             let incident_record = SocIncidentRecord {
@@ -293,11 +276,64 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
                 status: "open".to_string(),
                 closed_at: None,
             };
-            if let Err(e) = db::insert_soc_incident(&pool, &incident_record).await {
-                error!(
+            let mut was_merged = false;
+            match db::upsert_soc_incident(&pool, &incident_record).await {
+                Ok(db::IncidentUpsertResult::Merged { id }) => {
+                    was_merged = true;
+                    debug!(
+                        incident_id = %incident.incident_id,
+                        merged_into = %id,
+                        "SOC-005: merged repeat incident into existing open incident",
+                    );
+                }
+                Ok(db::IncidentUpsertResult::Inserted) => {}
+                Err(e) => {
+                    error!(
+                        incident_id = %incident.incident_id,
+                        "Phase 5: failed to persist SOC incident: {:?}", e
+                    );
+                }
+            }
+
+            match incident.severity.as_str() {
+                "high" => {
+                    warn!(
+                        incident_id = %incident.incident_id,
+                        kind = %incident.kind,
+                        severity = %incident.severity,
+                        tenant = %incident.tenant_id,
+                        agent = %incident.agent_id,
+                        contributing_events = ?incident.source_event_ids.len(),
+                        summary = %incident.summary,
+                        merged = was_merged,
+                        "SOC incident",
+                    );
+                    // Phase 2 — incident notify: HIGH incidents only. SOC-005
+                    // (#1188): suppressed for repeat incidents merged into an
+                    // already-notified open incident (no alert fatigue).
+                    if !was_merged {
+                        sink.notify(NotifyMessage {
+                            kind: "incident".to_string(),
+                            severity: incident.severity.clone(),
+                            tenant_id: incident.tenant_id.clone(),
+                            agent_id: incident.agent_id.clone(),
+                            summary: incident.summary.clone(),
+                            alert_or_incident_id: Some(incident.incident_id.clone()),
+                            occurred_at: incident.opened_at.clone(),
+                        });
+                    }
+                }
+                _ => info!(
                     incident_id = %incident.incident_id,
-                    "Phase 5: failed to persist SOC incident: {:?}", e
-                );
+                    kind = %incident.kind,
+                    severity = %incident.severity,
+                    tenant = %incident.tenant_id,
+                    agent = %incident.agent_id,
+                    contributing_events = ?incident.source_event_ids.len(),
+                    summary = %incident.summary,
+                    merged = was_merged,
+                    "SOC incident",
+                ),
             }
 
             // Phase 4 — Response Engine auto-dispatch (#1184). Best-effort:
@@ -311,7 +347,8 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
                         "SOC response: {}", action.description,
                     );
 
-                    if action.critical_notify {
+                    // L4 (auto-respond + silent) suppresses the response notification.
+                    if autonomy == "L3" && action.critical_notify {
                         sink.notify(NotifyMessage {
                             kind: "response".to_string(),
                             severity: "critical".to_string(),
