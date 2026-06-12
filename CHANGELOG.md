@@ -95,6 +95,7 @@ reaches 1.0.
 - SQLite foreign key constraints enforced on every connection (#1125).
 - 100-tenant cross-tenant isolation stress test (#1221).
 - 50-concurrent `consume_approval` stress test (#1220).
+- `GET /v1/audit/events` tenant-isolation and 100-row cap test (#1006).
 
 ### Tests
 

@@ -5903,6 +5903,64 @@ mod tests {
         assert_eq!(event_json["id"], response.decision_id.to_string());
     }
 
+    /// TASK-0160 (#1006): `GET /v1/audit/events` must (a) only return the
+    /// caller's own tenant's events, never another tenant's, and (b) cap the
+    /// result at 100 rows (`db::get_all_audit_events`'s `LIMIT 100`) even
+    /// when more rows exist.
+    #[tokio::test]
+    async fn get_audit_events_respects_tenant_scope_and_limit() {
+        let (state, tenant_id, _agent_token) = setup_state("audit_events_scope_limit").await;
+        let other_tenant = "audit_events_scope_limit_other";
+        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
+            .await
+            .unwrap();
+
+        fn audit_event(tenant_id: &str, n: usize) -> AuditEventRecord {
+            AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                event_type: "test_event".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: None,
+                resource: Some(format!("item-{n}")),
+                event_json: "{}".to_string(),
+                input_hash: None,
+                output_hash: None,
+                created_at: Utc::now(),
+            }
+        }
+
+        // 105 events for the caller's tenant (exceeds the 100-row cap) and one
+        // for another tenant (must never be returned).
+        for n in 0..105 {
+            db::insert_audit_event(&state.pool, &audit_event(&tenant_id, n))
+                .await
+                .unwrap();
+        }
+        db::insert_audit_event(&state.pool, &audit_event(other_tenant, 0))
+            .await
+            .unwrap();
+
+        let response = get_audit_events(State(state), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<AuditEventRecord> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(events.len(), 100, "result must be capped at 100 rows");
+        assert!(
+            events.iter().all(|e| e.tenant_id == tenant_id),
+            "must never return another tenant's audit events"
+        );
+    }
+
     /// #0119: a mutating action whose triggering content has
     /// `semi_trusted_customer` provenance is paused for human review rather
     /// than auto-allowed or auto-denied.
