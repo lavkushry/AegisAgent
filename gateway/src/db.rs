@@ -836,6 +836,25 @@ pub async fn set_mcp_server_manifest_hash(
     Ok(())
 }
 
+/// DB-007 (#932): record that `server_key`'s tool manifest was just
+/// (re-)discovered via `POST /v1/mcp/servers/:server_key/tools`. Tenant-scoped,
+/// parameterized.
+pub async fn touch_mcp_server_discovery(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE mcp_servers SET last_discovery_at = CURRENT_TIMESTAMP \
+         WHERE tenant_id = ? AND server_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(server_key)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Additive migration: record the canonicalization scheme on each receipt so the
 /// hash chain is self-describing and a future scheme bump stays migratable. Empty
 /// string on legacy rows. NOT part of `receipt_hash` (byte-parity untouched).
@@ -3399,12 +3418,19 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(rows.len(), 1, "expected exactly one applied migration");
-        assert_eq!(rows[0].0, 1);
-        assert_eq!(rows[0].1, "baseline");
+        assert!(!rows.is_empty(), "expected at least one applied migration");
+        let baseline = rows
+            .iter()
+            .find(|(version, _, _)| *version == 1)
+            .expect("baseline migration (version 1) must be recorded");
+        assert_eq!(baseline.1, "baseline");
         assert!(
-            rows[0].2,
+            baseline.2,
             "baseline migration must be recorded as successful"
+        );
+        assert!(
+            rows.iter().all(|(_, _, success)| *success),
+            "all applied migrations must be recorded as successful"
         );
     }
 

@@ -56,6 +56,12 @@ reaches 1.0.
   every startup for backward compatibility with pre-existing databases, so the
   baseline migration is a no-op there too. All future schema changes ship as new
   numbered files via `sqlx migrate add`.
+- **DB-007 (#932): `mcp_servers.last_discovery_at`**. New migration
+  `0002_mcp_servers_last_discovery_at.sql` adds a nullable timestamp column,
+  stamped via `db::touch_mcp_server_discovery` on every
+  `POST /v1/mcp/servers/:server_key/tools` discovery call, surfaced on
+  `McpServerRecord`/`GET /v1/mcp/servers` so operators can see manifest
+  staleness alongside `manifest_hash`.
 
 ### Changed
 
