@@ -57,15 +57,28 @@ pub struct AseEvent {
 pub struct EventSink {
     tx: mpsc::Sender<AseEvent>,
     tx_broadcast: tokio::sync::broadcast::Sender<AseEvent>,
+    metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
 }
 
 impl EventSink {
     /// Build a sink and its receiver. Production spawns [`drain`] on the
-    /// receiver; tests keep it to assert exactly what was emitted.
-    pub fn channel(capacity: usize) -> (Self, mpsc::Receiver<AseEvent>) {
+    /// receiver; tests keep it to assert exactly what was emitted. `metrics`
+    /// is shared with [`drain`] and `AppState` so `aegis_events_emitted_total`
+    /// / `aegis_events_dropped_total` (OBS-002, #1155) reflect this sink.
+    pub fn channel(
+        capacity: usize,
+        metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
+    ) -> (Self, mpsc::Receiver<AseEvent>) {
         let (tx, rx) = mpsc::channel(capacity);
         let (tx_broadcast, _) = tokio::sync::broadcast::channel(capacity);
-        (Self { tx, tx_broadcast }, rx)
+        (
+            Self {
+                tx,
+                tx_broadcast,
+                metrics,
+            },
+            rx,
+        )
     }
 
     /// Subscribe to live events.
@@ -82,11 +95,15 @@ impl EventSink {
         let _ = self.tx_broadcast.send(event.clone());
 
         match self.tx.try_send(event) {
-            Ok(()) => {}
+            Ok(()) => {
+                self.metrics.inc_event_emitted();
+            }
             Err(mpsc::error::TrySendError::Full(ev)) => {
+                self.metrics.inc_event_dropped();
                 warn!(event_id = %ev.event_id, "SOC event stream full — dropping event");
             }
             Err(mpsc::error::TrySendError::Closed(ev)) => {
+                self.metrics.inc_event_dropped();
                 debug!(event_id = %ev.event_id, "SOC event stream closed — dropping event");
             }
         }
@@ -185,7 +202,11 @@ async fn handle_alert(
     }
 }
 
-pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize {
+pub async fn drain(
+    mut rx: mpsc::Receiver<AseEvent>,
+    pool: SqlitePool,
+    metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
+) -> usize {
     let detector = Detector::default();
     // Phase 2: construct the notify sink once from env; NullSink when
     // AEGIS_WEBHOOK_URL is absent (safe default — no network calls in tests).

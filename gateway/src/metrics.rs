@@ -13,7 +13,9 @@
 /// * `provenance_denials_total` — incremented each time a mutating action is
 ///   denied because the source trust level is untrusted_external, malicious_suspected
 ///   or unknown (confused-deputy defence, CLAUDE.md critical invariant).
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// Upper bounds (in seconds) of the `aegis_authorize_duration_seconds`
 /// histogram buckets (OBS-001, #1154): 5ms, 10ms, 25ms, 50ms, 75ms, 100ms,
@@ -88,6 +90,53 @@ impl DurationHistogram {
     }
 }
 
+/// A counter keyed by a small, fixed set of string labels (e.g. policy rule
+/// names, alert/incident kinds). Label values come only from deterministic,
+/// closed sets defined in `detect.rs`/`correlate.rs`/this module — never from
+/// agent- or tenant-supplied data — so cardinality stays bounded (redaction
+/// invariant: no tenant/agent PII in label values).
+#[derive(Debug, Default)]
+pub struct LabeledCounter {
+    counts: Mutex<HashMap<Vec<String>, u64>>,
+}
+
+impl LabeledCounter {
+    /// Increment the counter for `labels` by 1. Lock contention is
+    /// out-of-band for all current call sites (decision write, SOC drain
+    /// loop) and bounded by the small fixed label cardinality.
+    pub fn inc(&self, labels: &[&str]) {
+        let key: Vec<String> = labels.iter().map(|s| s.to_string()).collect();
+        let mut counts = match self.counts.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *counts.entry(key).or_insert(0) += 1;
+    }
+
+    /// Render as Prometheus text exposition lines for metric `name`, with
+    /// `label_names` (e.g. `["decision"]`) zipped against each recorded
+    /// label-value tuple.
+    fn render(&self, name: &str, help: &str, label_names: &[&str]) -> String {
+        let mut out = format!("# HELP {name} {help}\n# TYPE {name} counter\n");
+        let counts = match self.counts.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut entries: Vec<(&Vec<String>, &u64)> = counts.iter().collect();
+        entries.sort();
+        for (labels, count) in entries {
+            let label_str = label_names
+                .iter()
+                .zip(labels.iter())
+                .map(|(k, v)| format!("{k}=\"{v}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push_str(&format!("{name}{{{label_str}}} {count}\n"));
+        }
+        out
+    }
+}
+
 /// Process-wide security counters. Held in `AppState` (via `Arc<AppState>`).
 #[derive(Debug, Default)]
 pub struct SecurityMetrics {
@@ -102,6 +151,19 @@ pub struct SecurityMetrics {
     pub handler_panics_total: AtomicU64,
     /// `/v1/authorize` request duration histogram (OBS-001, #1154).
     pub authorize_duration: DurationHistogram,
+    /// `aegis_decisions_total{decision="allow|deny|require_approval"}` (OBS-002, #1155).
+    pub decisions_total: LabeledCounter,
+    /// `aegis_alerts_total{rule="...",severity="..."}` (OBS-002, #1155).
+    pub alerts_total: LabeledCounter,
+    /// `aegis_incidents_total{kind="..."}` (OBS-002, #1155).
+    pub incidents_total: LabeledCounter,
+    /// Number of SOC events successfully enqueued onto the async stream
+    /// (OBS-002, #1155).
+    pub events_emitted_total: AtomicU64,
+    /// Number of SOC events dropped because the async stream channel was
+    /// full or closed (OBS-002, #1155). Non-zero values indicate the
+    /// drain task is falling behind.
+    pub events_dropped_total: AtomicU64,
 }
 
 impl SecurityMetrics {
@@ -130,6 +192,37 @@ impl SecurityMetrics {
         self.handler_panics_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record one `/v1/authorize` decision (`"allow"`, `"deny"`, or
+    /// `"require_approval"`) on `aegis_decisions_total`.
+    #[inline]
+    pub fn inc_decision(&self, decision: &str) {
+        self.decisions_total.inc(&[decision]);
+    }
+
+    /// Record one SOC alert on `aegis_alerts_total{rule, severity}`.
+    #[inline]
+    pub fn inc_alert(&self, rule: &str, severity: &str) {
+        self.alerts_total.inc(&[rule, severity]);
+    }
+
+    /// Record one SOC incident on `aegis_incidents_total{kind}`.
+    #[inline]
+    pub fn inc_incident(&self, kind: &str) {
+        self.incidents_total.inc(&[kind]);
+    }
+
+    /// Increment `aegis_events_emitted_total` by 1.
+    #[inline]
+    pub fn inc_event_emitted(&self) {
+        self.events_emitted_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment `aegis_events_dropped_total` by 1.
+    #[inline]
+    pub fn inc_event_dropped(&self) {
+        self.events_dropped_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Render the current counter values as a Prometheus text exposition (v0.0.4).
     /// Only the security counters are exposed; no labels containing
     /// tenant/agent/payload data (redaction by design).
@@ -154,6 +247,31 @@ impl SecurityMetrics {
                 .authorize_duration
                 .render("aegis_authorize_duration_seconds"),
         );
+        out.push_str(&self.decisions_total.render(
+            "aegis_decisions_total",
+            "Number of /v1/authorize decisions by outcome",
+            &["decision"],
+        ));
+        out.push_str(&self.alerts_total.render(
+            "aegis_alerts_total",
+            "Number of SOC alerts raised, by rule and severity",
+            &["rule", "severity"],
+        ));
+        out.push_str(&self.incidents_total.render(
+            "aegis_incidents_total",
+            "Number of SOC incidents opened, by kind",
+            &["kind"],
+        ));
+        let emitted = self.events_emitted_total.load(Ordering::Relaxed);
+        let dropped = self.events_dropped_total.load(Ordering::Relaxed);
+        out.push_str(&format!(
+            "# HELP aegis_events_emitted_total Number of SOC events enqueued onto the async stream\n\
+             # TYPE aegis_events_emitted_total counter\n\
+             aegis_events_emitted_total {emitted}\n\
+             # HELP aegis_events_dropped_total Number of SOC events dropped because the async stream was full or closed\n\
+             # TYPE aegis_events_dropped_total counter\n\
+             aegis_events_dropped_total {dropped}\n"
+        ));
         out
     }
 }
@@ -219,6 +337,50 @@ mod tests {
         assert!(out.contains("# TYPE approval_hash_mismatch_total counter"));
         assert!(out.contains("# TYPE provenance_denials_total counter"));
         assert!(out.contains("# TYPE aegis_handler_panics_total counter"));
+    }
+
+    #[test]
+    fn inc_decision_renders_labeled_counter() {
+        let m = SecurityMetrics::new();
+        m.inc_decision("allow");
+        m.inc_decision("allow");
+        m.inc_decision("deny");
+        let out = m.render_prometheus();
+        assert!(out.contains("# TYPE aegis_decisions_total counter"));
+        assert!(out.contains("aegis_decisions_total{decision=\"allow\"} 2\n"));
+        assert!(out.contains("aegis_decisions_total{decision=\"deny\"} 1\n"));
+    }
+
+    #[test]
+    fn inc_alert_renders_labeled_counter() {
+        let m = SecurityMetrics::new();
+        m.inc_alert("deny_storm", "high");
+        let out = m.render_prometheus();
+        assert!(out.contains("# TYPE aegis_alerts_total counter"));
+        assert!(out.contains("aegis_alerts_total{rule=\"deny_storm\",severity=\"high\"} 1\n"));
+    }
+
+    #[test]
+    fn inc_incident_renders_labeled_counter() {
+        let m = SecurityMetrics::new();
+        m.inc_incident("deny_storm");
+        m.inc_incident("deny_storm");
+        let out = m.render_prometheus();
+        assert!(out.contains("# TYPE aegis_incidents_total counter"));
+        assert!(out.contains("aegis_incidents_total{kind=\"deny_storm\"} 2\n"));
+    }
+
+    #[test]
+    fn event_emitted_and_dropped_counters() {
+        let m = SecurityMetrics::new();
+        m.inc_event_emitted();
+        m.inc_event_emitted();
+        m.inc_event_dropped();
+        let out = m.render_prometheus();
+        assert!(out.contains("# TYPE aegis_events_emitted_total counter"));
+        assert!(out.contains("aegis_events_emitted_total 2\n"));
+        assert!(out.contains("# TYPE aegis_events_dropped_total counter"));
+        assert!(out.contains("aegis_events_dropped_total 1\n"));
     }
 
     #[test]
