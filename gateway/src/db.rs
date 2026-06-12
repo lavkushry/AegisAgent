@@ -3446,6 +3446,76 @@ mod tests {
         assert!(health_check(&pool).await.is_err());
     }
 
+    /// TASK-0151 (#997): registering an MCP server twice with the same
+    /// `(tenant_id, server_key)` must update the existing row in place (new
+    /// name/transport/etc., re-activated status) rather than creating a
+    /// second row or erroring on the unique constraint.
+    #[tokio::test]
+    async fn upsert_mcp_server_upserts_on_duplicate_server_key() {
+        let pool = setup_pool("mcp_server_upsert").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        let first_id = upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        // Quarantine it, then re-register with the same server_key but new fields.
+        set_mcp_server_status(&pool, "tenant_a", "github-mcp", "quarantined")
+            .await
+            .unwrap();
+
+        let second_id = upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP v2",
+            Some("security"),
+            "stdio",
+            Some("internal-registry-v2"),
+            "semi_trusted_customer",
+            "http://127.0.0.1:9002/mcp",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first_id, second_id, "upsert must reuse the existing row id");
+
+        let servers = list_mcp_servers(&pool, "tenant_a", 100, 0).await.unwrap();
+        assert_eq!(
+            servers.len(),
+            1,
+            "duplicate server_key must not create a second row"
+        );
+
+        let server = get_mcp_server_by_key(&pool, "tenant_a", "github-mcp")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.id, first_id);
+        assert_eq!(server.name, "GitHub MCP v2");
+        assert_eq!(server.owner_team.as_deref(), Some("security"));
+        assert_eq!(server.transport, "stdio");
+        assert_eq!(server.source.as_deref(), Some("internal-registry-v2"));
+        assert_eq!(server.trust_level, "semi_trusted_customer");
+        assert_eq!(server.endpoint, "http://127.0.0.1:9002/mcp");
+        assert_eq!(
+            server.status, "active",
+            "re-registration must re-activate a quarantined server"
+        );
+    }
+
     #[tokio::test]
     async fn mcp_tool_manifest_defaults_to_pending_and_is_tenant_scoped() {
         let pool = setup_pool("mcp_manifest").await;

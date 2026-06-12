@@ -7950,6 +7950,74 @@ mod tests {
         );
     }
 
+    /// TASK-0152 (#998): `discover_mcp_tools` must register a `skills` row
+    /// (skill_key `mcp:<server_key>`) and a `skill_actions` row per discovered
+    /// tool, so the regular authorize path (`db::get_skill_action`) finds them.
+    #[tokio::test]
+    async fn discover_mcp_tools_creates_skill_actions() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_discover_skill_actions").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        // No skill action exists prior to discovery.
+        assert!(
+            db::get_skill_action(&state.pool, &tenant_id, "mcp:github-mcp", "create_issue")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let mut approval_required_tool = drift_tool("merge_pr", "high");
+        approval_required_tool.approval_required = true;
+        approval_required_tool.mutates_state = true;
+
+        let req = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "medium"), approval_required_tool],
+        };
+        let response = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(req),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let create_issue =
+            db::get_skill_action(&state.pool, &tenant_id, "mcp:github-mcp", "create_issue")
+                .await
+                .unwrap()
+                .expect("create_issue skill action must be registered");
+        let (risk, mutates_state, approval_required, default_decision) = create_issue;
+        assert_eq!(risk, "medium");
+        assert!(!mutates_state);
+        assert!(!approval_required);
+        assert_eq!(default_decision, "policy");
+
+        let merge_pr = db::get_skill_action(&state.pool, &tenant_id, "mcp:github-mcp", "merge_pr")
+            .await
+            .unwrap()
+            .expect("merge_pr skill action must be registered");
+        let (risk, mutates_state, approval_required, default_decision) = merge_pr;
+        assert_eq!(risk, "high");
+        assert!(mutates_state);
+        assert!(approval_required);
+        assert_eq!(default_decision, "require_approval");
+    }
+
     /// A quarantined MCP server must deny an otherwise-approved tool inline
     /// (Phase 4 response enforcement). Before this, quarantine was recorded but
     /// never checked on the authorize hot path.
