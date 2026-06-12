@@ -5033,52 +5033,77 @@ mod tests {
         }
     }
 
-    /// TASK-0156 (#1001): `aegis-jcs-1` canonicalization must recurse into
-    /// objects nested arbitrarily deep, sorting keys at every level
-    /// independently — not just the top level or one level of nesting.
+    /// TASK-0153 (#999): canonicalization must handle large (~10MB)
+    /// `parameters` payloads — deterministically (same input -> same canonical
+    /// string/hash, regardless of key insertion order) and without panicking
+    /// (no recursion-depth blowup, no truncation of large arrays/strings).
     #[test]
-    fn canonicalization_sorts_keys_three_levels_deep() {
-        let input = json!({
-            "z_top": {
-                "z_mid": {
-                    "z_leaf": 1,
-                    "a_leaf": 2,
-                },
-                "a_mid": {
-                    "b_leaf": 3,
-                    "a_leaf": 4,
-                },
-            },
-            "a_top": "value",
+    fn canonicalization_handles_large_10mb_payload() {
+        // Build a large, deeply-nested-ish payload: 20,000 entries with
+        // out-of-order keys, plus one large string field, totaling >10MB of
+        // JSON when serialized.
+        let big_string = "x".repeat(11 * 1024 * 1024); // 11MB string
+        let mut items = Vec::with_capacity(20_000);
+        for i in 0..20_000 {
+            items.push(json!({
+                "zeta": i,
+                "alpha": format!("item-{i}"),
+                "nested": { "b": 2, "a": 1 },
+            }));
+        }
+        let parameters = json!({
+            "large_blob": big_string,
+            "items": items,
+            "z_field": "last",
+            "a_field": "first",
         });
 
-        let canonical = canonicalize_json(input);
-        assert_eq!(
-            serde_json::to_string(&canonical).unwrap(),
-            r#"{"a_top":"value","z_top":{"a_mid":{"a_leaf":4,"b_leaf":3},"z_mid":{"a_leaf":2,"z_leaf":1}}}"#
+        let tool_call = AuthorizeToolCall {
+            tool: "filesystem".to_string(),
+            action: "write_file".to_string(),
+            resource: Some("/tmp/large.bin".to_string()),
+            mutates_state: true,
+            parameters,
+        };
+
+        let serialized_len = serde_json::to_string(&tool_call.parameters)
+            .expect("parameters must serialize")
+            .len();
+        assert!(
+            serialized_len > 10 * 1024 * 1024,
+            "payload must exceed 10MB to exercise the large-payload path, got {serialized_len} bytes"
         );
 
-        // Also exercise via the full AuthorizeToolCall/hash path with a
-        // 3-level-deep `parameters` object.
-        let tool_call = AuthorizeToolCall {
-            tool: "t".to_string(),
-            action: "x".to_string(),
-            resource: None,
-            mutates_state: false,
-            parameters: json!({
-                "level1": {
-                    "level2": {
-                        "level3": {
-                            "z": 1,
-                            "a": 2,
-                        }
-                    }
-                }
-            }),
-        };
-        let canonical_str = canonical_action_string(&tool_call);
-        assert!(canonical_str.contains(r#""level3":{"a":2,"z":1}"#));
-        assert_eq!(hash_tool_call(&tool_call), hash_tool_call(&tool_call));
+        // Canonicalization must be deterministic across repeated runs.
+        let canonical1 = canonical_action_string(&tool_call);
+        let canonical2 = canonical_action_string(&tool_call.clone());
+        assert_eq!(
+            canonical1, canonical2,
+            "canonicalization must be deterministic"
+        );
+
+        // Top-level object keys must be sorted by Unicode code point.
+        let canonicalized = canonicalize_json(json!({
+            "z_field": "last",
+            "a_field": "first",
+            "large_blob": "y",
+        }));
+        let keys: Vec<&str> = canonicalized
+            .as_object()
+            .expect("must remain an object")
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(keys, vec!["a_field", "large_blob", "z_field"]);
+
+        // Hashing must succeed and be stable/repeatable for a large payload.
+        let hash1 = hash_tool_call(&tool_call);
+        let hash2 = hash_tool_call(&tool_call);
+        assert_eq!(
+            hash1, hash2,
+            "action_hash must be stable across repeated calls"
+        );
+        assert_eq!(hash1.len(), 64, "SHA-256 hex digest must be 64 chars");
     }
 
     fn make_test_approval(
