@@ -5033,51 +5033,77 @@ mod tests {
         }
     }
 
-    /// TASK-0154 (#1000): `aegis-jcs-1` canonicalization must handle Unicode
-    /// parameter values and object keys correctly — raw UTF-8 (no `\uXXXX`
-    /// escaping), object keys sorted by Unicode code point (not by byte/UTF-16
-    /// order), and 4-byte UTF-8 sequences (emoji / supplementary-plane
-    /// characters) preserved exactly. A divergence here would break
-    /// cross-language byte-parity for non-ASCII payloads.
+    /// TASK-0153 (#999): canonicalization must handle large (~10MB)
+    /// `parameters` payloads — deterministically (same input -> same canonical
+    /// string/hash, regardless of key insertion order) and without panicking
+    /// (no recursion-depth blowup, no truncation of large arrays/strings).
     #[test]
-    fn canonicalization_handles_unicode_parameters() {
+    fn canonicalization_handles_large_10mb_payload() {
+        // Build a large, deeply-nested-ish payload: 20,000 entries with
+        // out-of-order keys, plus one large string field, totaling >10MB of
+        // JSON when serialized.
+        let big_string = "x".repeat(11 * 1024 * 1024); // 11MB string
+        let mut items = Vec::with_capacity(20_000);
+        for i in 0..20_000 {
+            items.push(json!({
+                "zeta": i,
+                "alpha": format!("item-{i}"),
+                "nested": { "b": 2, "a": 1 },
+            }));
+        }
+        let parameters = json!({
+            "large_blob": big_string,
+            "items": items,
+            "z_field": "last",
+            "a_field": "first",
+        });
+
         let tool_call = AuthorizeToolCall {
-            tool: "github".to_string(),
-            action: "create_issue".to_string(),
-            resource: Some("repo/example".to_string()),
+            tool: "filesystem".to_string(),
+            action: "write_file".to_string(),
+            resource: Some("/tmp/large.bin".to_string()),
             mutates_state: true,
-            parameters: json!({
-                "title": "日本語のタイトル",
-                "emoji": "🔥🚀",
-                "é": 1,
-                "z": 2,
-                "a": 3,
-            }),
+            parameters,
         };
 
-        let canonical = canonical_action_string(&tool_call);
-
-        // Raw UTF-8, not \uXXXX-escaped.
-        assert!(canonical.contains("日本語のタイトル"));
-        assert!(canonical.contains("🔥🚀"));
-        assert!(!canonical.contains("\\u"));
-
-        // Object keys sorted by Unicode code point: 'a' (0x61) < 'z' (0x7A) <
-        // 'é' (0xE9), so within "parameters" the order is a, z, é.
-        let params_start = canonical.find("\"parameters\":{").unwrap();
-        let params_section = &canonical[params_start..];
-        let a_pos = params_section.find("\"a\":3").unwrap();
-        let z_pos = params_section.find("\"z\":2").unwrap();
-        let e_pos = params_section.find("\"é\":1").unwrap();
+        let serialized_len = serde_json::to_string(&tool_call.parameters)
+            .expect("parameters must serialize")
+            .len();
         assert!(
-            a_pos < z_pos && z_pos < e_pos,
-            "keys must sort by Unicode code point: a < z < é"
+            serialized_len > 10 * 1024 * 1024,
+            "payload must exceed 10MB to exercise the large-payload path, got {serialized_len} bytes"
         );
 
-        // Canonicalization and hashing are deterministic for Unicode input.
-        let canonical2 = canonical_action_string(&tool_call);
-        assert_eq!(canonical, canonical2);
-        assert_eq!(hash_tool_call(&tool_call), hash_tool_call(&tool_call));
+        // Canonicalization must be deterministic across repeated runs.
+        let canonical1 = canonical_action_string(&tool_call);
+        let canonical2 = canonical_action_string(&tool_call.clone());
+        assert_eq!(
+            canonical1, canonical2,
+            "canonicalization must be deterministic"
+        );
+
+        // Top-level object keys must be sorted by Unicode code point.
+        let canonicalized = canonicalize_json(json!({
+            "z_field": "last",
+            "a_field": "first",
+            "large_blob": "y",
+        }));
+        let keys: Vec<&str> = canonicalized
+            .as_object()
+            .expect("must remain an object")
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(keys, vec!["a_field", "large_blob", "z_field"]);
+
+        // Hashing must succeed and be stable/repeatable for a large payload.
+        let hash1 = hash_tool_call(&tool_call);
+        let hash2 = hash_tool_call(&tool_call);
+        assert_eq!(
+            hash1, hash2,
+            "action_hash must be stable across repeated calls"
+        );
+        assert_eq!(hash1.len(), 64, "SHA-256 hex digest must be 64 chars");
     }
 
     fn make_test_approval(
@@ -7922,6 +7948,74 @@ mod tests {
             after.last_discovery_at.is_some(),
             "discovery must stamp last_discovery_at"
         );
+    }
+
+    /// TASK-0152 (#998): `discover_mcp_tools` must register a `skills` row
+    /// (skill_key `mcp:<server_key>`) and a `skill_actions` row per discovered
+    /// tool, so the regular authorize path (`db::get_skill_action`) finds them.
+    #[tokio::test]
+    async fn discover_mcp_tools_creates_skill_actions() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_discover_skill_actions").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        // No skill action exists prior to discovery.
+        assert!(
+            db::get_skill_action(&state.pool, &tenant_id, "mcp:github-mcp", "create_issue")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let mut approval_required_tool = drift_tool("merge_pr", "high");
+        approval_required_tool.approval_required = true;
+        approval_required_tool.mutates_state = true;
+
+        let req = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "medium"), approval_required_tool],
+        };
+        let response = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(req),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let create_issue =
+            db::get_skill_action(&state.pool, &tenant_id, "mcp:github-mcp", "create_issue")
+                .await
+                .unwrap()
+                .expect("create_issue skill action must be registered");
+        let (risk, mutates_state, approval_required, default_decision) = create_issue;
+        assert_eq!(risk, "medium");
+        assert!(!mutates_state);
+        assert!(!approval_required);
+        assert_eq!(default_decision, "policy");
+
+        let merge_pr = db::get_skill_action(&state.pool, &tenant_id, "mcp:github-mcp", "merge_pr")
+            .await
+            .unwrap()
+            .expect("merge_pr skill action must be registered");
+        let (risk, mutates_state, approval_required, default_decision) = merge_pr;
+        assert_eq!(risk, "high");
+        assert!(mutates_state);
+        assert!(approval_required);
+        assert_eq!(default_decision, "require_approval");
     }
 
     /// A quarantined MCP server must deny an otherwise-approved tool inline

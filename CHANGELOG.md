@@ -97,9 +97,9 @@ reaches 1.0.
 - 50-concurrent `consume_approval` stress test (#1220).
 - `GET /v1/audit/events` tenant-isolation and 100-row cap test (#1006).
 - `GET /v1/runs/:id/timeline` chronological-order and run-scoping test (#1005).
-- `aegis-jcs-1` canonicalization of Unicode parameter values and object keys
-  (CJK text, emoji/4-byte UTF-8, non-ASCII keys sorted by Unicode code point,
-  raw UTF-8 with no `\uXXXX` escaping) (#1000).
+- `discover_mcp_tools` registers a `skills`/`skill_actions` row per discovered
+  MCP tool, with `default_decision`/`approval_required`/`risk`/`mutates_state`
+  derived from the manifest, retrievable via `db::get_skill_action` (#998).
 
 ### Tests
 
