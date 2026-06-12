@@ -5033,6 +5033,53 @@ mod tests {
         }
     }
 
+    /// TASK-0154 (#1000): `aegis-jcs-1` canonicalization must handle Unicode
+    /// parameter values and object keys correctly — raw UTF-8 (no `\uXXXX`
+    /// escaping), object keys sorted by Unicode code point (not by byte/UTF-16
+    /// order), and 4-byte UTF-8 sequences (emoji / supplementary-plane
+    /// characters) preserved exactly. A divergence here would break
+    /// cross-language byte-parity for non-ASCII payloads.
+    #[test]
+    fn canonicalization_handles_unicode_parameters() {
+        let tool_call = AuthorizeToolCall {
+            tool: "github".to_string(),
+            action: "create_issue".to_string(),
+            resource: Some("repo/example".to_string()),
+            mutates_state: true,
+            parameters: json!({
+                "title": "日本語のタイトル",
+                "emoji": "🔥🚀",
+                "é": 1,
+                "z": 2,
+                "a": 3,
+            }),
+        };
+
+        let canonical = canonical_action_string(&tool_call);
+
+        // Raw UTF-8, not \uXXXX-escaped.
+        assert!(canonical.contains("日本語のタイトル"));
+        assert!(canonical.contains("🔥🚀"));
+        assert!(!canonical.contains("\\u"));
+
+        // Object keys sorted by Unicode code point: 'a' (0x61) < 'z' (0x7A) <
+        // 'é' (0xE9), so within "parameters" the order is a, z, é.
+        let params_start = canonical.find("\"parameters\":{").unwrap();
+        let params_section = &canonical[params_start..];
+        let a_pos = params_section.find("\"a\":3").unwrap();
+        let z_pos = params_section.find("\"z\":2").unwrap();
+        let e_pos = params_section.find("\"é\":1").unwrap();
+        assert!(
+            a_pos < z_pos && z_pos < e_pos,
+            "keys must sort by Unicode code point: a < z < é"
+        );
+
+        // Canonicalization and hashing are deterministic for Unicode input.
+        let canonical2 = canonical_action_string(&tool_call);
+        assert_eq!(canonical, canonical2);
+        assert_eq!(hash_tool_call(&tool_call), hash_tool_call(&tool_call));
+    }
+
     fn make_test_approval(
         expires_at: Option<chrono::DateTime<Utc>>,
         status: &str,
