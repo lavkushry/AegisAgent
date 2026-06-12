@@ -35,6 +35,11 @@ reaches 1.0.
   TypeScript SDK, cross-language corpus byte-equality gate, Docker Compose E2E,
   blocking dependency audits (cargo-audit + pip-audit) (#1170).
 - **MkDocs Material docs site**: auto-deployed to GitHub Pages on push to `main`.
+- **End-to-end SOC pipeline test** (TEST-001, #1161): a single test feeds
+  events through the full Phase 0-3/5 pipeline (emit → detect → correlate →
+  persist → notify), asserting a `confused_deputy_block` alert and a
+  `deny_storm` incident are persisted to `soc_alerts`/`soc_incidents` and a
+  HIGH notification is delivered to a mock webhook sink.
 
 ### Changed
 
