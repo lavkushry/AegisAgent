@@ -100,8 +100,8 @@ reaches 1.0.
 - `discover_mcp_tools` registers a `skills`/`skill_actions` row per discovered
   MCP tool, with `default_decision`/`approval_required`/`risk`/`mutates_state`
   derived from the manifest, retrievable via `db::get_skill_action` (#998).
-- `aegis-jcs-1` canonicalization of an empty `parameters` object (`{}`) with a
-  `None` resource produces a stable canonical string and SHA-256 hash (#1002).
+- `aegis-jcs-1` canonicalization sorts object keys independently at every
+  nesting level, verified 3 levels deep (#1001).
 
 ### Tests
 
