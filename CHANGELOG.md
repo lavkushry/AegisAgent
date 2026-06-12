@@ -48,6 +48,14 @@ reaches 1.0.
   persist → notify), asserting a `confused_deputy_block` alert and a
   `deny_storm` incident are persisted to `soc_alerts`/`soc_incidents` and a
   HIGH notification is delivered to a mock webhook sink.
+- **DB-001 (#1191): versioned `sqlx` migrations**. New `gateway/migrations/`
+  directory (starting with `0001_baseline.sql`, the full current schema written
+  with `IF NOT EXISTS`) applied via `sqlx::migrate!("./migrations")`, tracked in
+  `_sqlx_migrations`. The legacy ad-hoc inline schema bootstrap
+  (`db::bootstrap_legacy_schema`, formerly `run_migrations`) still runs first on
+  every startup for backward compatibility with pre-existing databases, so the
+  baseline migration is a no-op there too. All future schema changes ship as new
+  numbered files via `sqlx migrate add`.
 
 ### Changed
 
