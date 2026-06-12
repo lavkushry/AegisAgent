@@ -5961,6 +5961,98 @@ mod tests {
         );
     }
 
+    /// TASK-0159 (#1005): `GET /v1/runs/:id/timeline` must return events for the
+    /// requested run in chronological (`created_at ASC`) order, regardless of
+    /// the order they were inserted, and must exclude events from other runs.
+    #[tokio::test]
+    async fn get_timeline_returns_events_in_chronological_order() {
+        let (state, tenant_id, _agent_token) = setup_state("timeline_chronological_order").await;
+        let run_id = "run-timeline-1";
+
+        fn timeline_event(
+            tenant_id: &str,
+            run_id: &str,
+            label: &str,
+            age_secs: i64,
+        ) -> AuditEventRecord {
+            AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                event_type: "test_event".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: Some(run_id.to_string()),
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: None,
+                resource: Some(label.to_string()),
+                event_json: "{}".to_string(),
+                input_hash: None,
+                output_hash: None,
+                created_at: Utc::now() - Duration::seconds(age_secs),
+            }
+        }
+
+        // insert_audit_event relies on the column's DEFAULT CURRENT_TIMESTAMP and
+        // does not bind `created_at`, so set the desired timestamps directly
+        // after each insert to exercise ORDER BY created_at ASC deterministically.
+        async fn insert_with_created_at(pool: &sqlx::SqlitePool, event: &AuditEventRecord) {
+            db::insert_audit_event(pool, event).await.unwrap();
+            sqlx::query("UPDATE audit_events SET created_at = ? WHERE id = ?")
+                .bind(event.created_at)
+                .bind(&event.id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+
+        // Insert out of chronological order: "third" (oldest) last.
+        insert_with_created_at(
+            &state.pool,
+            &timeline_event(&tenant_id, run_id, "first", 10),
+        )
+        .await;
+        insert_with_created_at(
+            &state.pool,
+            &timeline_event(&tenant_id, run_id, "second", 5),
+        )
+        .await;
+        insert_with_created_at(
+            &state.pool,
+            &timeline_event(&tenant_id, run_id, "third", 20),
+        )
+        .await;
+        // A different run — must not appear in this run's timeline.
+        insert_with_created_at(
+            &state.pool,
+            &timeline_event(&tenant_id, "run-timeline-other", "other-run", 1),
+        )
+        .await;
+
+        let response = get_timeline(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path(run_id.to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<AuditEventRecord> = serde_json::from_slice(&body).unwrap();
+
+        let resources: Vec<&str> = events
+            .iter()
+            .map(|e| e.resource.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            resources,
+            vec!["third", "first", "second"],
+            "events must be ordered oldest-first by created_at, regardless of insertion order"
+        );
+    }
+
     /// #0119: a mutating action whose triggering content has
     /// `semi_trusted_customer` provenance is paused for human review rather
     /// than auto-allowed or auto-denied.
