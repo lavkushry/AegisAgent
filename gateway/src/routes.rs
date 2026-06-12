@@ -5106,6 +5106,33 @@ mod tests {
         assert_eq!(hash1.len(), 64, "SHA-256 hex digest must be 64 chars");
     }
 
+    /// TASK-0155 (#1002): canonicalization must handle an empty `parameters`
+    /// object (`{}`) and a `None` resource — the most common shape for
+    /// read-only/no-argument tool calls — producing a stable, well-formed
+    /// canonical string and hash.
+    #[test]
+    fn canonicalization_handles_empty_parameters() {
+        let tool_call = AuthorizeToolCall {
+            tool: "filesystem".to_string(),
+            action: "list_dir".to_string(),
+            resource: None,
+            mutates_state: false,
+            parameters: json!({}),
+        };
+
+        let canonical = canonical_action_string(&tool_call);
+        assert_eq!(
+            canonical,
+            r#"{"action":"list_dir","mutates_state":false,"parameters":{},"resource":null,"tool":"filesystem"}"#
+        );
+
+        // Deterministic hash, well-formed 64-char SHA-256 hex digest.
+        let hash = hash_tool_call(&tool_call);
+        assert_eq!(hash.len(), 64);
+        assert_eq!(hash, sha256_hex(canonical.as_bytes()));
+        assert_eq!(hash, hash_tool_call(&tool_call));
+    }
+
     fn make_test_approval(
         expires_at: Option<chrono::DateTime<Utc>>,
         status: &str,
