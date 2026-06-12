@@ -57,15 +57,28 @@ pub struct AseEvent {
 pub struct EventSink {
     tx: mpsc::Sender<AseEvent>,
     tx_broadcast: tokio::sync::broadcast::Sender<AseEvent>,
+    metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
 }
 
 impl EventSink {
     /// Build a sink and its receiver. Production spawns [`drain`] on the
-    /// receiver; tests keep it to assert exactly what was emitted.
-    pub fn channel(capacity: usize) -> (Self, mpsc::Receiver<AseEvent>) {
+    /// receiver; tests keep it to assert exactly what was emitted. `metrics`
+    /// is shared with [`drain`] and `AppState` so `aegis_events_emitted_total`
+    /// / `aegis_events_dropped_total` (OBS-002, #1155) reflect this sink.
+    pub fn channel(
+        capacity: usize,
+        metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
+    ) -> (Self, mpsc::Receiver<AseEvent>) {
         let (tx, rx) = mpsc::channel(capacity);
         let (tx_broadcast, _) = tokio::sync::broadcast::channel(capacity);
-        (Self { tx, tx_broadcast }, rx)
+        (
+            Self {
+                tx,
+                tx_broadcast,
+                metrics,
+            },
+            rx,
+        )
     }
 
     /// Subscribe to live events.
@@ -82,11 +95,15 @@ impl EventSink {
         let _ = self.tx_broadcast.send(event.clone());
 
         match self.tx.try_send(event) {
-            Ok(()) => {}
+            Ok(()) => {
+                self.metrics.inc_event_emitted();
+            }
             Err(mpsc::error::TrySendError::Full(ev)) => {
+                self.metrics.inc_event_dropped();
                 warn!(event_id = %ev.event_id, "SOC event stream full — dropping event");
             }
             Err(mpsc::error::TrySendError::Closed(ev)) => {
+                self.metrics.inc_event_dropped();
                 debug!(event_id = %ev.event_id, "SOC event stream closed — dropping event");
             }
         }
@@ -122,7 +139,15 @@ impl EventSink {
 /// shared by Phase 1 ([`Detector`]) and SOC-007 ([`baseline`]) alerts.
 /// Best-effort: a persistence error is logged and never panics or aborts the
 /// drain loop (design law 3).
-async fn handle_alert(alert: &crate::detect::Alert, sink: &dyn NotifySink, pool: &SqlitePool) {
+async fn handle_alert(
+    alert: &crate::detect::Alert,
+    sink: &dyn NotifySink,
+    pool: &SqlitePool,
+    metrics: &crate::metrics::SecurityMetrics,
+) {
+    // OBS-002 (#1155): aegis_alerts_total{rule, severity}.
+    metrics.inc_alert(&alert.rule, &alert.severity);
+
     match alert.severity.as_str() {
         "high" => {
             warn!(
@@ -177,7 +202,11 @@ async fn handle_alert(alert: &crate::detect::Alert, sink: &dyn NotifySink, pool:
     }
 }
 
-pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize {
+pub async fn drain(
+    mut rx: mpsc::Receiver<AseEvent>,
+    pool: SqlitePool,
+    metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
+) -> usize {
     let detector = Detector::default();
     // Phase 2: construct the notify sink once from env; NullSink when
     // AEGIS_WEBHOOK_URL is absent (safe default — no network calls in tests).
@@ -217,7 +246,7 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
 
         // Phase 1: deterministic, atomic detection over the single event.
         for alert in detector.evaluate(&ev) {
-            handle_alert(&alert, sink.as_ref(), &pool).await;
+            handle_alert(&alert, sink.as_ref(), &pool, &metrics).await;
         }
 
         // SOC-007 (#1190): per-agent behavioral baselining (rate anomaly +
@@ -225,7 +254,7 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         match baseline::evaluate(&pool, &ev).await {
             Ok(baseline_alerts) => {
                 for alert in baseline_alerts {
-                    handle_alert(&alert, sink.as_ref(), &pool).await;
+                    handle_alert(&alert, sink.as_ref(), &pool, &metrics).await;
                 }
             }
             Err(e) => {
@@ -239,6 +268,9 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
         // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
         for incident in correlator.observe(&ev) {
+            // OBS-002 (#1155): aegis_incidents_total{kind}.
+            metrics.inc_incident(&incident.kind);
+
             match incident.severity.as_str() {
                 "high" => {
                     warn!(

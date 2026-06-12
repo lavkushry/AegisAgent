@@ -27,6 +27,11 @@ reaches 1.0.
   records inline `/v1/authorize` latency with buckets at 5/10/25/50/75/100/250/
   500/1000ms, exposed on `GET /metrics`. Includes a Grafana dashboard template
   (`grafana/dashboards/aegis-authorize-latency.json`) with p50/p95/p99 panels.
+- **Counter metrics on `GET /metrics`** (OBS-002, #1155): `aegis_decisions_total{decision}`
+  (per `/v1/authorize` outcome), `aegis_alerts_total{rule,severity}` and
+  `aegis_incidents_total{kind}` (SOC drain), and `aegis_events_emitted_total` /
+  `aegis_events_dropped_total` (SOC event stream health). All labels come from
+  small, fixed, deterministic sets (redaction invariant).
 
 ### Changed
 

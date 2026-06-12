@@ -218,8 +218,10 @@ pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub policy_engine: PolicyEngine,
     pub events: EventSink,
-    /// Process-wide security counters exposed on GET /metrics.
-    pub metrics: SecurityMetrics,
+    /// Process-wide security counters exposed on GET /metrics. Shared with
+    /// the `events::drain` background task so alert/incident counters
+    /// (OBS-002, #1155) update the same instance.
+    pub metrics: Arc<SecurityMetrics>,
     /// Approval time-to-live in seconds. Configurable via AEGIS_APPROVAL_TTL_SECS
     /// environment variable (default: 1800 = 30 minutes).
     pub approval_ttl_secs: i64,
@@ -752,6 +754,8 @@ async fn write_decision_and_audit(
     // than as middleware, so it shares the exact `started_at` already used
     // for `decision_record.latency_ms`.
     metrics.authorize_duration.observe(started_at.elapsed());
+    // OBS-002 (#1155): aegis_decisions_total{decision="allow|deny|require_approval"}.
+    metrics.inc_decision(decision);
 
     let decision_record = DecisionRecord {
         id: decision_id.to_string(),
@@ -4783,7 +4787,11 @@ mod tests {
         let (state_raw, tenant_id, agent_token, events_rx) =
             setup_state_with_events("limit_test").await;
         // Drain events in background
-        tokio::spawn(events::drain(events_rx, state_raw.pool.clone()));
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
 
         // Create a custom app state with rate limit capacity = 1
         let policy_engine1 = PolicyEngine::init("policies.cedar").await.unwrap();
@@ -4791,7 +4799,7 @@ mod tests {
             pool: state_raw.pool.clone(),
             policy_engine: policy_engine1,
             events: state_raw.events.clone(),
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics: Arc::new(crate::metrics::SecurityMetrics::new()),
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1.0, 1.0),
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
@@ -4822,7 +4830,7 @@ mod tests {
             pool: state_raw.pool.clone(),
             policy_engine: policy_engine2,
             events: state_raw.events.clone(),
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics: Arc::new(crate::metrics::SecurityMetrics::new()),
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(100.0, 100.0), // high rate limit
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
@@ -4855,7 +4863,11 @@ mod tests {
         let (state, tenant_id, agent_token, events_rx) = setup_state_with_events(test_name).await;
         // Drain in the background so existing tests are unaffected by the stream.
         // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
-        tokio::spawn(events::drain(events_rx, state.pool.clone()));
+        tokio::spawn(events::drain(
+            events_rx,
+            state.pool.clone(),
+            state.metrics.clone(),
+        ));
         (state, tenant_id, agent_token)
     }
 
@@ -4901,12 +4913,14 @@ mod tests {
         db::insert_agent(&pool, &agent).await.unwrap();
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
-        let (events, events_rx) = EventSink::channel(events::DEFAULT_CAPACITY);
+        let test_metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, events_rx) =
+            EventSink::channel(events::DEFAULT_CAPACITY, test_metrics.clone());
         let state = Arc::new(AppState {
             pool,
             policy_engine,
             events,
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics: test_metrics,
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
@@ -6543,6 +6557,29 @@ mod tests {
         assert!(
             metrics_text.contains("aegis_authorize_duration_seconds_sum "),
             "metrics text must include the cumulative sum"
+        );
+    }
+
+    /// OBS-002 (#1155): one `/v1/authorize` call increments
+    /// `aegis_decisions_total{decision="..."}` for the resulting decision.
+    #[tokio::test]
+    async fn authorize_records_decision_counter() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_decision_counter").await;
+
+        let request = mcp_authorize_request("github", "read_file");
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let decision = response.decision.clone();
+
+        let metrics_text = state.metrics.render_prometheus();
+        assert!(
+            metrics_text.contains("# TYPE aegis_decisions_total counter"),
+            "metrics text must declare the decisions counter TYPE"
+        );
+        assert!(
+            metrics_text.contains(&format!(
+                "aegis_decisions_total{{decision=\"{decision}\"}} 1"
+            )),
+            "metrics text must record the resulting decision: {metrics_text}"
         );
     }
 
@@ -9002,7 +9039,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_event_sink_broadcasting() {
-        let (sink, _rx) = EventSink::channel(100);
+        let (sink, _rx) = EventSink::channel(100, Arc::new(crate::metrics::SecurityMetrics::new()));
         let mut sub = sink.subscribe();
 
         let event = AseEvent {
