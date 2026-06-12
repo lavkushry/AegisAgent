@@ -9,13 +9,14 @@ reaches 1.0.
 
 ### Added
 
-- **SAST scanning with semgrep** (CI-002, #1171): new blocking `sast.yml`
-  workflow runs `semgrep scan` on every PR with custom rules
-  (`.semgrep/aegisagent-rust.yml`, `.semgrep/aegisagent-python.yml`) for raw
-  string-built SQL (CWE-89), `.unwrap()`/`.expect()` in production gateway
-  code (CWE-391/397), and unredacted secret/token logging (CWE-532), plus the
-  community `p/rust`, `p/python`, and `p/secrets` rulesets. Any finding fails
-  the job.
+- **Fuzz testing for `aegis-jcs-1` canonicalization** (TEST-002, #1162): the
+  canonicalization logic was extracted into a new `aegis-canon` crate
+  (`gateway/canon/`), shared by the gateway (via path dependency, delegated
+  from `routes::canonicalize_json`/`canonical_action_string`) and two new
+  `cargo-fuzz` targets in `gateway/fuzz/` — `canonicalize_json` (arbitrary
+  JSON) and `canonical_value_string` (arbitrary `AuthorizeToolCall`-shaped
+  input). A 60s smoke run gates PRs (`canon-fuzz` job in `ci.yml`); a nightly
+  workflow (`canon-fuzz.yml`) runs each target for 1 hour.
 - **Canonicalization scheme `aegis-jcs-1`** shared byte-identically between the
   Python SDK, Go SDK, TypeScript SDK, and the Rust gateway, locked by shared test
   corpora (`tests/canonical_action_vectors.json`, `tests/receipt_chain_vectors.json`)
@@ -42,6 +43,11 @@ reaches 1.0.
   TypeScript SDK, cross-language corpus byte-equality gate, Docker Compose E2E,
   blocking dependency audits (cargo-audit + pip-audit) (#1170).
 - **MkDocs Material docs site**: auto-deployed to GitHub Pages on push to `main`.
+- **End-to-end SOC pipeline test** (TEST-001, #1161): a single test feeds
+  events through the full Phase 0-3/5 pipeline (emit → detect → correlate →
+  persist → notify), asserting a `confused_deputy_block` alert and a
+  `deny_storm` incident are persisted to `soc_alerts`/`soc_incidents` and a
+  HIGH notification is delivered to a mock webhook sink.
 
 ### Changed
 
