@@ -35,6 +35,14 @@ reaches 1.0.
   TypeScript SDK, cross-language corpus byte-equality gate, Docker Compose E2E,
   blocking dependency audits (cargo-audit + pip-audit) (#1170).
 - **MkDocs Material docs site**: auto-deployed to GitHub Pages on push to `main`.
+- **DB-001 (#1191): versioned `sqlx` migrations**. New `gateway/migrations/`
+  directory (starting with `0001_baseline.sql`, the full current schema written
+  with `IF NOT EXISTS`) applied via `sqlx::migrate!("./migrations")`, tracked in
+  `_sqlx_migrations`. The legacy ad-hoc inline schema bootstrap
+  (`db::bootstrap_legacy_schema`, formerly `run_migrations`) still runs first on
+  every startup for backward compatibility with pre-existing databases, so the
+  baseline migration is a no-op there too. All future schema changes ship as new
+  numbered files via `sqlx migrate add`.
 
 ### Changed
 
