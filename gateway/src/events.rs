@@ -254,6 +254,47 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
         // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
         for incident in correlator.observe(&ev) {
+            // Phase 5 — persist the incident (best-effort; never panics on failure).
+            // source_event_ids is serialised to JSON so the column stores structured
+            // evidence without SQL concatenation (redaction + parameterization).
+            // SOC-005 (#1188): repeat incidents for the same (tenant, agent, kind)
+            // within the dedup window are merged into the existing open incident
+            // rather than creating a new row.
+            let source_ids_json = serde_json::to_string(&incident.source_event_ids)
+                .unwrap_or_else(|_| "[]".to_string());
+            let incident_record = SocIncidentRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: incident.tenant_id.clone(),
+                kind: incident.kind.clone(),
+                severity: incident.severity.clone(),
+                agent_id: incident.agent_id.clone(),
+                summary: incident.summary.clone(),
+                source_event_ids: source_ids_json,
+                opened_at: incident.opened_at.clone(),
+                // Lifecycle defaults — the DB INSERT always writes 'open'/NULL regardless
+                // of these struct fields; they exist to satisfy the type.
+                status: "open".to_string(),
+                closed_at: None,
+            };
+            let mut was_merged = false;
+            match db::upsert_soc_incident(&pool, &incident_record).await {
+                Ok(db::IncidentUpsertResult::Merged { id }) => {
+                    was_merged = true;
+                    debug!(
+                        incident_id = %incident.incident_id,
+                        merged_into = %id,
+                        "SOC-005: merged repeat incident into existing open incident",
+                    );
+                }
+                Ok(db::IncidentUpsertResult::Inserted) => {}
+                Err(e) => {
+                    error!(
+                        incident_id = %incident.incident_id,
+                        "Phase 5: failed to persist SOC incident: {:?}", e
+                    );
+                }
+            }
+
             match incident.severity.as_str() {
                 "high" => {
                     warn!(
@@ -264,11 +305,13 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
                         agent = %incident.agent_id,
                         contributing_events = ?incident.source_event_ids.len(),
                         summary = %incident.summary,
+                        merged = was_merged,
                         "SOC incident",
                     );
-                    // Phase 2 — incident notify: HIGH incidents only. SOC-002
-                    // (#1185): suppressed at autonomy level L0 (log-only).
-                    if notify_enabled {
+                    // Phase 2 — incident notify: HIGH incidents only. SOC-005
+                    // (#1188): suppressed for repeat incidents merged into an
+                    // already-notified open incident (no alert fatigue).
+                    if !was_merged {
                         sink.notify(NotifyMessage {
                             kind: "incident".to_string(),
                             severity: incident.severity.clone(),
@@ -288,58 +331,14 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
                     agent = %incident.agent_id,
                     contributing_events = ?incident.source_event_ids.len(),
                     summary = %incident.summary,
+                    merged = was_merged,
                     "SOC incident",
                 ),
             }
 
-            // Phase 5 — persist the incident (best-effort; never panics on failure).
-            // source_event_ids is serialised to JSON so the column stores structured
-            // evidence without SQL concatenation (redaction + parameterization).
-            let source_ids_json = serde_json::to_string(&incident.source_event_ids)
-                .unwrap_or_else(|_| "[]".to_string());
-            let incident_record = SocIncidentRecord {
-                id: Uuid::new_v4().to_string(),
-                tenant_id: incident.tenant_id.clone(),
-                kind: incident.kind.clone(),
-                severity: incident.severity.clone(),
-                agent_id: incident.agent_id.clone(),
-                summary: incident.summary.clone(),
-                source_event_ids: source_ids_json,
-                opened_at: incident.opened_at.clone(),
-                // Lifecycle defaults — the DB INSERT always writes 'open'/NULL regardless
-                // of these struct fields; they exist to satisfy the type.
-                status: "open".to_string(),
-                closed_at: None,
-            };
-            if let Err(e) = db::insert_soc_incident(&pool, &incident_record).await {
-                error!(
-                    incident_id = %incident.incident_id,
-                    "Phase 5: failed to persist SOC incident: {:?}", e
-                );
-            }
-
-            // Phase 4 — Response Engine auto-dispatch (#1184), gated by the
-            // SOC-002 (#1185) autonomy level:
-            // - L0/L1: no auto-response (dispatch is never called).
-            // - L2: "notify + recommend" — log what would have been done,
-            //   but never execute or notify.
-            // - L3/L4: full Phase 4 auto-dispatch; L4 suppresses the
-            //   resulting notification (auto-respond + silent).
-            // Best-effort: a DB error here is logged and never panics or
-            // aborts the drain loop (design law 3, out-of-band).
-            if autonomy == "L2" {
-                if let Some(action) = respond::recommended_action(&incident) {
-                    info!(
-                        incident_id = %incident.incident_id,
-                        action = %action.action,
-                        "SOC response (L2 recommend-only, not executed): {}", action.description,
-                    );
-                }
-                continue;
-            }
-            if autonomy != "L3" && autonomy != "L4" {
-                continue;
-            }
+            // Phase 4 — Response Engine auto-dispatch (#1184). Best-effort:
+            // a DB error here is logged and never panics or aborts the drain
+            // loop (design law 3, out-of-band).
             match respond::dispatch(&pool, &incident).await {
                 Ok(Some(action)) => {
                     warn!(
