@@ -4588,6 +4588,28 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     }
                 }
             },
+            "/v1/api_keys": {
+                "get": {
+                    "summary": "List tenant API keys",
+                    "responses": {
+                        "200": { "description": "List of API keys" }
+                    }
+                },
+                "post": {
+                    "summary": "Create a new tenant API key (plaintext key returned once)",
+                    "responses": {
+                        "201": { "description": "API key created" }
+                    }
+                }
+            },
+            "/v1/api_keys/{id}/revoke": {
+                "post": {
+                    "summary": "Revoke a tenant API key",
+                    "responses": {
+                        "200": { "description": "API key revoked" }
+                    }
+                }
+            },
             "/v1/approvals": {
                 "get": {
                     "summary": "List approvals",
@@ -9359,6 +9381,87 @@ mod tests {
             .unwrap();
         let subs2: Vec<WebhookSubscriptionRecord> = serde_json::from_slice(&body_list2).unwrap();
         assert!(subs2.is_empty());
+    }
+
+    /// TASK-0093 (#939): CRUD lifecycle for tenant-managed API keys. The
+    /// plaintext key is returned only at creation; list/revoke never expose it.
+    #[tokio::test]
+    async fn test_api_key_crud_route() {
+        let (state, tenant_id, _) = setup_state("api_key_crud").await;
+
+        // 1. List (initially empty)
+        let response = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let keys: Vec<ApiKeyRecord> = serde_json::from_slice(&body).unwrap();
+        assert!(keys.is_empty());
+
+        // 2. Create
+        let payload = CreateApiKeyRequest {
+            name: "ci-deploy-key".to_string(),
+        };
+        let response_create = create_api_key(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: Value = serde_json::from_slice(&body_create).unwrap();
+        let key_id = created["id"].as_str().unwrap().to_string();
+        let plaintext_key = created["key"].as_str().unwrap().to_string();
+        assert!(!plaintext_key.is_empty());
+
+        // 3. List (should contain 1 key, hashed, status active, no plaintext)
+        let response_list = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let keys_list: Vec<ApiKeyRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert_eq!(keys_list.len(), 1);
+        assert_eq!(keys_list[0].id, key_id);
+        assert_eq!(keys_list[0].name, "ci-deploy-key");
+        assert_eq!(keys_list[0].status, "active");
+        assert_eq!(keys_list[0].key_hash, sha256_hex(plaintext_key.as_bytes()));
+
+        // 4. Revoke
+        let response_revoke = revoke_api_key(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(key_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_revoke.status(), StatusCode::OK);
+
+        // 5. Revoke again (already revoked -> 404)
+        let response_revoke_404 = revoke_api_key(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(key_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_revoke_404.status(), StatusCode::NOT_FOUND);
+
+        // 6. List shows status revoked
+        let response_list2 = list_api_keys(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        let body_list2 = to_bytes(response_list2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let keys_list2: Vec<ApiKeyRecord> = serde_json::from_slice(&body_list2).unwrap();
+        assert_eq!(keys_list2.len(), 1);
+        assert_eq!(keys_list2[0].status, "revoked");
     }
 
     /// TASK-0091 (#937): `PUT /v1/policies/:id` overwrites the `policies` row

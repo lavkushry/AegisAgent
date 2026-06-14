@@ -102,6 +102,14 @@ reaches 1.0.
 - **BUG-004, BUG-005**: lock poisoning panics in policy and events modules (#1213).
 - `edit_approval` re-hashes edited call and rejects if already decided (#1121).
 - Python SDK `close_incident()` / `narrate_incident()` implementation restored (#1237).
+- **Build regression**: the #939/#1261 merge to `main` referenced
+  `db::create_api_key`, `db::list_api_keys`, `db::revoke_api_key`, and an
+  `ApiKeyRecord` model from `routes.rs` without adding them, and never wired
+  `/v1/api_keys` (`GET`/`POST`) or `/v1/api_keys/:id/revoke` into the router —
+  leaving `main` unable to compile. Adds the missing tenant-scoped,
+  parameterized `db.rs` functions and `ApiKeyRecord`, wires the routes,
+  documents them in `GET /v1/openapi.json`, and adds
+  `test_api_key_crud_route` covering create/list/revoke/revoke-again/list.
 
 ### Security
 
