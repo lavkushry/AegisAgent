@@ -1491,12 +1491,30 @@ pub async fn insert_policy_version(
     .bind(record.created_at)
     .execute(pool)
     .await?;
+
+    // #1302: cap archived versions at 10 per (tenant_id, policy_id) — delete
+    // anything beyond the 10 most recent (by version) to bound table growth.
+    sqlx::query(
+        "DELETE FROM policy_versions
+         WHERE tenant_id = ? AND policy_id = ?
+           AND id NOT IN (
+             SELECT id FROM policy_versions
+             WHERE tenant_id = ? AND policy_id = ?
+             ORDER BY version DESC LIMIT 10
+           )",
+    )
+    .bind(&record.tenant_id)
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.id)
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
 /// TASK-0091 (#937): list archived versions of a policy, most recent first.
 /// Tenant-scoped, parameterized.
-#[cfg(test)]
 pub async fn list_policy_versions(
     pool: &SqlitePool,
     tenant_id: &str,

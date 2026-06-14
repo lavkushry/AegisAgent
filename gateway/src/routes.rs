@@ -3417,6 +3417,135 @@ pub async fn update_policy(
     }
 }
 
+/// #1302: `POST /v1/policies/:id/rollback` restores the most recently
+/// archived `policy_versions` row onto the live `policies` row.
+///
+/// Before restoring, the CURRENT live row is itself archived (same pattern
+/// as `update_policy`) so the rollback is reversible — rolling back again
+/// would restore the version being rolled back from. `version` is bumped to
+/// `current_version + 1` (monotonically increasing, never reused) and a
+/// `policy_rolled_back` audit event is emitted. The Cedar engine is
+/// hot-reloaded for the tenant on success.
+pub async fn rollback_policy(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let mut record = match db::get_policy_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Policy not found"})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to lookup policy for rollback: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let versions = match db::list_policy_versions(&state.pool, &tenant_id, &id).await {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to list policy versions for rollback: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let previous_version = match versions.into_iter().next() {
+        Some(v) => v,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "No previous version to roll back to"})),
+            )
+                .into_response()
+        }
+    };
+
+    // Archive the CURRENT live row before overwriting it, so rollback itself
+    // is reversible and doesn't lose the version being rolled back from.
+    let current = record.clone();
+    if let Err(e) = db::insert_policy_version(&state.pool, &current).await {
+        error!(
+            "Failed to archive current policy version before rollback: {:?}",
+            e
+        );
+    }
+
+    // Restore the archived version's content onto the live row. `version`
+    // is monotonically bumped from the CURRENT live version, never copied
+    // from the archived row, so version numbers never decrease or repeat.
+    record.policy_key = previous_version.policy_key.clone();
+    record.name = previous_version.name.clone();
+    record.language = previous_version.language.clone();
+    record.body = previous_version.body.clone();
+    record.status = previous_version.status.clone();
+    record.version += 1;
+
+    match db::update_policy(&state.pool, &record).await {
+        Ok(_) => {
+            // Trigger hot-reload
+            if let Err(e) = state
+                .policy_engine
+                .reload_tenant_policies(&state.pool, &tenant_id)
+                .await
+            {
+                error!("Failed to hot-reload policies after rollback: {:?}", e);
+            }
+
+            let audit_record = AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                event_type: "policy_rolled_back".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: Some(record.policy_key.clone()),
+                resource: Some(record.id.clone()),
+                event_json: serde_json::to_string(&json!({
+                    "policy_id": record.id,
+                    "policy_key": record.policy_key,
+                    "name": record.name,
+                    "body": record.body,
+                    "rolled_back_to_version": previous_version.version,
+                    "new_version": record.version,
+                }))
+                .unwrap_or_default(),
+                input_hash: None,
+                output_hash: None,
+                created_at: Utc::now(),
+            };
+            if let Err(e) = db::insert_audit_event(&state.pool, &audit_record).await {
+                error!("Failed to write policy_rolled_back audit event: {:?}", e);
+            }
+
+            (StatusCode::OK, Json(record)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to roll back policy: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn delete_policy(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -4909,6 +5038,15 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Delete custom policy",
                     "responses": {
                         "200": { "description": "Policy deleted" }
+                    }
+                }
+            },
+            "/v1/policies/{id}/rollback": {
+                "post": {
+                    "summary": "Roll back a policy to its most recently archived version",
+                    "responses": {
+                        "200": { "description": "Policy rolled back to the previous version" },
+                        "404": { "description": "Policy not found, or no previous version to roll back to" }
                     }
                 }
             },
@@ -10435,6 +10573,318 @@ mod tests {
         assert_eq!(versions[0].version, 2, "most recent archived version first");
         assert_eq!(versions[0].body, "forbid (principal, action, resource);");
         assert_eq!(versions[1].version, 1);
+    }
+
+    /// #1302: `POST /v1/policies/:id/rollback` restores the most recently
+    /// archived `policy_versions` row onto the live `policies` row, bumping
+    /// `version` monotonically (never reusing/decreasing version numbers).
+    #[tokio::test]
+    async fn rollback_restores_previous_policy_version() {
+        let (state, tenant_id, _) = setup_state("policy_rollback_restore").await;
+
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+        let original_name = json_create["name"].as_str().unwrap().to_string();
+        let original_body = json_create["body"].as_str().unwrap().to_string();
+        assert_eq!(json_create["version"].as_i64(), Some(1));
+
+        // Update: v1 -> v2, body/name changed.
+        let update1 = UpdatePolicyRequest {
+            policy_key: None,
+            name: Some("Renamed Policy".to_string()),
+            body: Some("forbid (principal, action, resource);".to_string()),
+            status: None,
+        };
+        let response_update1 = update_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+            Json(update1),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update1.status(), StatusCode::OK);
+        let body_update1 = to_bytes(response_update1.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_update1: Value = serde_json::from_slice(&body_update1).unwrap();
+        assert_eq!(json_update1["version"].as_i64(), Some(2));
+        assert_eq!(json_update1["name"].as_str().unwrap(), "Renamed Policy");
+
+        // Rollback: restores the archived v1 body/name, bumps version to 3.
+        let response_rollback = rollback_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_rollback.status(), StatusCode::OK);
+        let body_rollback = to_bytes(response_rollback.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_rollback: Value = serde_json::from_slice(&body_rollback).unwrap();
+        assert_eq!(
+            json_rollback["body"].as_str().unwrap(),
+            original_body,
+            "rollback must restore the pre-update body"
+        );
+        assert_eq!(
+            json_rollback["name"].as_str().unwrap(),
+            original_name,
+            "rollback must restore the pre-update name"
+        );
+        assert_eq!(
+            json_rollback["version"].as_i64(),
+            Some(3),
+            "version must monotonically increase, never reuse the old version number"
+        );
+
+        // The live record in the DB must match too.
+        let live = db::get_policy_by_id(&state.pool, &tenant_id, &policy_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(live.body, original_body);
+        assert_eq!(live.name, original_name);
+        assert_eq!(live.version, 3);
+    }
+
+    /// #1302: rollback must archive the row it's rolling back FROM (so the
+    /// rollback itself is reversible) and emit a `policy_rolled_back` audit
+    /// event.
+    #[tokio::test]
+    async fn rollback_emits_policy_rolled_back_audit_event() {
+        let (state, tenant_id, _) = setup_state("policy_rollback_audit").await;
+
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+
+        let update1 = UpdatePolicyRequest {
+            policy_key: None,
+            name: None,
+            body: Some("forbid (principal, action, resource);".to_string()),
+            status: None,
+        };
+        let response_update1 = update_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+            Json(update1),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update1.status(), StatusCode::OK);
+
+        let response_rollback = rollback_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_rollback.status(), StatusCode::OK);
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id)
+            .await
+            .unwrap();
+        let rollback_event = events
+            .iter()
+            .find(|e| e.event_type == "policy_rolled_back")
+            .expect("policy_rolled_back audit event must be emitted");
+        assert_eq!(rollback_event.tenant_id, tenant_id);
+        assert_eq!(rollback_event.resource.as_deref(), Some(policy_id.as_str()));
+
+        // Rollback must also have archived the row it rolled back FROM (v2),
+        // so two versions are now archived: v1 (from the update) and v2
+        // (from the rollback).
+        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+            .await
+            .unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].version, 2, "most recent archived first");
+        assert_eq!(versions[1].version, 1);
+    }
+
+    /// #1302: rolling back a policy that has never been updated (no archived
+    /// version exists) must fail rather than silently no-op.
+    #[tokio::test]
+    async fn rollback_without_prior_version_returns_error() {
+        let (state, tenant_id, _) = setup_state("policy_rollback_no_prior").await;
+
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+
+        let response_rollback = rollback_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        let status = response_rollback.status();
+        assert!(
+            status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
+            "expected 404 or 400, got {}",
+            status
+        );
+        let body = to_bytes(response_rollback.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().is_some());
+    }
+
+    /// #1302: rolling back a nonexistent policy id returns 404, fail-closed.
+    #[tokio::test]
+    async fn rollback_nonexistent_policy_returns_404() {
+        let (state, tenant_id, _) = setup_state("policy_rollback_missing").await;
+
+        let response_rollback = rollback_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_rollback.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #1302: rollback is tenant-scoped — tenant B cannot roll back tenant
+    /// A's policy via its id (CWE-284).
+    #[tokio::test]
+    async fn rollback_returns_404_cross_tenant() {
+        let (state, tenant_id_a, _) = setup_state("policy_rollback_cross_tenant").await;
+        let tenant_id_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
+        db::register_tenant(&state.pool, &tenant_id_b, "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id_a.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+
+        // Tenant B attempts to roll back tenant A's policy.
+        let response_rollback = rollback_policy(
+            State(state.clone()),
+            TenantId(tenant_id_b.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_rollback.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #1302: `policy_versions` retains at most 10 rows per (tenant, policy),
+    /// keeping the highest-numbered (most recent) versions.
+    #[tokio::test]
+    async fn policy_versions_capped_at_ten() {
+        let (state, tenant_id, _) = setup_state("policy_versions_cap").await;
+
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+
+        // Archive 12 versions directly via the db helper.
+        for v in 1..=12 {
+            let record = PolicyRecord {
+                id: policy_id.clone(),
+                tenant_id: tenant_id.clone(),
+                policy_key: "allow-all".to_string(),
+                name: format!("Version {}", v),
+                language: "cedar".to_string(),
+                body: "permit (principal, action, resource);".to_string(),
+                version: v,
+                status: "active".to_string(),
+                created_by: None,
+                created_at: Utc::now(),
+            };
+            db::insert_policy_version(&state.pool, &record)
+                .await
+                .unwrap();
+        }
+
+        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+            .await
+            .unwrap();
+        assert_eq!(versions.len(), 10, "must retain at most 10 versions");
+        // Highest-numbered (most recent) versions retained: 12 down to 3.
+        let kept_versions: Vec<i32> = versions.iter().map(|v| v.version).collect();
+        assert_eq!(kept_versions, vec![12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
     }
 
     /// SOC-004 (#1187): `POST /v1/ingest` normalizes a GitHub webhook payload,
