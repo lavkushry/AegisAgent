@@ -773,6 +773,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             put(routes::update_policy).delete(routes::delete_policy),
         )
         .route("/v1/policies/reload", post(routes::reload_global_policies))
+        .route(
+            "/v1/webhook_subscriptions",
+            get(routes::list_webhook_subscriptions).post(routes::create_webhook_subscription),
+        )
+        .route(
+            "/v1/webhook_subscriptions/:id",
+            axum::routing::delete(routes::delete_webhook_subscription),
+        )
         // Approvals
         .route("/v1/approvals", get(routes::list_approvals))
         .route("/v1/approvals/:id", get(routes::get_approval))
