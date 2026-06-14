@@ -307,8 +307,8 @@ pub struct McpServerRecord {
 
 /// TASK-0090 (#936): one row per MCP tool-manifest discovery call, capturing
 /// the computed `mcp-manifest-1` hash and the raw discovered tool list so
-/// manifest drift can be diffed after the fact.
-#[cfg(test)]
+/// manifest drift can be diffed after the fact. #1336: also read in production
+/// by `discover_mcp_tools` to classify drift severity against the prior snapshot.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct McpManifestSnapshotRecord {
     pub id: String,

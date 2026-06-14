@@ -180,17 +180,30 @@ pub fn replay_attempt(event: &AseEvent) -> Option<Alert> {
 /// server-integrity hash on every `discover_mcp_tools` and emits an `AseEvent`
 /// with `kind == "mcp_manifest_drift"` when it diverges from the pin. Drift is a
 /// supply-chain / tool-hijack signal — the manifest the operator approved is not
-/// the one now being advertised — so this raises a HIGH SOC alert pointing at the
-/// affected server. Deterministic field match on the event kind only (Laws 1–2);
-/// carries the server key + hashes, no payloads.
+/// the one now being advertised.
+///
+/// #1336: severity is no longer a flat "high" for every drift — the gateway
+/// classifies *what* changed (`tool_added`/`tool_removed` vs `tool_modified` vs
+/// `metadata_changed`) and encodes that classification's severity in
+/// `event.risk_score` using the same buckets as `risk_score_for_level`
+/// (high >= 75, medium >= 40, else low). Deterministic field match on the event
+/// kind + risk_score only (Laws 1–2); carries the server key + hashes + a
+/// tool-key-only diff, no payloads.
 pub fn mcp_manifest_drift(event: &AseEvent) -> Option<Alert> {
     if event.kind != "mcp_manifest_drift" {
         return None;
     }
+    let severity = if event.risk_score >= 75 {
+        "high"
+    } else if event.risk_score >= 40 {
+        "medium"
+    } else {
+        "low"
+    };
     Some(Alert::from_event(
         event,
         "mcp_manifest_drift",
-        "high",
+        severity,
         format!(
             "MCP tool-manifest drift on '{}' — advertised manifest differs from the pinned hash: {}",
             event.resource.as_deref().unwrap_or(event.tool.as_str()),
@@ -453,8 +466,10 @@ mod tests {
         ev.tool = "mcp:github".to_string();
         ev.action = "discover".to_string();
         ev.resource = Some("github".to_string());
-        ev.reason = "MCP tool-manifest drift on server 'github': pinned sha256:aaa != \
-                      observed sha256:bbb"
+        // #1336: tool_added/tool_removed classification — high severity.
+        ev.risk_score = 75;
+        ev.reason = "MCP tool-manifest drift on server 'github' (tool_added): pinned \
+                      sha256:aaa != observed sha256:bbb — tools added: create_issue"
             .to_string();
         ev
     }
@@ -483,6 +498,33 @@ mod tests {
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].rule, "mcp_manifest_drift");
         assert_eq!(alerts[0].severity, "high");
+    }
+
+    /// #1336: a `tool_modified` drift (e.g. a new optional parameter on an
+    /// existing tool) is encoded as `risk_score: 40` and must surface as a
+    /// medium-severity alert, not the flat "high" of every prior drift.
+    #[test]
+    fn mcp_manifest_drift_tool_modified_fires_medium_alert() {
+        let mut ev = drift_event();
+        ev.risk_score = 40;
+        ev.reason = "MCP tool-manifest drift on server 'github' (tool_modified): pinned \
+                      sha256:aaa != observed sha256:bbb — tools modified: create_issue"
+            .to_string();
+        let alert = mcp_manifest_drift(&ev).expect("rule should fire");
+        assert_eq!(alert.severity, "medium");
+    }
+
+    /// #1336: a `metadata_changed` drift (description-only change) is encoded as
+    /// `risk_score: 10` and must surface as a low-severity alert.
+    #[test]
+    fn mcp_manifest_drift_metadata_changed_fires_low_alert() {
+        let mut ev = drift_event();
+        ev.risk_score = 10;
+        ev.reason = "MCP tool-manifest drift on server 'github' (metadata_changed): pinned \
+                      sha256:aaa != observed sha256:bbb — metadata changed: create_issue"
+            .to_string();
+        let alert = mcp_manifest_drift(&ev).expect("rule should fire");
+        assert_eq!(alert.severity, "low");
     }
 
     #[test]

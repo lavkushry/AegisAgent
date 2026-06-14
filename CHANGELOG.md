@@ -108,6 +108,20 @@ reaches 1.0.
 
 ### Fixed
 
+- **#1336: MCP manifest-drift severity classification + diff**. Re-discovering
+  an MCP server's tool manifest used to fire a single hardcoded
+  `"high"`-severity `mcp_manifest_drift` alert on *any* hash change. The
+  gateway now diffs the new manifest against the most recent prior
+  `mcp_manifest_snapshots` row (`classify_manifest_drift` in `routes.rs`) and
+  classifies the change as `tool_added`/`tool_removed` (high),
+  `tool_modified` — e.g. a new optional parameter on an existing tool's
+  `input_schema` (medium), or `metadata_changed` — name/description only
+  (low). The classification and a tool-key-only diff are carried in the
+  `AseEvent.reason`/`risk_score`, and `detect::mcp_manifest_drift` derives the
+  SOC alert severity from `risk_score` instead of a flat `"high"`. Adding a
+  parameter to an existing tool now still triggers drift, but as a
+  medium-severity alert rather than being indistinguishable from a brand-new
+  or removed tool.
 - **BUG-001, BUG-002, BUG-003**: auth and tenant isolation vulnerabilities (#1212).
 - **BUG-004, BUG-005**: lock poisoning panics in policy and events modules (#1213).
 - `edit_approval` re-hashes edited call and rejects if already decided (#1121).
