@@ -35,6 +35,12 @@ reqwest = { version = "0.12.28", default-features = false, features = ["rustls-t
 tower-http = { version = "0.5", features = ["cors", "request-id", "propagate-header", "set-header", "util", "compression-full", "limit", "timeout", "catch-panic"] }
 tower = { version = "0.4", features = ["util"] }
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
+# Tool-identifier normalization (#1335): both already present transitively
+# (axum -> form_urlencoded -> percent-encoding; cedar-policy-validator ->
+# unicode-security -> unicode-normalization). Promoted to direct deps with
+# their existing locked versions — no new supply-chain surface.
+percent-encoding = "2.3.2"
+unicode-normalization = "0.1.25"
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"

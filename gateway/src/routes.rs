@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, info};
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::db;
@@ -425,6 +426,24 @@ async fn idempotent_replay_response(
 fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
     tool.strip_prefix("mcp:")
         .filter(|server_key| !server_key.is_empty())
+}
+
+/// TASK-XXXX (#1335): normalize a tool/action identifier before authorization
+/// lookups (`mcp_server_key_from_tool`, `db::get_skill_action`,
+/// `db::get_mcp_tool_by_key`) so that percent-encoding, Unicode normalization
+/// form, or letter-case variation cannot be used to dodge the deny-by-default
+/// "unknown tool" / "unknown MCP server" checks — e.g. `my_tool`, `My_Tool`,
+/// and `my%5Ftool` must all resolve to the same registered identifier (or all
+/// be denied as unknown). Percent-decodes, applies Unicode NFC, then
+/// lowercases. The action_hash / canonicalized payload always uses the
+/// original, un-normalized strings from `payload.tool_call` — only
+/// authorization lookups use the normalized form.
+fn normalize_tool_identifier(value: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| value.to_string());
+    decoded.nfc().collect::<String>().to_lowercase()
 }
 
 /// Recursively sort JSON object keys by Unicode code point (`aegis-jcs-1`).
@@ -1569,6 +1588,14 @@ pub async fn authorize_action(
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
 
+    // #1335: normalized forms of the tool/action identifiers, used for every
+    // authorization lookup (MCP server/tool resolution, skill_action lookup)
+    // so percent-encoding/Unicode-form/case variations can't dodge the
+    // deny-by-default "unknown tool" checks. The action_hash / canonicalized
+    // payload below always uses the original `payload.tool_call` values.
+    let normalized_tool = normalize_tool_identifier(&payload.tool_call.tool);
+    let normalized_action = normalize_tool_identifier(&payload.tool_call.action);
+
     // Idempotency (#0072): a repeat call with the same request_id returns the
     // original decision unchanged instead of re-evaluating Cedar and writing
     // duplicate audit events / approvals / receipts.
@@ -1622,7 +1649,7 @@ pub async fn authorize_action(
         let risk_score = 100;
         let risk_level = "critical".to_string();
 
-        let audit_event_type = if mcp_server_key_from_tool(&payload.tool_call.tool).is_some() {
+        let audit_event_type = if mcp_server_key_from_tool(&normalized_tool).is_some() {
             "mcp_tool_called"
         } else {
             "tool_call_intercepted"
@@ -1676,18 +1703,15 @@ pub async fn authorize_action(
 
     // Read-through cache (#899): registered-action metadata is static between
     // registrations, so serve it from the LRU and fall back to the DB on a miss.
-    let skill_cache_key = SkillActionCache::cache_key(
-        &tenant_id,
-        &payload.tool_call.tool,
-        &payload.tool_call.action,
-    );
+    let skill_cache_key =
+        SkillActionCache::cache_key(&tenant_id, &normalized_tool, &normalized_action);
     let action_meta = match state.skill_cache.get(&skill_cache_key) {
         Some(meta) => Some(meta),
         None => match db::get_skill_action(
             &state.pool,
             &tenant_id,
-            &payload.tool_call.tool,
-            &payload.tool_call.action,
+            &normalized_tool,
+            &normalized_action,
         )
         .await
         {
@@ -1717,7 +1741,7 @@ pub async fn authorize_action(
         action_default_decision = default_decision;
     }
 
-    let mcp_server_key = mcp_server_key_from_tool(&payload.tool_call.tool).map(str::to_string);
+    let mcp_server_key = mcp_server_key_from_tool(&normalized_tool).map(str::to_string);
     let is_mcp_call = mcp_server_key.is_some();
 
     if let Some(server_key) = mcp_server_key.as_deref() {
@@ -1787,13 +1811,7 @@ pub async fn authorize_action(
             }
         }
 
-        match db::get_mcp_tool_by_key(
-            &state.pool,
-            &tenant_id,
-            server_key,
-            &payload.tool_call.action,
-        )
-        .await
+        match db::get_mcp_tool_by_key(&state.pool, &tenant_id, server_key, &normalized_action).await
         {
             Ok(Some(tool)) => {
                 risk_level = tool.risk.clone();
@@ -6290,6 +6308,104 @@ mod tests {
         assert!(response
             .matched_policies
             .contains(&"mcp_unknown_tool".to_string()));
+    }
+
+    /// #1335: percent-encoding, Unicode form, or letter-case variation in the
+    /// `tool`/`action` identifiers must not let an unregistered MCP server or
+    /// tool slip past the deny-by-default "unknown MCP tool" check (e.g. by
+    /// disguising the `mcp:` prefix so `mcp_server_key_from_tool` misses it
+    /// and the MCP-specific checks are skipped entirely). After normalization
+    /// (URL-decode, NFC, lowercase) each of these must resolve the same as
+    /// `mcp:github-mcp` / `unknown_tool` and be denied as an unknown MCP tool.
+    #[tokio::test]
+    async fn authorize_denies_unknown_mcp_tool_with_encoded_or_cased_identifier() {
+        let (state, tenant_id, agent_token) = setup_state("unknown_mcp_tool_encoded").await;
+
+        for (tool, action) in [
+            ("MCP:github-mcp", "unknown_tool"),
+            ("mcp%3Agithub-mcp", "unknown_tool"),
+            ("mcp:github-mcp", "Unknown_Tool"),
+            ("mcp:github-mcp", "unknown%5Ftool"),
+        ] {
+            let response = call_authorize(
+                state.clone(),
+                &tenant_id,
+                &agent_token,
+                mcp_authorize_request(tool, action),
+            )
+            .await;
+
+            assert_eq!(response.decision, "deny", "tool={tool}, action={action}");
+            assert_eq!(response.risk_level, "critical");
+            assert_eq!(response.risk_score, 100);
+            assert!(
+                response
+                    .matched_policies
+                    .contains(&"mcp_unknown_tool".to_string()),
+                "tool={tool}, action={action}"
+            );
+        }
+    }
+
+    /// #1335: an approved MCP tool must still be recognized when the caller's
+    /// `tool`/`action` identifiers use a different letter case or
+    /// percent-encoding than the registered `tool_key` — normalization makes
+    /// `Create_Issue` and `create%5Fissue` resolve to the registered
+    /// `create_issue` tool.
+    #[tokio::test]
+    async fn authorize_allows_approved_mcp_tool_with_encoded_or_cased_identifier() {
+        let (state, tenant_id, agent_token) = setup_state("approved_mcp_tool_encoded").await;
+        let server_id = db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+        let tool = McpToolManifestItem {
+            tool_key: "create_issue".to_string(),
+            name: "Create issue".to_string(),
+            description: None,
+            input_schema: None,
+            risk: "medium".to_string(),
+            mutates_state: false,
+            approval_required: false,
+        };
+        db::upsert_mcp_tool(&state.pool, &tenant_id, &server_id, &tool)
+            .await
+            .unwrap();
+        db::set_mcp_tool_status(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "create_issue",
+            "approved",
+        )
+        .await
+        .unwrap();
+
+        for (tool, action) in [
+            ("MCP:GitHub-Mcp", "Create_Issue"),
+            ("mcp:github-mcp", "create%5Fissue"),
+        ] {
+            let response = call_authorize(
+                state.clone(),
+                &tenant_id,
+                &agent_token,
+                mcp_authorize_request(tool, action),
+            )
+            .await;
+
+            assert_eq!(response.decision, "allow", "tool={tool}, action={action}");
+            assert_eq!(response.risk_level, "medium");
+            assert_eq!(response.risk_score, 40);
+        }
     }
 
     /// #0117: a non-mutating ("read-only") action on a registered low-risk

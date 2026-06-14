@@ -930,6 +930,7 @@ dependencies = [
  "futures-util",
  "hex",
  "jsonwebtoken",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
@@ -942,6 +943,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "unicode-normalization",
  "uuid",
 ]
 
