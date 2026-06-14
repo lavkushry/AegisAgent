@@ -5693,6 +5693,7 @@ pub mod benchutil {
             rate_limiter: RateLimiter::new(1_000_000.0, 1_000_000.0),
             quota_manager: QuotaManager::new(0, 86400), // 0 == quota disabled
             skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
@@ -5822,6 +5823,8 @@ pub mod benchutil {
                 run_id: "run_bench".to_string(),
                 trace_id: "trace_bench".to_string(),
             }),
+            nonce: None,
+            timestamp: None,
         }
     }
 }
