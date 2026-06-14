@@ -12,11 +12,13 @@ use crate::baseline;
 use crate::correlate::Correlator;
 use crate::db;
 use crate::detect::Detector;
+use crate::metrics::SecurityMetrics;
 use crate::models::{AuditEventRecord, SocAlertRecord, SocIncidentRecord};
 use crate::notify::{self, NotifyMessage, NotifySink};
 use crate::respond;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -57,15 +59,26 @@ pub struct AseEvent {
 pub struct EventSink {
     tx: mpsc::Sender<AseEvent>,
     tx_broadcast: tokio::sync::broadcast::Sender<AseEvent>,
+    metrics: Arc<SecurityMetrics>,
 }
 
 impl EventSink {
     /// Build a sink and its receiver. Production spawns [`drain`] on the
     /// receiver; tests keep it to assert exactly what was emitted.
-    pub fn channel(capacity: usize) -> (Self, mpsc::Receiver<AseEvent>) {
+    pub fn channel(
+        capacity: usize,
+        metrics: Arc<SecurityMetrics>,
+    ) -> (Self, mpsc::Receiver<AseEvent>) {
         let (tx, rx) = mpsc::channel(capacity);
         let (tx_broadcast, _) = tokio::sync::broadcast::channel(capacity);
-        (Self { tx, tx_broadcast }, rx)
+        (
+            Self {
+                tx,
+                tx_broadcast,
+                metrics,
+            },
+            rx,
+        )
     }
 
     /// Subscribe to live events.
@@ -89,12 +102,16 @@ impl EventSink {
         let _ = self.tx_broadcast.send(event.clone());
 
         match self.tx.try_send(event) {
-            Ok(()) => {}
+            Ok(()) => {
+                self.metrics.inc_event_emitted();
+            }
             Err(mpsc::error::TrySendError::Full(ev)) => {
                 warn!(event_id = %ev.event_id, "SOC event stream full — dropping event");
+                self.metrics.inc_event_dropped();
             }
             Err(mpsc::error::TrySendError::Closed(ev)) => {
                 debug!(event_id = %ev.event_id, "SOC event stream closed — dropping event");
+                self.metrics.inc_event_dropped();
             }
         }
     }
@@ -134,7 +151,11 @@ async fn handle_alert(
     sink: &dyn NotifySink,
     pool: &SqlitePool,
     notify_enabled: bool,
+    metrics: &SecurityMetrics,
 ) {
+    // OBS-002 (#1155): per (rule, severity) detection alert counter.
+    metrics.inc_alert(&alert.rule, &alert.severity);
+
     match alert.severity.as_str() {
         "high" => {
             warn!(
@@ -192,7 +213,11 @@ async fn handle_alert(
     }
 }
 
-pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize {
+pub async fn drain(
+    mut rx: mpsc::Receiver<AseEvent>,
+    pool: SqlitePool,
+    metrics: Arc<SecurityMetrics>,
+) -> usize {
     let detector = Detector::default();
     // Phase 2: construct the notify sink once from env; NullSink when
     // AEGIS_WEBHOOK_URL is absent (safe default — no network calls in tests).
@@ -239,7 +264,7 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
 
         // Phase 1: deterministic, atomic detection over the single event.
         for alert in detector.evaluate(&ev) {
-            handle_alert(&alert, sink.as_ref(), &pool, notify_enabled).await;
+            handle_alert(&alert, sink.as_ref(), &pool, notify_enabled, &metrics).await;
         }
 
         // SOC-007 (#1190): per-agent behavioral baselining (rate anomaly +
@@ -247,7 +272,7 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         match baseline::evaluate(&pool, &ev).await {
             Ok(baseline_alerts) => {
                 for alert in baseline_alerts {
-                    handle_alert(&alert, sink.as_ref(), &pool, notify_enabled).await;
+                    handle_alert(&alert, sink.as_ref(), &pool, notify_enabled, &metrics).await;
                 }
             }
             Err(e) => {
@@ -261,6 +286,9 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
         // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
         // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
         for incident in correlator.observe(&ev) {
+            // OBS-002 (#1155): per-kind correlated incident counter.
+            metrics.inc_incident(&incident.kind);
+
             // Phase 5 — persist the incident (best-effort; never panics on failure).
             // source_event_ids is serialised to JSON so the column stores structured
             // evidence without SQL concatenation (redaction + parameterization).
@@ -494,7 +522,8 @@ mod tests {
 
         // Spawn the drain task (Phase 0 consumer + Phases 1/2/3/5).
         let (tx, rx) = mpsc::channel(16);
-        let drain_handle = tokio::spawn(drain(rx, pool.clone()));
+        let metrics = Arc::new(SecurityMetrics::new());
+        let drain_handle = tokio::spawn(drain(rx, pool.clone(), metrics));
 
         // Emit DENY_STORM_N (5) deny events for the same (tenant, agent).
         for i in 0..crate::correlate::DENY_STORM_N {

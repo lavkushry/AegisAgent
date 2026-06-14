@@ -613,8 +613,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SOC phase (detection, correlation, response, indexing) consumes this one
     // stream and never touches the inline path.
     // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
-    let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
-    let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone()));
+    let metrics = Arc::new(metrics::SecurityMetrics::new());
+    let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
+    let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone(), metrics.clone()));
 
     // #0107: periodic receipt chain integrity check across all tenants. Any
     // broken link or hash mismatch is recorded as a critical SOC alert.
@@ -772,7 +773,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
         policy_engine,
         events,
-        metrics: metrics::SecurityMetrics::new(),
+        metrics,
         approval_ttl_secs,
         rate_limiter,
         quota_manager,
@@ -1112,8 +1113,10 @@ mod tests {
         let pool = db::init_db(&db_url).await.unwrap();
 
         // Setup the channel
-        let (events_sink, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
-        let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone()));
+        let metrics = Arc::new(metrics::SecurityMetrics::new());
+        let (events_sink, events_rx) =
+            events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
+        let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone(), metrics.clone()));
 
         // Emit an event
         let event = events::AseEvent {
@@ -1184,12 +1187,14 @@ mod tests {
         let policy_engine = crate::policy::PolicyEngine::init("policies.cedar")
             .await
             .unwrap();
-        let (events, _events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, _events_rx) =
+            events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
             pool,
             policy_engine,
             events,
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics,
             approval_ttl_secs: 1800,
             rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
             quota_manager: routes::QuotaManager::new(0, 86400),
@@ -1256,12 +1261,14 @@ mod tests {
         let policy_engine = crate::policy::PolicyEngine::init("policies.cedar")
             .await
             .unwrap();
-        let (events, _events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY);
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, _events_rx) =
+            events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
             pool,
             policy_engine,
             events,
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics,
             approval_ttl_secs: 1800,
             rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
             quota_manager: routes::QuotaManager::new(0, 86400),
