@@ -4900,16 +4900,14 @@ pub async fn ws_events(
                 Json(json!({"error": "Invalid or expired JWT token"})),
             )
                 .into_response();
+        } else if token.starts_with("tenant_") {
+            token.to_string()
         } else {
-            if token.starts_with("tenant_") {
-                token.to_string()
-            } else {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
-                )
-                    .into_response();
-            }
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
+            )
+                .into_response();
         }
     } else {
         let auth_header = headers.get("Authorization").and_then(|h| h.to_str().ok());
@@ -4926,16 +4924,14 @@ pub async fn ws_events(
                         Json(json!({"error": "Invalid or expired JWT token"})),
                     )
                         .into_response();
+                } else if token.starts_with("tenant_") {
+                    token.to_string()
                 } else {
-                    if token.starts_with("tenant_") {
-                        token.to_string()
-                    } else {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
-                        )
-                            .into_response();
-                    }
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
+                    )
+                        .into_response();
                 }
             } else {
                 return (
@@ -5695,6 +5691,7 @@ pub mod benchutil {
             skill_cache: SkillActionCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
         });
 
         Ok((state, tenant_id, agent_token))
@@ -5822,6 +5819,8 @@ pub mod benchutil {
                 run_id: "run_bench".to_string(),
                 trace_id: "trace_bench".to_string(),
             }),
+            nonce: None,
+            timestamp: None,
         }
     }
 }
