@@ -1854,11 +1854,47 @@ pub async fn discover_mcp_tools(
                 // denies every tool call until an operator verifies the new manifest
                 // out-of-band and explicitly restores the server. Best-effort: a DB
                 // error is logged and never blocks the discovery response.
-                if let Err(e) =
-                    db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, "quarantined")
-                        .await
+                match db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, "quarantined")
+                    .await
                 {
-                    error!("Failed to auto-quarantine drifted MCP server: {:?}", e);
+                    Ok(_) => {
+                        // #1332: record a dedicated, queryable audit event (distinct
+                        // from the manual `mcp_server_quarantined` event written by
+                        // `update_mcp_server_quarantine`) carrying the drift details
+                        // that triggered the auto-quarantine.
+                        let audit_record = AuditEventRecord {
+                            id: Uuid::new_v4().to_string(),
+                            tenant_id: tenant_id.clone(),
+                            event_type: "mcp_server_auto_quarantined".to_string(),
+                            agent_id: None,
+                            user_id: None,
+                            run_id: None,
+                            trace_id: None,
+                            span_id: None,
+                            skill: Some(format!("mcp:{}", server_key)),
+                            action: None,
+                            resource: Some(server_key.clone()),
+                            event_json: serde_json::to_string(&json!({
+                                "server_key": server_key,
+                                "owner_team": server.owner_team,
+                                "classification": classification,
+                                "severity": severity,
+                                "pinned_manifest_hash": pinned,
+                                "observed_manifest_hash": new_manifest_hash,
+                                "diff": diff,
+                            }))
+                            .unwrap_or_default(),
+                            input_hash: None,
+                            output_hash: None,
+                            decision_id: None,
+                            approval_id: None,
+                            created_at: Utc::now(),
+                        };
+                        let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+                    }
+                    Err(e) => {
+                        error!("Failed to auto-quarantine drifted MCP server: {:?}", e);
+                    }
                 }
             }
             if pinned != new_manifest_hash {
@@ -10809,6 +10845,84 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(server.status, "quarantined");
+    }
+
+    /// #1332 AC#5: auto-quarantining a drifted MCP server must write a
+    /// dedicated, queryable `audit_events` row (`mcp_server_auto_quarantined`)
+    /// distinct from the manual `mcp_server_quarantined` event, carrying the
+    /// drift classification/severity/hashes/owner so operators and compliance
+    /// can see *why* the server was auto-quarantined without reading SOC events.
+    #[tokio::test]
+    async fn discover_drift_auto_quarantine_writes_audit_event() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_drift_audit").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform-team"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        // 1) First discovery pins the manifest — no drift.
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![drift_tool("create_issue", "medium")],
+            }),
+        )
+        .await;
+
+        // 2) Manifest changes (a tool is added) — must drift and auto-quarantine.
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![
+                    drift_tool("create_issue", "medium"),
+                    drift_tool("delete_repo", "critical"),
+                ],
+            }),
+        )
+        .await;
+
+        let server = db::get_mcp_server_by_key(&state.pool, &tenant_id, "github-mcp")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.status, "quarantined");
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        let audit_event = events
+            .iter()
+            .find(|e| e.event_type == "mcp_server_auto_quarantined")
+            .expect("auto-quarantine must write a mcp_server_auto_quarantined audit event");
+        assert_eq!(audit_event.resource.as_deref(), Some("github-mcp"));
+        assert_eq!(audit_event.skill.as_deref(), Some("mcp:github-mcp"));
+
+        let details: serde_json::Value = serde_json::from_str(&audit_event.event_json).unwrap();
+        assert_eq!(details["server_key"], "github-mcp");
+        assert_eq!(details["owner_team"], "platform-team");
+        assert_eq!(details["classification"], "tool_added");
+        assert_eq!(details["severity"], "high");
+        assert!(details["pinned_manifest_hash"].is_string());
+        assert!(details["observed_manifest_hash"].is_string());
+        assert_ne!(
+            details["pinned_manifest_hash"],
+            details["observed_manifest_hash"]
+        );
+        assert!(details["diff"].is_string());
     }
 
     /// #1336 acceptance criterion: adding an optional parameter to an existing
