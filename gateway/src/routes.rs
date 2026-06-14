@@ -1284,6 +1284,23 @@ pub async fn discover_mcp_tools(
     // SOC emit is non-blocking (`try_send`). Carries the server key + hashes only —
     // never any tool payload.
     let new_manifest_hash = compute_mcp_manifest_hash(&payload.tools);
+
+    // TASK-0090 (#936): record a historical snapshot of every discovered
+    // manifest so a drift alert can be diffed against prior versions.
+    // Best-effort: a DB error here never blocks the discovery response.
+    let manifest_json = serde_json::to_string(&payload.tools).unwrap_or_default();
+    if let Err(e) = db::insert_mcp_manifest_snapshot(
+        &state.pool,
+        &tenant_id,
+        &server_key,
+        &new_manifest_hash,
+        &manifest_json,
+    )
+    .await
+    {
+        error!("Failed to record MCP manifest snapshot: {:?}", e);
+    }
+
     match db::get_mcp_server_manifest_hash(&state.pool, &tenant_id, &server_key).await {
         Ok(pinned) => {
             if !pinned.is_empty() && pinned != new_manifest_hash {
@@ -7984,6 +8001,78 @@ mod tests {
             after.last_discovery_at.is_some(),
             "discovery must stamp last_discovery_at"
         );
+    }
+
+    /// TASK-0090 (#936): each `POST /v1/mcp/servers/:server_key/tools` discovery
+    /// call must record a `mcp_manifest_snapshots` row capturing the computed
+    /// `mcp-manifest-1` hash and the raw discovered tool list, so a later
+    /// `mcp_manifest_drift` alert can be diffed against prior manifest versions.
+    #[tokio::test]
+    async fn discover_records_manifest_snapshot() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_manifest_snapshots").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        // First discovery.
+        let req1 = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "medium")],
+        };
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(req1),
+        )
+        .await;
+
+        let snapshots = db::list_mcp_manifest_snapshots(&state.pool, &tenant_id, "github-mcp", 10)
+            .await
+            .unwrap();
+        assert_eq!(snapshots.len(), 1, "first discovery records one snapshot");
+        let first_hash = snapshots[0].manifest_hash.clone();
+        assert!(first_hash.starts_with("sha256:"));
+        assert!(snapshots[0].manifest_json.contains("create_issue"));
+        assert_eq!(snapshots[0].tenant_id, tenant_id);
+        assert_eq!(snapshots[0].server_key, "github-mcp");
+
+        // Second discovery with a changed manifest records a second, distinct
+        // snapshot — most-recent first.
+        let req2 = DiscoverMcpToolsRequest {
+            tools: vec![drift_tool("create_issue", "critical")],
+        };
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(req2),
+        )
+        .await;
+
+        let snapshots = db::list_mcp_manifest_snapshots(&state.pool, &tenant_id, "github-mcp", 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "second discovery records another snapshot"
+        );
+        assert_ne!(
+            snapshots[0].manifest_hash, first_hash,
+            "changed manifest must produce a different hash"
+        );
+        assert_eq!(snapshots[1].manifest_hash, first_hash);
     }
 
     /// TASK-0152 (#998): `discover_mcp_tools` must register a `skills` row

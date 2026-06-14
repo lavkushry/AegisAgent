@@ -305,6 +305,20 @@ pub struct McpServerRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// TASK-0090 (#936): one row per MCP tool-manifest discovery call, capturing
+/// the computed `mcp-manifest-1` hash and the raw discovered tool list so
+/// manifest drift can be diffed after the fact.
+#[cfg(test)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct McpManifestSnapshotRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub server_key: String,
+    pub manifest_hash: String,
+    pub manifest_json: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct McpToolRecord {
     pub id: String,
