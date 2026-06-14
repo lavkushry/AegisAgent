@@ -846,6 +846,72 @@ fn approval_is_expired(app: &ApprovalRecord) -> bool {
     app.expires_at.map(|e| e < Utc::now()).unwrap_or(false)
 }
 
+/// #1300: build the 409 CONFLICT response when an atomic conditional approval
+/// transition (`db::update_approval_status`/`update_approval_edit`) returned
+/// `false` — i.e. the approval was no longer `status = 'created'` and
+/// non-expired at the instant of the UPDATE. Re-reads the approval (best
+/// effort) purely to produce a helpful error message; the UPDATE's failure,
+/// not this re-read, is the authority that the transition did not happen.
+///
+/// If the approval has expired, emits a tamper-attempt receipt tagged with
+/// `expired_tamper_kind` (e.g. `"reject_expired"`/`"edit_expired"`), matching
+/// the receipt `approve_approval` already emits for its pre-check expiry case.
+async fn conflict_response_for_failed_transition(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+    approval_id: &Uuid,
+    expired_tamper_kind: &str,
+) -> axum::response::Response {
+    let approval = db::get_approval_by_id(&state.pool, tenant_id, &approval_id.to_string())
+        .await
+        .ok()
+        .flatten();
+
+    match approval {
+        Some(approval) if approval.status == "created" && approval_is_expired(&approval) => {
+            emit_tamper_attempt_receipt(
+                &state.pool,
+                &state.events,
+                tenant_id,
+                None,
+                expired_tamper_kind,
+                &approval_id.to_string(),
+                Some(approval.original_call_hash.clone()),
+                Some(&approval.decision_id),
+            )
+            .await;
+            (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "Approval has expired",
+                    "approval_id": approval_id,
+                    "reason": "approval_expired",
+                })),
+            )
+                .into_response()
+        }
+        Some(approval) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Approval already decided",
+                "status": approval.status,
+                "approval_id": approval_id,
+                "reason": "approval_already_decided",
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Approval already decided",
+                "approval_id": approval_id,
+                "reason": "approval_already_decided",
+            })),
+        )
+            .into_response(),
+    }
+}
+
 /// True if a write-decision/audit failure for this action must fail closed
 /// (deny) rather than degrade to allow-with-warning (#1299). Mutating
 /// actions and anything risk-level "medium"/"high"/"critical" are
@@ -2606,13 +2672,17 @@ pub async fn approve_approval(
             Json(json!({
                 "error": "Approval has expired",
                 "approval_id": approval_id,
+                "reason": "approval_expired",
             })),
         )
             .into_response();
     }
 
-    // Update approval status to APPROVED
-    if let Err(e) = db::update_approval_status(
+    // Atomically transition to APPROVED (#1300). The UPDATE itself is the
+    // source of truth: it only matches a still-`created`, non-expired row, so
+    // a concurrent decision or last-instant expiry between the pre-checks
+    // above and this write is caught here rather than silently overwritten.
+    let updated = match db::update_approval_status(
         &state.pool,
         &tenant_id,
         &approval_id.to_string(),
@@ -2623,12 +2693,25 @@ pub async fn approve_approval(
     )
     .await
     {
-        error!("Failed to approve request: {:?}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Failed to approve request"})),
+        Ok(updated) => updated,
+        Err(e) => {
+            error!("Failed to approve request: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to approve request"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !updated {
+        return conflict_response_for_failed_transition(
+            &state,
+            &tenant_id,
+            &approval_id,
+            "approve_expired",
         )
-            .into_response();
+        .await;
     }
 
     // Write audit event
@@ -2672,8 +2755,32 @@ pub async fn reject_approval(
     Path(approval_id): Path<Uuid>,
     Json(payload): Json<ApproveRequest>,
 ) -> impl IntoResponse {
-    // Update approval status to REJECTED
-    if let Err(e) = db::update_approval_status(
+    // 404 if the approval doesn't exist for this tenant.
+    let approval =
+        match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
+            Ok(Some(app)) => app,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "Approval request not found"})),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Database lookup error: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    // Atomically transition to REJECTED (#1300). Previously this handler had
+    // NO status/expiry guard at all and would unconditionally overwrite an
+    // already-decided approval's status — the UPDATE itself is now the
+    // source of truth: it only matches a still-`created`, non-expired row.
+    let updated = match db::update_approval_status(
         &state.pool,
         &tenant_id,
         &approval_id.to_string(),
@@ -2684,22 +2791,28 @@ pub async fn reject_approval(
     )
     .await
     {
-        error!("Failed to reject request: {:?}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Failed to reject request"})),
+        Ok(updated) => updated,
+        Err(e) => {
+            error!("Failed to reject request: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to reject request"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !updated {
+        return conflict_response_for_failed_transition(
+            &state,
+            &tenant_id,
+            &approval_id,
+            "reject_expired",
         )
-            .into_response();
+        .await;
     }
 
-    // #1301: best-effort lookup of the approval's bound decision_id for audit
-    // linkage. Never blocks the response on failure.
-    let linked_decision_id =
-        db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
-            .await
-            .ok()
-            .flatten()
-            .map(|a| a.decision_id);
+    let linked_decision_id = Some(approval.decision_id.clone());
 
     // Write audit event
     let audit_record = AuditEventRecord {
@@ -2784,8 +2897,11 @@ pub async fn edit_approval(
     // not the original.
     let new_action_hash = hash_tool_call(&payload.edited_tool_call);
 
-    // Update approval status to EDITED, re-binding the action_hash.
-    if let Err(e) = db::update_approval_edit(
+    // Atomically transition to EDITED, re-binding the action_hash (#1300). The
+    // UPDATE itself is the source of truth: it only matches a still-`created`,
+    // non-expired row, closing the TOCTOU window between the pre-check above
+    // and this write.
+    let updated = match db::update_approval_edit(
         &state.pool,
         &tenant_id,
         &approval_id.to_string(),
@@ -2796,12 +2912,25 @@ pub async fn edit_approval(
     )
     .await
     {
-        error!("Failed to edit approval: {:?}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Failed to edit request"})),
+        Ok(updated) => updated,
+        Err(e) => {
+            error!("Failed to edit approval: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to edit request"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !updated {
+        return conflict_response_for_failed_transition(
+            &state,
+            &tenant_id,
+            &approval_id,
+            "edit_expired",
         )
-            .into_response();
+        .await;
     }
 
     // Write audit event
@@ -3527,6 +3656,8 @@ pub async fn rollback_policy(
                 .unwrap_or_default(),
                 input_hash: None,
                 output_hash: None,
+                decision_id: None,
+                approval_id: None,
                 created_at: Utc::now(),
             };
             if let Err(e) = db::insert_audit_event(&state.pool, &audit_record).await {
@@ -6275,6 +6406,266 @@ mod tests {
         .await
         .into_response();
         assert_eq!(consume.status(), StatusCode::CONFLICT);
+    }
+
+    /// #1300: approve_approval's expiry 409 response carries a machine-readable
+    /// `reason` field so Slack callback handlers can distinguish "expired" from
+    /// other conflict cases.
+    #[tokio::test]
+    async fn approve_approval_expired_response_includes_reason_field() {
+        let (state, tenant_id, agent_token) = setup_state("approve_expired_reason").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "30").await;
+
+        // Force the approval past its window before it is ever decided.
+        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
+            .bind(Utc::now() - Duration::minutes(5))
+            .bind(tenant_id.as_str())
+            .bind(approval_id.to_string())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let approve_resp = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve_resp.status(), StatusCode::CONFLICT);
+        let body = to_bytes(approve_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reason"], "approval_expired");
+
+        // The stored status must remain "created" — the conditional UPDATE
+        // must not have stomped it.
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(stored.status, "created");
+    }
+
+    /// #1300: reject_approval previously had NO status/expiry guard at all and
+    /// would unconditionally overwrite an already-APPROVED approval's status to
+    /// REJECTED. A reject callback arriving after the approval has already been
+    /// decided must be refused with 409 and must not change the stored status.
+    #[tokio::test]
+    async fn reject_approval_rejects_already_approved_approval() {
+        let (state, tenant_id, agent_token) = setup_state("reject_after_approve").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "31").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let reject = reject_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: Some("too late".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(reject.status(), StatusCode::CONFLICT);
+        let body = to_bytes(reject.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reason"], "approval_already_decided");
+        assert_eq!(json["status"], "APPROVED");
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(
+            stored.status, "APPROVED",
+            "reject must not overwrite an already-decided approval"
+        );
+    }
+
+    /// #1300: reject_approval must fail closed (409, reason `approval_expired`)
+    /// when the approval window has already passed, mirroring
+    /// `consume_approval_rejects_expired_approval`.
+    #[tokio::test]
+    async fn reject_approval_rejects_expired_approval() {
+        let (state, tenant_id, agent_token) = setup_state("reject_rejects_expired").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "32").await;
+
+        // Age the approval out while it is still pending.
+        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
+            .bind(Utc::now() - Duration::minutes(5))
+            .bind(tenant_id.as_str())
+            .bind(approval_id.to_string())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let reject = reject_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: Some("too late".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(reject.status(), StatusCode::CONFLICT);
+        let body = to_bytes(reject.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reason"], "approval_expired");
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(
+            stored.status, "created",
+            "reject must not change the status of an expired pending approval"
+        );
+    }
+
+    /// #1300: edit_approval must fail closed (409, reason `approval_expired`)
+    /// when the approval window has already passed, mirroring the reject/consume
+    /// expiry guards.
+    #[tokio::test]
+    async fn edit_approval_rejects_expired_approval() {
+        let (state, tenant_id, agent_token) = setup_state("edit_rejects_expired").await;
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/33".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        let approval_id = response.approval.expect("approval created").approval_id;
+
+        // Age the approval out while it is still pending.
+        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
+            .bind(Utc::now() - Duration::minutes(5))
+            .bind(tenant_id.as_str())
+            .bind(approval_id.to_string())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let edit_resp = edit_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: Some("tightening scope".to_string()),
+                edited_tool_call: AuthorizeToolCall {
+                    tool: "github".to_string(),
+                    action: "merge_pull_request".to_string(),
+                    resource: Some("repo/example/pull/33".to_string()),
+                    mutates_state: true,
+                    parameters: serde_json::json!({"base_branch": "main2"}),
+                },
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit_resp.status(), StatusCode::CONFLICT);
+        let body = to_bytes(edit_resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reason"], "approval_expired");
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(
+            stored.status, "created",
+            "edit must not change the status of an expired pending approval"
+        );
+    }
+
+    /// #1300 (AC #3): concurrent approve + reject against the same pending
+    /// approval must race safely — exactly one wins (200 OK), the other is
+    /// rejected with 409 `approval_already_decided`, and the final stored
+    /// status reflects whichever decision won (never both, never neither).
+    #[tokio::test]
+    async fn concurrent_approve_and_reject_only_one_wins() {
+        let (state, tenant_id, agent_token) = setup_state("concurrent_approve_reject").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "34").await;
+
+        let (approve_resp, reject_resp) = tokio::join!(
+            approve_approval(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Path(approval_id),
+                Json(ApproveRequest {
+                    approver_user_id: "reviewer-a".to_string(),
+                    reason: None,
+                }),
+            ),
+            reject_approval(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Path(approval_id),
+                Json(ApproveRequest {
+                    approver_user_id: "reviewer-b".to_string(),
+                    reason: Some("racing reject".to_string()),
+                }),
+            ),
+        );
+
+        let approve_resp = approve_resp.into_response();
+        let reject_resp = reject_resp.into_response();
+        let statuses = [approve_resp.status(), reject_resp.status()];
+        let ok_count = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+        let conflict_count = statuses
+            .iter()
+            .filter(|s| **s == StatusCode::CONFLICT)
+            .count();
+        assert_eq!(ok_count, 1, "exactly one of approve/reject must succeed");
+        assert_eq!(
+            conflict_count, 1,
+            "exactly one of approve/reject must be rejected"
+        );
+
+        // Whichever lost must report `approval_already_decided`.
+        let loser = if approve_resp.status() == StatusCode::CONFLICT {
+            approve_resp
+        } else {
+            reject_resp
+        };
+        let body = to_bytes(loser.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reason"], "approval_already_decided");
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert!(
+            stored.status == "APPROVED" || stored.status == "REJECTED",
+            "final status must reflect exactly the winning decision, got {}",
+            stored.status
+        );
     }
 
     /// #0134: consume_approval returns the original action_hash that the
@@ -10716,7 +11107,7 @@ mod tests {
         .into_response();
         assert_eq!(response_rollback.status(), StatusCode::OK);
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id)
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
             .await
             .unwrap();
         let rollback_event = events
