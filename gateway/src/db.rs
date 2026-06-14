@@ -1154,6 +1154,116 @@ pub async fn export_tenant_data(
     })
 }
 
+/// #1298 (Compliance Evidence Pack): tenant-scoped `action_receipts`,
+/// optionally bounded by a `[from, to]` `created_at` window. Either bound may
+/// be `None` to leave that side of the range open. Parameterized; both bounds
+/// are bound twice for the `(? IS NULL OR created_at >= ?)` pattern, matching
+/// [`get_all_audit_events`]'s optional-filter style.
+pub async fn list_action_receipts_in_range(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ActionReceiptRecord>(
+        "SELECT * FROM action_receipts
+         WHERE tenant_id = ?
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
+         ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .bind(from)
+    .bind(from)
+    .bind(to)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+}
+
+/// #1298 (Compliance Evidence Pack): tenant-scoped `audit_events`, optionally
+/// bounded by a `[from, to]` `created_at` window. Distinct from
+/// [`get_all_audit_events`] (which filters by `decision_id` and caps at 100
+/// rows) — evidence packs need the full date-bounded set, uncapped.
+pub async fn get_audit_events_in_range(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AuditEventRecord>(
+        "SELECT * FROM audit_events
+         WHERE tenant_id = ?
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
+         ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .bind(from)
+    .bind(from)
+    .bind(to)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+}
+
+/// #1298 (Compliance Evidence Pack): tenant-scoped `approvals`, optionally
+/// bounded by a `[from, to]` `created_at` window. Includes `approver_user_id`
+/// and `decided_at` as-is — human-oversight evidence for SOC 2 / EU AI Act
+/// Art. 14.
+pub async fn list_approvals_in_range(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> Result<Vec<ApprovalRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ApprovalRecord>(
+        "SELECT * FROM approvals
+         WHERE tenant_id = ?
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
+         ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .bind(from)
+    .bind(from)
+    .bind(to)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+}
+
+/// #1298 (Compliance Evidence Pack): tenant-scoped `soc_incidents`, optionally
+/// bounded by a `[from, to]` `opened_at` window (the table has no
+/// `created_at` column; `opened_at` is the analogous lifecycle timestamp).
+/// `opened_at` is stored as an RFC-3339 `TEXT` column, so the range bounds are
+/// passed as RFC-3339 strings for a lexicographic comparison that matches
+/// chronological order.
+pub async fn list_soc_incidents_in_range(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> Result<Vec<SocIncidentRecord>, sqlx::Error> {
+    let from = from.map(|d| d.to_rfc3339());
+    let to = to.map(|d| d.to_rfc3339());
+    sqlx::query_as::<_, SocIncidentRecord>(
+        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
+         FROM soc_incidents
+         WHERE tenant_id = ?
+           AND (? IS NULL OR opened_at >= ?)
+           AND (? IS NULL OR opened_at <= ?)
+         ORDER BY opened_at ASC",
+    )
+    .bind(tenant_id)
+    .bind(&from)
+    .bind(&from)
+    .bind(&to)
+    .bind(&to)
+    .fetch_all(pool)
+    .await
+}
+
 /// Permanently delete every row owned by `tenant_id` (#947, GDPR right to
 /// erasure), including the `tenants` row itself. Runs in a single
 /// transaction, deleting child tables before their parents so that the

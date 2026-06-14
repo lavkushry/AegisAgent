@@ -41,6 +41,9 @@ jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
 # their existing locked versions — no new supply-chain surface.
 percent-encoding = "2.3.2"
 unicode-normalization = "0.1.25"
+# Compliance Evidence Pack export (#1298): in-memory ZIP construction for
+# GET /v1/compliance/evidence-pack.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"

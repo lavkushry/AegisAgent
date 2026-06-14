@@ -4667,6 +4667,237 @@ pub async fn get_tenant(
     }
 }
 
+/// Query params for `GET /v1/compliance/evidence-pack` (#1298). Both bounds
+/// are optional RFC-3339 timestamps; an absent bound leaves that side of the
+/// range open. Strings (not `DateTime<Utc>`) so invalid input can be reported
+/// as a 400 rather than rejected silently by the extractor.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EvidencePackParams {
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+/// GET /v1/compliance/evidence-pack — compliance evidence pack export (#1298).
+///
+/// Returns a ZIP archive (tenant-scoped, optionally date-bounded by `from`/`to`
+/// RFC-3339 query params) containing:
+/// - `manifest.json` — schema tag, tenant id, generation time, requested
+///   range, row counts, and the canonicalization scheme.
+/// - `receipts.jsonl` — date-filtered `action_receipts` (one JSON object per
+///   line). Receipts may carry an optional Ed25519 `signature` /
+///   `signer_public_key` — non-repudiation evidence (SOC 2 / EU AI Act
+///   Art. 14).
+/// - `audit_events.jsonl` — date-filtered `audit_events`.
+/// - `policies.json` — the tenant's *current* policy set (not date-filtered;
+///   documented in `manifest.json`).
+/// - `incidents.json` — date-filtered `soc_incidents` (by `opened_at`).
+/// - `approvals.json` — date-filtered `approvals`, including
+///   `approver_user_id` / `decided_at` — human-oversight evidence.
+///
+/// Fails closed: an unparsable `from`/`to` returns `400 Bad Request` rather
+/// than silently ignoring the filter.
+pub async fn get_evidence_pack(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::Query(params): axum::extract::Query<EvidencePackParams>,
+) -> impl IntoResponse {
+    let from = match params.from.as_deref().map(DateTime::parse_from_rfc3339) {
+        Some(Ok(dt)) => Some(dt.with_timezone(&Utc)),
+        Some(Err(e)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid 'from' timestamp: {e}")})),
+            )
+                .into_response();
+        }
+        None => None,
+    };
+    let to = match params.to.as_deref().map(DateTime::parse_from_rfc3339) {
+        Some(Ok(dt)) => Some(dt.with_timezone(&Utc)),
+        Some(Err(e)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid 'to' timestamp: {e}")})),
+            )
+                .into_response();
+        }
+        None => None,
+    };
+
+    let receipts = match db::list_action_receipts_in_range(&state.pool, &tenant_id, from, to).await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load receipts for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+    let audit_events = match db::get_audit_events_in_range(&state.pool, &tenant_id, from, to).await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load audit events for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+    let approvals = match db::list_approvals_in_range(&state.pool, &tenant_id, from, to).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load approvals for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+    let incidents = match db::list_soc_incidents_in_range(&state.pool, &tenant_id, from, to).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load incidents for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+    let policies = match db::list_policies(&state.pool, &tenant_id).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load policies for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let manifest = json!({
+        "schema": "aegis-evidence-pack-1",
+        "tenant_id": tenant_id,
+        "generated_at": Utc::now().to_rfc3339(),
+        "range": {
+            "from": params.from,
+            "to": params.to,
+        },
+        "counts": {
+            "receipts": receipts.len(),
+            "audit_events": audit_events.len(),
+            "approvals": approvals.len(),
+            "incidents": incidents.len(),
+            "policies": policies.len(),
+        },
+        "canonicalization_scheme": "aegis-jcs-1",
+        "policies_note": "policies.json reflects current policy state, not date-filtered",
+    });
+
+    let zip_bytes = match build_evidence_pack_zip(
+        &manifest,
+        &receipts,
+        &audit_events,
+        &policies,
+        &incidents,
+        &approvals,
+    ) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            error!("Failed to build evidence pack zip: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to build evidence pack"})),
+            )
+                .into_response();
+        }
+    };
+
+    let filename = format!("evidence-pack-{tenant_id}-{}.zip", Utc::now().timestamp());
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/zip".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        zip_bytes,
+    )
+        .into_response()
+}
+
+/// Serialize the evidence-pack entries into an in-memory ZIP archive
+/// (#1298). `manifest` is written as pretty JSON; the `.jsonl` entries are one
+/// compact JSON object per line; the `.json` entries are JSON arrays.
+fn build_evidence_pack_zip(
+    manifest: &Value,
+    receipts: &[ActionReceiptRecord],
+    audit_events: &[AuditEventRecord],
+    policies: &[PolicyRecord],
+    incidents: &[SocIncidentRecord],
+    approvals: &[ApprovalRecord],
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        writer.start_file("manifest.json", options)?;
+        let manifest_bytes = serde_json::to_vec_pretty(manifest)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &manifest_bytes)?;
+
+        writer.start_file("receipts.jsonl", options)?;
+        for receipt in receipts {
+            let line = serde_json::to_string(receipt)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            std::io::Write::write_all(&mut writer, line.as_bytes())?;
+            std::io::Write::write_all(&mut writer, b"\n")?;
+        }
+
+        writer.start_file("audit_events.jsonl", options)?;
+        for event in audit_events {
+            let line = serde_json::to_string(event)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            std::io::Write::write_all(&mut writer, line.as_bytes())?;
+            std::io::Write::write_all(&mut writer, b"\n")?;
+        }
+
+        writer.start_file("policies.json", options)?;
+        let policies_bytes = serde_json::to_vec_pretty(policies)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &policies_bytes)?;
+
+        writer.start_file("incidents.json", options)?;
+        let incidents_bytes = serde_json::to_vec_pretty(incidents)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &incidents_bytes)?;
+
+        writer.start_file("approvals.json", options)?;
+        let approvals_bytes = serde_json::to_vec_pretty(approvals)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &approvals_bytes)?;
+
+        writer.finish().map_err(std::io::Error::other)?;
+    }
+    Ok(cursor.into_inner())
+}
+
 /// GET /v1/tenants/:id/export — GDPR data-portability (#946). Returns the full
 /// tenant-scoped data bundle (agents, decisions, approvals, receipts, audit
 /// events, MCP servers) as JSON. A caller may export ONLY its own tenant: a path
@@ -5471,6 +5702,37 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Get audit events log",
                     "responses": {
                         "200": { "description": "List of audit events" }
+                    }
+                }
+            },
+            "/v1/compliance/evidence-pack": {
+                "get": {
+                    "summary": "Download a compliance evidence pack (SOC 2 Type II / EU AI Act Art. 14)",
+                    "description": "Returns a tenant-scoped ZIP archive containing manifest.json, receipts.jsonl, audit_events.jsonl, policies.json, incidents.json, and approvals.json. Receipts may include Ed25519 signatures (non-repudiation); approvals include approver_user_id (human oversight evidence).",
+                    "parameters": [
+                        {
+                            "name": "from",
+                            "in": "query",
+                            "required": false,
+                            "schema": { "type": "string", "format": "date-time" },
+                            "description": "RFC-3339 lower bound for date-filtered entries (receipts, audit events, approvals, incidents). Omit for an open lower bound."
+                        },
+                        {
+                            "name": "to",
+                            "in": "query",
+                            "required": false,
+                            "schema": { "type": "string", "format": "date-time" },
+                            "description": "RFC-3339 upper bound for date-filtered entries. Omit for an open upper bound."
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "ZIP archive",
+                            "content": {
+                                "application/zip": { "schema": { "type": "string", "format": "binary" } }
+                            }
+                        },
+                        "400": { "description": "Invalid from/to RFC-3339 timestamp" }
                     }
                 }
             },
@@ -13599,5 +13861,336 @@ mod tests {
         .await;
 
         assert_eq!(response.decision, "allow");
+    }
+
+    // ── #1298: Compliance Evidence Pack ─────────────────────────────────────
+
+    /// Seed a minimal set of compliance-relevant rows for `tenant_id`:
+    /// an agent + decision (via authorize), an action receipt, an audit
+    /// event, an approval with `approver_user_id` set, a current policy, and
+    /// a SOC incident. Returns the decision id used for the receipt.
+    async fn seed_evidence_pack_data(state: &Arc<AppState>, tenant_id: &str, agent_token: &str) {
+        // Agent + decision + receipt + audit event via a normal authorize call.
+        let _ = call_authorize(
+            state.clone(),
+            tenant_id,
+            agent_token,
+            mcp_authorize_request("github", "read_issue"),
+        )
+        .await;
+
+        // Reuse the decision row created above so the approval's FK is valid.
+        let decision_id: String = sqlx::query_scalar(
+            "SELECT id FROM decisions WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(tenant_id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+        // Approval with approver identity set.
+        let approval = ApprovalRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id,
+            status: "approved".to_string(),
+            approver_group: Some("platform-leads".to_string()),
+            approver_user_id: Some("user_alice".to_string()),
+            reason: Some("looks safe".to_string()),
+            original_skill_call: "{}".to_string(),
+            original_call_hash: "deadbeef".to_string(),
+            edited_skill_call: None,
+            expires_at: None,
+            decided_at: Some(Utc::now()),
+            callback_url: None,
+            callback_secret_hash: None,
+            created_at: Utc::now(),
+        };
+        db::insert_approval(&state.pool, &approval).await.unwrap();
+
+        // Current policy snapshot.
+        let policy = PolicyRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_key: "evidence_pack_policy".to_string(),
+            name: "Evidence Pack Policy".to_string(),
+            language: "cedar".to_string(),
+            body: "permit(principal, action, resource);".to_string(),
+            version: 1,
+            status: "active".to_string(),
+            created_by: None,
+            created_at: Utc::now(),
+        };
+        db::insert_policy(&state.pool, &policy).await.unwrap();
+
+        // SOC incident.
+        let incident = SocIncidentRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: "test_incident".to_string(),
+            severity: "high".to_string(),
+            agent_id: "evidence-agent".to_string(),
+            summary: "Evidence pack test incident".to_string(),
+            source_event_ids: "[]".to_string(),
+            opened_at: Utc::now().to_rfc3339(),
+            status: "open".to_string(),
+            closed_at: None,
+        };
+        db::insert_soc_incident(&state.pool, &incident)
+            .await
+            .unwrap();
+    }
+
+    /// Parse a ZIP byte buffer and return the set of entry names it contains.
+    fn zip_entry_names(bytes: &[u8]) -> std::collections::HashSet<String> {
+        let reader = std::io::Cursor::new(bytes);
+        let archive = zip::ZipArchive::new(reader).unwrap();
+        archive.file_names().map(|s| s.to_string()).collect()
+    }
+
+    /// Read a single entry from a ZIP byte buffer as a UTF-8 string.
+    fn zip_entry_string(bytes: &[u8], name: &str) -> String {
+        let reader = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+        let mut file = archive.by_name(name).unwrap();
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut file, &mut out).unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn evidence_pack_returns_zip_with_expected_entries() {
+        let (state, tenant_id, agent_token) = setup_state("evidence_pack_entries").await;
+        seed_evidence_pack_data(&state, &tenant_id, &agent_token).await;
+
+        let resp = get_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::Query(EvidencePackParams {
+                from: None,
+                to: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let entries = zip_entry_names(&body);
+        for expected in [
+            "manifest.json",
+            "receipts.jsonl",
+            "audit_events.jsonl",
+            "policies.json",
+            "incidents.json",
+            "approvals.json",
+        ] {
+            assert!(
+                entries.contains(expected),
+                "missing zip entry: {expected} (have {entries:?})"
+            );
+        }
+
+        let manifest: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "manifest.json")).unwrap();
+        assert_eq!(manifest["schema"], "aegis-evidence-pack-1");
+        assert_eq!(manifest["tenant_id"], tenant_id);
+        assert_eq!(manifest["canonicalization_scheme"], "aegis-jcs-1");
+        assert!(manifest["counts"]["receipts"].as_u64().unwrap() >= 1);
+        assert!(manifest["counts"]["audit_events"].as_u64().unwrap() >= 1);
+        assert_eq!(manifest["counts"]["approvals"].as_u64().unwrap(), 1);
+        assert_eq!(manifest["counts"]["incidents"].as_u64().unwrap(), 1);
+        assert_eq!(manifest["counts"]["policies"].as_u64().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn evidence_pack_date_range_filters_receipts_and_audit_events() {
+        let (state, tenant_id, agent_token) = setup_state("evidence_pack_range").await;
+
+        // Old receipt + audit event (outside range).
+        let _ = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("github", "read_issue"),
+        )
+        .await;
+        let old_time = Utc::now() - Duration::days(10);
+        sqlx::query("UPDATE action_receipts SET created_at = ? WHERE tenant_id = ?")
+            .bind(old_time)
+            .bind(&tenant_id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE audit_events SET created_at = ? WHERE tenant_id = ?")
+            .bind(old_time)
+            .bind(&tenant_id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        // New receipt + audit event (inside range).
+        let _ = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("github", "read_issue"),
+        )
+        .await;
+
+        // Narrow the range to exclude the 10-day-old rows but include "now".
+        let from = (Utc::now() - Duration::days(1)).to_rfc3339();
+        let to = (Utc::now() + Duration::days(1)).to_rfc3339();
+
+        let resp = get_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::Query(EvidencePackParams {
+                from: Some(from),
+                to: Some(to),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+
+        let receipts_jsonl = zip_entry_string(&body, "receipts.jsonl");
+        let receipt_lines: Vec<&str> = receipts_jsonl.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            receipt_lines.len(),
+            1,
+            "only the in-range receipt should be present"
+        );
+
+        let audit_jsonl = zip_entry_string(&body, "audit_events.jsonl");
+        let audit_lines: Vec<&str> = audit_jsonl.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            audit_lines.len(),
+            1,
+            "only the in-range audit event should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn evidence_pack_is_tenant_scoped() {
+        let (state, tenant_a, agent_a) = setup_state("evidence_pack_tenant_a").await;
+        seed_evidence_pack_data(&state, &tenant_a, &agent_a).await;
+
+        // Register a second tenant + agent in the *same* pool and seed its
+        // own evidence data.
+        let tenant_b = "tenant_other_evidence".to_string();
+        db::register_tenant(&state.pool, &tenant_b, "Other Tenant", "developer")
+            .await
+            .unwrap();
+        let register_resp = register_agent(
+            State(state.clone()),
+            TenantId(tenant_b.clone()),
+            Json(RegisterAgentRequest {
+                agent_key: "evidence-agent-b".to_string(),
+                name: "Evidence Agent B".to_string(),
+                owner_team: None,
+                environment: "production".to_string(),
+                framework: None,
+                model_provider: None,
+                model_name: None,
+                risk_tier: "low".to_string(),
+                purpose: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(register_resp.status(), StatusCode::CREATED);
+        let register_body = to_bytes(register_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let register_json: serde_json::Value = serde_json::from_slice(&register_body).unwrap();
+        let agent_b = register_json["agent_token"].as_str().unwrap().to_string();
+
+        seed_evidence_pack_data(&state, &tenant_b, &agent_b).await;
+
+        let resp = get_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_a.clone()),
+            axum::extract::Query(EvidencePackParams {
+                from: None,
+                to: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+
+        let approvals: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "approvals.json")).unwrap();
+        let approvals = approvals.as_array().unwrap();
+        assert_eq!(approvals.len(), 1, "only tenant A's approval is included");
+        for approval in approvals {
+            assert_eq!(approval["tenant_id"], tenant_a);
+            assert_ne!(approval["tenant_id"], tenant_b);
+        }
+
+        let incidents: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "incidents.json")).unwrap();
+        let incidents = incidents.as_array().unwrap();
+        assert_eq!(incidents.len(), 1, "only tenant A's incident is included");
+        for incident in incidents {
+            assert_eq!(incident["tenant_id"], tenant_a);
+        }
+
+        let policies: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "policies.json")).unwrap();
+        let policies = policies.as_array().unwrap();
+        assert_eq!(policies.len(), 1, "only tenant A's policy is included");
+        for policy in policies {
+            assert_eq!(policy["tenant_id"], tenant_a);
+        }
+    }
+
+    #[tokio::test]
+    async fn evidence_pack_invalid_date_param_returns_400() {
+        let (state, tenant_id, _agent_token) = setup_state("evidence_pack_invalid_date").await;
+
+        let resp = get_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::Query(EvidencePackParams {
+                from: Some("not-a-date".to_string()),
+                to: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn evidence_pack_includes_approver_identity_in_approvals() {
+        let (state, tenant_id, agent_token) = setup_state("evidence_pack_approver").await;
+        seed_evidence_pack_data(&state, &tenant_id, &agent_token).await;
+
+        let resp = get_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::Query(EvidencePackParams {
+                from: None,
+                to: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+
+        let approvals: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "approvals.json")).unwrap();
+        let approvals = approvals.as_array().unwrap();
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0]["approver_user_id"], "user_alice");
     }
 }
