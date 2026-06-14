@@ -9,6 +9,16 @@ reaches 1.0.
 
 ### Added
 
+- **TASK-0088 (#934): `detection_rules` table + management API**. New
+  migration `0008_detection_rules.sql` adds a tenant-scoped, indexed table
+  (`rule_key`, `name`, `severity`, `condition`, `summary_template`,
+  `enabled`) managed via `POST/GET /v1/detection_rules` (upsert by
+  `(tenant_id, rule_key)`) and `DELETE /v1/detection_rules/:id`. This is the
+  additive first step ("the migration issue") referenced by SOC-003 (#1186):
+  loading these rows as a YAML-driven detection DSL that replaces the
+  hardcoded Rust functions in `detect.rs` (`confused_deputy_block`,
+  `approval_required_surface`, etc.) is deferred as separate, larger-scope
+  work.
 - **Tenant-managed API keys** (TASK-0093, #939): new `api_keys` table
   (`gateway/migrations/0007_api_keys.sql`) plus management endpoints
   `POST /v1/api_keys` (returns the plaintext key exactly once;

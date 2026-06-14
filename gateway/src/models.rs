@@ -459,6 +459,24 @@ pub struct WebhookSubscriptionRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// TASK-0088 (#934): a tenant-managed detection rule. First step toward
+/// SOC-003 (#1186) — `condition` and `summary_template` hold a YAML rule
+/// body that will eventually be loaded by `detect.rs` to replace the
+/// hardcoded Rust detection functions. `enabled` lets operators turn a rule
+/// off without deleting it.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct DetectionRuleRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub rule_key: String,
+    pub name: String,
+    pub severity: String,
+    pub condition: String,
+    pub summary_template: String,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}
+
 /// TASK-0093 (#939): a tenant-managed API key. `key_hash` is `sha256(key)` —
 /// the plaintext key is returned exactly once at creation and never persisted.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
