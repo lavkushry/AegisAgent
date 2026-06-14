@@ -9,6 +9,9 @@ ENV CARGO_HTTP_MULTIPLEXING=false
 
 COPY gateway/Cargo.toml gateway/Cargo.lock ./gateway/
 COPY gateway/src ./gateway/src
+COPY gateway/canon ./gateway/canon
+COPY gateway/benches ./gateway/benches
+COPY gateway/migrations ./gateway/migrations
 COPY gateway/policies.cedar ./gateway/policies.cedar
 RUN cargo build --release --manifest-path gateway/Cargo.toml
 
