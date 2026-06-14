@@ -2659,6 +2659,91 @@ pub async fn get_action_receipt_by_id(
     .await
 }
 
+/// #1312: append a hash-chained entry to the tenant's `policy_audit_log`.
+///
+/// Mirrors [`append_action_receipt_atomic`]: `BEGIN IMMEDIATE` serializes
+/// concurrent appenders, the current chain head is read, and `build` receives
+/// that head's `entry_hash` (`""` for the genesis entry) and returns the
+/// fully-hashed record to insert. The `policy_audit_log` table additionally
+/// has SQLite triggers that abort any `UPDATE`/`DELETE`, making the chain
+/// tamper-evident at the database level.
+pub async fn append_policy_audit_log_entry_atomic<F>(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    build: F,
+) -> Result<PolicyAuditLogRecord, sqlx::Error>
+where
+    F: FnOnce(String) -> PolicyAuditLogRecord,
+{
+    let mut conn = pool.acquire().await?;
+
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+    async fn rollback(conn: &mut sqlx::SqliteConnection) {
+        let _ = sqlx::query("ROLLBACK").execute(conn).await;
+    }
+
+    let head: Option<(String,)> = match sqlx::query_as(
+        "SELECT entry_hash FROM policy_audit_log WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&mut *conn)
+    .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            rollback(&mut conn).await;
+            return Err(e);
+        }
+    };
+    let prev = head.map(|(h,)| h).unwrap_or_default();
+
+    let record = build(prev);
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO policy_audit_log (id, tenant_id, policy_id, policy_key, action, changed_by, body_hash, diff_summary, prev_hash, entry_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.policy_id)
+    .bind(&record.policy_key)
+    .bind(&record.action)
+    .bind(&record.changed_by)
+    .bind(&record.body_hash)
+    .bind(&record.diff_summary)
+    .bind(&record.prev_hash)
+    .bind(&record.entry_hash)
+    .execute(&mut *conn)
+    .await
+    {
+        rollback(&mut conn).await;
+        return Err(e);
+    }
+
+    sqlx::query("COMMIT").execute(&mut *conn).await?;
+    Ok(record)
+}
+
+/// #1312: tenant-scoped, paginated listing of the policy transparency log,
+/// newest first.
+pub async fn list_policy_audit_log(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<PolicyAuditLogRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    sqlx::query_as::<_, PolicyAuditLogRecord>(
+        "SELECT * FROM policy_audit_log WHERE tenant_id = ? ORDER BY rowid DESC LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_audit_events_by_run(
     pool: &SqlitePool,
     tenant_id: &str,

@@ -828,6 +828,28 @@ pub(crate) fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
     sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
 }
 
+/// #1312: the hashed body of a `policy_audit_log` entry — every semantic field
+/// plus the chain link, excluding `entry_hash` and the volatile DB
+/// `created_at`. Mirrors [`receipt_body_value`]'s shape for the policy
+/// transparency log. Scheme aegis-jcs-1.
+pub(crate) fn policy_audit_log_entry_value(rec: &PolicyAuditLogRecord) -> Value {
+    json!({
+        "id": rec.id,
+        "tenant_id": rec.tenant_id,
+        "policy_id": rec.policy_id,
+        "policy_key": rec.policy_key,
+        "action": rec.action,
+        "changed_by": rec.changed_by,
+        "body_hash": rec.body_hash,
+        "diff_summary": rec.diff_summary,
+        "prev_hash": rec.prev_hash,
+    })
+}
+
+pub(crate) fn compute_policy_audit_log_entry_hash(rec: &PolicyAuditLogRecord) -> String {
+    sha256_hex(canonical_value_string(&policy_audit_log_entry_value(rec)).as_bytes())
+}
+
 /// Optionally attach an Ed25519 signature OVER the already-computed `receipt_hash`.
 ///
 /// This runs AFTER `compute_receipt_hash` and never feeds back into the hash: the
@@ -3870,6 +3892,47 @@ pub async fn ingest_event(
     }
 }
 
+/// #1312: append a hash-chained `policy_audit_log` entry for a policy
+/// create/update/delete/rollback. `body` is the resulting policy body (the
+/// body being deleted, for `action == "deleted"`) and is hashed into
+/// `body_hash`, never stored verbatim. Best-effort: a failure here is logged
+/// but never blocks the policy operation that triggered it.
+async fn record_policy_audit_log(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+    policy_id: &str,
+    policy_key: &str,
+    action: &str,
+    body: &str,
+    diff_summary: String,
+) {
+    let body_hash = format!("sha256:{}", sha256_hex(body.as_bytes()));
+    let policy_id = policy_id.to_string();
+    let policy_key = policy_key.to_string();
+    let action = action.to_string();
+    if let Err(e) = db::append_policy_audit_log_entry_atomic(pool, tenant_id, move |prev_hash| {
+        let mut rec = PolicyAuditLogRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_id,
+            policy_key,
+            action,
+            changed_by: None,
+            body_hash,
+            diff_summary,
+            prev_hash,
+            entry_hash: String::new(),
+            created_at: Utc::now(),
+        };
+        rec.entry_hash = compute_policy_audit_log_entry_hash(&rec);
+        rec
+    })
+    .await
+    {
+        error!("Failed to append policy_audit_log entry: {:?}", e);
+    }
+}
+
 pub async fn list_policies(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -3925,6 +3988,19 @@ pub async fn create_policy(
             {
                 error!("Failed to hot-reload policies after create: {:?}", e);
             }
+            record_policy_audit_log(
+                &state.pool,
+                &tenant_id,
+                &record.id,
+                &record.policy_key,
+                "created",
+                &record.body,
+                format!(
+                    "Policy '{}' created (version {})",
+                    record.name, record.version
+                ),
+            )
+            .await;
             (StatusCode::CREATED, Json(record)).into_response()
         }
         Err(e) => {
@@ -3967,10 +4043,19 @@ pub async fn update_policy(
     // operators can inspect/restore prior policy versions.
     let previous = record.clone();
 
+    // #1312: track which fields changed for the transparency-log diff summary.
+    let mut changed_fields: Vec<&str> = Vec::new();
+
     if let Some(policy_key) = payload.policy_key {
+        if policy_key != record.policy_key {
+            changed_fields.push("policy_key");
+        }
         record.policy_key = policy_key;
     }
     if let Some(name) = payload.name {
+        if name != record.name {
+            changed_fields.push("name");
+        }
         record.name = name;
     }
     if let Some(body) = payload.body {
@@ -3982,9 +4067,15 @@ pub async fn update_policy(
             )
                 .into_response();
         }
+        if body != record.body {
+            changed_fields.push("body");
+        }
         record.body = body;
     }
     if let Some(status) = payload.status {
+        if status != record.status {
+            changed_fields.push("status");
+        }
         record.status = status;
     }
     record.version += 1;
@@ -4004,6 +4095,29 @@ pub async fn update_policy(
             {
                 error!("Failed to hot-reload policies after update: {:?}", e);
             }
+            let diff_summary = if changed_fields.is_empty() {
+                format!(
+                    "Policy '{}' updated to version {}",
+                    record.name, record.version
+                )
+            } else {
+                format!(
+                    "Policy '{}' updated to version {} (changed: {})",
+                    record.name,
+                    record.version,
+                    changed_fields.join(", ")
+                )
+            };
+            record_policy_audit_log(
+                &state.pool,
+                &tenant_id,
+                &record.id,
+                &record.policy_key,
+                "updated",
+                &record.body,
+                diff_summary,
+            )
+            .await;
             (StatusCode::OK, Json(record)).into_response()
         }
         Err(e) => {
@@ -4135,6 +4249,20 @@ pub async fn rollback_policy(
                 error!("Failed to write policy_rolled_back audit event: {:?}", e);
             }
 
+            record_policy_audit_log(
+                &state.pool,
+                &tenant_id,
+                &record.id,
+                &record.policy_key,
+                "rolled_back",
+                &record.body,
+                format!(
+                    "Policy '{}' rolled back to version {} (new version {})",
+                    record.name, previous_version.version, record.version
+                ),
+            )
+            .await;
+
             (StatusCode::OK, Json(record)).into_response()
         }
         Err(e) => {
@@ -4153,6 +4281,20 @@ pub async fn delete_policy(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // #1312: fetch the policy before deleting so the transparency-log entry
+    // can record its `policy_key` and a hash of the deleted body.
+    let existing = match db::get_policy_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to lookup policy for delete: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
     match db::delete_policy(&state.pool, &tenant_id, &id).await {
         Ok(true) => {
             // Trigger hot-reload
@@ -4162,6 +4304,21 @@ pub async fn delete_policy(
                 .await
             {
                 error!("Failed to hot-reload policies after delete: {:?}", e);
+            }
+            if let Some(policy) = existing {
+                record_policy_audit_log(
+                    &state.pool,
+                    &tenant_id,
+                    &policy.id,
+                    &policy.policy_key,
+                    "deleted",
+                    &policy.body,
+                    format!(
+                        "Policy '{}' (version {}) deleted",
+                        policy.name, policy.version
+                    ),
+                )
+                .await;
             }
             (
                 StatusCode::OK,
@@ -4176,6 +4333,31 @@ pub async fn delete_policy(
             .into_response(),
         Err(e) => {
             error!("Failed to delete policy: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1312: GET /v1/policies/audit-log — tenant-scoped, paginated transparency
+/// log of policy create/update/delete/rollback operations, newest first.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+pub async fn list_policy_audit_log(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_policy_audit_log(&state.pool, &tenant_id, limit, offset).await {
+        Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
+        Err(e) => {
+            error!("Failed to list policy audit log: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
@@ -14995,5 +15177,236 @@ mod tests {
         let approvals = approvals.as_array().unwrap();
         assert_eq!(approvals.len(), 1);
         assert_eq!(approvals[0]["approver_user_id"], "user_alice");
+    }
+
+    /// #1312: every policy create/update/rollback/delete must append a
+    /// hash-chained entry to `policy_audit_log`, with the correct `action`
+    /// label and a verifiable `prev_hash` -> `entry_hash` chain.
+    #[tokio::test]
+    async fn policy_audit_log_hash_chain_is_verifiable_across_operations() {
+        let (state, tenant_id, _) = setup_state("policy_audit_log_chain").await;
+
+        // 1. create
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+
+        // 2. update
+        let update1 = UpdatePolicyRequest {
+            policy_key: None,
+            name: None,
+            body: Some("forbid (principal, action, resource);".to_string()),
+            status: None,
+        };
+        let response_update = update_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+            Json(update1),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update.status(), StatusCode::OK);
+
+        // 3. rollback
+        let response_rollback = rollback_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_rollback.status(), StatusCode::OK);
+
+        // 4. delete
+        let response_delete = delete_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_delete.status(), StatusCode::OK);
+
+        // The log is newest-first; reverse to walk it in chain order.
+        let mut entries = db::list_policy_audit_log(&state.pool, &tenant_id, 50, 0)
+            .await
+            .unwrap();
+        entries.reverse();
+
+        assert_eq!(
+            entries.len(),
+            4,
+            "create/update/rollback/delete each append one entry"
+        );
+        assert_eq!(entries[0].action, "created");
+        assert_eq!(entries[1].action, "updated");
+        assert_eq!(entries[2].action, "rolled_back");
+        assert_eq!(entries[3].action, "deleted");
+
+        // Hash-chain integrity: each entry's prev_hash must equal the previous
+        // entry's entry_hash, and each entry's entry_hash must be reproducible
+        // from its own body.
+        let mut prev_hash = String::new();
+        for entry in &entries {
+            assert_eq!(entry.prev_hash, prev_hash);
+            assert_eq!(entry.entry_hash, compute_policy_audit_log_entry_hash(entry));
+            assert_eq!(entry.tenant_id, tenant_id);
+            assert_eq!(entry.policy_id, policy_id);
+            prev_hash = entry.entry_hash.clone();
+        }
+    }
+
+    /// #1312 AC#4: `policy_audit_log` must be append-only at the SQLite level
+    /// — `UPDATE`/`DELETE` against it must always fail via the triggers added
+    /// in `0010_policy_audit_log.sql`.
+    #[tokio::test]
+    async fn policy_audit_log_is_append_only_via_triggers() {
+        let (state, tenant_id, _) = setup_state("policy_audit_log_append_only").await;
+
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+
+        let entries = db::list_policy_audit_log(&state.pool, &tenant_id, 50, 0)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry_id = entries[0].id.clone();
+
+        let update_result =
+            sqlx::query("UPDATE policy_audit_log SET diff_summary = ? WHERE id = ?")
+                .bind("tampered")
+                .bind(&entry_id)
+                .execute(&state.pool)
+                .await;
+        assert!(
+            update_result.is_err(),
+            "UPDATE must be rejected by the append-only trigger"
+        );
+
+        let delete_result = sqlx::query("DELETE FROM policy_audit_log WHERE id = ?")
+            .bind(&entry_id)
+            .execute(&state.pool)
+            .await;
+        assert!(
+            delete_result.is_err(),
+            "DELETE must be rejected by the append-only trigger"
+        );
+
+        // The entry must be unchanged.
+        let entries_after = db::list_policy_audit_log(&state.pool, &tenant_id, 50, 0)
+            .await
+            .unwrap();
+        assert_eq!(entries_after.len(), 1);
+        assert_eq!(entries_after[0].diff_summary, entries[0].diff_summary);
+    }
+
+    /// #1312: `GET /v1/policies/audit-log` must be tenant-scoped and paginated.
+    #[tokio::test]
+    async fn policy_audit_log_endpoint_is_tenant_scoped_and_paginated() {
+        let (state, tenant_id, _) = setup_state("policy_audit_log_endpoint").await;
+
+        let other_tenant = "tenant_other_policy_audit".to_string();
+        db::register_tenant(&state.pool, &other_tenant, "Other Tenant", "developer")
+            .await
+            .unwrap();
+
+        // Two policies for the primary tenant -> two log entries.
+        for key in ["policy-a", "policy-b"] {
+            let response = create_policy(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Json(CreatePolicyRequest {
+                    policy_key: key.to_string(),
+                    name: key.to_string(),
+                    body: "permit (principal, action, resource);".to_string(),
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+
+        // One policy for the other tenant -> must not leak into the first
+        // tenant's log.
+        let response_other = create_policy(
+            State(state.clone()),
+            TenantId(other_tenant.clone()),
+            Json(CreatePolicyRequest {
+                policy_key: "policy-other".to_string(),
+                name: "policy-other".to_string(),
+                body: "permit (principal, action, resource);".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_other.status(), StatusCode::CREATED);
+
+        // Full list for the primary tenant: only its own 2 entries.
+        let resp_all = list_policy_audit_log(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_all.status(), StatusCode::OK);
+        let body_all = to_bytes(resp_all.into_body(), usize::MAX).await.unwrap();
+        let entries_all: Vec<PolicyAuditLogRecord> = serde_json::from_slice(&body_all).unwrap();
+        assert_eq!(entries_all.len(), 2);
+        assert!(entries_all.iter().all(|e| e.tenant_id == tenant_id));
+
+        // Paginated: limit=1 returns only the most recent entry.
+        let resp_page = list_policy_audit_log(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_page.status(), StatusCode::OK);
+        let body_page = to_bytes(resp_page.into_body(), usize::MAX).await.unwrap();
+        let entries_page: Vec<PolicyAuditLogRecord> = serde_json::from_slice(&body_page).unwrap();
+        assert_eq!(entries_page.len(), 1);
+        assert_eq!(entries_page[0].id, entries_all[0].id);
+
+        // The other tenant's log contains only its own entry.
+        let resp_other = list_policy_audit_log(
+            State(state.clone()),
+            TenantId(other_tenant.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        let body_other = to_bytes(resp_other.into_body(), usize::MAX).await.unwrap();
+        let entries_other: Vec<PolicyAuditLogRecord> = serde_json::from_slice(&body_other).unwrap();
+        assert_eq!(entries_other.len(), 1);
+        assert_eq!(entries_other[0].policy_key, "policy-other");
     }
 }
