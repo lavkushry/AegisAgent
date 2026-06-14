@@ -8761,6 +8761,96 @@ mod tests {
         assert_eq!(json_tenant["verified"].as_bool(), Some(false));
     }
 
+    /// TASK-0157 (#1003): a 1000-entry receipt chain must verify end-to-end —
+    /// `POST /v1/receipts/verify-chain` must walk all 1000 links without error,
+    /// and a single tampered entry anywhere in a 1000-entry chain must still be
+    /// detected (hash mismatch breaks the chain from that point on).
+    #[tokio::test]
+    async fn receipt_chain_with_1000_entries_verifies() {
+        let (state, tenant_id, _agent_token) = setup_state("receipt_chain_1000").await;
+
+        const N: usize = 1000;
+        for i in 0..N {
+            db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev_receipt_hash| {
+                let mut receipt = ActionReceiptRecord {
+                    id: Uuid::new_v4().to_string(),
+                    tenant_id: tenant_id.clone(),
+                    decision_id: None,
+                    ts: Utc::now().to_rfc3339(),
+                    agent_id: None,
+                    user_id: None,
+                    run_id: None,
+                    trace_id: None,
+                    tool: Some("filesystem".to_string()),
+                    action: Some("read_file".to_string()),
+                    resource: Some(format!("/tmp/file-{i}")),
+                    source_trust: "trusted_internal_signed".to_string(),
+                    decision: "allow".to_string(),
+                    approver: None,
+                    action_hash: Some(format!("{i:064x}")),
+                    prev_receipt_hash,
+                    receipt_hash: String::new(),
+                    canon_version: CANON_VERSION.to_string(),
+                    signature: None,
+                    signer_public_key: None,
+                    created_at: Utc::now(),
+                };
+                receipt.receipt_hash = compute_receipt_hash(&receipt);
+                receipt
+            })
+            .await
+            .unwrap();
+        }
+
+        let chain = db::list_action_receipts_chain_order(&state.pool, &tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), N, "all 1000 receipts must be persisted");
+
+        let receipts: Vec<Value> = chain
+            .iter()
+            .map(|r| {
+                let mut body = receipt_body_value(r);
+                body["receipt_hash"] = json!(r.receipt_hash);
+                body
+            })
+            .collect();
+
+        // 1. A clean 1000-entry chain verifies.
+        let response = verify_receipt_chain(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(VerifyChainRequest {
+                receipts: receipts.clone(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["verified"].as_bool(), Some(true));
+
+        // 2. Tampering with an entry in the middle of a 1000-entry chain is detected.
+        let mut tampered = receipts.clone();
+        if let Some(obj) = tampered[N / 2].as_object_mut() {
+            obj.insert("action".to_string(), json!("delete_file"));
+        }
+        let response_tampered = verify_receipt_chain(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(VerifyChainRequest { receipts: tampered }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_tampered.status(), StatusCode::OK);
+        let body_tampered = to_bytes(response_tampered.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_tampered: Value = serde_json::from_slice(&body_tampered).unwrap();
+        assert_eq!(json_tampered["verified"].as_bool(), Some(false));
+    }
+
     #[tokio::test]
     async fn test_policy_crud_and_reload_route() {
         let (state, tenant_id, _) = setup_state("policy_crud_reload").await;
