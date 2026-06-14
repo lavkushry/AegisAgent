@@ -9,6 +9,26 @@ reaches 1.0.
 
 ### Added
 
+- **Compliance Evidence Pack export** (#1298): new `GET
+  /v1/compliance/evidence-pack` endpoint returns a tenant-scoped ZIP archive
+  for SOC 2 Type II / EU AI Act Article 14 audits. Optional `from`/`to`
+  RFC-3339 query params date-filter the archive's `receipts.jsonl`,
+  `audit_events.jsonl`, `approvals.json`, and `incidents.json` entries
+  (`policies.json` reflects current policy state, documented as such in
+  `manifest.json`); an unparsable `from`/`to` fails closed with `400 Bad
+  Request`. The archive's six entries are: `manifest.json` (schema tag,
+  tenant id, generation time, requested range, row counts, and the
+  `aegis-jcs-1` canonicalization scheme), `receipts.jsonl`,
+  `audit_events.jsonl`, `policies.json`, `incidents.json`, and
+  `approvals.json`. Maps directly to the two compliance pillars: action
+  receipts (with their optional Ed25519 `signature`/`signer_public_key`)
+  provide non-repudiation evidence, and approvals (with `approver_user_id` /
+  `decided_at`) provide human-oversight evidence. New tenant-scoped, fully
+  parameterized `db.rs` helpers: `list_action_receipts_in_range`,
+  `get_audit_events_in_range`, `list_approvals_in_range`, and
+  `list_soc_incidents_in_range` (the last filters on `soc_incidents.opened_at`,
+  the table's analogous lifecycle timestamp). Adds the `zip` crate (v2) for
+  in-memory archive construction.
 - **`/v1/authorize` latency baseline** (#1313): added a criterion benchmark
   (`gateway/benches/authorize_benchmark.rs`) that exercises the real
   `authorize_action` handler end-to-end against a real SQLite pool seeded
