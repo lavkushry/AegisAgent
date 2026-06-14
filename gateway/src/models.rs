@@ -459,6 +459,20 @@ pub struct WebhookSubscriptionRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// TASK-0093 (#939): a tenant-managed API key. `key_hash` is `sha256(key)` —
+/// the plaintext key is returned exactly once at creation and never persisted.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct ApiKeyRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub key_hash: String,
+    pub name: String,
+    pub status: String,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct AuditEventRecord {
     pub id: String,

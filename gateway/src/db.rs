@@ -1584,6 +1584,68 @@ pub async fn delete_webhook_subscription(
     Ok(result.rows_affected() > 0)
 }
 
+/// TASK-0093 (#939): create a tenant-managed API key. The plaintext key is
+/// returned exactly once (caller must surface it to the user); only
+/// `sha256(key)` is persisted, mirroring `hash_token` / `agents.agent_token`.
+pub async fn create_api_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    name: &str,
+) -> Result<(String, String), sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let key = format!(
+        "aegis_key_{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let key_hash = hash_token(&key);
+
+    sqlx::query(
+        "INSERT INTO api_keys (id, tenant_id, key_hash, name, status) \
+         VALUES (?, ?, ?, ?, 'active')",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(&key_hash)
+    .bind(name)
+    .execute(pool)
+    .await?;
+
+    Ok((id, key))
+}
+
+/// TASK-0093 (#939): list a tenant's API keys, most recent first. `key_hash`
+/// is included (it is not a secret); the plaintext key is never persisted.
+pub async fn list_api_keys(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<ApiKeyRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ApiKeyRecord>(
+        "SELECT * FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// TASK-0093 (#939): revoke a tenant's API key. Returns `true` if a row was
+/// updated.
+pub async fn revoke_api_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE api_keys SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP \
+         WHERE tenant_id = ? AND id = ? AND status != 'revoked'",
+    )
+    .bind(tenant_id)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_skill(
     pool: &SqlitePool,
