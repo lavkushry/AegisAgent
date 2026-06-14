@@ -102,6 +102,9 @@ reaches 1.0.
   derived from the manifest, retrievable via `db::get_skill_action` (#998).
 - `aegis-jcs-1` canonicalization sorts object keys independently at every
   nesting level, verified 3 levels deep (#1001).
+- `POST /v1/receipts/verify-chain` verifies a clean 1000-entry receipt chain
+  end-to-end and detects tampering with an entry in the middle of the chain
+  (#1003).
 
 ### Tests
 
