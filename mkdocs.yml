@@ -89,3 +89,4 @@ nav:
   - Reference:
       - Action receipt spec: action-receipt-spec.md
       - Database schema (ERD): database-schema.md
+      - SDK parity status: sdk-parity-status.md

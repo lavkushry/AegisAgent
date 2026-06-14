@@ -3311,6 +3311,75 @@ pub async fn reload_global_policies(State(state): State<Arc<AppState>>) -> impl 
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+}
+
+/// POST /v1/api_keys — create a new tenant-managed API key. TASK-0093
+/// (#939): the plaintext key is returned exactly once in the response body;
+/// only `sha256(key)` is persisted (see `db::create_api_key`).
+pub async fn create_api_key(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<CreateApiKeyRequest>,
+) -> impl IntoResponse {
+    match db::create_api_key(&state.pool, &tenant_id, &payload.name).await {
+        Ok((id, key)) => (StatusCode::CREATED, Json(json!({"id": id, "key": key}))).into_response(),
+        Err(e) => {
+            error!("Failed to create API key: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/api_keys — list the authenticated tenant's API keys.
+/// `key_hash` is included (it is not a secret), the plaintext key never is.
+pub async fn list_api_keys(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::list_api_keys(&state.pool, &tenant_id).await {
+        Ok(keys) => (StatusCode::OK, Json(keys)).into_response(),
+        Err(e) => {
+            error!("Failed to list API keys: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST /v1/api_keys/:id/revoke — revoke a tenant-managed API key.
+pub async fn revoke_api_key(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::revoke_api_key(&state.pool, &tenant_id, &id).await {
+        Ok(true) => (StatusCode::OK, Json(json!({"message": "API key revoked"}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "API key not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to revoke API key: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// GET /v1/alerts — list SOC detection alerts for the authenticated tenant.
 ///
 /// Query params:

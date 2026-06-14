@@ -9,6 +9,15 @@ reaches 1.0.
 
 ### Added
 
+- **Tenant-managed API keys** (TASK-0093, #939): new `api_keys` table
+  (`gateway/migrations/0007_api_keys.sql`) plus management endpoints
+  `POST /v1/api_keys` (returns the plaintext key exactly once;
+  `sha256(key)` is the only thing persisted, mirroring
+  `agents.agent_token`), `GET /v1/api_keys`, and
+  `POST /v1/api_keys/:id/revoke`. This is an additive first step; wiring
+  `api_keys` into the `TenantId` extractor's authentication path (replacing
+  the `tenant_<id>` bearer-token heuristic) is deferred as a separate
+  cross-cutting security task.
 - **Fuzz testing for `aegis-jcs-1` canonicalization** (TEST-002, #1162): the
   canonicalization logic was extracted into a new `aegis-canon` crate
   (`gateway/canon/`), shared by the gateway (via path dependency, delegated

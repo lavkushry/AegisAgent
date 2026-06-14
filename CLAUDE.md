@@ -11,39 +11,65 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 
 > Motto: **Make the approval trustworthy. Trust the source, not the text.**
 
-## Current status (work-in-progress on branch `feat/approval-integrity`)
+## Current status
 
-**Verified here (Python, 25/25 + runnable demo + CLI):**
+**Python SDK — 174 tests, fully verified on `main`:**
 - `action_hash` canonicalization unified as scheme **`aegis-jcs-1`** in `sdk-python/aegisagent/canon.py`; SDK fails closed on hash mismatch, on approval expiry, **and if it cannot atomically consume a single-use approval** (replay defense).
 - Verifiable receipts: format + reference verifier (`aegisagent/receipts.py`), CLI (`aegis-verify-receipts`), shared corpus (`tests/receipt_chain_vectors.json`).
+- Async client (`AegisAsyncClient`) + `async_protect_tool` decorator.
+- CLI tools: `aegis-status`, `aegis-freeze-agent`, `aegis-export-audit`.
+- Evidence packs, webhook handler, structured JSON logging.
 - End-to-end demo `examples/integrity_demo.py`.
 
-**Written but NOT yet compiled (Rust gateway — no toolchain in some envs):**
+**Go SDK — full parity, verified on `main`:**
+- `aegis-jcs-1` canonicalizer (`canon/canon.go`), `aegis.Client`, `aegis.Protect`, receipt verifier.
+- Cross-language byte-parity CI gate.
+
+**TypeScript SDK — full parity, verified on `main`:**
+- `aegis-jcs-1` canonicalizer (`src/canon.ts`), `AegisClient`, `protect()`.
+- `tsc --noEmit` build + `node --test` suite + cross-language corpus CI gate.
+
+**Rust gateway — 53 tests, verified on `main`:**
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
-- Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409): `expired_approval_is_reported_and_cannot_be_approved`.
+- Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409).
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
-- **Receipt emission**: `action_receipts` table + `emit_action_receipt` on every decision + `GET /v1/receipts/:id/verify` (`authorize_emits_verifiable_receipt`).
-- **Single-use approvals (replay T-A3)**: `consumed_at` column + atomic `db::consume_approval` + `POST /v1/approvals/:id/consume` (`consume_is_single_use`); SDK consumes before executing.
+- **Receipt emission**: `action_receipts` table + `emit_action_receipt` on every decision + `GET /v1/receipts/:id/verify` + optional Ed25519 signing (`sign.rs`).
+- **Single-use approvals (replay T-A3)**: `consumed_at` column + atomic `db::consume_approval` + `POST /v1/approvals/:id/consume`.
+- **Agent SOC (Phases 0-3, 5, 6)**: async event stream (`events.rs`), detection rules (`detect.rs`), correlation engine + incidents (`correlate.rs`), notify sink with HMAC-SHA256 signing + circuit breaker (`notify.rs`), RCA narrator (`narrate.rs`), SQLite event indexer + `/v1/ws/events` live feed + `/v1/soc/summary`.
+- **Phase 4 — Response Engine** (`respond.rs`): `freeze`/`revoke`/`quarantine` APIs + auto-dispatch responder with configurable autonomy levels (`L0`-`L4`).
+- **Agentless ingestion** (`ingest.rs`): `POST /v1/ingest` for GitHub webhooks, OpenAI traces.
+- **Behavioral baselining** (`baseline.rs`): per-agent action frequency baselines with anomaly detection.
+- **Kubernetes probes**: `/livez`, `/readyz`, `/startupz`.
+- Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
 
-**Next (Rust):** make chain-head selection race-safe (transaction); enterprise receipt signing / transparency-log anchoring. **Build the Rust + run `cargo test` before stacking more Rust.**
+**Next:** real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend, Kubernetes/Helm packaging.
 
-Baseline still present: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, Python `@protect_tool`.
+Baseline: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, 3-SDK parity.
 
 ## Commands
 
 ```bash
 # Gateway (Rust)
 cargo check  --manifest-path gateway/Cargo.toml
-cargo test   --manifest-path gateway/Cargo.toml        # incl. the 3 tests above
+cargo test   --manifest-path gateway/Cargo.toml        # 53 tests
 cargo fmt    --manifest-path gateway/Cargo.toml -- --check
 cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080
 
 # SDK + demos (Python)
 python3 -m pip install -e sdk-python/
-python3 -m unittest discover -s sdk-python/tests       # 25/25
+python3 -m unittest discover -s sdk-python/tests       # 174 tests
 python3 examples/integrity_demo.py                     # zero-setup wedge demo
 aegis-verify-receipts <receipts.json>                  # or: python3 -m aegisagent.verify_receipts <f>
+aegis-status --gateway http://127.0.0.1:8080           # gateway health + agent summary
+aegis-freeze-agent --gateway http://127.0.0.1:8080 --agent <id>
+aegis-export-audit --gateway http://127.0.0.1:8080 --output audit.json
+
+# Go SDK
+cd sdk-go && go test ./...
+
+# TypeScript SDK
+cd sdk-typescript && npm ci && npx tsc --noEmit && npm test
 
 # Local stack
 docker compose up --build && bash scripts/seed-demo.sh && python3 examples/github-attack-demo.py
@@ -51,9 +77,9 @@ docker compose up --build && bash scripts/seed-demo.sh && python3 examples/githu
 
 ## API endpoints (contract)
 
-`GET /health` · `POST /v1/agents/register` · `POST /v1/tools` · `GET|POST /v1/mcp/servers` (GET lists servers with `status` + pinned `manifest_hash`) · `GET|POST /v1/mcp/servers/:server_key/tools` · `POST .../tools/:tool_key/approve|disable` · `POST /v1/authorize` (returns `decision`, `action_hash`, approval info; optional `request_id` makes the call idempotent — a repeat with the same `(agent, request_id)` replays the original decision/approval instead of re-evaluating; optional `callback: {"url": "...", "secret": "..."}` registers a webhook for the resulting approval — stored as `callback_url` + `sha256(secret)` `callback_secret_hash`, plaintext secret never persisted) · `GET /v1/approvals/:id` (returns `status`, bound `action_hash`; `EXPIRED` for stale pending) · `POST /v1/approvals/:id/approve|reject|edit` · `POST /v1/approvals/:id/consume` (single-use; 409 if already used/expired) · `GET /v1/runs/:id/timeline` · `GET /v1/audit/events` · `GET /v1/receipts/:id/verify` (recomputes receipt hash; returns `verified`).
+**Core:** `GET /health` · `GET /livez` · `GET /readyz` · `GET /startupz` · `POST /v1/agents/register` · `POST /v1/tools` · `GET|POST /v1/mcp/servers` (GET lists servers with `status` + pinned `manifest_hash`) · `GET|POST /v1/mcp/servers/:server_key/tools` · `POST .../tools/:tool_key/approve|disable` · `POST /v1/authorize` (returns `decision`, `action_hash`, approval info; optional `request_id` makes the call idempotent — a repeat with the same `(agent, request_id)` replays the original decision/approval instead of re-evaluating; optional `callback: {"url": "...", "secret": "..."}` registers a webhook for the resulting approval — stored as `callback_url` + `sha256(secret)` `callback_secret_hash`, plaintext secret never persisted) · `GET /v1/approvals/:id` (returns `status`, bound `action_hash`; `EXPIRED` for stale pending) · `POST /v1/approvals/:id/approve|reject|edit` · `POST /v1/approvals/:id/consume` (single-use; 409 if already used/expired) · `GET /v1/runs/:id/timeline` · `GET /v1/audit/events` · `GET /v1/receipts/:id/verify` (recomputes receipt hash; returns `verified`).
 
-**Management & query API** (tenant-scoped, paginated; batch-1 #1096): `GET /v1/agents` · `GET|PATCH|DELETE /v1/agents/:id` · `POST /v1/agents/:id/freeze|unfreeze|revoke` (freeze accepts optional `{"reason": "..."}`, recorded as `agents.frozen_reason`; agents also track `last_seen_at` heartbeat and `quarantined_at`) · `GET /v1/decisions` (filter `agent_id`,`decision`) · `GET /v1/decisions/:id` · `GET /v1/approvals` (list pending; `EXPIRED` for stale) · `GET /v1/receipts` · `GET /v1/receipts/:id` · `POST /v1/receipts/verify-chain` · `GET|POST /v1/policies` · `PUT|DELETE /v1/policies/:id` · `POST /v1/policies/reload` · `GET|POST /v1/tenants` · `GET /v1/tenants/:id` · `GET /v1/tenants/:id/export` (GDPR data-portability bundle) · `GET|PUT /v1/mcp/servers/:server_key` · `POST /v1/mcp/servers/:server_key/quarantine|restore` · `GET /v1/stats` · `GET /v1/openapi.json` · `GET /v1/version` · `GET /v1/ws/events` (WebSocket live SOC stream). **SOC:** `GET /v1/alerts` · `GET /v1/incidents` · `GET /v1/incidents/:id` · `POST /v1/incidents/:id/close` · `GET /v1/incidents/:id/narrate` · `GET /v1/soc/summary` · `POST /v1/ingest` (SOC-004, agentless ingestion: `{"source": "github_webhook"|"openai_trace", "payload": {...}}`, normalizes and feeds the same detect→correlate→respond pipeline as `/v1/authorize`).
+**Management & query API** (tenant-scoped, paginated): `GET /v1/agents` · `GET|PATCH|DELETE /v1/agents/:id` · `POST /v1/agents/:id/freeze|unfreeze|revoke` (freeze accepts optional `{"reason": "..."}`, recorded as `agents.frozen_reason`; agents also track `last_seen_at` heartbeat and `quarantined_at`) · `GET /v1/decisions` (filter `agent_id`,`decision`) · `GET /v1/decisions/:id` · `GET /v1/approvals` (list pending; `EXPIRED` for stale) · `GET /v1/receipts` · `GET /v1/receipts/:id` · `POST /v1/receipts/verify-chain` · `GET|POST /v1/policies` · `PUT|DELETE /v1/policies/:id` · `POST /v1/policies/reload` · `GET|POST /v1/tenants` · `GET /v1/tenants/:id` · `GET /v1/tenants/:id/export` (GDPR data-portability bundle) · `GET|PUT /v1/mcp/servers/:server_key` · `POST /v1/mcp/servers/:server_key/quarantine|restore` · `GET /v1/stats` · `GET /v1/openapi.json` · `GET /v1/version` · `GET /v1/ws/events` (WebSocket live SOC stream). **SOC:** `GET /v1/alerts` · `GET /v1/incidents` · `GET /v1/incidents/:id` · `POST /v1/incidents/:id/close` · `GET /v1/incidents/:id/narrate` · `GET /v1/soc/summary` · `POST /v1/ingest` (SOC-004, agentless ingestion: `{"source": "github_webhook"|"openai_trace", "payload": {...}}`, normalizes and feeds the same detect→correlate→respond pipeline as `/v1/authorize`).
 
 ## Critical invariants (do not weaken)
 
@@ -66,8 +92,10 @@ docker compose up --build && bash scripts/seed-demo.sh && python3 examples/githu
 
 ## Where things live
 
-- `gateway/src/`: `routes.rs` (handlers, canonicalization, approval integrity, receipt helpers), `db.rs` (tenant-scoped SQLx), `policy.rs` (Cedar), `models.rs`, `main.rs`. `gateway/policies.cedar` (keep ≡ root `policies.cedar`).
-- `sdk-python/aegisagent/`: `canon.py` (scheme), `decorator.py` (`@protect_tool`, fail-closed + expiry), `receipts.py` (verifier), `verify_receipts.py` (CLI), `client.py`.
+- `gateway/src/`: `routes.rs` (handlers, canonicalization, approval integrity, receipt helpers), `db.rs` (tenant-scoped SQLx, migrations), `policy.rs` (Cedar), `models.rs`, `main.rs` (lifecycle, redaction, K8s probes), `events.rs` (async SOC event emitter), `detect.rs` (detection rules), `correlate.rs` (correlation engine + incidents), `notify.rs` (webhook + Slack notifications, HMAC signing, circuit breaker), `respond.rs` (response engine, autonomy levels), `ingest.rs` (agentless ingestion), `baseline.rs` (behavioral baselining), `narrate.rs` (RCA narrator), `jobs.rs` (background jobs: cleanup, archival, chain verification), `metrics.rs` (database size/row monitoring), `sign.rs` (Ed25519 receipt signing). `gateway/policies.cedar` (keep ≡ root `policies.cedar`).
+- `sdk-python/aegisagent/`: `canon.py` (scheme), `decorator.py` (`@protect_tool`, fail-closed + expiry), `client.py` (sync + async clients), `receipts.py` (verifier), `verify_receipts.py` (CLI), `accumulator.py` (receipt accumulation), `evidence.py` (evidence packs), `webhooks.py` (webhook/Slack handler), `logging.py` (structured JSON), `cli.py` (CLI tools).
+- `sdk-go/`: `canon/canon.go` (scheme), `aegis/client.go`, `aegis/protect.go`, `aegis/receipts.go`.
+- `sdk-typescript/src/`: `canon.ts` (scheme), `client.ts`, `protect.ts`.
 - Strategy docs in `docs/` were re-anchored 2026-06-02 on the integrity wedge; `docs/action-receipt-spec.md` is the open receipt format.
 
 ## How to continue

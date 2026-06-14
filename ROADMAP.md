@@ -16,24 +16,24 @@
 
 ---
 
-## Status update (2026-06-10)
+## Status update (2026-06-11)
 
 The "Q4 2026" and "2027 H1/H2" sections below were written before implementation started and are
-kept for build-order rationale, but **most of the listed phases are now done**. Current state
+kept for build-order rationale, but **nearly all listed phases are now done**. Current state
 (see [`docs/AegisAgent_Agent_SOC_Design.md` §28](docs/AegisAgent_Agent_SOC_Design.md) for the
 file-by-file breakdown):
 
 - ✅ **Done:** the integrity moat (canonicalization, approval integrity, hash-chained receipts —
   Python/Rust/Go/TS), Phase 0 (ASE event stream), Phase 1 (detection rules), Phase 2 (notify
-  sink), Phase 3 (correlation/incidents), Phase 5 (SQLite event indexer + `/v1/ws/events` live
-  feed + `/v1/soc/summary`), Phase 6 (RCA narrator).
-- 🟡 **Partial:** Phase 4 response control — manual `freeze`/`revoke`/`quarantine` APIs exist and
-  are enforced fail-closed by the authorize path; the auto-dispatch responder (detection → action)
-  is not yet wired (#1184).
-- ❌ **Remaining:** Phase 7 agentless ingestion + behavioural baselining (#1187, #1190), a real SOC
-  Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend,
-  Kubernetes/Helm packaging, and the production-hardening (#1206-#1211) and developer-experience
-  (#1202-#1205) tracks.
+  sink with HMAC-SHA256 webhook signing + circuit breaker), Phase 3 (correlation/incidents),
+  Phase 4 (response engine with auto-dispatch + autonomy levels `L0`-`L4`, #1227),
+  Phase 5 (SQLite event indexer + `/v1/ws/events` live feed + `/v1/soc/summary`),
+  Phase 6 (RCA narrator). Also done: agentless ingestion via `POST /v1/ingest` (#1230),
+  per-agent behavioral baselining (#1229), Kubernetes health probes `/livez`/`readyz`/`startupz`
+  (#1225), Ed25519 receipt signing, hashed agent tokens, graceful shutdown, CatchPanic layer,
+  SQLITE_BUSY retry, and production-hardening fixes (BUG-001 through BUG-005).
+- ❌ **Remaining:** a real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard),
+  PostgreSQL backend, Kubernetes/Helm packaging, and remaining developer-experience improvements.
 
 ---
 
