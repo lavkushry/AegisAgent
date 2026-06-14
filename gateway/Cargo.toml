@@ -45,3 +45,12 @@ unicode-normalization = "0.1.25"
 [dev-dependencies]
 tokio-tungstenite = "0.21"
 futures-util = "0.3"
+# TASK-1313: end-to-end /v1/authorize criterion benchmark. `async_tokio`
+# enables `Bencher::to_async`/`iter` against a `tokio::runtime::Runtime` so we
+# can benchmark the real (async) `authorize_action` handler.
+criterion = { version = "0.5", features = ["async_tokio"] }
+tempfile = "3.10"
+
+[[bench]]
+name = "authorize_benchmark"
+harness = false

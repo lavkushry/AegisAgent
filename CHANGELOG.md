@@ -9,6 +9,20 @@ reaches 1.0.
 
 ### Added
 
+- **`/v1/authorize` latency baseline** (#1313): added a criterion benchmark
+  (`gateway/benches/authorize_benchmark.rs`) that exercises the real
+  `authorize_action` handler end-to-end against a real SQLite pool seeded
+  with 100 agents + 1000 decisions — measured mean **~6.7ms** (sample_size=30),
+  comfortably under the p50 < 10ms target. A `gateway/src/lib.rs` was added so
+  the gateway crate can be exercised from `benches/` (the binary is now a thin
+  wrapper over the library). Added HTTP-level load test scripts
+  (`gateway/benchmarks/authorize_load.sh` using vegeta — p50 10.24ms / p95
+  13.80ms / p99 17.58ms, all within target; plus an untested `.k6.js` variant
+  and a stdlib-only Python fallback). Documented methodology, results, and a
+  code-reading flame-graph substitute (no `perf` in CI sandbox) in
+  `docs/performance-baseline.md`. Added a CI regression gate
+  (`gateway/scripts/check_bench_regression.py` + `gateway/benches/baseline.json`)
+  that fails if the benchmark's mean latency regresses by more than 25%.
 - **Policy rollback** (#1302): `POST /v1/policies/:id/rollback` restores a
   policy's most recently archived `policy_versions` row onto the live
   `policies` row. The current live row is itself archived first (so the
