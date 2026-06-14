@@ -5695,6 +5695,7 @@ pub mod benchutil {
             skill_cache: SkillActionCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
         });
 
         Ok((state, tenant_id, agent_token))
@@ -5822,6 +5823,8 @@ pub mod benchutil {
                 run_id: "run_bench".to_string(),
                 trace_id: "trace_bench".to_string(),
             }),
+            nonce: None,
+            timestamp: None,
         }
     }
 }
