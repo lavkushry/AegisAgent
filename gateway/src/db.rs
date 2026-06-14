@@ -1812,6 +1812,50 @@ pub async fn insert_decision(
     Ok(())
 }
 
+/// TASK-0089 (#935): record a historical risk-score sample for `agent_id`,
+/// linked to the decision that produced it. Called from
+/// `routes::write_decision_and_audit` for every `/v1/authorize` decision.
+/// Tenant-scoped, parameterized.
+pub async fn insert_agent_risk_score(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    decision_id: &str,
+    score: i32,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO agent_risk_scores (id, tenant_id, agent_id, decision_id, score, reason) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(decision_id)
+    .bind(score)
+    .bind(reason)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// TASK-0089 (#935): list historical risk-score samples for `agent_id`, most
+/// recent first. Tenant-scoped, parameterized.
+#[cfg(test)]
+pub async fn list_agent_risk_scores(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<Vec<AgentRiskScoreRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRiskScoreRecord>(
+        "SELECT * FROM agent_risk_scores WHERE tenant_id = ? AND agent_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .fetch_all(pool)
+    .await
+}
+
 /// Idempotency lookup (#0072): find a previously-recorded decision for the same
 /// `(tenant_id, agent_id, request_id)`. Used by `/v1/authorize` to short-circuit
 /// repeat requests instead of re-evaluating Cedar / writing duplicate side

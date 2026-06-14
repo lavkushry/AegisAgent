@@ -371,6 +371,21 @@ pub struct PolicyVersionRecord {
     pub archived_at: DateTime<Utc>,
 }
 
+/// TASK-0089 (#935): a historical risk-score sample, written for every
+/// `/v1/authorize` decision so operators can see an agent's risk trend over
+/// time rather than only its latest decision's score.
+#[cfg(test)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct AgentRiskScoreRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: String,
+    pub decision_id: String,
+    pub score: i32,
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub id: String,
