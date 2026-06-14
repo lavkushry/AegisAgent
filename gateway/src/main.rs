@@ -224,7 +224,14 @@ async fn content_type_validation_middleware(
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
 
-        if content_length > 0 && !content_type.contains("application/json") {
+        // #1276: Slack interactive-component callbacks POST
+        // `application/x-www-form-urlencoded`, not JSON — exempt this one
+        // path (its own HMAC signature check, not this content-type gate, is
+        // what authenticates the request).
+        let is_slack_callback = request.uri().path() == "/v1/callbacks/slack"
+            && content_type.contains("application/x-www-form-urlencoded");
+
+        if content_length > 0 && !content_type.contains("application/json") && !is_slack_callback {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 Json(json!({"error": "Content-Type must be application/json"})),
@@ -749,6 +756,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // HMAC-SHA256 signing secret for verifying X-Slack-Signature on
+    // POST /v1/callbacks/slack (#1276). When unset, the endpoint refuses every
+    // request with 404 (fail closed).
+    let slack_signing_secret = std::env::var("AEGIS_SLACK_SIGNING_SECRET").ok();
+    if slack_signing_secret.is_none() {
+        info!(
+            "AEGIS_SLACK_SIGNING_SECRET is not set. POST /v1/callbacks/slack \
+             will refuse all requests with 404."
+        );
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -766,6 +784,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
 
         github_webhook_secret,
+        slack_signing_secret,
     });
 
     // Read request body size limit (default 1MB)
@@ -858,6 +877,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/approvals/:id/reject", post(routes::reject_approval))
         .route("/v1/approvals/:id/edit", post(routes::edit_approval))
         .route("/v1/approvals/:id/consume", post(routes::consume_approval))
+        // Slack interactive-component callback (#1276): HMAC-verified, not
+        // tenant-scoped via the Authorization header — tenant comes from the
+        // signed callback payload itself.
+        .route("/v1/callbacks/slack", post(routes::slack_callback))
         // Audits
         .route("/v1/runs/:id/timeline", get(routes::get_timeline))
         .route("/v1/audit/events", get(routes::get_audit_events))
@@ -1177,6 +1200,7 @@ mod tests {
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
 
             github_webhook_secret: None,
+            slack_signing_secret: None,
         });
 
         let app = Router::new()
@@ -1248,6 +1272,7 @@ mod tests {
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
 
             github_webhook_secret: None,
+            slack_signing_secret: None,
         });
 
         let app = Router::new()

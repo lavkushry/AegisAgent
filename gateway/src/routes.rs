@@ -410,6 +410,12 @@ pub struct AppState {
     /// default), signature verification is skipped entirely, preserving
     /// pre-#1339 behavior.
     pub github_webhook_secret: Option<String>,
+    /// HMAC-SHA256 signing secret for verifying `X-Slack-Signature` on
+    /// `POST /v1/callbacks/slack` (#1276). Configured via
+    /// `AEGIS_SLACK_SIGNING_SECRET`. When `None`, the endpoint refuses every
+    /// request with `404` — fail closed, since an unconfigured secret means
+    /// no valid signature can ever be verified.
+    pub slack_signing_secret: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -3775,6 +3781,210 @@ fn verify_github_webhook_signature(
     mac.verify_slice(&expected).is_ok()
 }
 
+/// Verifies a Slack-style `X-Slack-Signature: v0=<hex>` header against
+/// `v0:{timestamp}:{body}` using `secret` (#1276), per Slack's request
+/// signing spec. Returns `false` on any malformed input (missing `v0=`
+/// prefix, non-hex digest, wrong length) as well as on a digest mismatch —
+/// fail closed. Uses [`Mac::verify_slice`], which performs a constant-time
+/// comparison.
+fn verify_slack_signature(secret: &str, timestamp: &str, body: &[u8], sig_header: &str) -> bool {
+    let Some(hex_digest) = sig_header.strip_prefix("v0=") else {
+        return false;
+    };
+    let Ok(expected) = hex::decode(hex_digest) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(b"v0:");
+    mac.update(timestamp.as_bytes());
+    mac.update(b":");
+    mac.update(body);
+    mac.verify_slice(&expected).is_ok()
+}
+
+/// Returns `true` if `timestamp` (Slack's `X-Slack-Request-Timestamp`, Unix
+/// seconds) is within 5 minutes of `now` in either direction (#1276). Slack's
+/// own verification guidance rejects requests older than 5 minutes to defend
+/// against replay of a captured request/signature pair. Also rejects
+/// malformed (non-integer) timestamps — fail closed.
+fn slack_timestamp_is_fresh(timestamp: &str, now: DateTime<Utc>) -> bool {
+    let Ok(ts) = timestamp.parse::<i64>() else {
+        return false;
+    };
+    let Some(ts_time) = DateTime::<Utc>::from_timestamp(ts, 0) else {
+        return false;
+    };
+    (now - ts_time).abs() <= Duration::minutes(5)
+}
+
+/// Extracts the `payload` field from a Slack interactive-component callback
+/// body, `application/x-www-form-urlencoded` with a single `payload=<url
+/// -encoded JSON>` field. Returns `None` if the field is absent or not valid
+/// UTF-8 after percent-decoding.
+fn extract_slack_payload_field(body: &[u8]) -> Option<String> {
+    let body_str = std::str::from_utf8(body).ok()?;
+    for pair in body_str.split('&') {
+        let (key, value) = pair.split_once('=')?;
+        if key == "payload" {
+            let value = value.replace('+', " ");
+            return percent_encoding::percent_decode_str(&value)
+                .decode_utf8()
+                .ok()
+                .map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// `POST /v1/callbacks/slack` (#1276) — verifies and processes a Slack
+/// interactive-component (Block Kit button) callback for an approval
+/// decision.
+///
+/// Not tenant-scoped via [`TenantId`]: Slack does not send our agent
+/// authentication header, so the tenant is recovered from the callback
+/// payload itself (see below). Authenticity instead comes entirely from the
+/// HMAC signature.
+///
+/// Security checks, all fail-closed:
+/// - If [`AppState::slack_signing_secret`] is not configured, the endpoint
+///   refuses every request with `404` (the feature is effectively disabled —
+///   no valid signature can ever be verified without a secret).
+/// - `X-Slack-Request-Timestamp` must be present, a valid Unix timestamp, and
+///   within 5 minutes of now ([`slack_timestamp_is_fresh`]) — defends against
+///   replay of a captured request.
+/// - `X-Slack-Signature` must be present and match `v0=HMAC-SHA256("v0:{ts}:
+///   {body}")` ([`verify_slack_signature`]) — defends against forged
+///   callbacks (spoofed approvals).
+///
+/// On success, the `payload` form field is parsed as Slack's
+/// `block_actions` interactive payload. `actions[0].value` is expected to
+/// encode `"{tenant_id}:{approval_id}"` (set when the approval notification
+/// was sent to Slack) and `actions[0].action_id` is `"approve"` or
+/// `"reject"`; the approver identity is taken from `user.username` (falling
+/// back to `user.id`). The corresponding approval is then approved/rejected
+/// exactly as `POST /v1/approvals/:id/{approve,reject}` would.
+pub async fn slack_callback(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> axum::response::Response {
+    let Some(secret) = state.slack_signing_secret.as_ref() else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "Not found"}))).into_response();
+    };
+
+    let timestamp = match headers
+        .get("X-Slack-Request-Timestamp")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(ts) if slack_timestamp_is_fresh(ts, Utc::now()) => ts,
+        _ => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "missing or stale X-Slack-Request-Timestamp",
+                    "reason": "stale_timestamp",
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    match headers
+        .get("X-Slack-Signature")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(sig) if verify_slack_signature(secret, timestamp, &body, sig) => {}
+        _ => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "invalid Slack callback signature",
+                    "reason": "invalid_signature",
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let Some(payload_json) = extract_slack_payload_field(&body) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing or invalid 'payload' field"})),
+        )
+            .into_response();
+    };
+    let payload: Value = match serde_json::from_str(&payload_json) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid 'payload' JSON: {}", e)})),
+            )
+                .into_response();
+        }
+    };
+
+    let action = payload
+        .get("actions")
+        .and_then(|a| a.as_array())
+        .and_then(|a| a.first());
+    let action_id = action
+        .and_then(|a| a.get("action_id"))
+        .and_then(|v| v.as_str());
+    let value = action.and_then(|a| a.get("value")).and_then(|v| v.as_str());
+    let approver_user_id = payload
+        .get("user")
+        .and_then(|u| u.get("username").or_else(|| u.get("id")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("slack_user")
+        .to_string();
+
+    let (tenant_id, approval_id) = match value.and_then(|v| v.split_once(':')) {
+        Some((tenant_id, approval_id)) => match Uuid::parse_str(approval_id) {
+            Ok(id) => (tenant_id.to_string(), id),
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "invalid approval id in callback value"})),
+                )
+                    .into_response();
+            }
+        },
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "missing or malformed callback value"})),
+            )
+                .into_response();
+        }
+    };
+
+    let decision_payload = ApproveRequest {
+        approver_user_id,
+        reason: Some("Decided via Slack interactive callback".to_string()),
+    };
+
+    let response = match action_id {
+        Some("approve") => {
+            approve_approval_inner(state.clone(), tenant_id, approval_id, decision_payload).await
+        }
+        Some("reject") => {
+            reject_approval_inner(state.clone(), tenant_id, approval_id, decision_payload).await
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "unsupported action_id"})),
+            )
+                .into_response();
+        }
+    };
+    record_approval_attempt_failure(&state, &response, &approval_id);
+    response
+}
+
 /// `POST /v1/ingest` (SOC-004, #1187) — agentless event ingestion.
 ///
 /// Tenant-scoped (via [`TenantId`]) and authenticated like every other
@@ -6288,6 +6498,7 @@ pub mod benchutil {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
             github_webhook_secret: None,
+            slack_signing_secret: None,
         });
 
         Ok((state, tenant_id, agent_token))
@@ -6661,6 +6872,7 @@ mod tests {
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
 
             github_webhook_secret: None,
+            slack_signing_secret: None,
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -6698,6 +6910,7 @@ mod tests {
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
 
             github_webhook_secret: None,
+            slack_signing_secret: None,
         });
 
         // First request is allowed through quota
@@ -6748,6 +6961,40 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
             github_webhook_secret: Some(secret.to_string()),
+            slack_signing_secret: None,
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `slack_signing_secret` set to `Some(secret)`, for testing the
+    /// `X-Slack-Signature` verification on `POST /v1/callbacks/slack` (#1276).
+    async fn setup_state_with_slack_secret(
+        test_name: &str,
+        secret: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(events_rx, state_raw.pool.clone()));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            github_webhook_secret: None,
+            slack_signing_secret: Some(secret.to_string()),
         });
 
         (state, tenant_id, agent_token)
@@ -6831,6 +7078,7 @@ mod tests {
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
 
             github_webhook_secret: None,
+            slack_signing_secret: None,
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -14553,6 +14801,7 @@ mod tests {
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
 
             github_webhook_secret: None,
+            slack_signing_secret: None,
         });
 
         register_high_risk_action(state.clone()).await;
@@ -14995,5 +15244,239 @@ mod tests {
         let approvals = approvals.as_array().unwrap();
         assert_eq!(approvals.len(), 1);
         assert_eq!(approvals[0]["approver_user_id"], "user_alice");
+    }
+
+    /// Computes the `X-Slack-Signature: v0=<hex hmac>` header value for a
+    /// Slack interactive-component callback, per Slack's signing spec:
+    /// `HMAC-SHA256(secret, "v0:{timestamp}:{body}")`.
+    fn slack_signature_header(secret: &str, timestamp: &str, body: &[u8]) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(b"v0:");
+        mac.update(timestamp.as_bytes());
+        mac.update(b":");
+        mac.update(body);
+        format!("v0={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    /// Builds a Slack interactive-component callback body
+    /// (`payload=<percent-encoded JSON>`) for `action_id`/`value`.
+    fn slack_callback_body(action_id: &str, value: &str) -> Bytes {
+        let payload = json!({
+            "actions": [{"action_id": action_id, "value": value}],
+            "user": {"username": "reviewer", "id": "U123"},
+        });
+        let encoded = percent_encoding::utf8_percent_encode(
+            &payload.to_string(),
+            percent_encoding::NON_ALPHANUMERIC,
+        )
+        .to_string();
+        Bytes::from(format!("payload={encoded}"))
+    }
+
+    /// #1276: when `slack_signing_secret` is not configured, the callback
+    /// endpoint fails closed with `404` regardless of headers/body.
+    #[tokio::test]
+    async fn slack_callback_returns_404_when_secret_not_configured() {
+        let (state, _tenant_id, _agent_token) = setup_state("slack_no_secret").await;
+
+        let response = slack_callback(State(state.clone()), HeaderMap::new(), Bytes::new())
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #1276: a callback with a timestamp older than 5 minutes is rejected
+    /// with `401` and `reason: "stale_timestamp"`, even if the signature
+    /// over that (stale) timestamp is otherwise valid.
+    #[tokio::test]
+    async fn slack_callback_rejects_stale_timestamp_with_401() {
+        let (state, _tenant_id, _agent_token) =
+            setup_state_with_slack_secret("slack_stale_ts", "test_secret").await;
+
+        let body = slack_callback_body("approve", "tenant:00000000-0000-0000-0000-000000000000");
+        let stale_ts = (Utc::now() - Duration::minutes(10)).timestamp().to_string();
+        let sig = slack_signature_header("test_secret", &stale_ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&stale_ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["reason"], "stale_timestamp");
+    }
+
+    /// #1276: a callback signed with the wrong secret is rejected with `401`
+    /// and `reason: "invalid_signature"`.
+    #[tokio::test]
+    async fn slack_callback_rejects_invalid_signature_with_401() {
+        let (state, _tenant_id, _agent_token) =
+            setup_state_with_slack_secret("slack_bad_sig", "test_secret").await;
+
+        let body = slack_callback_body("approve", "tenant:00000000-0000-0000-0000-000000000000");
+        let ts = Utc::now().timestamp().to_string();
+        // Signed with a different secret than the one configured server-side.
+        let sig = slack_signature_header("wrong_secret", &ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["reason"], "invalid_signature");
+    }
+
+    /// #1276: a validly-signed callback with `action_id: "approve"` and
+    /// `value: "{tenant_id}:{approval_id}"` transitions the matching pending
+    /// approval to `APPROVED`.
+    #[tokio::test]
+    async fn slack_callback_approve_action_approves_pending_approval() {
+        let (state, tenant_id, agent_token) =
+            setup_state_with_slack_secret("slack_approve", "test_secret").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "30").await;
+
+        let value = format!("{tenant_id}:{approval_id}");
+        let body = slack_callback_body("approve", &value);
+        let ts = Utc::now().timestamp().to_string();
+        let sig = slack_signature_header("test_secret", &ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(stored.status, "APPROVED");
+        assert_eq!(stored.approver_user_id.as_deref(), Some("reviewer"));
+    }
+
+    /// #1276: a validly-signed callback with `action_id: "reject"` transitions
+    /// the matching pending approval to `REJECTED`.
+    #[tokio::test]
+    async fn slack_callback_reject_action_rejects_pending_approval() {
+        let (state, tenant_id, agent_token) =
+            setup_state_with_slack_secret("slack_reject", "test_secret").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "31").await;
+
+        let value = format!("{tenant_id}:{approval_id}");
+        let body = slack_callback_body("reject", &value);
+        let ts = Utc::now().timestamp().to_string();
+        let sig = slack_signature_header("test_secret", &ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .unwrap()
+            .expect("approval should exist");
+        assert_eq!(stored.status, "REJECTED");
+    }
+
+    /// #1276: a validly-signed callback whose body has no `payload` field is
+    /// rejected with `400`.
+    #[tokio::test]
+    async fn slack_callback_missing_payload_field_returns_400() {
+        let (state, _tenant_id, _agent_token) =
+            setup_state_with_slack_secret("slack_missing_payload", "test_secret").await;
+
+        let body = Bytes::from("not_a_payload=true");
+        let ts = Utc::now().timestamp().to_string();
+        let sig = slack_signature_header("test_secret", &ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// #1276: a validly-signed callback whose `value` does not contain a
+    /// well-formed `{tenant_id}:{approval_id}` (non-UUID approval id) is
+    /// rejected with `400`.
+    #[tokio::test]
+    async fn slack_callback_malformed_approval_id_returns_400() {
+        let (state, tenant_id, _agent_token) =
+            setup_state_with_slack_secret("slack_bad_id", "test_secret").await;
+
+        let value = format!("{tenant_id}:not-a-uuid");
+        let body = slack_callback_body("approve", &value);
+        let ts = Utc::now().timestamp().to_string();
+        let sig = slack_signature_header("test_secret", &ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
