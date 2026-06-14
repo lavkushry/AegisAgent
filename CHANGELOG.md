@@ -7,6 +7,24 @@ reaches 1.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **#1352: `reload_tenant_policies` failed for any tenant with an active
+  custom policy** due to `PolicySet` auto-generated id collisions —
+  `PolicySet::from_str` assigns ids starting from `policy0` for every
+  independently-parsed source, so merging a custom policy's parsed
+  `PolicySet` into a clone of the base set via `PolicySet::add` collided
+  with the base set's own `policy0..N` and returned
+  `Err("duplicate template or policy id")`. The error was silently swallowed
+  (`let _ = ...`) by `authorize_action`, so the tenant's custom policies had
+  **zero effect** on authorization decisions with no operator-visible error.
+  `gateway/src/policy.rs`'s `PolicyEngine` now retains the base policy
+  set's raw Cedar source (`base_policy_src`) and `reload_tenant_policies`
+  re-parses the base source concatenated with each active custom policy's
+  source in a single `PolicySet::from_str` call, assigning globally-unique
+  sequential ids. New regression test
+  `test_reload_tenant_policies_with_custom_policy_succeeds_and_applies`.
+
 ### Performance
 
 - **In-memory compiled policy cache verified** (#1314): `PolicyEngine`
