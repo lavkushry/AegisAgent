@@ -123,6 +123,39 @@ reaches 1.0.
 
 ### Fixed
 
+- **#1300: Approval approve/reject/edit TOCTOU race on expiry**.
+  `db::update_approval_status` (used by `approve_approval` and
+  `reject_approval`) and `db::update_approval_edit` (used by `edit_approval`)
+  were unconditional `UPDATE`s with no `status = 'created'` or expiry guard.
+  Most seriously, `reject_approval` had **no pre-check at all** — a reject
+  callback arriving after an approval had already been `APPROVED` (or
+  otherwise decided) would silently overwrite its status to `REJECTED`,
+  violating "never re-decide a decided approval." `approve_approval` and
+  `edit_approval` had a read-then-write TOCTOU window: the pre-check
+  (`status != "created"` / `approval_is_expired`) could pass and then the
+  approval could be decided or expire before the subsequent unconditional
+  write. Both functions are now atomic, conditional `UPDATE`s — mirroring
+  `db::consume_approval`'s pattern (`WHERE ... AND status = 'created' AND
+  (expires_at IS NULL OR expires_at > ?)`) — and return `bool` (whether this
+  call performed the transition). The handlers treat the UPDATE itself as the
+  authority: a `false` result means the approval was no longer pending or has
+  expired, and the handler responds `409 CONFLICT` with a `"reason"` field —
+  `"approval_expired"` (also emitting a `tamper_attempt` receipt, as
+  `approve_approval` already did for its pre-check expiry case) or
+  `"approval_already_decided"` (including the current `status`).
+  `approve_approval`'s existing pre-check expiry 409 also now carries
+  `"reason": "approval_expired"` for response-shape consistency.
+  `reject_approval` and `edit_approval` gained the same expiry/already-decided
+  409s. A new concurrent-race test (`concurrent_approve_and_reject_only_one_wins`)
+  proves that of two simultaneous approve/reject calls against the same
+  pending approval, exactly one succeeds (200) and the other is rejected (409
+  `approval_already_decided`) — the final stored status reflects only the
+  winner, never both, never neither. **Out of scope**: the issue's AC #2
+  ("Slack message updated to show 'Expired' status") is not implemented —
+  this gateway has no interactive Slack-app message-update integration (no
+  stored Slack message timestamps/channel ids; `notify.rs` is a
+  fire-and-forget outbound webhook POST only), so there is nothing to wire a
+  live message edit to. This is an intentional deferral, not a regression.
 - **#1301: Audit event missing decision_id linkage**. `audit_events` (and
   its `audit_events_archive` counterpart) gained nullable `decision_id` and
   `approval_id` columns (migration `0009_audit_events_decision_linkage.sql`,

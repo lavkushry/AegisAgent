@@ -2265,6 +2265,13 @@ pub async fn get_approval_by_id(
 /// re-hashed and that new hash becomes the approval's bound `action_hash`, so
 /// any subsequent approve/consume is bound to the edited action, not the
 /// original one.
+///
+/// #1300: the UPDATE is the atomic source of truth for the transition — it
+/// only matches a still-`created`, non-expired approval (mirroring
+/// `consume_approval`'s pattern), closing the TOCTOU window between a
+/// handler's pre-read and this write. Returns `true` only if this call
+/// performed the transition (one row updated); `false` if the approval was
+/// already decided or has expired.
 pub async fn update_approval_edit(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -2273,26 +2280,42 @@ pub async fn update_approval_edit(
     reason: Option<&str>,
     edited_call: &str,
     new_action_hash: &str,
-) -> Result<(), sqlx::Error> {
-    let now = Utc::now();
-    sqlx::query(
-        "UPDATE approvals
-         SET status = 'EDITED', approver_user_id = ?, reason = ?, edited_skill_call = ?,
-             original_call_hash = ?, decided_at = ?
-         WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(user_id)
-    .bind(reason)
-    .bind(edited_call)
-    .bind(new_action_hash)
-    .bind(now)
-    .bind(tenant_id)
-    .bind(approval_id)
-    .execute(pool)
-    .await?;
-    Ok(())
+) -> Result<bool, sqlx::Error> {
+    retry_on_busy(3, || async {
+        let now = Utc::now();
+        let result = sqlx::query(
+            "UPDATE approvals
+             SET status = 'EDITED', approver_user_id = ?, reason = ?, edited_skill_call = ?,
+                 original_call_hash = ?, decided_at = ?
+             WHERE tenant_id = ? AND id = ? AND status = 'created'
+               AND (expires_at IS NULL OR expires_at > ?)",
+        )
+        .bind(user_id)
+        .bind(reason)
+        .bind(edited_call)
+        .bind(new_action_hash)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(approval_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    })
+    .await
 }
 
+/// Atomically transition a pending approval to a decided `status`
+/// (`APPROVED`/`REJECTED`).
+///
+/// #1300: the UPDATE itself is the conditional gate — it only matches a row
+/// that is still `status = 'created'` and not past its `expires_at` (mirroring
+/// `consume_approval`'s pattern). This closes the TOCTOU race where a
+/// handler's pre-read of the approval is stale by the time the write happens
+/// (e.g. two concurrent approve/reject callbacks, or a callback arriving just
+/// as the approval expires). Returns `true` only if this call performed the
+/// transition (one row updated); `false` if the approval was already decided
+/// or has expired — callers must treat `false` as a 409, never as success.
 pub async fn update_approval_status(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -2301,23 +2324,28 @@ pub async fn update_approval_status(
     user_id: &str,
     reason: Option<&str>,
     edited_call: Option<&str>,
-) -> Result<(), sqlx::Error> {
-    let now = Utc::now();
-    sqlx::query(
-        "UPDATE approvals
-         SET status = ?, approver_user_id = ?, reason = ?, edited_skill_call = ?, decided_at = ?
-         WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(status)
-    .bind(user_id)
-    .bind(reason)
-    .bind(edited_call)
-    .bind(now)
-    .bind(tenant_id)
-    .bind(approval_id)
-    .execute(pool)
-    .await?;
-    Ok(())
+) -> Result<bool, sqlx::Error> {
+    retry_on_busy(3, || async {
+        let now = Utc::now();
+        let result = sqlx::query(
+            "UPDATE approvals
+             SET status = ?, approver_user_id = ?, reason = ?, edited_skill_call = ?, decided_at = ?
+             WHERE tenant_id = ? AND id = ? AND status = 'created'
+               AND (expires_at IS NULL OR expires_at > ?)",
+        )
+        .bind(status)
+        .bind(user_id)
+        .bind(reason)
+        .bind(edited_call)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(approval_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    })
+    .await
 }
 
 pub async fn insert_audit_event(
