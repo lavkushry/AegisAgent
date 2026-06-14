@@ -62,6 +62,12 @@ reaches 1.0.
   `POST /v1/mcp/servers/:server_key/tools` discovery call, surfaced on
   `McpServerRecord`/`GET /v1/mcp/servers` so operators can see manifest
   staleness alongside `manifest_hash`.
+- **TASK-0090 (#936): `mcp_manifest_snapshots` table**. New migration
+  `0003_mcp_manifest_snapshots.sql` adds a tenant-scoped, indexed table that
+  records one row per `POST /v1/mcp/servers/:server_key/tools` discovery call,
+  capturing the computed `mcp-manifest-1` hash and the raw discovered tool list
+  via `db::insert_mcp_manifest_snapshot`. Gives operators an audit trail to diff
+  against when investigating an `mcp_manifest_drift` alert.
 
 ### Changed
 

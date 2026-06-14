@@ -855,6 +855,52 @@ pub async fn touch_mcp_server_discovery(
     Ok(())
 }
 
+/// TASK-0090 (#936): record a snapshot of the discovered MCP tool manifest
+/// (its computed `mcp-manifest-1` hash and the raw tool list) on every
+/// `POST /v1/mcp/servers/:server_key/tools` discovery call. Tenant-scoped,
+/// parameterized. Returns the new snapshot's id.
+pub async fn insert_mcp_manifest_snapshot(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    manifest_hash: &str,
+    manifest_json: &str,
+) -> Result<String, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO mcp_manifest_snapshots (id, tenant_id, server_key, manifest_hash, manifest_json) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(server_key)
+    .bind(manifest_hash)
+    .bind(manifest_json)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+/// TASK-0090 (#936): list manifest snapshots for a server, most recent first.
+/// Tenant-scoped, parameterized.
+#[cfg(test)]
+pub async fn list_mcp_manifest_snapshots(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    limit: i64,
+) -> Result<Vec<McpManifestSnapshotRecord>, sqlx::Error> {
+    sqlx::query_as::<_, McpManifestSnapshotRecord>(
+        "SELECT * FROM mcp_manifest_snapshots WHERE tenant_id = ? AND server_key = ? \
+         ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(server_key)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 /// Additive migration: record the canonicalization scheme on each receipt so the
 /// hash chain is self-describing and a future scheme bump stays migratable. Empty
 /// string on legacy rows. NOT part of `receipt_hash` (byte-parity untouched).
