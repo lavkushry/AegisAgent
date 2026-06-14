@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Duration, Utc};
+use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -402,6 +403,12 @@ pub struct AppState {
     /// record to SQLite failed. Cleared back to `false` on the next successful
     /// write. Backs the `audit_writer` field on `GET /readyz` (#1299).
     pub audit_writer_unhealthy: std::sync::atomic::AtomicBool,
+    /// Opt-in HMAC-SHA256 secret for verifying `X-Hub-Signature-256` on
+    /// `POST /v1/ingest` requests with `source: "github_webhook"` (#1339).
+    /// Configured via `AEGIS_GITHUB_WEBHOOK_SECRET`. When `None` (the
+    /// default), signature verification is skipped entirely, preserving
+    /// pre-#1339 behavior.
+    pub github_webhook_secret: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -3732,13 +3739,39 @@ pub struct UpdatePolicyRequest {
     pub status: Option<String>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct IngestRequest {
     /// One of [`crate::ingest::SUPPORTED_SOURCES`].
     pub source: String,
     /// The raw event payload from the external system, in that system's
     /// native shape (e.g. a GitHub webhook body, an OpenAI trace entry).
     pub payload: serde_json::Value,
+}
+
+/// Verifies a GitHub-style `X-Hub-Signature-256: sha256=<hex>` header against
+/// `body` using `secret` (#1339). Returns `false` on any malformed input
+/// (missing `sha256=` prefix, non-hex digest, wrong length) as well as on a
+/// digest mismatch — fail closed. Uses [`Mac::verify_slice`], which performs
+/// a constant-time comparison.
+fn verify_github_webhook_signature(
+    secret: &str,
+    body: &[u8],
+    sig_header: &axum::http::HeaderValue,
+) -> bool {
+    let Ok(sig_header) = sig_header.to_str() else {
+        return false;
+    };
+    let Some(hex_digest) = sig_header.strip_prefix("sha256=") else {
+        return false;
+    };
+    let Ok(expected) = hex::decode(hex_digest) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&expected).is_ok()
 }
 
 /// `POST /v1/ingest` (SOC-004, #1187) — agentless event ingestion.
@@ -3750,11 +3783,63 @@ pub struct IngestRequest {
 /// flows through the identical detect -> correlate -> respond pipeline.
 /// Never touches the authorize hot path itself (Law 3) — this is its own
 /// request/response cycle.
+///
+/// GitHub webhook signature verification (#1339): when
+/// [`AppState::github_webhook_secret`] is configured and `source ==
+/// "github_webhook"`, the request must carry a valid `X-Hub-Signature-256`
+/// HMAC-SHA256 over the raw request body, or the request is rejected with
+/// `401`. This is opt-in — when the secret is unset, behavior is unchanged
+/// from pre-#1339.
 pub async fn ingest_event(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
-    Json(payload): Json<IngestRequest>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let payload: IngestRequest = match serde_json::from_slice(&body) {
+        Ok(payload) => payload,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid JSON body: {}", e)})),
+            )
+                .into_response();
+        }
+    };
+
+    // GitHub webhook signature verification (#1339, opt-in via
+    // AEGIS_GITHUB_WEBHOOK_SECRET). Skipped entirely when the secret is not
+    // configured, and for sources other than "github_webhook" — matching
+    // GitHub's actual webhook delivery mechanism (X-Hub-Signature-256).
+    if payload.source == "github_webhook" {
+        if let Some(secret) = state.github_webhook_secret.as_ref() {
+            match headers.get("X-Hub-Signature-256") {
+                None => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({
+                            "error": "missing X-Hub-Signature-256 header",
+                            "reason": "missing_signature",
+                        })),
+                    )
+                        .into_response();
+                }
+                Some(sig_header) => {
+                    if !verify_github_webhook_signature(secret, &body, sig_header) {
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({
+                                "error": "invalid webhook signature",
+                                "reason": "invalid_signature",
+                            })),
+                        )
+                            .into_response();
+                    }
+                }
+            }
+        }
+    }
+
     match crate::ingest::normalize(&tenant_id, &payload.source, &payload.payload) {
         Err(()) => (
             StatusCode::BAD_REQUEST,
@@ -6311,6 +6396,8 @@ mod tests {
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -6346,6 +6433,8 @@ mod tests {
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         // First request is allowed through quota
@@ -6367,6 +6456,36 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp4.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `github_webhook_secret` set to `Some(secret)`, for testing the
+    /// `X-Hub-Signature-256` verification on `POST /v1/ingest` (#1339).
+    async fn setup_state_with_github_secret(
+        test_name: &str,
+        secret: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(events_rx, state_raw.pool.clone()));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            github_webhook_secret: Some(secret.to_string()),
+        });
+
+        (state, tenant_id, agent_token)
     }
 
     async fn setup_state(test_name: &str) -> (Arc<AppState>, String, String) {
@@ -6445,6 +6564,8 @@ mod tests {
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -12314,10 +12435,12 @@ mod tests {
             }),
         };
 
+        let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
         let response = ingest_event(
             State(state.clone()),
             TenantId(tenant_id.clone()),
-            Json(payload),
+            HeaderMap::new(),
+            body,
         )
         .await
         .into_response();
@@ -12347,10 +12470,12 @@ mod tests {
             payload: serde_json::json!({}),
         };
 
+        let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
         let response = ingest_event(
             State(state.clone()),
             TenantId(tenant_id.clone()),
-            Json(payload),
+            HeaderMap::new(),
+            body,
         )
         .await
         .into_response();
@@ -12368,10 +12493,166 @@ mod tests {
             payload: serde_json::json!({"foo": "bar"}),
         };
 
+        let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
         let response = ingest_event(
             State(state.clone()),
             TenantId(tenant_id.clone()),
-            Json(payload),
+            HeaderMap::new(),
+            body,
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Computes the GitHub-style `X-Hub-Signature-256` header value
+    /// (`sha256=<hex hmac>`) for `body` using `secret`.
+    fn github_signature_header(secret: &str, body: &[u8]) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    /// #1339: a `github_webhook` ingest request with a correctly-computed
+    /// `X-Hub-Signature-256` header (over the exact raw body bytes) is
+    /// processed normally (202 Accepted), when `github_webhook_secret` is
+    /// configured.
+    #[tokio::test]
+    async fn ingest_github_webhook_valid_signature_is_processed() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("ingest_gh_valid_sig", "test_secret").await;
+
+        let payload = IngestRequest {
+            source: "github_webhook".to_string(),
+            payload: serde_json::json!({
+                "action": "opened",
+                "repository": {"full_name": "lavkushry/AegisAgent"},
+                "sender": {"login": "alice"}
+            }),
+        };
+        let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        let sig = github_signature_header("test_secret", &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Hub-Signature-256",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = ingest_event(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            headers,
+            body,
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    /// #1339: a `github_webhook` ingest request with an `X-Hub-Signature-256`
+    /// header computed using the WRONG secret is rejected with `401` and
+    /// `reason: "invalid_signature"`.
+    #[tokio::test]
+    async fn ingest_github_webhook_invalid_signature_returns_401() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("ingest_gh_invalid_sig", "test_secret").await;
+
+        let payload = IngestRequest {
+            source: "github_webhook".to_string(),
+            payload: serde_json::json!({
+                "action": "opened",
+                "repository": {"full_name": "lavkushry/AegisAgent"},
+                "sender": {"login": "alice"}
+            }),
+        };
+        let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        // Signed with a different secret than the one configured server-side.
+        let sig = github_signature_header("wrong_secret", &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Hub-Signature-256",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = ingest_event(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            headers,
+            body,
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["reason"], "invalid_signature");
+    }
+
+    /// #1339: a `github_webhook` ingest request with NO
+    /// `X-Hub-Signature-256` header at all is rejected with `401` and
+    /// `reason: "missing_signature"`, when `github_webhook_secret` is
+    /// configured.
+    #[tokio::test]
+    async fn ingest_github_webhook_missing_signature_header_returns_401() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("ingest_gh_missing_sig", "test_secret").await;
+
+        let payload = IngestRequest {
+            source: "github_webhook".to_string(),
+            payload: serde_json::json!({
+                "action": "opened",
+                "repository": {"full_name": "lavkushry/AegisAgent"},
+                "sender": {"login": "alice"}
+            }),
+        };
+        let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        let response = ingest_event(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            HeaderMap::new(),
+            body,
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["reason"], "missing_signature");
+    }
+
+    /// #1339 (AC#4): a `github_webhook` ingest request with a VALID signature
+    /// but a payload shape that `normalize_github_webhook` cannot normalize
+    /// (e.g. missing `sender`) is still rejected with `400` (payload-shape
+    /// validation), not `401` — signature verification and payload-shape
+    /// validation are independent.
+    #[tokio::test]
+    async fn ingest_github_webhook_valid_signature_unrecognized_payload_returns_400() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("ingest_gh_valid_sig_bad_payload", "test_secret").await;
+
+        let payload = IngestRequest {
+            source: "github_webhook".to_string(),
+            payload: serde_json::json!({"foo": "bar"}),
+        };
+        let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        let sig = github_signature_header("test_secret", &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Hub-Signature-256",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = ingest_event(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            headers,
+            body,
         )
         .await
         .into_response();
@@ -14005,6 +14286,8 @@ mod tests {
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         register_high_risk_action(state.clone()).await;

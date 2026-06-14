@@ -1077,6 +1077,7 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hex",
+ "hmac",
  "jsonwebtoken",
  "percent-encoding",
  "reqwest",
