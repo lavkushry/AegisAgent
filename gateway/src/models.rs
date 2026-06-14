@@ -351,6 +351,26 @@ pub struct PolicyRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// TASK-0091 (#937): an archived prior version of a [`PolicyRecord`], written
+/// by `routes::update_policy` before the `policies` row is overwritten in
+/// place — gives operators an audit trail of every prior policy version.
+#[cfg(test)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct PolicyVersionRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub policy_id: String,
+    pub policy_key: String,
+    pub name: String,
+    pub language: String,
+    pub body: String,
+    pub version: i32,
+    pub status: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub archived_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub id: String,

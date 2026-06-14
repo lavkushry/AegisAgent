@@ -3093,6 +3093,10 @@ pub async fn update_policy(
         }
     };
 
+    // TASK-0091 (#937): archive the pre-update row before overwriting it, so
+    // operators can inspect/restore prior policy versions.
+    let previous = record.clone();
+
     if let Some(policy_key) = payload.policy_key {
         record.policy_key = policy_key;
     }
@@ -3114,6 +3118,11 @@ pub async fn update_policy(
         record.status = status;
     }
     record.version += 1;
+
+    // Best-effort: a DB error archiving the previous version never blocks the update.
+    if let Err(e) = db::insert_policy_version(&state.pool, &previous).await {
+        error!("Failed to archive previous policy version: {:?}", e);
+    }
 
     match db::update_policy(&state.pool, &record).await {
         Ok(_) => {
@@ -9035,6 +9044,93 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// TASK-0091 (#937): `PUT /v1/policies/:id` overwrites the `policies` row
+    /// in place after incrementing `version`, so the previous body would
+    /// otherwise be lost. Each update must archive the pre-update row into
+    /// `policy_versions`, tenant-scoped, giving operators an audit trail.
+    #[tokio::test]
+    async fn update_policy_archives_previous_version() {
+        let (state, tenant_id, _) = setup_state("policy_version_archive").await;
+
+        let create_payload = CreatePolicyRequest {
+            policy_key: "allow-all".to_string(),
+            name: "Allow All".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+        };
+        let response_create = create_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(create_payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let policy_id = json_create["id"].as_str().unwrap().to_string();
+        assert_eq!(json_create["version"].as_i64(), Some(1));
+
+        // No versions archived yet for a brand-new policy.
+        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+            .await
+            .unwrap();
+        assert!(versions.is_empty());
+
+        // First update: v1 -> v2. The original v1 body must be archived.
+        let update1 = UpdatePolicyRequest {
+            policy_key: None,
+            name: None,
+            body: Some("forbid (principal, action, resource);".to_string()),
+            status: None,
+        };
+        let response_update1 = update_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+            Json(update1),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update1.status(), StatusCode::OK);
+
+        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+            .await
+            .unwrap();
+        assert_eq!(versions.len(), 1, "v1 must be archived after first update");
+        assert_eq!(versions[0].version, 1);
+        assert_eq!(versions[0].body, "permit (principal, action, resource);");
+        assert_eq!(versions[0].tenant_id, tenant_id);
+        assert_eq!(versions[0].policy_id, policy_id);
+
+        // Second update: v2 -> v3. The v2 body must also be archived, most
+        // recent first.
+        let update2 = UpdatePolicyRequest {
+            policy_key: None,
+            name: None,
+            body: Some("permit (principal, action == Action::\"x\", resource);".to_string()),
+            status: None,
+        };
+        let response_update2 = update_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(policy_id.clone()),
+            Json(update2),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update2.status(), StatusCode::OK);
+
+        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+            .await
+            .unwrap();
+        assert_eq!(versions.len(), 2, "v2 must also be archived");
+        assert_eq!(versions[0].version, 2, "most recent archived version first");
+        assert_eq!(versions[0].body, "forbid (principal, action, resource);");
+        assert_eq!(versions[1].version, 1);
     }
 
     /// SOC-004 (#1187): `POST /v1/ingest` normalizes a GitHub webhook payload,
