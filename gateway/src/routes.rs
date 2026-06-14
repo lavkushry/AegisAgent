@@ -8861,6 +8861,107 @@ mod tests {
         );
     }
 
+    /// #1303: `insert_audit_event` must persist the caller-supplied
+    /// `created_at` (microsecond precision) instead of relying on the
+    /// column's `DEFAULT CURRENT_TIMESTAMP` (second precision, assigned at
+    /// insert time). Without this, two events emitted within the same wall-
+    /// clock second always sort by insertion order rather than their actual
+    /// logical timestamps, which can put them out of chronological order on
+    /// the timeline.
+    #[tokio::test]
+    async fn insert_audit_event_persists_microsecond_created_at_for_chronological_ordering() {
+        let (state, tenant_id, _agent_token) =
+            setup_state("audit_event_microsecond_created_at").await;
+        let run_id = "run-microsecond-order";
+
+        fn event_at(
+            tenant_id: &str,
+            run_id: &str,
+            label: &str,
+            created_at: DateTime<Utc>,
+        ) -> AuditEventRecord {
+            AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                event_type: "test_event".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: Some(run_id.to_string()),
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: None,
+                resource: Some(label.to_string()),
+                event_json: "{}".to_string(),
+                input_hash: None,
+                output_hash: None,
+                decision_id: None,
+                approval_id: None,
+                created_at,
+            }
+        }
+
+        // All three events fall within the same wall-clock second but have
+        // distinct logical timestamps (microseconds apart). Insert them in a
+        // scrambled order — "first" (earliest) is inserted last.
+        let base = Utc::now();
+        db::insert_audit_event(
+            &state.pool,
+            &event_at(
+                &tenant_id,
+                run_id,
+                "second",
+                base + Duration::microseconds(2000),
+            ),
+        )
+        .await
+        .unwrap();
+        db::insert_audit_event(
+            &state.pool,
+            &event_at(
+                &tenant_id,
+                run_id,
+                "third",
+                base + Duration::microseconds(3000),
+            ),
+        )
+        .await
+        .unwrap();
+        db::insert_audit_event(
+            &state.pool,
+            &event_at(
+                &tenant_id,
+                run_id,
+                "first",
+                base + Duration::microseconds(1000),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let response = get_timeline(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path(run_id.to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<AuditEventRecord> = serde_json::from_slice(&body).unwrap();
+        let resources: Vec<&str> = events
+            .iter()
+            .map(|e| e.resource.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            resources,
+            vec!["first", "second", "third"],
+            "events within the same wall-clock second must still sort by their \
+             microsecond-precision created_at, not by insertion order"
+        );
+    }
+
     /// #0119: a mutating action whose triggering content has
     /// `semi_trusted_customer` provenance is paused for human review rather
     /// than auto-allowed or auto-denied.
