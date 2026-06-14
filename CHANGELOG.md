@@ -108,6 +108,20 @@ reaches 1.0.
 
 ### Fixed
 
+- **#1299: High-risk action allowed when audit writer is unavailable**. The
+  `/v1/authorize` decision path could return `allow`/`require_approval` for a
+  mutating or high-risk action even when the audit trail for that decision
+  could not be persisted — violating the fail-closed law "audit unavailable
+  → do not execute critical action." The gateway now health-checks the SOC
+  event stream (`EventSink::has_capacity`) before the main decision write: if
+  the channel is full, or if `write_decision_and_audit` fails (e.g. SQLite
+  write error), a mutating or non-`"low"`-risk action is denied with
+  `reason` containing `audit_writer_unavailable` and
+  `matched_policies: ["audit_writer_unavailable"]`. Read-only, low-risk
+  actions instead degrade gracefully — they are still allowed, with a warning
+  logged, since they have no destructive side effect to gate. A new
+  `AppState.audit_writer_unhealthy` flag tracks the most recent DB-write
+  outcome and is now surfaced on `GET /readyz` as `"audit_writer": "up"|"down"`.
 - **#1336: MCP manifest-drift severity classification + diff**. Re-discovering
   an MCP server's tool manifest used to fire a single hardcoded
   `"high"`-severity `mcp_manifest_drift` alert on *any* hash change. The
