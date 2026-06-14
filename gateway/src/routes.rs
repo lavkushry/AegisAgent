@@ -1,5 +1,6 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
+    body::Bytes,
     extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -6286,7 +6287,7 @@ pub mod benchutil {
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
-            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            github_webhook_secret: None,
         });
 
         Ok((state, tenant_id, agent_token))
@@ -6740,6 +6741,8 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
