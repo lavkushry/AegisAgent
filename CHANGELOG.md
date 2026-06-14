@@ -9,6 +9,18 @@ reaches 1.0.
 
 ### Added
 
+- **Replay protection nonce** (#1306): `POST /v1/authorize` accepts optional
+  `nonce` and `timestamp` fields. When `nonce` is present, the gateway
+  rejects a `(tenant, agent, nonce)` repeat with `409 Conflict` +
+  `reason: replay_nonce_reused`, and rejects a `timestamp` more than 5
+  minutes outside the current time with `409 Conflict` +
+  `reason: replay_timestamp_expired`. Dedup is backed by a new in-memory LRU
+  (`ReplayNonceCache`, capacity 10,000, configurable via
+  `AEGIS_REPLAY_NONCE_CACHE_CAPACITY`) rather than the database, keeping the
+  hot path fast; the LRU plus the timestamp check together approximate the
+  5-minute replay window. Entirely opt-in — requests without `nonce` are
+  unaffected (backwards compatible).
+
 - **Policy rollback** (#1302): `POST /v1/policies/:id/rollback` restores a
   policy's most recently archived `policy_versions` row onto the live
   `policies` row. The current live row is itself archived first (so the

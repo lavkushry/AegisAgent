@@ -712,6 +712,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(1024);
     let skill_cache = routes::SkillActionCache::new(skill_cache_capacity);
 
+    // In-memory LRU dedup cache for opt-in /v1/authorize replay-protection
+    // nonces (#1306). AEGIS_REPLAY_NONCE_CACHE_CAPACITY == 0 disables it
+    // (every nonce treated as unseen, i.e. no replay rejection).
+    let replay_nonce_cache_capacity: usize = std::env::var("AEGIS_REPLAY_NONCE_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10_000);
+    let replay_nonce_cache = routes::ReplayNonceCache::new(replay_nonce_cache_capacity);
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -722,6 +731,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rate_limiter,
         quota_manager,
         skill_cache,
+        replay_nonce_cache,
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
     });
@@ -1115,6 +1125,7 @@ mod tests {
             rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
             quota_manager: routes::QuotaManager::new(0, 86400),
             skill_cache: routes::SkillActionCache::new(1024),
+            replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
@@ -1181,6 +1192,7 @@ mod tests {
             rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
             quota_manager: routes::QuotaManager::new(0, 86400),
             skill_cache: routes::SkillActionCache::new(1024),
+            replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
