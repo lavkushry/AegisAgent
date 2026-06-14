@@ -1420,6 +1420,51 @@ pub async fn update_policy(pool: &SqlitePool, record: &PolicyRecord) -> Result<(
     Ok(())
 }
 
+/// TASK-0091 (#937): archive `record` (the pre-update policy row) into
+/// `policy_versions` so it can be inspected/restored later. Called by
+/// `routes::update_policy` before the `policies` row is overwritten in place.
+/// Tenant-scoped, parameterized.
+pub async fn insert_policy_version(
+    pool: &SqlitePool,
+    record: &PolicyRecord,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO policy_versions (id, tenant_id, policy_id, policy_key, name, language, body, version, status, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&record.tenant_id)
+    .bind(&record.id)
+    .bind(&record.policy_key)
+    .bind(&record.name)
+    .bind(&record.language)
+    .bind(&record.body)
+    .bind(record.version)
+    .bind(&record.status)
+    .bind(&record.created_by)
+    .bind(record.created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// TASK-0091 (#937): list archived versions of a policy, most recent first.
+/// Tenant-scoped, parameterized.
+#[cfg(test)]
+pub async fn list_policy_versions(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    policy_id: &str,
+) -> Result<Vec<PolicyVersionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PolicyVersionRecord>(
+        "SELECT * FROM policy_versions WHERE tenant_id = ? AND policy_id = ? ORDER BY version DESC",
+    )
+    .bind(tenant_id)
+    .bind(policy_id)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn delete_policy(
     pool: &SqlitePool,
     tenant_id: &str,

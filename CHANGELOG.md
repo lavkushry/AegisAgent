@@ -62,6 +62,12 @@ reaches 1.0.
   `POST /v1/mcp/servers/:server_key/tools` discovery call, surfaced on
   `McpServerRecord`/`GET /v1/mcp/servers` so operators can see manifest
   staleness alongside `manifest_hash`.
+- **TASK-0091 (#937): `policy_versions` audit table**. New migration
+  `0004_policy_versions.sql` (with `ON DELETE CASCADE` on `policy_id`) plus
+  `db::insert_policy_version`, called from `routes::update_policy` to archive
+  the pre-update `policies` row before it is overwritten in place. Previously
+  `PUT /v1/policies/:id` silently discarded the prior body on every edit;
+  operators now have a tenant-scoped audit trail of every prior version.
 
 ### Changed
 
