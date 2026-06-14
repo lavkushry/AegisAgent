@@ -773,6 +773,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             put(routes::update_policy).delete(routes::delete_policy),
         )
         .route("/v1/policies/reload", post(routes::reload_global_policies))
+        // TASK-0093 (#939): tenant-managed API keys
+        .route(
+            "/v1/api_keys",
+            get(routes::list_api_keys).post(routes::create_api_key),
+        )
+        .route("/v1/api_keys/:id/revoke", post(routes::revoke_api_key))
         // Approvals
         .route("/v1/approvals", get(routes::list_approvals))
         .route("/v1/approvals/:id", get(routes::get_approval))

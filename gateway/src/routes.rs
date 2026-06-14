@@ -3204,6 +3204,75 @@ pub async fn reload_global_policies(State(state): State<Arc<AppState>>) -> impl 
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+}
+
+/// POST /v1/api_keys — create a new tenant-managed API key. TASK-0093
+/// (#939): the plaintext key is returned exactly once in the response body;
+/// only `sha256(key)` is persisted (see `db::create_api_key`).
+pub async fn create_api_key(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<CreateApiKeyRequest>,
+) -> impl IntoResponse {
+    match db::create_api_key(&state.pool, &tenant_id, &payload.name).await {
+        Ok((id, key)) => (StatusCode::CREATED, Json(json!({"id": id, "key": key}))).into_response(),
+        Err(e) => {
+            error!("Failed to create API key: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/api_keys — list the authenticated tenant's API keys.
+/// `key_hash` is included (it is not a secret), the plaintext key never is.
+pub async fn list_api_keys(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::list_api_keys(&state.pool, &tenant_id).await {
+        Ok(keys) => (StatusCode::OK, Json(keys)).into_response(),
+        Err(e) => {
+            error!("Failed to list API keys: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST /v1/api_keys/:id/revoke — revoke a tenant-managed API key.
+pub async fn revoke_api_key(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::revoke_api_key(&state.pool, &tenant_id, &id).await {
+        Ok(true) => (StatusCode::OK, Json(json!({"message": "API key revoked"}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "API key not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to revoke API key: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// GET /v1/alerts — list SOC detection alerts for the authenticated tenant.
 ///
 /// Query params:
@@ -4387,6 +4456,28 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Reload global policies",
                     "responses": {
                         "200": { "description": "Policies reloaded" }
+                    }
+                }
+            },
+            "/v1/api_keys": {
+                "get": {
+                    "summary": "List tenant API keys",
+                    "responses": {
+                        "200": { "description": "List of API keys" }
+                    }
+                },
+                "post": {
+                    "summary": "Create a tenant API key (plaintext key returned once)",
+                    "responses": {
+                        "201": { "description": "API key created" }
+                    }
+                }
+            },
+            "/v1/api_keys/{id}/revoke": {
+                "post": {
+                    "summary": "Revoke a tenant API key",
+                    "responses": {
+                        "200": { "description": "API key revoked" }
                     }
                 }
             },
@@ -9044,6 +9135,87 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// TASK-0093 (#939): full lifecycle of the tenant-managed API key
+    /// endpoints — create returns the plaintext key exactly once and stores
+    /// only `sha256(key)`, list never exposes the plaintext, and revoke
+    /// transitions status to `revoked` (idempotently 404s afterward).
+    #[tokio::test]
+    async fn test_api_key_crud_route() {
+        let (state, tenant_id, _) = setup_state("api_key_crud").await;
+
+        // 1. List API keys (initially empty)
+        let response = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+
+        // 2. Create an API key
+        let response_create = create_api_key(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(CreateApiKeyRequest {
+                name: "ci-runner".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
+        let key_id = json_create["id"].as_str().unwrap().to_string();
+        let plaintext_key = json_create["key"].as_str().unwrap().to_string();
+        assert!(plaintext_key.starts_with("aegis_ak_"));
+
+        // 3. List API keys (should contain 1, with hash but never plaintext)
+        let response_list = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response_list.status(), StatusCode::OK);
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_list: Value = serde_json::from_slice(&body_list).unwrap();
+        let keys = json_list.as_array().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0]["id"].as_str().unwrap(), key_id);
+        assert_eq!(keys[0]["status"].as_str().unwrap(), "active");
+        assert_eq!(
+            keys[0]["key_hash"].as_str().unwrap(),
+            db::hash_token(&plaintext_key)
+        );
+        let serialized = serde_json::to_string(&keys[0]).unwrap();
+        assert!(!serialized.contains(&plaintext_key));
+
+        // 4. Revoke the API key
+        let response_revoke = revoke_api_key(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(key_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_revoke.status(), StatusCode::OK);
+
+        let keys_after_revoke = db::list_api_keys(&state.pool, &tenant_id).await.unwrap();
+        assert_eq!(keys_after_revoke[0].status, "revoked");
+        assert!(keys_after_revoke[0].revoked_at.is_some());
+
+        // 5. Revoking again returns 404 (already revoked)
+        let response_revoke_404 = revoke_api_key(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(key_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_revoke_404.status(), StatusCode::NOT_FOUND);
     }
 
     /// TASK-0091 (#937): `PUT /v1/policies/:id` overwrites the `policies` row

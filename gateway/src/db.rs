@@ -1524,6 +1524,55 @@ pub async fn delete_policy(
     Ok(result.rows_affected() > 0)
 }
 
+/// TASK-0093 (#939): create a new tenant-managed API key. Returns
+/// `(id, plaintext_key)` — the plaintext key is shown to the caller exactly
+/// once; only `hash_token(key)` is persisted.
+pub async fn create_api_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    name: &str,
+) -> Result<(String, String), sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let key = format!("aegis_ak_{}", uuid::Uuid::new_v4().simple());
+    let key_hash = hash_token(&key);
+    sqlx::query("INSERT INTO api_keys (id, tenant_id, key_hash, name) VALUES (?, ?, ?, ?)")
+        .bind(&id)
+        .bind(tenant_id)
+        .bind(&key_hash)
+        .bind(name)
+        .execute(pool)
+        .await?;
+    Ok((id, key))
+}
+
+pub async fn list_api_keys(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<ApiKeyRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ApiKeyRecord>(
+        "SELECT * FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn revoke_api_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE api_keys SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP \
+         WHERE id = ? AND tenant_id = ? AND status != 'revoked'",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_skill(
     pool: &SqlitePool,
