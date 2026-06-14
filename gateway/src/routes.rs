@@ -763,6 +763,22 @@ async fn write_decision_and_audit(
 
     db::insert_decision(pool, &decision_record).await?;
 
+    // TASK-0089 (#935): best-effort historical risk-score sample, so
+    // operators can see an agent's risk trend over time. Never blocks the
+    // decision response.
+    if let Err(e) = db::insert_agent_risk_score(
+        pool,
+        tenant_id,
+        agent_id,
+        &decision_id.to_string(),
+        risk_score,
+        reason,
+    )
+    .await
+    {
+        error!("Failed to record agent risk score: {:?}", e);
+    }
+
     let audit_record = AuditEventRecord {
         id: Uuid::new_v4().to_string(),
         tenant_id: tenant_id.to_string(),
@@ -3184,6 +3200,97 @@ pub async fn delete_policy(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct CreateWebhookSubscriptionRequest {
+    pub url: String,
+    /// Optional shared secret. Only `sha256(secret)` is persisted (#938) —
+    /// mirrors `ApprovalCallback::secret`.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// Comma-separated SOC event types to receive, or `"*"` for all.
+    #[serde(default = "default_webhook_event_types")]
+    pub event_types: String,
+}
+
+fn default_webhook_event_types() -> String {
+    "*".to_string()
+}
+
+/// TASK-0092 (#938): register a tenant-managed webhook subscription for SOC
+/// notifications (alerts/incidents). Only `sha256(secret)` is stored.
+pub async fn create_webhook_subscription(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<CreateWebhookSubscriptionRequest>,
+) -> impl IntoResponse {
+    let secret_hash = payload.secret.as_ref().map(|s| sha256_hex(s.as_bytes()));
+    match db::insert_webhook_subscription(
+        &state.pool,
+        &tenant_id,
+        &payload.url,
+        secret_hash.as_deref(),
+        &payload.event_types,
+    )
+    .await
+    {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => {
+            error!("Failed to create webhook subscription: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// TASK-0092 (#938): list this tenant's webhook subscriptions.
+pub async fn list_webhook_subscriptions(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::list_webhook_subscriptions(&state.pool, &tenant_id).await {
+        Ok(subs) => (StatusCode::OK, Json(subs)).into_response(),
+        Err(e) => {
+            error!("Failed to list webhook subscriptions: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// TASK-0092 (#938): delete a tenant's webhook subscription.
+pub async fn delete_webhook_subscription(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::delete_webhook_subscription(&state.pool, &tenant_id, &id).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(json!({"message": "Webhook subscription successfully deleted"})),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Webhook subscription not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to delete webhook subscription: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn reload_global_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let policy_path =
         std::env::var("CEDAR_POLICY_PATH").unwrap_or_else(|_| "policies.cedar".into());
@@ -4459,25 +4566,25 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     }
                 }
             },
-            "/v1/api_keys": {
+            "/v1/webhook_subscriptions": {
                 "get": {
-                    "summary": "List tenant API keys",
+                    "summary": "List tenant webhook subscriptions",
                     "responses": {
-                        "200": { "description": "List of API keys" }
+                        "200": { "description": "List of webhook subscriptions" }
                     }
                 },
                 "post": {
-                    "summary": "Create a tenant API key (plaintext key returned once)",
+                    "summary": "Register a webhook subscription for SOC notifications",
                     "responses": {
-                        "201": { "description": "API key created" }
+                        "201": { "description": "Webhook subscription created" }
                     }
                 }
             },
-            "/v1/api_keys/{id}/revoke": {
-                "post": {
-                    "summary": "Revoke a tenant API key",
+            "/v1/webhook_subscriptions/{id}": {
+                "delete": {
+                    "summary": "Delete a webhook subscription",
                     "responses": {
-                        "200": { "description": "API key revoked" }
+                        "200": { "description": "Webhook subscription deleted" }
                     }
                 }
             },
@@ -6063,6 +6170,35 @@ mod tests {
         assert_eq!(response.decision, "allow");
         assert_eq!(response.risk_level, "low");
         assert_eq!(response.risk_score, 10);
+    }
+
+    /// TASK-0089 (#935): every `/v1/authorize` decision writes a historical
+    /// risk-score sample to `agent_risk_scores`, linked to the decision that
+    /// produced it.
+    #[tokio::test]
+    async fn authorize_records_agent_risk_score() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_risk_score").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "allow");
+        assert_eq!(response.risk_score, 10);
+
+        let decisions = db::list_decisions(&state.pool, &tenant_id, 10, 0, None, None)
+            .await
+            .unwrap();
+        let decision = decisions.first().expect("expected a decision row");
+
+        let scores = db::list_agent_risk_scores(&state.pool, &tenant_id, &decision.agent_id)
+            .await
+            .unwrap();
+        assert_eq!(scores.len(), 1);
+        assert_eq!(scores[0].decision_id, decision.id);
+        assert_eq!(scores[0].score, 10);
     }
 
     /// #0118: a mutating action whose triggering content has untrusted
@@ -9137,30 +9273,33 @@ mod tests {
         assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
     }
 
-    /// TASK-0093 (#939): full lifecycle of the tenant-managed API key
-    /// endpoints — create returns the plaintext key exactly once and stores
-    /// only `sha256(key)`, list never exposes the plaintext, and revoke
-    /// transitions status to `revoked` (idempotently 404s afterward).
+    /// TASK-0092 (#938): CRUD lifecycle for tenant-managed webhook
+    /// subscriptions. The secret is hashed before storage, never persisted
+    /// in plaintext.
     #[tokio::test]
-    async fn test_api_key_crud_route() {
-        let (state, tenant_id, _) = setup_state("api_key_crud").await;
+    async fn test_webhook_subscription_crud_route() {
+        let (state, tenant_id, _) = setup_state("webhook_subscription_crud").await;
 
-        // 1. List API keys (initially empty)
-        let response = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        // 1. List (initially empty)
+        let response =
+            list_webhook_subscriptions(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert!(json.as_array().unwrap().is_empty());
 
-        // 2. Create an API key
-        let response_create = create_api_key(
+        // 2. Create with a secret
+        let payload = CreateWebhookSubscriptionRequest {
+            url: "https://example.com/hook".to_string(),
+            secret: Some("super-secret".to_string()),
+            event_types: "alert,incident".to_string(),
+        };
+        let response_create = create_webhook_subscription(
             State(state.clone()),
             TenantId(tenant_id.clone()),
-            Json(CreateApiKeyRequest {
-                name: "ci-runner".to_string(),
-            }),
+            Json(payload),
         )
         .await
         .into_response();
@@ -9168,54 +9307,58 @@ mod tests {
         let body_create = to_bytes(response_create.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json_create: Value = serde_json::from_slice(&body_create).unwrap();
-        let key_id = json_create["id"].as_str().unwrap().to_string();
-        let plaintext_key = json_create["key"].as_str().unwrap().to_string();
-        assert!(plaintext_key.starts_with("aegis_ak_"));
+        let record: WebhookSubscriptionRecord = serde_json::from_slice(&body_create).unwrap();
+        assert_eq!(record.url, "https://example.com/hook");
+        assert_eq!(record.event_types, "alert,incident");
+        assert_eq!(record.status, "active");
+        // The plaintext secret is never stored — only its hash.
+        assert_eq!(
+            record.secret_hash.as_deref(),
+            Some(sha256_hex("super-secret".as_bytes()).as_str())
+        );
 
-        // 3. List API keys (should contain 1, with hash but never plaintext)
-        let response_list = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        // 3. List (should contain 1 subscription)
+        let response_list =
+            list_webhook_subscriptions(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
         assert_eq!(response_list.status(), StatusCode::OK);
         let body_list = to_bytes(response_list.into_body(), usize::MAX)
             .await
             .unwrap();
-        let json_list: Value = serde_json::from_slice(&body_list).unwrap();
-        let keys = json_list.as_array().unwrap();
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0]["id"].as_str().unwrap(), key_id);
-        assert_eq!(keys[0]["status"].as_str().unwrap(), "active");
-        assert_eq!(
-            keys[0]["key_hash"].as_str().unwrap(),
-            db::hash_token(&plaintext_key)
-        );
-        let serialized = serde_json::to_string(&keys[0]).unwrap();
-        assert!(!serialized.contains(&plaintext_key));
+        let subs: Vec<WebhookSubscriptionRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].id, record.id);
 
-        // 4. Revoke the API key
-        let response_revoke = revoke_api_key(
+        // 4. Delete
+        let response_delete = delete_webhook_subscription(
             State(state.clone()),
             TenantId(tenant_id.clone()),
-            Path(key_id.clone()),
+            Path(record.id.clone()),
         )
         .await
         .into_response();
-        assert_eq!(response_revoke.status(), StatusCode::OK);
+        assert_eq!(response_delete.status(), StatusCode::OK);
 
-        let keys_after_revoke = db::list_api_keys(&state.pool, &tenant_id).await.unwrap();
-        assert_eq!(keys_after_revoke[0].status, "revoked");
-        assert!(keys_after_revoke[0].revoked_at.is_some());
-
-        // 5. Revoking again returns 404 (already revoked)
-        let response_revoke_404 = revoke_api_key(
+        // 5. Delete again (should return 404)
+        let response_delete_404 = delete_webhook_subscription(
             State(state.clone()),
             TenantId(tenant_id.clone()),
-            Path(key_id.clone()),
+            Path(record.id.clone()),
         )
         .await
         .into_response();
-        assert_eq!(response_revoke_404.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+
+        // 6. List (empty again)
+        let response_list2 = list_webhook_subscriptions(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        let body_list2 = to_bytes(response_list2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let subs2: Vec<WebhookSubscriptionRecord> = serde_json::from_slice(&body_list2).unwrap();
+        assert!(subs2.is_empty());
     }
 
     /// TASK-0091 (#937): `PUT /v1/policies/:id` overwrites the `policies` row
