@@ -782,6 +782,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::delete(routes::delete_webhook_subscription),
         )
         .route(
+            "/v1/detection_rules",
+            get(routes::list_detection_rules).post(routes::upsert_detection_rule),
+        )
+        .route(
+            "/v1/detection_rules/:id",
+            axum::routing::delete(routes::delete_detection_rule),
+        )
+        .route(
             "/v1/api_keys",
             get(routes::list_api_keys).post(routes::create_api_key),
         )

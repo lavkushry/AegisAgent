@@ -1584,6 +1584,75 @@ pub async fn delete_webhook_subscription(
     Ok(result.rows_affected() > 0)
 }
 
+/// TASK-0088 (#934): create or update (upsert by `(tenant_id, rule_key)`) a
+/// tenant-managed detection rule. First step toward SOC-003 (#1186).
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_detection_rule(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    rule_key: &str,
+    name: &str,
+    severity: &str,
+    condition: &str,
+    summary_template: &str,
+    enabled: bool,
+) -> Result<DetectionRuleRecord, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO detection_rules (id, tenant_id, rule_key, name, severity, condition, summary_template, enabled) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(tenant_id, rule_key) DO UPDATE SET \
+           name=excluded.name, severity=excluded.severity, condition=excluded.condition, \
+           summary_template=excluded.summary_template, enabled=excluded.enabled",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(rule_key)
+    .bind(name)
+    .bind(severity)
+    .bind(condition)
+    .bind(summary_template)
+    .bind(enabled)
+    .execute(pool)
+    .await?;
+
+    sqlx::query_as::<_, DetectionRuleRecord>(
+        "SELECT * FROM detection_rules WHERE tenant_id = ? AND rule_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(rule_key)
+    .fetch_one(pool)
+    .await
+}
+
+/// TASK-0088 (#934): list detection rules for a tenant, most recent first.
+pub async fn list_detection_rules(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<DetectionRuleRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DetectionRuleRecord>(
+        "SELECT * FROM detection_rules WHERE tenant_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// TASK-0088 (#934): delete a tenant's detection rule. Returns `true` if a
+/// row was deleted.
+pub async fn delete_detection_rule(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM detection_rules WHERE tenant_id = ? AND id = ?")
+        .bind(tenant_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// TASK-0093 (#939): create a tenant-managed API key. The plaintext key is
 /// returned exactly once (caller must surface it to the user); only
 /// `sha256(key)` is persisted, mirroring `hash_token` / `agents.agent_token`.

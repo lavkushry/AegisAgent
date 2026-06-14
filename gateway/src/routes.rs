@@ -3291,6 +3291,100 @@ pub async fn delete_webhook_subscription(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct UpsertDetectionRuleRequest {
+    pub rule_key: String,
+    pub name: String,
+    pub severity: String,
+    pub condition: String,
+    pub summary_template: String,
+    #[serde(default = "default_detection_rule_enabled")]
+    pub enabled: bool,
+}
+
+fn default_detection_rule_enabled() -> bool {
+    true
+}
+
+/// TASK-0088 (#934): create or update (upsert by `rule_key`) a tenant-managed
+/// detection rule. First step toward SOC-003 (#1186) — `condition` and
+/// `summary_template` hold a YAML rule body that will eventually be loaded
+/// by `detect.rs` to replace the hardcoded Rust detection functions.
+pub async fn upsert_detection_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<UpsertDetectionRuleRequest>,
+) -> impl IntoResponse {
+    match db::upsert_detection_rule(
+        &state.pool,
+        &tenant_id,
+        &payload.rule_key,
+        &payload.name,
+        &payload.severity,
+        &payload.condition,
+        &payload.summary_template,
+        payload.enabled,
+    )
+    .await
+    {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => {
+            error!("Failed to upsert detection rule: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// TASK-0088 (#934): list this tenant's detection rules.
+pub async fn list_detection_rules(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::list_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("Failed to list detection rules: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// TASK-0088 (#934): delete a tenant's detection rule.
+pub async fn delete_detection_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::delete_detection_rule(&state.pool, &tenant_id, &id).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(json!({"message": "Detection rule successfully deleted"})),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Detection rule not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to delete detection rule: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn reload_global_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let policy_path =
         std::env::var("CEDAR_POLICY_PATH").unwrap_or_else(|_| "policies.cedar".into());
@@ -4585,6 +4679,28 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Delete a webhook subscription",
                     "responses": {
                         "200": { "description": "Webhook subscription deleted" }
+                    }
+                }
+            },
+            "/v1/detection_rules": {
+                "get": {
+                    "summary": "List tenant detection rules",
+                    "responses": {
+                        "200": { "description": "List of detection rules" }
+                    }
+                },
+                "post": {
+                    "summary": "Create or update a detection rule",
+                    "responses": {
+                        "201": { "description": "Detection rule created or updated" }
+                    }
+                }
+            },
+            "/v1/detection_rules/{id}": {
+                "delete": {
+                    "summary": "Delete a detection rule",
+                    "responses": {
+                        "200": { "description": "Detection rule deleted" }
                     }
                 }
             },
@@ -9381,6 +9497,125 @@ mod tests {
             .unwrap();
         let subs2: Vec<WebhookSubscriptionRecord> = serde_json::from_slice(&body_list2).unwrap();
         assert!(subs2.is_empty());
+    }
+
+    /// TASK-0088 (#934): CRUD lifecycle for tenant-managed detection rules.
+    /// First step toward SOC-003 (#1186)'s YAML-driven detection DSL.
+    #[tokio::test]
+    async fn test_detection_rule_crud_route() {
+        let (state, tenant_id, _) = setup_state("detection_rule_crud").await;
+
+        // 1. List (initially empty)
+        let response = list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+
+        // 2. Upsert (create)
+        let payload = UpsertDetectionRuleRequest {
+            rule_key: "confused_deputy_block".to_string(),
+            name: "Confused deputy block".to_string(),
+            severity: "high".to_string(),
+            condition: "decision == 'deny' && reason contains 'confused_deputy'".to_string(),
+            summary_template: "Confused-deputy action blocked for {{agent_id}}".to_string(),
+            enabled: true,
+        };
+        let response_create = upsert_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let record: DetectionRuleRecord = serde_json::from_slice(&body_create).unwrap();
+        assert_eq!(record.rule_key, "confused_deputy_block");
+        assert_eq!(record.severity, "high");
+        assert!(record.enabled);
+
+        // 3. List (should contain 1 rule)
+        let response_list = list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response_list.status(), StatusCode::OK);
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].id, record.id);
+
+        // 4. Upsert again with same rule_key (update severity + disable)
+        let payload_update = UpsertDetectionRuleRequest {
+            rule_key: "confused_deputy_block".to_string(),
+            name: "Confused deputy block".to_string(),
+            severity: "critical".to_string(),
+            condition: "decision == 'deny' && reason contains 'confused_deputy'".to_string(),
+            summary_template: "Confused-deputy action blocked for {{agent_id}}".to_string(),
+            enabled: false,
+        };
+        let response_update = upsert_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload_update),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update.status(), StatusCode::CREATED);
+        let body_update = to_bytes(response_update.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let record_update: DetectionRuleRecord = serde_json::from_slice(&body_update).unwrap();
+        assert_eq!(record_update.id, record.id);
+        assert_eq!(record_update.severity, "critical");
+        assert!(!record_update.enabled);
+
+        // List should still contain exactly 1 rule (upsert, not duplicate)
+        let response_list2 =
+            list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
+        let body_list2 = to_bytes(response_list2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules2: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list2).unwrap();
+        assert_eq!(rules2.len(), 1);
+
+        // 5. Delete
+        let response_delete = delete_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(record.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_delete.status(), StatusCode::OK);
+
+        // 6. Delete again (should return 404)
+        let response_delete_404 = delete_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(record.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+
+        // 7. List (empty again)
+        let response_list3 = list_detection_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        let body_list3 = to_bytes(response_list3.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules3: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list3).unwrap();
+        assert!(rules3.is_empty());
     }
 
     /// TASK-0093 (#939): CRUD lifecycle for tenant-managed API keys. The
