@@ -376,8 +376,10 @@ pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub policy_engine: PolicyEngine,
     pub events: EventSink,
-    /// Process-wide security counters exposed on GET /metrics.
-    pub metrics: SecurityMetrics,
+    /// Process-wide security counters exposed on GET /metrics. Shared
+    /// (`Arc`) with the [`EventSink`] and the out-of-band `drain` task so
+    /// alert/incident/event counters can be incremented out-of-band.
+    pub metrics: Arc<SecurityMetrics>,
     /// Approval time-to-live in seconds. Configurable via AEGIS_APPROVAL_TTL_SECS
     /// environment variable (default: 1800 = 30 minutes).
     pub approval_ttl_secs: i64,
@@ -1251,6 +1253,8 @@ async fn write_decision_and_audit(
     // than as middleware, so it shares the exact `started_at` already used
     // for `decision_record.latency_ms`.
     metrics.authorize_duration.observe(started_at.elapsed());
+    // OBS-002 (#1155): per-outcome decision counter.
+    metrics.inc_decision(decision);
 
     let decision_record = DecisionRecord {
         id: decision_id.to_string(),
@@ -6699,13 +6703,14 @@ pub mod benchutil {
         // the gateway's design, so an undrained channel does not slow down
         // `authorize_action` until it fills. 100k is far larger than any
         // single benchmark run's iteration count needs to be accurate.
-        let (events, _events_rx) = EventSink::channel(100_000);
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, _events_rx) = EventSink::channel(100_000, metrics.clone());
 
         let state = Arc::new(AppState {
             pool,
             policy_engine,
             events,
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics,
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1_000_000.0, 1_000_000.0),
             quota_manager: QuotaManager::new(0, 86400), // 0 == quota disabled
@@ -7070,7 +7075,11 @@ mod tests {
         let (state_raw, tenant_id, agent_token, events_rx) =
             setup_state_with_events("limit_test").await;
         // Drain events in background
-        tokio::spawn(events::drain(events_rx, state_raw.pool.clone()));
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
 
         // Create a custom app state with rate limit capacity = 1
         let policy_engine1 = PolicyEngine::init("policies.cedar").await.unwrap();
@@ -7078,7 +7087,7 @@ mod tests {
             pool: state_raw.pool.clone(),
             policy_engine: policy_engine1,
             events: state_raw.events.clone(),
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics: state_raw.metrics.clone(),
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1.0, 1.0),
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
@@ -7116,7 +7125,7 @@ mod tests {
             pool: state_raw.pool.clone(),
             policy_engine: policy_engine2,
             events: state_raw.events.clone(),
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics: state_raw.metrics.clone(),
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(100.0, 100.0), // high rate limit
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
@@ -7161,14 +7170,18 @@ mod tests {
     ) -> (Arc<AppState>, String, String) {
         let (state_raw, tenant_id, agent_token, events_rx) =
             setup_state_with_events(test_name).await;
-        tokio::spawn(events::drain(events_rx, state_raw.pool.clone()));
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
             pool: state_raw.pool.clone(),
             policy_engine,
             events: state_raw.events.clone(),
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics: state_raw.metrics.clone(),
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
@@ -7194,14 +7207,18 @@ mod tests {
     ) -> (Arc<AppState>, String, String) {
         let (state_raw, tenant_id, agent_token, events_rx) =
             setup_state_with_events(test_name).await;
-        tokio::spawn(events::drain(events_rx, state_raw.pool.clone()));
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
             pool: state_raw.pool.clone(),
             policy_engine,
             events: state_raw.events.clone(),
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics: state_raw.metrics.clone(),
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
@@ -7222,7 +7239,11 @@ mod tests {
         let (state, tenant_id, agent_token, events_rx) = setup_state_with_events(test_name).await;
         // Drain in the background so existing tests are unaffected by the stream.
         // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
-        tokio::spawn(events::drain(events_rx, state.pool.clone()));
+        tokio::spawn(events::drain(
+            events_rx,
+            state.pool.clone(),
+            state.metrics.clone(),
+        ));
         (state, tenant_id, agent_token)
     }
 
@@ -7279,12 +7300,13 @@ mod tests {
         db::insert_agent(&pool, &agent).await.unwrap();
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
-        let (events, events_rx) = EventSink::channel(capacity);
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, events_rx) = EventSink::channel(capacity, metrics.clone());
         let state = Arc::new(AppState {
             pool,
             policy_engine,
             events,
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics,
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
@@ -13998,7 +14020,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_event_sink_broadcasting() {
-        let (sink, _rx) = EventSink::channel(100);
+        let (sink, _rx) = EventSink::channel(100, Arc::new(crate::metrics::SecurityMetrics::new()));
         let mut sub = sink.subscribe();
 
         let event = AseEvent {
@@ -14932,7 +14954,11 @@ mod tests {
         const CAPACITY: usize = 2;
         let (state, _tenant_id, _agent_token, events_rx) =
             setup_state_with_events_capacity("ws_events_lagged", CAPACITY).await;
-        tokio::spawn(events::drain(events_rx, state.pool.clone()));
+        tokio::spawn(events::drain(
+            events_rx,
+            state.pool.clone(),
+            state.metrics.clone(),
+        ));
 
         let app = Router::new()
             .route("/v1/ws/events", get(ws_events))
@@ -15180,13 +15206,14 @@ mod tests {
         db::insert_agent(&pool, &agent).await.unwrap();
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
         // Capacity 1: one emit fills it completely (capacity() == 0 afterwards).
-        let (events, _events_rx) = EventSink::channel(1);
+        let (events, _events_rx) = EventSink::channel(1, metrics.clone());
         let state = Arc::new(AppState {
             pool,
             policy_engine,
             events,
-            metrics: crate::metrics::SecurityMetrics::new(),
+            metrics,
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),

@@ -13,7 +13,9 @@
 /// * `provenance_denials_total` — incremented each time a mutating action is
 ///   denied because the source trust level is untrusted_external, malicious_suspected
 ///   or unknown (confused-deputy defence, CLAUDE.md critical invariant).
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// Upper bounds (in seconds) of the `aegis_authorize_duration_seconds`
 /// histogram buckets (OBS-001, #1154): 5ms, 10ms, 25ms, 50ms, 75ms, 100ms,
@@ -102,6 +104,22 @@ pub struct SecurityMetrics {
     pub handler_panics_total: AtomicU64,
     /// `/v1/authorize` request duration histogram (OBS-001, #1154).
     pub authorize_duration: DurationHistogram,
+    /// Number of `/v1/authorize` decisions that resulted in "allow" (OBS-002, #1155).
+    pub decisions_allow_total: AtomicU64,
+    /// Number of `/v1/authorize` decisions that resulted in "deny" (OBS-002, #1155).
+    pub decisions_deny_total: AtomicU64,
+    /// Number of `/v1/authorize` decisions that resulted in "require_approval" (OBS-002, #1155).
+    pub decisions_require_approval_total: AtomicU64,
+    /// Number of SOC events successfully enqueued onto the out-of-band pipeline (OBS-002, #1155).
+    pub events_emitted_total: AtomicU64,
+    /// Number of SOC events dropped because the out-of-band pipeline was full or closed (OBS-002, #1155).
+    pub events_dropped_total: AtomicU64,
+    /// Per (rule, severity) detection alert counts (OBS-002, #1155).
+    /// `rule` and `severity` are enum-like values defined by `detect.rs` — no PII.
+    alerts_total: Mutex<HashMap<(String, String), u64>>,
+    /// Per `kind` correlated incident counts (OBS-002, #1155).
+    /// `kind` is an enum-like value defined by `correlate.rs` — no PII.
+    incidents_total: Mutex<HashMap<String, u64>>,
 }
 
 impl SecurityMetrics {
@@ -130,6 +148,52 @@ impl SecurityMetrics {
         self.handler_panics_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment the per-decision counter for `/v1/authorize` outcomes.
+    /// `decision` must be one of `"allow"`, `"deny"`, `"require_approval"`;
+    /// any other value is ignored (no PII labels permitted).
+    #[inline]
+    pub fn inc_decision(&self, decision: &str) {
+        match decision {
+            "allow" => self.decisions_allow_total.fetch_add(1, Ordering::Relaxed),
+            "deny" => self.decisions_deny_total.fetch_add(1, Ordering::Relaxed),
+            "require_approval" => self
+                .decisions_require_approval_total
+                .fetch_add(1, Ordering::Relaxed),
+            _ => 0,
+        };
+    }
+
+    /// Increment `events_emitted_total` by 1.
+    #[inline]
+    pub fn inc_event_emitted(&self) {
+        self.events_emitted_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment `events_dropped_total` by 1.
+    #[inline]
+    pub fn inc_event_dropped(&self) {
+        self.events_dropped_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment the alert counter for the given detection `rule` and `severity`.
+    /// Both must be enum-like values defined by `detect.rs` (no PII).
+    pub fn inc_alert(&self, rule: &str, severity: &str) {
+        let mut alerts = self.alerts_total.lock().unwrap_or_else(|e| e.into_inner());
+        *alerts
+            .entry((rule.to_string(), severity.to_string()))
+            .or_insert(0) += 1;
+    }
+
+    /// Increment the incident counter for the given correlated incident `kind`.
+    /// `kind` must be an enum-like value defined by `correlate.rs` (no PII).
+    pub fn inc_incident(&self, kind: &str) {
+        let mut incidents = self
+            .incidents_total
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *incidents.entry(kind.to_string()).or_insert(0) += 1;
+    }
+
     /// Render the current counter values as a Prometheus text exposition (v0.0.4).
     /// Only the security counters are exposed; no labels containing
     /// tenant/agent/payload data (redaction by design).
@@ -154,6 +218,64 @@ impl SecurityMetrics {
                 .authorize_duration
                 .render("aegis_authorize_duration_seconds"),
         );
+
+        let allow = self.decisions_allow_total.load(Ordering::Relaxed);
+        let deny = self.decisions_deny_total.load(Ordering::Relaxed);
+        let require_approval = self
+            .decisions_require_approval_total
+            .load(Ordering::Relaxed);
+        out.push_str(&format!(
+            "# HELP aegis_decisions_total Number of /v1/authorize decisions by outcome\n\
+             # TYPE aegis_decisions_total counter\n\
+             aegis_decisions_total{{decision=\"allow\"}} {allow}\n\
+             aegis_decisions_total{{decision=\"deny\"}} {deny}\n\
+             aegis_decisions_total{{decision=\"require_approval\"}} {require_approval}\n"
+        ));
+
+        let emitted = self.events_emitted_total.load(Ordering::Relaxed);
+        let dropped = self.events_dropped_total.load(Ordering::Relaxed);
+        out.push_str(&format!(
+            "# HELP aegis_events_emitted_total Number of SOC events enqueued onto the out-of-band pipeline\n\
+             # TYPE aegis_events_emitted_total counter\n\
+             aegis_events_emitted_total {emitted}\n\
+             # HELP aegis_events_dropped_total Number of SOC events dropped because the out-of-band pipeline was full or closed\n\
+             # TYPE aegis_events_dropped_total counter\n\
+             aegis_events_dropped_total {dropped}\n"
+        ));
+
+        let alerts = self.alerts_total.lock().unwrap_or_else(|e| e.into_inner());
+        out.push_str(
+            "# HELP aegis_alerts_total Number of detection alerts raised by rule and severity\n\
+             # TYPE aegis_alerts_total counter\n",
+        );
+        let mut alert_keys: Vec<&(String, String)> = alerts.keys().collect();
+        alert_keys.sort();
+        for (rule, severity) in alert_keys {
+            let count = alerts[&(rule.clone(), severity.clone())];
+            out.push_str(&format!(
+                "aegis_alerts_total{{rule=\"{rule}\",severity=\"{severity}\"}} {count}\n"
+            ));
+        }
+        drop(alerts);
+
+        let incidents = self
+            .incidents_total
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        out.push_str(
+            "# HELP aegis_incidents_total Number of correlated incidents raised by kind\n\
+             # TYPE aegis_incidents_total counter\n",
+        );
+        let mut incident_keys: Vec<&String> = incidents.keys().collect();
+        incident_keys.sort();
+        for kind in incident_keys {
+            let count = incidents[kind];
+            out.push_str(&format!(
+                "aegis_incidents_total{{kind=\"{kind}\"}} {count}\n"
+            ));
+        }
+        drop(incidents);
+
         out
     }
 }
@@ -219,6 +341,67 @@ mod tests {
         assert!(out.contains("# TYPE approval_hash_mismatch_total counter"));
         assert!(out.contains("# TYPE provenance_denials_total counter"));
         assert!(out.contains("# TYPE aegis_handler_panics_total counter"));
+    }
+
+    #[test]
+    fn inc_decision_increments_correct_counter() {
+        let m = SecurityMetrics::new();
+        m.inc_decision("allow");
+        m.inc_decision("allow");
+        m.inc_decision("deny");
+        m.inc_decision("require_approval");
+        m.inc_decision("bogus"); // ignored, no panic
+        assert_eq!(m.decisions_allow_total.load(Ordering::Relaxed), 2);
+        assert_eq!(m.decisions_deny_total.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            m.decisions_require_approval_total.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn inc_event_emitted_and_dropped_increment() {
+        let m = SecurityMetrics::new();
+        m.inc_event_emitted();
+        m.inc_event_emitted();
+        m.inc_event_dropped();
+        assert_eq!(m.events_emitted_total.load(Ordering::Relaxed), 2);
+        assert_eq!(m.events_dropped_total.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn inc_alert_and_incident_increment() {
+        let m = SecurityMetrics::new();
+        m.inc_alert("rapid_fire_denials", "high");
+        m.inc_alert("rapid_fire_denials", "high");
+        m.inc_alert("anomalous_action", "medium");
+        m.inc_incident("burst_denials");
+        let out = m.render_prometheus();
+        assert!(
+            out.contains("aegis_alerts_total{rule=\"rapid_fire_denials\",severity=\"high\"} 2\n")
+        );
+        assert!(
+            out.contains("aegis_alerts_total{rule=\"anomalous_action\",severity=\"medium\"} 1\n")
+        );
+        assert!(out.contains("aegis_incidents_total{kind=\"burst_denials\"} 1\n"));
+    }
+
+    #[test]
+    fn render_prometheus_includes_decisions_and_events() {
+        let m = SecurityMetrics::new();
+        m.inc_decision("allow");
+        m.inc_decision("deny");
+        m.inc_event_emitted();
+        m.inc_event_dropped();
+        let out = m.render_prometheus();
+        assert!(out.contains("# TYPE aegis_decisions_total counter"));
+        assert!(out.contains("aegis_decisions_total{decision=\"allow\"} 1\n"));
+        assert!(out.contains("aegis_decisions_total{decision=\"deny\"} 1\n"));
+        assert!(out.contains("aegis_decisions_total{decision=\"require_approval\"} 0\n"));
+        assert!(out.contains("# TYPE aegis_events_emitted_total counter"));
+        assert!(out.contains("aegis_events_emitted_total 1\n"));
+        assert!(out.contains("# TYPE aegis_events_dropped_total counter"));
+        assert!(out.contains("aegis_events_dropped_total 1\n"));
     }
 
     #[test]
