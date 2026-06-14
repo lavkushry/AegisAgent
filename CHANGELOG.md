@@ -71,6 +71,12 @@ reaches 1.0.
   `POST /v1/mcp/servers/:server_key/tools` discovery call, surfaced on
   `McpServerRecord`/`GET /v1/mcp/servers` so operators can see manifest
   staleness alongside `manifest_hash`.
+- **TASK-0089 (#935): `agent_risk_scores` table**. New migration
+  `0005_agent_risk_scores.sql` adds a tenant-scoped, indexed table that
+  records one row per `/v1/authorize` decision via
+  `db::insert_agent_risk_score`, capturing the computed risk score and reason
+  linked to the originating `decisions` row. Gives operators a per-agent risk
+  trend over time instead of only the latest decision's score.
 - **TASK-0090 (#936): `mcp_manifest_snapshots` table**. New migration
   `0003_mcp_manifest_snapshots.sql` adds a tenant-scoped, indexed table that
   records one row per `POST /v1/mcp/servers/:server_key/tools` discovery call,

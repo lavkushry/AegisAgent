@@ -779,6 +779,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(routes::list_api_keys).post(routes::create_api_key),
         )
         .route("/v1/api_keys/:id/revoke", post(routes::revoke_api_key))
+        .route(
+            "/v1/webhook_subscriptions",
+            get(routes::list_webhook_subscriptions).post(routes::create_webhook_subscription),
+        )
+        .route(
+            "/v1/webhook_subscriptions/:id",
+            axum::routing::delete(routes::delete_webhook_subscription),
+        )
         // Approvals
         .route("/v1/approvals", get(routes::list_approvals))
         .route("/v1/approvals/:id", get(routes::get_approval))

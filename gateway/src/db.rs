@@ -1557,6 +1557,8 @@ pub async fn list_api_keys(
     .await
 }
 
+/// TASK-0093 (#939): revoke a tenant's API key. Returns `true` if a row was
+/// updated (i.e. it existed and was not already revoked).
 pub async fn revoke_api_key(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -1570,6 +1572,66 @@ pub async fn revoke_api_key(
     .bind(tenant_id)
     .execute(pool)
     .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// TASK-0092 (#938): register a tenant-managed webhook subscription.
+/// `secret_hash` is `sha256(secret)`, computed by the caller — the plaintext
+/// secret is never persisted. Tenant-scoped, parameterized.
+pub async fn insert_webhook_subscription(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    url: &str,
+    secret_hash: Option<&str>,
+    event_types: &str,
+) -> Result<WebhookSubscriptionRecord, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO webhook_subscriptions (id, tenant_id, url, secret_hash, event_types, status) \
+         VALUES (?, ?, ?, ?, ?, 'active')",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(url)
+    .bind(secret_hash)
+    .bind(event_types)
+    .execute(pool)
+    .await?;
+
+    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+        "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(&id)
+    .fetch_one(pool)
+    .await
+}
+
+/// TASK-0092 (#938): list webhook subscriptions for a tenant, most recent first.
+pub async fn list_webhook_subscriptions(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<WebhookSubscriptionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+        "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// TASK-0092 (#938): delete a tenant's webhook subscription. Returns `true`
+/// if a row was deleted.
+pub async fn delete_webhook_subscription(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?")
+        .bind(tenant_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -1859,6 +1921,50 @@ pub async fn insert_decision(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// TASK-0089 (#935): record a historical risk-score sample for `agent_id`,
+/// linked to the decision that produced it. Called from
+/// `routes::write_decision_and_audit` for every `/v1/authorize` decision.
+/// Tenant-scoped, parameterized.
+pub async fn insert_agent_risk_score(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    decision_id: &str,
+    score: i32,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO agent_risk_scores (id, tenant_id, agent_id, decision_id, score, reason) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(decision_id)
+    .bind(score)
+    .bind(reason)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// TASK-0089 (#935): list historical risk-score samples for `agent_id`, most
+/// recent first. Tenant-scoped, parameterized.
+#[cfg(test)]
+pub async fn list_agent_risk_scores(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<Vec<AgentRiskScoreRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRiskScoreRecord>(
+        "SELECT * FROM agent_risk_scores WHERE tenant_id = ? AND agent_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .fetch_all(pool)
+    .await
 }
 
 /// Idempotency lookup (#0072): find a previously-recorded decision for the same

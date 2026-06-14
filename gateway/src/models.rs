@@ -371,6 +371,21 @@ pub struct PolicyVersionRecord {
     pub archived_at: DateTime<Utc>,
 }
 
+/// TASK-0089 (#935): a historical risk-score sample, written for every
+/// `/v1/authorize` decision so operators can see an agent's risk trend over
+/// time rather than only its latest decision's score.
+#[cfg(test)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct AgentRiskScoreRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: String,
+    pub decision_id: String,
+    pub score: i32,
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub id: String,
@@ -444,6 +459,21 @@ pub struct ApiKeyRecord {
     pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// TASK-0092 (#938): a tenant-managed webhook subscription, registered via
+/// `/v1/webhook_subscriptions` to receive SOC notifications (alerts/incidents)
+/// at an operator-supplied endpoint. `secret_hash` is `sha256(secret)` — the
+/// plaintext secret is never persisted, mirroring `ApprovalRecord::callback_secret_hash`.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct WebhookSubscriptionRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub url: String,
+    pub secret_hash: Option<String>,
+    pub event_types: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
