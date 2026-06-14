@@ -4701,7 +4701,22 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, tenant_id: S
                             }
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        // #1305: a slow consumer fell behind the SOC broadcast
+                        // channel and the oldest buffered events were dropped
+                        // (tokio's broadcast channel evicts the oldest entries
+                        // on overflow and advances this receiver's cursor to
+                        // the new oldest message — no further action needed
+                        // for recovery). Tell the client how many events it
+                        // missed so it can resync/alert rather than silently
+                        // missing security events.
+                        let notice = json!({"type": "events_dropped", "count": n});
+                        if let Ok(msg) = serde_json::to_string(&notice) {
+                            if socket.send(Message::Text(msg)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         break;
                     }
@@ -5618,6 +5633,17 @@ mod tests {
     async fn setup_state_with_events(
         test_name: &str,
     ) -> (Arc<AppState>, String, String, mpsc::Receiver<AseEvent>) {
+        setup_state_with_events_capacity(test_name, events::DEFAULT_CAPACITY).await
+    }
+
+    /// Like [`setup_state_with_events`] but allows overriding the SOC event
+    /// channel capacity. Used by #1305 to construct a small-capacity
+    /// broadcast channel so a slow WebSocket consumer can be made to lag
+    /// deterministically without emitting thousands of events.
+    async fn setup_state_with_events_capacity(
+        test_name: &str,
+        capacity: usize,
+    ) -> (Arc<AppState>, String, String, mpsc::Receiver<AseEvent>) {
         std::fs::create_dir_all("target").unwrap();
         let db_url = format!(
             "sqlite://target/routes_{}_{}.db",
@@ -5657,7 +5683,7 @@ mod tests {
         db::insert_agent(&pool, &agent).await.unwrap();
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
-        let (events, events_rx) = EventSink::channel(events::DEFAULT_CAPACITY);
+        let (events, events_rx) = EventSink::channel(capacity);
         let state = Arc::new(AppState {
             pool,
             policy_engine,
@@ -12305,6 +12331,109 @@ mod tests {
         let received: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(received["event_id"], "evt_own_tenant");
         assert_eq!(received["tenant_id"], "tenant_a");
+
+        let _ = ws_stream.close(None).await;
+    }
+
+    /// #1305: a slow WebSocket consumer that falls behind the SOC broadcast
+    /// channel receives an `events_dropped` notification (with a `count` of
+    /// how many events it missed) instead of silently losing events, and the
+    /// connection remains healthy afterward (subsequent events still arrive).
+    #[tokio::test]
+    async fn ws_events_lagged_consumer_gets_drop_notice() {
+        use axum::routing::get;
+        use axum::Router;
+        use futures_util::StreamExt;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        // Tiny capacity so a handful of events emitted back-to-back overflow
+        // the broadcast channel before the WS handler's `rx.recv()` drains
+        // them, making the lag deterministic without 1000+ events.
+        const CAPACITY: usize = 2;
+        let (state, _tenant_id, _agent_token, events_rx) =
+            setup_state_with_events_capacity("ws_events_lagged", CAPACITY).await;
+        tokio::spawn(events::drain(events_rx, state.pool.clone()));
+
+        let app = Router::new()
+            .route("/v1/ws/events", get(ws_events))
+            .with_state(state.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("ws://{addr}/v1/ws/events?token=tenant_a");
+        let (mut ws_stream, _resp) = connect_async(url).await.unwrap();
+
+        fn make_event(tenant_id: &str, event_id: &str) -> AseEvent {
+            AseEvent {
+                event_id: event_id.to_string(),
+                occurred_at: Utc::now().to_rfc3339(),
+                tenant_id: tenant_id.to_string(),
+                kind: "authorize_decision".to_string(),
+                agent_id: "agent_ws_test".to_string(),
+                decision: "allow".to_string(),
+                tool: "github".to_string(),
+                action: "read_file".to_string(),
+                resource: None,
+                risk_score: 10,
+                reason: "policy_allow".to_string(),
+                run_id: None,
+                trace_id: None,
+                matched_policies: vec![],
+            }
+        }
+
+        // Give the server a moment to register the subscription before
+        // emitting, then flood the broadcast channel with more events than
+        // its capacity *before* the handler's select loop gets a chance to
+        // drain them, forcing a `RecvError::Lagged`.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        for i in 0..(CAPACITY * 5) {
+            state
+                .events
+                .emit(make_event("tenant_a", &format!("evt_{i}")));
+        }
+
+        // Drain messages until we see the `events_dropped` notice (or time
+        // out). Subsequent events for tenant_a should still arrive normally
+        // afterward, proving the connection survived the lag.
+        let mut saw_drop_notice = false;
+        let mut saw_event_after_drop = false;
+        for _ in 0..(CAPACITY * 5 + 2) {
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_millis(200), ws_stream.next()).await;
+            let msg = match msg {
+                Ok(Some(Ok(m))) => m,
+                _ => break,
+            };
+            let text = match msg {
+                WsMessage::Text(t) => t,
+                other => panic!("expected text message, got {other:?}"),
+            };
+            let received: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if received["type"] == "events_dropped" {
+                saw_drop_notice = true;
+                assert!(
+                    received["count"].as_u64().unwrap() > 0,
+                    "events_dropped count must be > 0"
+                );
+            } else if saw_drop_notice && received["tenant_id"] == "tenant_a" {
+                saw_event_after_drop = true;
+            }
+        }
+
+        assert!(
+            saw_drop_notice,
+            "slow consumer must receive an events_dropped notification"
+        );
+        assert!(
+            saw_event_after_drop,
+            "connection must remain healthy and deliver events after the drop notice"
+        );
 
         let _ = ws_stream.close(None).await;
     }

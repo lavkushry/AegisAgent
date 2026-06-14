@@ -162,6 +162,15 @@ reaches 1.0.
   parameter to an existing tool now still triggers drift, but as a
   medium-severity alert rather than being indistinguishable from a brand-new
   or removed tool.
+- **#1305: WebSocket SOC event stream silently dropped events under load**.
+  `GET /v1/ws/events` subscribes to a bounded `tokio::sync::broadcast` channel
+  (capacity 1024); if a connected client fell behind, the broadcast channel
+  would evict its oldest buffered events (`RecvError::Lagged(n)`), and
+  `handle_socket` silently swallowed this with no signal to the client. The
+  handler now sends a `{"type": "events_dropped", "count": n}` text message
+  over the socket whenever this happens, so slow consumers can detect and
+  resync after missed events instead of silently losing security events. The
+  channel's existing oldest-evicted/no-crash recovery behavior is unchanged.
 - **BUG-001, BUG-002, BUG-003**: auth and tenant isolation vulnerabilities (#1212).
 - **BUG-004, BUG-005**: lock poisoning panics in policy and events modules (#1213).
 - `edit_approval` re-hashes edited call and rejects if already decided (#1121).
