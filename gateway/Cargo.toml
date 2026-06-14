@@ -20,6 +20,9 @@ cedar-policy = "3.2.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+# GitHub webhook signature verification (X-Hub-Signature-256, #1339).
+# `Mac::verify_slice` performs a constant-time comparison.
+hmac = "0.12"
 # Optional Ed25519 receipt signing — third-party-verifiable evidence over the
 # existing receipt_hash. Hermetic default is unsigned (no key configured). The
 # "std" feature gives us deterministic signing from a parsed secret key; no rng
@@ -56,4 +59,8 @@ tempfile = "3.10"
 
 [[bench]]
 name = "authorize_benchmark"
+harness = false
+
+[[bench]]
+name = "policy_eval_benchmark"
 harness = false

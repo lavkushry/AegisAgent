@@ -10,6 +10,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -581,14 +582,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
             return Err("AEGIS_JWT_SECRET cannot be empty or 'default_secret' when AEGIS_JWT_REQUIRED is true.".into());
         }
-    } else {
-        if let Ok(jwt_secret) = std::env::var("AEGIS_JWT_SECRET") {
-            if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
-                tracing::warn!("AEGIS_JWT_SECRET is set to an empty or default value ('default_secret'). JWT validation will be disabled for security.");
-            }
-        } else {
-            tracing::warn!("AEGIS_JWT_SECRET is not set. JWT validation will be disabled.");
+    } else if let Ok(jwt_secret) = std::env::var("AEGIS_JWT_SECRET") {
+        if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
+            tracing::warn!("AEGIS_JWT_SECRET is set to an empty or default value ('default_secret'). JWT validation will be disabled for security.");
         }
+    } else {
+        tracing::warn!("AEGIS_JWT_SECRET is not set. JWT validation will be disabled.");
     }
 
     // Database setup (local SQLite file)
@@ -695,6 +694,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let quota_manager = routes::QuotaManager::new(quota_limit, quota_window_secs);
 
+    // Per-source-IP rate limiter for approval-decision callbacks (#1307,
+    // AC#1): POST /v1/approvals/:id/{approve,reject,edit}. Defaults to the
+    // issue's "max 10 attempts per IP per minute" (10 tokens, refilling at
+    // 10/60 tokens/sec), configurable for tests/ops.
+    let approval_callback_ip_limit_capacity: f64 =
+        std::env::var("AEGIS_APPROVAL_CALLBACK_IP_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10.0);
+    let approval_callback_ip_limiter = routes::RateLimiter::new(
+        approval_callback_ip_limit_capacity,
+        approval_callback_ip_limit_capacity / 60.0,
+    );
+
+    // Per-approval_id failed-attempt tracker for approval-decision callbacks
+    // (#1307, AC#2): max 5 failed (4xx) attempts per approval_id per hour.
+    let approval_attempt_limit: u64 = std::env::var("AEGIS_APPROVAL_ATTEMPT_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let approval_attempt_window_secs: u64 = std::env::var("AEGIS_APPROVAL_ATTEMPT_WINDOW_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3600);
+    let approval_attempt_tracker =
+        routes::ApprovalAttemptTracker::new(approval_attempt_limit, approval_attempt_window_secs);
+
     // Read-through cache for registered-action metadata (#899). Bounded LRU;
     // AEGIS_SKILL_CACHE_CAPACITY == 0 disables it.
     let skill_cache_capacity: usize = std::env::var("AEGIS_SKILL_CACHE_CAPACITY")
@@ -712,6 +738,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(10_000);
     let replay_nonce_cache = routes::ReplayNonceCache::new(replay_nonce_cache_capacity);
 
+    // Opt-in HMAC-SHA256 secret for verifying `X-Hub-Signature-256` on
+    // POST /v1/ingest requests with source: "github_webhook" (#1339). When
+    // unset, signature verification is skipped (pre-#1339 behavior).
+    let github_webhook_secret = std::env::var("AEGIS_GITHUB_WEBHOOK_SECRET").ok();
+    if github_webhook_secret.is_none() {
+        info!(
+            "AEGIS_GITHUB_WEBHOOK_SECRET is not set. GitHub webhook signature \
+             verification is disabled for POST /v1/ingest (source: github_webhook)."
+        );
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -721,10 +758,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         approval_ttl_secs,
         rate_limiter,
         quota_manager,
+        approval_callback_ip_limiter,
+        approval_attempt_tracker,
         skill_cache,
         replay_nonce_cache,
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+        github_webhook_secret,
     });
 
     // Read request body size limit (default 1MB)
@@ -916,9 +957,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Graceful shutdown: listen for SIGTERM (container orchestrators) and Ctrl-C.
     // In-flight requests are drained before the process exits.
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    //
+    // `into_make_service_with_connect_info::<SocketAddr>()` makes the
+    // client's source address available via the `ConnectInfo<SocketAddr>`
+    // extractor (#1307: per-IP rate limiting on approval-decision
+    // callbacks).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     info!("AegisAgent HTTP server stopped. Draining background event channel...");
     drop(state);
@@ -1120,10 +1169,14 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
             quota_manager: routes::QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         let app = Router::new()
@@ -1187,10 +1240,14 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
             quota_manager: routes::QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         let app = Router::new()

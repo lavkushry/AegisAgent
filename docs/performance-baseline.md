@@ -260,3 +260,77 @@ as disproportionately expensive, batching them into a single transaction
 would be the natural optimization — but this is speculative without
 measurement, so no issue was filed per the task's "evidence-based, not
 speculative" guidance.
+
+## Policy Evaluation Cache (#1314)
+
+Status: **verified, all ACs met** — `gateway/src/policy.rs` already
+implemented the compiled-policy cache before this issue; this section
+documents the verification and the new micro-benchmark proving AC#4
+(`< 1ms` policy evaluation from cache).
+
+### Cache architecture (AC#1, #2, #3, #5 — already met)
+
+- `PolicyEngine { base_policy_set: RwLock<PolicySet>, tenant_policy_sets:
+  RwLock<HashMap<String, PolicySet>> }` (`policy.rs:20-23`) — thread-safe via
+  `RwLock`, satisfying AC#5's "`Arc<RwLock<PolicySet>>` or equivalent".
+- `PolicyEngine::init` (`policy.rs:26-38`) parses `policies.cedar` exactly
+  once at startup into `base_policy_set` (AC#1).
+- `POST /v1/policies/reload` (`routes.rs:4045`) calls `reload_file`
+  (`policy.rs:101-128`), which re-parses the base file once and clears
+  `tenant_policy_sets` so every tenant's merged set is rebuilt from the new
+  base on next use (AC#2). Policy CRUD endpoints
+  (`routes.rs:2282,3592,3671,3770,3830`) call `reload_tenant_policies`
+  directly to rebuild just that tenant's cached set.
+- `PolicyEngine::authorize` (`policy.rs:130-187`) only reads
+  `tenant_policy_sets` (falling back to a clone of `base_policy_set` if the
+  tenant has no cached set yet) — there is **no `PolicySet::from_str` call in
+  the authorize hot path** (AC#3).
+
+**Cedar `PolicySet::clone()` cost**: read `cedar-policy{,-core} 3.4.2` source
+(`~/.cargo/registry/src/.../cedar-policy-3.4.2`) — `PolicySet` wraps
+`ast::PolicySet` (templates held as `Arc<Template>`) plus a small
+`HashMap<PolicyId, Policy>` (5 entries for `policies.cedar`). Cloning is an
+`Arc` bump plus a handful of `HashMap` entry clones — cheap, confirmed by the
+benchmark below. No change to `tenant_policy_sets`'s value type
+(`PolicySet` vs. `Arc<PolicySet>`) was needed.
+
+**Startup-population note**: `main.rs` only calls `PolicyEngine::init` (the
+base set) at startup — it does not pre-populate `tenant_policy_sets` for
+every existing tenant. A tenant that has never called `/v1/policies/*` takes
+the `base_policy_set.clone()` fallback on every `authorize` call until its
+first policy CRUD/reload. This is still cache-not-reparse (AC#3 holds either
+way) — both the `base_policy_set_fallback` and `tenant_policy_set_cached`
+paths are benchmarked separately below and both meet AC#4.
+
+### Micro-benchmark (AC#4)
+
+New `gateway/benches/policy_eval_benchmark.rs` constructs a `PolicyEngine`
+via `PolicyEngine::init("policies.cedar")` (same as production) and
+benchmarks `PolicyEngine::authorize(tenant_id, &auth_req)` in isolation (no
+HTTP layer, no DB writes — unlike the `/v1/authorize` benchmark from
+TASK-1313, which measures the full handler at ~6.7ms mean dominated by
+SQLite writes).
+
+| Scenario                                          | Mean latency |
+| -------------------------------------------------- | ------------ |
+| `base_policy_set_fallback` (tenant has no cached set) | **131.6 µs** |
+| `tenant_policy_set_cached` (after `reload_tenant_policies`) | **137.0 µs** |
+
+Both are roughly **7x under** the issue's `< 1ms` target — AC#4 met with
+comfortable margin, no code changes required.
+
+### Follow-up (separate from #1314)
+
+While building the benchmark, a **pre-existing, separate bug** in
+`reload_tenant_policies` was found: `PolicySet::from_str` always assigns
+policy ids `policy0..policyN-1` starting from `policy0`. Since
+`policies.cedar` itself has 5 policies (`policy0..policy4`), merging *any*
+tenant's custom `PolicySet` (parsed independently, so it also starts at
+`policy0`) into a clone of the base set via `PolicySet::add` fails with a
+"duplicate template or policy id" error for tenants with ≥1 active custom
+policy — that tenant's `reload_tenant_policies` call returns `Err` and its
+`tenant_policy_sets` entry is never populated (it keeps falling back to
+`base_policy_set`, silently ignoring its custom policies). This is a
+correctness bug in custom-policy merging, **independent of the caching
+mechanism** this issue is about — filed as a follow-up rather than fixed
+here to keep this change verification-only.

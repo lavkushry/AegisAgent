@@ -7,28 +7,54 @@ reaches 1.0.
 
 ## [Unreleased]
 
+### Performance
+
+- **In-memory compiled policy cache verified** (#1314): `PolicyEngine`
+  (`gateway/src/policy.rs`) already compiled `policies.cedar` once at startup
+  and cached per-tenant merged `PolicySet`s in a `RwLock<HashMap<...>>`, with
+  `authorize` never re-parsing Cedar source on the hot path and
+  `POST /v1/policies/reload` invalidating the cache. A new isolated
+  micro-benchmark (`gateway/benches/policy_eval_benchmark.rs`) confirms
+  `PolicyEngine::authorize` takes ~131-137µs — well under the issue's <1ms
+  target — for both the base-policy-set fallback and a tenant with a cached
+  merged set. No code changes were required; see
+  `docs/performance-baseline.md#policy-evaluation-cache-1314` for the full
+  writeup, including a separate pre-existing bug found and filed as #1352
+  (custom policies fail to merge into a tenant's cached set due to
+  `PolicySet` id collisions).
+
 ### Added
 
-- **Compliance Evidence Pack export** (#1298): new `GET
-  /v1/compliance/evidence-pack` endpoint returns a tenant-scoped ZIP archive
-  for SOC 2 Type II / EU AI Act Article 14 audits. Optional `from`/`to`
-  RFC-3339 query params date-filter the archive's `receipts.jsonl`,
-  `audit_events.jsonl`, `approvals.json`, and `incidents.json` entries
-  (`policies.json` reflects current policy state, documented as such in
-  `manifest.json`); an unparsable `from`/`to` fails closed with `400 Bad
-  Request`. The archive's six entries are: `manifest.json` (schema tag,
-  tenant id, generation time, requested range, row counts, and the
-  `aegis-jcs-1` canonicalization scheme), `receipts.jsonl`,
-  `audit_events.jsonl`, `policies.json`, `incidents.json`, and
-  `approvals.json`. Maps directly to the two compliance pillars: action
-  receipts (with their optional Ed25519 `signature`/`signer_public_key`)
-  provide non-repudiation evidence, and approvals (with `approver_user_id` /
-  `decided_at`) provide human-oversight evidence. New tenant-scoped, fully
-  parameterized `db.rs` helpers: `list_action_receipts_in_range`,
-  `get_audit_events_in_range`, `list_approvals_in_range`, and
-  `list_soc_incidents_in_range` (the last filters on `soc_incidents.opened_at`,
-  the table's analogous lifecycle timestamp). Adds the `zip` crate (v2) for
-  in-memory archive construction.
+- **#1307: rate limiting on approval-decision callbacks (anti-brute-force)**.
+  `POST /v1/approvals/:id/{approve,reject,edit}` had no rate limiting, so an
+  attacker could brute-force `approval_id` UUIDs. Two independent limiters
+  are now checked at the top of all three handlers (`approval_callback_rate_limit_guard`):
+  (1) **per-source-IP** (`AppState.approval_callback_ip_limiter`, a
+  `RateLimiter` token bucket — capacity 10, refilling at 10/min, configurable
+  via `AEGIS_APPROVAL_CALLBACK_IP_LIMIT`), wired up via
+  `axum::extract::ConnectInfo<SocketAddr>` (the production server now serves
+  via `into_make_service_with_connect_info::<SocketAddr>()`); and (2)
+  **per-`approval_id` failed-attempt count** (`AppState.approval_attempt_tracker`,
+  a new `ApprovalAttemptTracker` — max 5 failed (4xx: 404/409) attempts per
+  `approval_id` per hour, configurable via `AEGIS_APPROVAL_ATTEMPT_LIMIT` /
+  `AEGIS_APPROVAL_ATTEMPT_WINDOW_SECS`; successful 2xx decisions never count).
+  Either limit being exceeded returns `429 Too Many Requests` with
+  `{"reason": "rate_limited_ip"}` or `{"reason": "rate_limited_approval_attempts"}`
+  respectively. **AC#4 (admin bypass)**: there is no "admin token"/admin-role
+  concept anywhere in this codebase (no admin claim on agents, tenants, or
+  JWTs). Rather than invent a new credential type, an `X-Aegis-Admin-Key`
+  header matching an `active` tenant-scoped API key (`api_keys` table, #939 —
+  `db::is_active_api_key`, a new tenant-scoped parameterized lookup) bypasses
+  both limits — the closest existing analogue to a trusted-automation
+  credential. New tests:
+  `approve_approval_rate_limited_after_10_per_ip_per_minute` (20 attempts,
+  each against a distinct pending approval, from one IP -> first 10 succeed,
+  11-20 are 429 `rate_limited_ip`),
+  `reject_and_edit_approval_covered_by_ip_rate_limiter`,
+  `approve_approval_rate_limited_after_5_failed_attempts_per_approval_id` (6
+  attempts against one nonexistent `approval_id` from 6 distinct IPs -> the
+  6th is 429 `rate_limited_approval_attempts`), and
+  `approve_approval_admin_key_bypasses_rate_limits`.
 - **`/v1/authorize` latency baseline** (#1313): added a criterion benchmark
   (`gateway/benches/authorize_benchmark.rs`) that exercises the real
   `authorize_action` handler end-to-end against a real SQLite pool seeded
@@ -268,6 +294,28 @@ reaches 1.0.
 
 ### Security
 
+- **GitHub webhook signature verification for `/v1/ingest`** (#1339,
+  opt-in): `POST /v1/ingest` requests with `source: "github_webhook"` are now
+  verified against GitHub's standard `X-Hub-Signature-256` HMAC-SHA256
+  header when the new `AEGIS_GITHUB_WEBHOOK_SECRET` environment variable is
+  set. A missing header returns `401 {"error": "missing X-Hub-Signature-256
+  header", "reason": "missing_signature"}`; a header that doesn't match the
+  HMAC-SHA256 of the raw request body (constant-time comparison via
+  `hmac::Mac::verify_slice`) returns `401 {"error": "invalid webhook
+  signature", "reason": "invalid_signature"}`. Signature verification is
+  independent of payload-shape validation — a correctly-signed but
+  unrecognized event still returns the existing `400 {"error": "payload
+  could not be normalized for this source"}`. Other ingest `source` values
+  (e.g. `"openai_trace"`) are unaffected. **This hardening is opt-in for
+  backward compatibility: if `AEGIS_GITHUB_WEBHOOK_SECRET` is unset (the
+  default), `github_webhook` ingest requests are processed exactly as
+  before, with no signature check.** Operators integrating real GitHub
+  webhooks into `/v1/ingest` MUST set `AEGIS_GITHUB_WEBHOOK_SECRET` to the
+  webhook secret configured in their GitHub App/webhook settings — without
+  it, any caller holding a valid tenant bearer token can inject forged
+  `github_webhook` events into the SOC detect -> correlate -> respond
+  pipeline. Adds the `hmac` crate as a direct dependency (alongside the
+  existing `sha2`/`hex`).
 - Fail-closed defaults across unknown agent/tool/MCP server/MCP tool, on hash
   mismatch, on expired/consumed approvals, and on gateway unreachability for
   mutating/high-risk actions.
