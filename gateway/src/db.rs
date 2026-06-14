@@ -1715,6 +1715,27 @@ pub async fn list_api_keys(
     .await
 }
 
+/// #1307 (AC#4): check whether `key_hash` matches an `active` API key for
+/// `tenant_id`. Used by the approval-callback rate limiters to grant a
+/// bypass for trusted automation holding a tenant-scoped API key (the
+/// closest existing analogue to an "admin token" in this codebase — see
+/// `create_api_key` / #939). Tenant-scoped and parameterized; fails closed
+/// (returns `false`) for any non-`active` or unknown hash.
+pub async fn is_active_api_key(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    key_hash: &str,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT 1 FROM api_keys WHERE tenant_id = ? AND key_hash = ? AND status = 'active'",
+    )
+    .bind(tenant_id)
+    .bind(key_hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
 /// TASK-0093 (#939): revoke a tenant's API key. Returns `true` if a row was
 /// updated.
 pub async fn revoke_api_key(
