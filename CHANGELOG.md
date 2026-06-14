@@ -248,6 +248,28 @@ reaches 1.0.
 
 ### Security
 
+- **GitHub webhook signature verification for `/v1/ingest`** (#1339,
+  opt-in): `POST /v1/ingest` requests with `source: "github_webhook"` are now
+  verified against GitHub's standard `X-Hub-Signature-256` HMAC-SHA256
+  header when the new `AEGIS_GITHUB_WEBHOOK_SECRET` environment variable is
+  set. A missing header returns `401 {"error": "missing X-Hub-Signature-256
+  header", "reason": "missing_signature"}`; a header that doesn't match the
+  HMAC-SHA256 of the raw request body (constant-time comparison via
+  `hmac::Mac::verify_slice`) returns `401 {"error": "invalid webhook
+  signature", "reason": "invalid_signature"}`. Signature verification is
+  independent of payload-shape validation — a correctly-signed but
+  unrecognized event still returns the existing `400 {"error": "payload
+  could not be normalized for this source"}`. Other ingest `source` values
+  (e.g. `"openai_trace"`) are unaffected. **This hardening is opt-in for
+  backward compatibility: if `AEGIS_GITHUB_WEBHOOK_SECRET` is unset (the
+  default), `github_webhook` ingest requests are processed exactly as
+  before, with no signature check.** Operators integrating real GitHub
+  webhooks into `/v1/ingest` MUST set `AEGIS_GITHUB_WEBHOOK_SECRET` to the
+  webhook secret configured in their GitHub App/webhook settings — without
+  it, any caller holding a valid tenant bearer token can inject forged
+  `github_webhook` events into the SOC detect -> correlate -> respond
+  pipeline. Adds the `hmac` crate as a direct dependency (alongside the
+  existing `sha2`/`hex`).
 - Fail-closed defaults across unknown agent/tool/MCP server/MCP tool, on hash
   mismatch, on expired/consumed approvals, and on gateway unreachability for
   mutating/high-risk actions.

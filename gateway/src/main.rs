@@ -712,6 +712,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(10_000);
     let replay_nonce_cache = routes::ReplayNonceCache::new(replay_nonce_cache_capacity);
 
+    // Opt-in HMAC-SHA256 secret for verifying `X-Hub-Signature-256` on
+    // POST /v1/ingest requests with source: "github_webhook" (#1339). When
+    // unset, signature verification is skipped (pre-#1339 behavior).
+    let github_webhook_secret = std::env::var("AEGIS_GITHUB_WEBHOOK_SECRET").ok();
+    if github_webhook_secret.is_none() {
+        info!(
+            "AEGIS_GITHUB_WEBHOOK_SECRET is not set. GitHub webhook signature \
+             verification is disabled for POST /v1/ingest (source: github_webhook)."
+        );
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -725,6 +736,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         replay_nonce_cache,
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+        github_webhook_secret,
     });
 
     // Read request body size limit (default 1MB)
@@ -1119,6 +1132,8 @@ mod tests {
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         let app = Router::new()
@@ -1186,6 +1201,8 @@ mod tests {
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+
+            github_webhook_secret: None,
         });
 
         let app = Router::new()
