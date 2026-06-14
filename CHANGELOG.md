@@ -111,6 +111,21 @@ reaches 1.0.
   documents them in `GET /v1/openapi.json`, and adds
   `test_api_key_crud_route` covering create/list/revoke/revoke-again/list.
 
+- **#1335: MCP tool/server identifier normalization**. `/v1/authorize`
+  resolved the `mcp:` server prefix and looked up `mcp_servers`/`mcp_tools`
+  rows using the caller-supplied `tool`/`action` strings verbatim. A request
+  with a different letter case (`MCP:github-mcp`), percent-encoding
+  (`mcp%3Agithub-mcp`, `create%5Fissue`), or other Unicode form for the same
+  identifier would make `mcp_server_key_from_tool` miss the `mcp:` prefix
+  entirely, **skipping the deny-by-default "unknown MCP server/tool" checks**
+  and falling through to the generic Cedar policy evaluation. `routes.rs` now
+  normalizes (`normalize_tool_identifier`: percent-decode, Unicode NFC,
+  lowercase) the `tool`/`action` identifiers once before any MCP/skill-action
+  lookup; the `action_hash`/canonicalized payload still uses the original,
+  un-normalized values. Adds
+  `authorize_denies_unknown_mcp_tool_with_encoded_or_cased_identifier` and
+  `authorize_allows_approved_mcp_tool_with_encoded_or_cased_identifier`.
+
 ### Security
 
 - Fail-closed defaults across unknown agent/tool/MCP server/MCP tool, on hash
