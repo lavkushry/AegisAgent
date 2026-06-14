@@ -21,7 +21,7 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -514,6 +514,106 @@ fn compute_mcp_manifest_hash(tools: &[McpToolManifestItem]) -> String {
     });
     let canonical = canonical_value_string(&Value::Array(entries));
     format!("sha256:{}", sha256_hex(canonical.as_bytes()))
+}
+
+/// #1336: classify MCP manifest drift and describe what changed between the
+/// previously discovered manifest (`old_tools`) and the newly discovered one
+/// (`new_tools`), so a binary hash mismatch becomes an actionable, severity-aware
+/// alert instead of a single generic "drift" signal.
+///
+/// Returns the highest-severity classification that applies, in precedence order:
+///   - `tool_added` / `tool_removed` — a tool was added or removed (high)
+///   - `tool_modified` — an existing tool's risk/mutation/approval/input_schema
+///     changed, e.g. a new parameter was added (medium)
+///   - `metadata_changed` — only a tool's name/description changed (low)
+///
+/// along with a human-readable, secret-free diff summary (tool keys only).
+fn classify_manifest_drift(
+    old_tools: &[McpToolManifestItem],
+    new_tools: &[McpToolManifestItem],
+) -> (&'static str, String) {
+    let old_by_key: BTreeMap<&str, &McpToolManifestItem> =
+        old_tools.iter().map(|t| (t.tool_key.as_str(), t)).collect();
+    let new_by_key: BTreeMap<&str, &McpToolManifestItem> =
+        new_tools.iter().map(|t| (t.tool_key.as_str(), t)).collect();
+
+    let added: Vec<&str> = new_by_key
+        .keys()
+        .filter(|k| !old_by_key.contains_key(*k))
+        .copied()
+        .collect();
+    let removed: Vec<&str> = old_by_key
+        .keys()
+        .filter(|k| !new_by_key.contains_key(*k))
+        .copied()
+        .collect();
+
+    let mut modified: Vec<&str> = Vec::new();
+    let mut metadata_changed: Vec<&str> = Vec::new();
+    for (key, new_tool) in &new_by_key {
+        if let Some(old_tool) = old_by_key.get(key) {
+            if old_tool.risk != new_tool.risk
+                || old_tool.mutates_state != new_tool.mutates_state
+                || old_tool.approval_required != new_tool.approval_required
+                || old_tool.input_schema != new_tool.input_schema
+            {
+                modified.push(key);
+            } else if old_tool.name != new_tool.name || old_tool.description != new_tool.description
+            {
+                metadata_changed.push(key);
+            }
+        }
+    }
+
+    let mut diff_parts: Vec<String> = Vec::new();
+    if !added.is_empty() {
+        diff_parts.push(format!("tools added: {}", added.join(", ")));
+    }
+    if !removed.is_empty() {
+        diff_parts.push(format!("tools removed: {}", removed.join(", ")));
+    }
+    if !modified.is_empty() {
+        diff_parts.push(format!("tools modified: {}", modified.join(", ")));
+    }
+    if !metadata_changed.is_empty() {
+        diff_parts.push(format!("metadata changed: {}", metadata_changed.join(", ")));
+    }
+
+    let classification = if !added.is_empty() {
+        "tool_added"
+    } else if !removed.is_empty() {
+        "tool_removed"
+    } else if !modified.is_empty() {
+        "tool_modified"
+    } else if !metadata_changed.is_empty() {
+        "metadata_changed"
+    } else {
+        // The manifest hash differs but no per-field diff was found (e.g. no prior
+        // snapshot was available to diff against) — fail closed to the
+        // medium-severity bucket rather than silently dropping the signal.
+        "tool_modified"
+    };
+
+    let diff = if diff_parts.is_empty() {
+        "manifest changed (no prior snapshot available to diff against)".to_string()
+    } else {
+        diff_parts.join("; ")
+    };
+
+    (classification, diff)
+}
+
+/// #1336: map a [`classify_manifest_drift`] classification to a SOC severity —
+/// `tool_added`/`tool_removed` (a tool's presence changed) are `"high"`,
+/// `tool_modified` (an existing tool's security-relevant shape changed, e.g. a
+/// new parameter) is `"medium"`, and `metadata_changed` (cosmetic-only) is
+/// `"low"`.
+fn severity_for_manifest_drift(classification: &str) -> &'static str {
+    match classification {
+        "tool_added" | "tool_removed" => "high",
+        "tool_modified" => "medium",
+        _ => "low",
+    }
 }
 
 /// Canonical (scheme `aegis-jcs-1`) string for an arbitrary JSON value. Used for
@@ -1339,6 +1439,21 @@ pub async fn discover_mcp_tools(
     match db::get_mcp_server_manifest_hash(&state.pool, &tenant_id, &server_key).await {
         Ok(pinned) => {
             if !pinned.is_empty() && pinned != new_manifest_hash {
+                // #1336: diff against the manifest pinned just before this discovery
+                // (the second-most-recent snapshot — the most recent is the one just
+                // inserted above for this discovery) to classify drift severity and
+                // describe what changed, instead of a single generic "drift" signal.
+                let old_tools: Vec<McpToolManifestItem> =
+                    db::list_mcp_manifest_snapshots(&state.pool, &tenant_id, &server_key, 2)
+                        .await
+                        .ok()
+                        .and_then(|snapshots| snapshots.into_iter().nth(1))
+                        .and_then(|snapshot| serde_json::from_str(&snapshot.manifest_json).ok())
+                        .unwrap_or_default();
+
+                let (classification, diff) = classify_manifest_drift(&old_tools, &payload.tools);
+                let severity = severity_for_manifest_drift(classification);
+
                 state.events.emit(AseEvent {
                     event_id: Uuid::new_v4().to_string(),
                     occurred_at: Utc::now().to_rfc3339(),
@@ -1351,10 +1466,13 @@ pub async fn discover_mcp_tools(
                     tool: format!("mcp:{}", server_key),
                     action: "discover".to_string(),
                     resource: Some(server_key.clone()),
-                    risk_score: 0,
+                    // #1336: encodes the severity classification (high/medium/low)
+                    // via the same risk-score buckets `risk_score_for_level` uses,
+                    // decoded back to a severity by `detect::mcp_manifest_drift`.
+                    risk_score: risk_score_for_level(severity),
                     reason: format!(
-                        "MCP tool-manifest drift on server '{}': pinned {} != observed {}",
-                        server_key, pinned, new_manifest_hash
+                        "MCP tool-manifest drift on server '{}' ({}): pinned {} != observed {} — {}",
+                        server_key, classification, pinned, new_manifest_hash, diff
                     ),
                     run_id: None,
                     trace_id: None,
@@ -8348,6 +8466,89 @@ mod tests {
         assert!(compute_mcp_manifest_hash(&a).starts_with("sha256:"));
     }
 
+    /// #1336: a brand-new tool in the manifest classifies as `tool_added` (high).
+    #[test]
+    fn classify_manifest_drift_tool_added_is_high() {
+        let old = vec![drift_tool("create_issue", "medium")];
+        let new = vec![
+            drift_tool("create_issue", "medium"),
+            drift_tool("merge", "high"),
+        ];
+        let (classification, diff) = classify_manifest_drift(&old, &new);
+        assert_eq!(classification, "tool_added");
+        assert_eq!(severity_for_manifest_drift(classification), "high");
+        assert!(diff.contains("tools added: merge"));
+    }
+
+    /// #1336: a tool disappearing from the manifest classifies as `tool_removed`
+    /// (high) — even if another tool was also modified, removal takes precedence.
+    #[test]
+    fn classify_manifest_drift_tool_removed_is_high() {
+        let old = vec![
+            drift_tool("create_issue", "medium"),
+            drift_tool("merge", "high"),
+        ];
+        let new = vec![drift_tool("create_issue", "medium")];
+        let (classification, diff) = classify_manifest_drift(&old, &new);
+        assert_eq!(classification, "tool_removed");
+        assert_eq!(severity_for_manifest_drift(classification), "high");
+        assert!(diff.contains("tools removed: merge"));
+    }
+
+    /// #1336 acceptance criterion: adding an optional parameter to an existing
+    /// tool's `input_schema` (no tools added/removed) classifies as
+    /// `tool_modified` — medium severity.
+    #[test]
+    fn classify_manifest_drift_new_optional_parameter_is_tool_modified_medium() {
+        let old = vec![McpToolManifestItem {
+            tool_key: "create_issue".to_string(),
+            name: "Create Issue".to_string(),
+            description: Some("Open a new issue".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {"title": {"type": "string"}},
+                "required": ["title"],
+            })),
+            risk: "medium".to_string(),
+            mutates_state: true,
+            approval_required: false,
+        }];
+        let new = vec![McpToolManifestItem {
+            tool_key: "create_issue".to_string(),
+            name: "Create Issue".to_string(),
+            description: Some("Open a new issue".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "labels": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["title"],
+            })),
+            risk: "medium".to_string(),
+            mutates_state: true,
+            approval_required: false,
+        }];
+        let (classification, diff) = classify_manifest_drift(&old, &new);
+        assert_eq!(classification, "tool_modified");
+        assert_eq!(severity_for_manifest_drift(classification), "medium");
+        assert!(diff.contains("tools modified: create_issue"));
+    }
+
+    /// #1336: only a description/name change classifies as `metadata_changed` —
+    /// low severity.
+    #[test]
+    fn classify_manifest_drift_description_only_is_metadata_changed_low() {
+        let old = vec![drift_tool("create_issue", "medium")];
+        let mut renamed = drift_tool("create_issue", "medium");
+        renamed.description = Some("Updated description".to_string());
+        let new = vec![renamed];
+        let (classification, diff) = classify_manifest_drift(&old, &new);
+        assert_eq!(classification, "metadata_changed");
+        assert_eq!(severity_for_manifest_drift(classification), "low");
+        assert!(diff.contains("metadata changed: create_issue"));
+    }
+
     /// Re-discovering a server whose advertised manifest changed must emit a
     /// `mcp_manifest_drift` AseEvent onto the SOC stream (and only on change).
     #[tokio::test]
@@ -8432,6 +8633,98 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(server.status, "quarantined");
+    }
+
+    /// #1336 acceptance criterion: adding an optional parameter to an existing
+    /// tool's `input_schema` must still trigger drift (any manifest hash change
+    /// drifts), but classified `tool_modified` — a medium-severity alert, not the
+    /// flat "high" every drift used to produce.
+    #[tokio::test]
+    async fn discover_classifies_new_optional_parameter_as_medium_severity_drift() {
+        let (state, tenant_id, _agent_token, mut events_rx) =
+            setup_state_with_events("mcp_drift_param").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        fn create_issue_tool(with_labels_param: bool) -> McpToolManifestItem {
+            let properties = if with_labels_param {
+                json!({
+                    "title": {"type": "string"},
+                    "labels": {"type": "array", "items": {"type": "string"}},
+                })
+            } else {
+                json!({"title": {"type": "string"}})
+            };
+            McpToolManifestItem {
+                tool_key: "create_issue".to_string(),
+                name: "Create Issue".to_string(),
+                description: Some("Open a new issue".to_string()),
+                input_schema: Some(json!({
+                    "type": "object",
+                    "properties": properties,
+                    "required": ["title"],
+                })),
+                risk: "medium".to_string(),
+                mutates_state: true,
+                approval_required: false,
+            }
+        }
+
+        // 1) First discovery pins the manifest — no drift.
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![create_issue_tool(false)],
+            }),
+        )
+        .await;
+
+        // 2) Re-discovery adds an optional `labels` parameter — same tool, no
+        // tools added/removed, so this must classify as `tool_modified`.
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![create_issue_tool(true)],
+            }),
+        )
+        .await;
+
+        let mut drift_event = None;
+        while let Ok(ev) = events_rx.try_recv() {
+            if ev.kind == "mcp_manifest_drift" {
+                drift_event = Some(ev);
+            }
+        }
+        let ev = drift_event.expect("a new parameter must still trigger drift");
+        assert_eq!(
+            ev.risk_score, 40,
+            "tool_modified drift must encode medium severity (risk_score 40)"
+        );
+        assert!(
+            ev.reason.contains("tool_modified"),
+            "reason must classify the drift: {}",
+            ev.reason
+        );
+        assert!(
+            ev.reason.contains("tools modified: create_issue"),
+            "reason must include a diff naming the changed tool: {}",
+            ev.reason
+        );
     }
 
     /// DB-007 (#932): `last_discovery_at` is `None` until the first discovery

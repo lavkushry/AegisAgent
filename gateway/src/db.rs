@@ -882,8 +882,8 @@ pub async fn insert_mcp_manifest_snapshot(
 }
 
 /// TASK-0090 (#936): list manifest snapshots for a server, most recent first.
-/// Tenant-scoped, parameterized.
-#[cfg(test)]
+/// Tenant-scoped, parameterized. Also used by #1336 drift-severity classification
+/// to diff the newly discovered manifest against the previous snapshot.
 pub async fn list_mcp_manifest_snapshots(
     pool: &SqlitePool,
     tenant_id: &str,
