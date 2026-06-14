@@ -232,6 +232,10 @@ pub struct AppState {
     /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
     /// so orchestrators can distinguish "still starting" from "ready".
     pub startup_complete: std::sync::atomic::AtomicBool,
+    /// Set to `true` when the most recent attempt to persist a decision/audit
+    /// record to SQLite failed. Cleared back to `false` on the next successful
+    /// write. Backs the `audit_writer` field on `GET /readyz` (#1299).
+    pub audit_writer_unhealthy: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -836,6 +840,15 @@ async fn emit_tamper_attempt_receipt(
 /// whose `expires_at` is in the past.
 fn approval_is_expired(app: &ApprovalRecord) -> bool {
     app.expires_at.map(|e| e < Utc::now()).unwrap_or(false)
+}
+
+/// True if a write-decision/audit failure for this action must fail closed
+/// (deny) rather than degrade to allow-with-warning (#1299). Mutating
+/// actions and anything risk-level "medium"/"high"/"critical" are
+/// high-risk; only non-mutating, risk-level "low" actions may proceed
+/// without a persisted audit record.
+fn is_high_risk_for_audit(risk_level: &str, mutates_state: bool) -> bool {
+    mutates_state || risk_level != "low"
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2115,6 +2128,29 @@ pub async fn authorize_action(
         "tool_call_intercepted"
     };
 
+    // Audit-writer health pre-flight (#1299): if the SOC event channel is
+    // already full, audit observability for this decision is about to be
+    // dropped. For high-risk/mutating actions that is itself the
+    // "audit unavailable" condition — fail closed before attempting the DB
+    // write at all.
+    if is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state)
+        && !state.events.has_capacity()
+    {
+        return (
+            StatusCode::OK,
+            Json(AuthorizeResponse {
+                decision_id,
+                decision: "deny".to_string(),
+                risk_score,
+                risk_level,
+                reason: "Audit writer unavailable (SOC event stream full): action denied (audit_writer_unavailable, fail-closed).".to_string(),
+                matched_policies: vec!["audit_writer_unavailable".to_string()],
+                approval: None,
+            }),
+        )
+            .into_response();
+    }
+
     if let Err(e) = write_decision_and_audit(
         &state.pool,
         &state.events,
@@ -2132,12 +2168,54 @@ pub async fn authorize_action(
     )
     .await
     {
-        error!("Failed to write decision: {:?}", e);
+        error!(
+            "Failed to write decision/audit record (audit writer unavailable): {:?}",
+            e
+        );
+        state
+            .audit_writer_unhealthy
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        if is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state) {
+            return (
+                StatusCode::OK,
+                Json(AuthorizeResponse {
+                    decision_id,
+                    decision: "deny".to_string(),
+                    risk_score,
+                    risk_level,
+                    reason: "Audit writer unavailable (database write failed): action denied (audit_writer_unavailable, fail-closed).".to_string(),
+                    matched_policies: vec!["audit_writer_unavailable".to_string()],
+                    approval: None,
+                }),
+            )
+                .into_response();
+        }
+
+        // Low-risk, non-mutating action: degrade gracefully — allow without a
+        // persisted audit record, but log a warning so operators can see the gap.
+        tracing::warn!(
+            tool = %payload.tool_call.tool,
+            action = %payload.tool_call.action,
+            "Audit writer unavailable for low-risk action; allowing without persisted audit record"
+        );
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Database error"})),
+            StatusCode::OK,
+            Json(AuthorizeResponse {
+                decision_id,
+                decision: decision_str,
+                risk_score,
+                risk_level,
+                reason,
+                matched_policies,
+                approval: None,
+            }),
         )
             .into_response();
+    } else {
+        state
+            .audit_writer_unhealthy
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     // Emit a verifiable, hash-chained receipt for this decision (non-fatal).
@@ -5289,6 +5367,7 @@ mod tests {
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
             skill_cache: SkillActionCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -5320,6 +5399,7 @@ mod tests {
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
             skill_cache: SkillActionCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
 
         // First request is allowed through quota
@@ -5404,6 +5484,7 @@ mod tests {
             quota_manager: QuotaManager::new(0, 86400),
             skill_cache: SkillActionCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -11615,5 +11696,290 @@ mod tests {
         assert_eq!(received["tenant_id"], "tenant_a");
 
         let _ = ws_stream.close(None).await;
+    }
+
+    /// #1299: helper building an authorize request for a registered,
+    /// mutating, high-risk action ("deployer"/"ship").
+    fn high_risk_authorize_request() -> AuthorizeRequest {
+        AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            agent: AuthorizeAgentContext {
+                id: "routes-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "deployer".to_string(),
+                action: "ship".to_string(),
+                resource: None,
+                mutates_state: true,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: Some(AuthorizeTraceContext {
+                run_id: "run_routes".to_string(),
+                trace_id: "trace_routes".to_string(),
+            }),
+        }
+    }
+
+    /// #1299: register "deployer"/"ship" as a high-risk, mutating action for
+    /// the given tenant via the standard registration handler.
+    async fn register_high_risk_action(state: Arc<AppState>) {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = register_tool_router(state);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/tools")
+            .header("content-type", "application/json")
+            .header("Authorization", "Bearer tenant_routes")
+            .body(axum::body::Body::from(
+                register_tool_payload("deployer", "high").to_string(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// #1299: an authorize request for a registered, non-mutating, low-risk
+    /// read-only action ("deployer"/"status").
+    fn low_risk_authorize_request() -> AuthorizeRequest {
+        AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            agent: AuthorizeAgentContext {
+                id: "routes-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "deployer".to_string(),
+                action: "status".to_string(),
+                resource: None,
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: Some(AuthorizeTraceContext {
+                run_id: "run_routes".to_string(),
+                trace_id: "trace_routes".to_string(),
+            }),
+        }
+    }
+
+    /// #1299: register "deployer"/"status" as a low-risk, non-mutating
+    /// read-only action for the given tenant.
+    async fn register_low_risk_action(state: Arc<AppState>) {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = register_tool_router(state);
+        let payload = json!({
+            "skill_key": "deployer",
+            "name": "Deployer",
+            "type": "static",
+            "auth_type": null,
+            "owner_team": "platform",
+            "default_risk": "low",
+            "actions": [
+                {
+                    "action_key": "status",
+                    "description": "Check deploy status",
+                    "risk": "low",
+                    "mutates_state": false,
+                    "data_access": "read",
+                    "approval_required": false,
+                    "default_decision": "policy"
+                }
+            ]
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/tools")
+            .header("content-type", "application/json")
+            .header("Authorization", "Bearer tenant_routes")
+            .body(axum::body::Body::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// #1299 acceptance criteria: when the SOC event channel is full (no
+    /// spare capacity), a high-risk/mutating action must be denied with
+    /// `audit_writer_unavailable` rather than executing without an audit
+    /// trail.
+    #[tokio::test]
+    async fn authorize_denies_high_risk_action_when_event_channel_is_full() {
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/routes_audit_full_channel_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let pool = db::init_db(&db_url).await.unwrap();
+        let tenant_id = "tenant_routes".to_string();
+        db::register_tenant(&pool, &tenant_id, "Routes Tenant", "developer")
+            .await
+            .unwrap();
+
+        let agent_id = Uuid::new_v4().to_string();
+        let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+        let agent = AgentRecord {
+            id: agent_id,
+            tenant_id: tenant_id.clone(),
+            agent_key: "routes-agent".to_string(),
+            agent_token: db::hash_token(&agent_token),
+            name: "Routes Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&pool, &agent).await.unwrap();
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        // Capacity 1: one emit fills it completely (capacity() == 0 afterwards).
+        let (events, _events_rx) = EventSink::channel(1);
+        let state = Arc::new(AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            skill_cache: SkillActionCache::new(1024),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        register_high_risk_action(state.clone()).await;
+
+        // Fill the event channel so has_capacity() returns false.
+        state.events.emit(AseEvent {
+            event_id: "evt_fill".to_string(),
+            occurred_at: Utc::now().to_rfc3339(),
+            tenant_id: tenant_id.clone(),
+            kind: "authorize_decision".to_string(),
+            agent_id: "agent_fill".to_string(),
+            decision: "allow".to_string(),
+            tool: "filler".to_string(),
+            action: "noop".to_string(),
+            resource: None,
+            risk_score: 0,
+            reason: "fill".to_string(),
+            run_id: None,
+            trace_id: None,
+            matched_policies: vec![],
+        });
+        assert!(!state.events.has_capacity());
+
+        let response = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            high_risk_authorize_request(),
+        )
+        .await;
+
+        assert_eq!(response.decision, "deny");
+        assert!(
+            response.reason.contains("audit_writer_unavailable"),
+            "reason was: {}",
+            response.reason
+        );
+        assert!(response
+            .matched_policies
+            .contains(&"audit_writer_unavailable".to_string()));
+    }
+
+    /// #1299 acceptance criteria: when the audit-record DB write fails (pool
+    /// closed), a critical/high-risk mutating action must be denied with
+    /// `audit_writer_unavailable` rather than executing without an audit
+    /// trail.
+    #[tokio::test]
+    async fn authorize_denies_high_risk_action_when_audit_db_write_fails() {
+        let (state, tenant_id, agent_token) = setup_state("audit_db_failure_high_risk").await;
+
+        register_high_risk_action(state.clone()).await;
+
+        // Simulate a DB write failure for the audit/decision record only:
+        // drop the `decisions` table so `insert_decision` fails while agent
+        // and registered-action lookups (SELECTs against other tables)
+        // still succeed.
+        sqlx::query("DROP TABLE decisions")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let response = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            high_risk_authorize_request(),
+        )
+        .await;
+
+        assert_eq!(response.decision, "deny");
+        assert!(
+            response.reason.contains("audit_writer_unavailable"),
+            "reason was: {}",
+            response.reason
+        );
+        assert!(response
+            .matched_policies
+            .contains(&"audit_writer_unavailable".to_string()));
+        assert!(state
+            .audit_writer_unhealthy
+            .load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    /// #1299 acceptance criteria: when the audit-record DB write fails for a
+    /// low-risk, non-mutating (read-only) action, the gateway degrades
+    /// gracefully and still allows the action (with a warning logged) rather
+    /// than denying it.
+    #[tokio::test]
+    async fn authorize_allows_low_risk_action_with_warning_when_audit_db_write_fails() {
+        let (state, tenant_id, agent_token) = setup_state("audit_db_failure_low_risk").await;
+
+        register_low_risk_action(state.clone()).await;
+
+        // Simulate a DB write failure for the audit/decision record only:
+        // drop the `decisions` table so `insert_decision` fails while agent
+        // and registered-action lookups (SELECTs against other tables)
+        // still succeed.
+        sqlx::query("DROP TABLE decisions")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let response = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            low_risk_authorize_request(),
+        )
+        .await;
+
+        assert_eq!(response.decision, "allow");
     }
 }

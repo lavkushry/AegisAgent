@@ -77,6 +77,13 @@ impl EventSink {
     /// caller: a full or closed channel is logged and the event dropped, so the
     /// inline decision is unaffected (fail-open for *observability*, never for
     /// the security decision itself).
+    /// Returns `true` if the SOC event channel currently has spare capacity.
+    /// Used as a health signal for the audit-writer readiness check (#1299) —
+    /// a full channel means events are about to be dropped.
+    pub fn has_capacity(&self) -> bool {
+        self.tx.capacity() > 0
+    }
+
     pub fn emit(&self, event: AseEvent) {
         // Broadcast the event to any active subscribers (WebSockets)
         let _ = self.tx_broadcast.send(event.clone());

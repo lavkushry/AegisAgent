@@ -86,13 +86,26 @@ async fn livez_handler() -> impl IntoResponse {
 /// database is reachable, so an orchestrator stops routing traffic to a
 /// gateway that can't serve requests (fail-closed).
 async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let audit_writer_status = if state
+        .audit_writer_unhealthy
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        "down"
+    } else {
+        "up"
+    };
     match db::health_check(&state.pool).await {
-        Ok(()) => (StatusCode::OK, Json(json!({"status": "ready", "db": "up"}))),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"status": "ready", "db": "up", "audit_writer": audit_writer_status})),
+        ),
         Err(e) => {
             tracing::warn!("readyz check DB ping failed: {:?}", e);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"status": "not_ready", "db": "down"})),
+                Json(
+                    json!({"status": "not_ready", "db": "down", "audit_writer": audit_writer_status}),
+                ),
             )
         }
     }
@@ -710,6 +723,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         quota_manager,
         skill_cache,
         startup_complete: std::sync::atomic::AtomicBool::new(false),
+        audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Read request body size limit (default 1MB)
@@ -1101,6 +1115,7 @@ mod tests {
             quota_manager: routes::QuotaManager::new(0, 86400),
             skill_cache: routes::SkillActionCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
 
         let app = Router::new()
@@ -1166,6 +1181,7 @@ mod tests {
             quota_manager: routes::QuotaManager::new(0, 86400),
             skill_cache: routes::SkillActionCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
 
         let app = Router::new()
@@ -1279,6 +1295,57 @@ mod tests {
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["status"], "started");
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1299: GET /readyz reports `audit_writer: "down"` once a decision/audit
+    /// write has failed, and `"up"` otherwise.
+    #[tokio::test]
+    async fn readyz_reports_audit_writer_down_after_write_failure() {
+        use tower::ServiceExt;
+
+        let (app, state, db_url) = probe_test_app("readyz_audit_writer").await;
+
+        // Healthy by default.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["audit_writer"], "up");
+
+        // Simulate a prior decision/audit write failure.
+        state
+            .audit_writer_unhealthy
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["audit_writer"], "down");
+        assert_eq!(parsed["db"], "up");
 
         cleanup_db(&db_url);
     }
