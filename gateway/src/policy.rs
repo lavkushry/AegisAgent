@@ -19,6 +19,13 @@ pub enum PolicyError {
 
 pub struct PolicyEngine {
     base_policy_set: RwLock<PolicySet>,
+    /// Raw Cedar source of the base policy set (#1352). Kept alongside the
+    /// parsed `base_policy_set` so [`Self::reload_tenant_policies`] can
+    /// re-parse the base text together with a tenant's custom policy bodies
+    /// in a single [`PolicySet::from_str`] call, avoiding the `policy0..N`
+    /// auto-id collisions that occur when each policy source is parsed
+    /// independently and then merged via [`PolicySet::add`].
+    base_policy_src: RwLock<String>,
     tenant_policy_sets: RwLock<HashMap<String, PolicySet>>,
 }
 
@@ -33,6 +40,7 @@ impl PolicyEngine {
 
         Ok(Self {
             base_policy_set: RwLock::new(policy_set),
+            base_policy_src: RwLock::new(policy_str),
             tenant_policy_sets: RwLock::new(HashMap::new()),
         })
     }
@@ -54,39 +62,47 @@ impl PolicyEngine {
             .await
             .map_err(|e| PolicyError::File(e.to_string()))?;
 
-        // Rebuild policy set for this tenant.
-        // Start with the base policy set
-        let mut policy_set = {
+        // Rebuild policy set for this tenant by re-parsing the base policy
+        // source together with each active custom policy's source in a
+        // single `PolicySet::from_str` call (#1352). Parsing each policy
+        // body independently (the prior approach) assigns auto-generated
+        // ids starting from `policy0` for every source, so merging a
+        // separately-parsed custom `PolicySet` into the base set via
+        // `PolicySet::add` collides with the base set's own `policy0..N`
+        // ids and fails with "duplicate template or policy id". A single
+        // combined-source parse assigns globally-unique sequential ids.
+        let mut combined_src = {
             let base = self
-                .base_policy_set
+                .base_policy_src
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
             base.clone()
         };
 
-        // Append each active policy from the database
-        for policy_rec in db_policies {
+        for policy_rec in &db_policies {
             if policy_rec.status != "active" {
                 continue;
             }
-            // Parse Cedar policy from the body string
-            let custom_set = PolicySet::from_str(&policy_rec.body).map_err(|e| {
+            // Validate the custom policy parses on its own before merging,
+            // so a malformed policy is attributed to its own id rather than
+            // surfacing as an opaque error against the combined source.
+            PolicySet::from_str(&policy_rec.body).map_err(|e| {
                 PolicyError::Parse(format!(
                     "Failed to parse custom policy '{}': {}",
                     policy_rec.id, e
                 ))
             })?;
 
-            // Merge custom rules into policy_set
-            for p in custom_set.policies() {
-                policy_set.add(p.clone()).map_err(|e| {
-                    PolicyError::Parse(format!(
-                        "Failed to add custom policy '{}': {}",
-                        policy_rec.id, e
-                    ))
-                })?;
-            }
+            combined_src.push('\n');
+            combined_src.push_str(&policy_rec.body);
         }
+
+        let policy_set = PolicySet::from_str(&combined_src).map_err(|e| {
+            PolicyError::Parse(format!(
+                "Failed to parse combined policy set for tenant '{}': {}",
+                tenant_id, e
+            ))
+        })?;
 
         // Write the rebuilt policy set to our thread-safe map
         let mut sets = self
@@ -106,13 +122,20 @@ impl PolicyEngine {
         let policy_set =
             PolicySet::from_str(&policy_str).map_err(|e| PolicyError::Parse(e.to_string()))?;
 
-        // Update the base policy set
+        // Update the base policy set and its raw source
         {
             let mut base = self
                 .base_policy_set
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
             *base = policy_set;
+        }
+        {
+            let mut src = self
+                .base_policy_src
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            *src = policy_str;
         }
 
         // Clear cached tenant policy sets as base policies changed
@@ -453,5 +476,90 @@ mod tests {
             result.approver_group,
             Some("security-reviewers".to_string())
         );
+    }
+
+    /// Regression test for #1352: a tenant with an active custom policy
+    /// must successfully load (not error out and silently fall back to
+    /// `base_policy_set`), and the custom policy must actually affect
+    /// `authorize` decisions. The custom policy body below is parsed
+    /// independently by `PolicySet::from_str`, which assigns it id
+    /// `policy0` — the same id the base `policies.cedar` set assigns to
+    /// its own first policy. Before the fix, merging this into a clone of
+    /// the base set via `PolicySet::add` returned
+    /// `Err("duplicate template or policy id")`, `reload_tenant_policies`
+    /// propagated that error, and the caller (`let _ = ...`) silently
+    /// ignored it — leaving the tenant on the base policy set forever.
+    #[tokio::test]
+    async fn test_reload_tenant_policies_with_custom_policy_succeeds_and_applies() {
+        use crate::models::PolicyRecord;
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!("sqlite://target/policy_{}.db", Uuid::new_v4().simple());
+        let pool = crate::db::init_db(&db_url).await.unwrap();
+        let tenant_id = "tenant_custom_policy";
+        crate::db::register_tenant(&pool, tenant_id, "Custom Policy Tenant", "developer")
+            .await
+            .unwrap();
+
+        let engine = setup_engine().await;
+
+        // Sanity check: without any custom policy, a read-only filesystem
+        // action is allowed by the base policy set (see
+        // `test_readonly_allowed` above).
+        let readonly_request = AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            nonce: None,
+            timestamp: None,
+            agent: AuthorizeAgentContext {
+                id: "test-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "filesystem".to_string(),
+                action: "read_file".to_string(),
+                resource: Some("/etc/hosts".to_string()),
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "untrusted_external".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+        let before = engine.authorize(tenant_id, &readonly_request).unwrap();
+        assert_eq!(before.decision, "allow");
+
+        // Active custom policy: forbid the filesystem_read_file tool
+        // action outright. Parsed on its own, this policy is assigned id
+        // `policy0`, colliding with the base set's `policy0`.
+        let policy = PolicyRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_key: "deny_filesystem_read".to_string(),
+            name: "Deny filesystem read".to_string(),
+            language: "cedar".to_string(),
+            body: "forbid(principal, action == Action::\"tool_call\", resource == ToolAction::\"filesystem_read_file\");".to_string(),
+            version: 1,
+            status: "active".to_string(),
+            created_by: None,
+            created_at: Utc::now(),
+        };
+        crate::db::insert_policy(&pool, &policy).await.unwrap();
+
+        // Must succeed (not Err("duplicate template or policy id")).
+        engine
+            .reload_tenant_policies(&pool, tenant_id)
+            .await
+            .unwrap();
+        assert!(engine.has_tenant(tenant_id));
+
+        // The custom forbid must now take effect for this tenant.
+        let after = engine.authorize(tenant_id, &readonly_request).unwrap();
+        assert_eq!(after.decision, "deny");
     }
 }
