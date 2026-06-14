@@ -254,6 +254,8 @@ mod tests {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -328,6 +330,8 @@ mod tests {
         let request = AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -357,6 +361,8 @@ mod tests {
         let request = AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -389,6 +395,8 @@ mod tests {
         let request = AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -418,6 +426,8 @@ mod tests {
         let request = AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),

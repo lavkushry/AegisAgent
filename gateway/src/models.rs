@@ -159,6 +159,19 @@ pub struct AuthorizeRequest {
     /// Optional approval-callback registration (#1187/TASK-0082-0083).
     #[serde(default)]
     pub callback: Option<ApprovalCallback>,
+    /// Opt-in replay-protection nonce (#1306). When present, the gateway
+    /// rejects a repeat of the same `(tenant, agent, nonce)` with 409
+    /// `replay_nonce_reused`. `None` skips all replay checks (backwards
+    /// compatible). This is a distinct mechanism from `request_id`
+    /// idempotency above: `request_id` *replays the original decision*,
+    /// while `nonce` *rejects* the repeat outright.
+    #[serde(default)]
+    pub nonce: Option<String>,
+    /// Optional client-supplied timestamp paired with `nonce` (#1306). If
+    /// older than the replay window (5 minutes), the gateway rejects with
+    /// 409 `replay_timestamp_expired`. Ignored if `nonce` is `None`.
+    #[serde(default)]
+    pub timestamp: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

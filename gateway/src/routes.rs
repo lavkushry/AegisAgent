@@ -5,12 +5,12 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -213,6 +213,88 @@ impl SkillActionCache {
     }
 }
 
+/// In-memory, bounded LRU dedup cache for `/v1/authorize` replay-protection
+/// nonces (#1306, opt-in). Keyed on `(tenant_id, agent_id, nonce)` so two
+/// different agents (or tenants) can independently use the same nonce
+/// string without colliding — replay protection is a per-agent guarantee,
+/// not a global one.
+///
+/// This is intentionally **not** a strict 5-minute time-bounded cache: it is
+/// a capacity-bounded LRU, so an entry can in principle be evicted before 5
+/// minutes elapse under very high request volume for that tenant/agent, or
+/// persist in memory slightly longer than 5 minutes under low volume. The
+/// AC's "5-minute window" is *approximated* by the combination of:
+///   1. This LRU (catches the common case: duplicate nonce arriving while
+///      still "hot" in memory), and
+///   2. The `timestamp` staleness check in `authorize_action`, which
+///      independently rejects any request whose `timestamp` is more than 5
+///      minutes old — bounding how long a captured request remains
+///      "replayable" even if its nonce has aged out of this cache.
+///
+/// This mirrors the documented approximation style of #1305/#1313. A
+/// strict, durable replay window would require a DB-backed or
+/// timestamp-bucketed store, which is explicitly out of scope per the issue
+/// ("nonce deduplication via in-memory LRU cache, not DB — hot path").
+pub struct ReplayNonceCache {
+    inner: Mutex<ReplayNonceCacheInner>,
+    capacity: usize,
+}
+
+#[derive(Default)]
+struct ReplayNonceCacheInner {
+    seen: HashMap<String, DateTime<Utc>>,
+    /// Recency order, least-recent at the front.
+    order: VecDeque<String>,
+}
+
+impl ReplayNonceCache {
+    /// `capacity == 0` disables the cache (every nonce is treated as unseen).
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(ReplayNonceCacheInner::default()),
+            capacity,
+        }
+    }
+
+    /// Build the composite cache key for a `(tenant, agent, nonce)` triple.
+    /// `\x1f` (unit separator) cannot appear in tenant/agent identifiers, so
+    /// the join is unambiguous.
+    pub fn cache_key(tenant_id: &str, agent_id: &str, nonce: &str) -> String {
+        format!("{tenant_id}\x1f{agent_id}\x1f{nonce}")
+    }
+
+    /// Atomically check-and-insert: returns `true` if `key` was already
+    /// present (replay), or `false` if this is the first time it has been
+    /// seen (and records it as seen now), evicting the least-recently-used
+    /// entry if the cache is at capacity.
+    pub fn check_and_insert(&self, key: &str, now: DateTime<Utc>) -> bool {
+        if self.capacity == 0 {
+            return false;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if inner.seen.contains_key(key) {
+            if let Some(pos) = inner.order.iter().position(|k| k == key) {
+                inner.order.remove(pos);
+            }
+            inner.order.push_back(key.to_string());
+            return true;
+        }
+        inner.seen.insert(key.to_string(), now);
+        inner.order.push_back(key.to_string());
+        while inner.seen.len() > self.capacity {
+            if let Some(evict) = inner.order.pop_front() {
+                inner.seen.remove(&evict);
+            } else {
+                break;
+            }
+        }
+        false
+    }
+}
+
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
@@ -228,6 +310,9 @@ pub struct AppState {
     pub quota_manager: QuotaManager,
     /// Read-through cache for registered-action metadata (#899).
     pub skill_cache: SkillActionCache,
+    /// Opt-in replay-protection nonce dedup cache (#1306). See
+    /// [`ReplayNonceCache`] for the LRU + timestamp-window approximation.
+    pub replay_nonce_cache: ReplayNonceCache,
     /// Set to `true` once startup initialization (DB pool, migrations, policy
     /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
     /// so orchestrators can distinguish "still starting" from "ready".
@@ -1796,6 +1881,61 @@ pub async fn authorize_action(
 
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
+
+    // Replay protection (#1306, opt-in): only runs when the caller supplies
+    // `nonce`. Placed after agent-token authentication (fail-closed: an
+    // attacker without a valid token can't probe nonce/timestamp state) but
+    // before any policy evaluation or DB writes, so a replayed request is
+    // rejected as cheaply as possible.
+    if let Some(nonce) = payload.nonce.as_deref().filter(|n| !n.is_empty()) {
+        let now = Utc::now();
+
+        // Timestamp window check (AC #3): a `timestamp` more than 5 minutes
+        // in the past is treated as a stale/replayed request. We also reject
+        // timestamps more than 5 minutes in the *future*, since a clock-skew
+        // window that large is itself suspicious and the same bound keeps
+        // the check simple/symmetric; legitimate clients should always send
+        // a current timestamp.
+        if let Some(ts) = payload.timestamp {
+            let age_secs = (now - ts).num_seconds().abs();
+            if age_secs > 300 {
+                warn!(
+                    "Replay protection: rejecting request with stale timestamp for tenant={} agent={} (age={}s)",
+                    tenant_id, agent_id, age_secs
+                );
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "Request timestamp outside the acceptable window",
+                        "reason": "replay_timestamp_expired"
+                    })),
+                )
+                    .into_response();
+            }
+        }
+
+        // Nonce dedup check (AC #2/#4/#6): scoped per (tenant, agent) so two
+        // different agents (or tenants) reusing the same nonce string don't
+        // collide. Backed by a capacity-bounded in-memory LRU rather than a
+        // strict 5-minute store -- see `ReplayNonceCache` for why this, in
+        // combination with the timestamp check above, approximates the
+        // 5-minute replay window from the issue.
+        let nonce_key = ReplayNonceCache::cache_key(&tenant_id, &agent_id, nonce);
+        if state.replay_nonce_cache.check_and_insert(&nonce_key, now) {
+            warn!(
+                "Replay protection: rejecting duplicate nonce for tenant={} agent={}",
+                tenant_id, agent_id
+            );
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "Duplicate nonce: possible replay attack",
+                    "reason": "replay_nonce_reused"
+                })),
+            )
+                .into_response();
+        }
+    }
 
     // #1335: normalized forms of the tool/action identifiers, used for every
     // authorization lookup (MCP server/tool resolution, skill_action lookup)
@@ -5905,6 +6045,7 @@ mod tests {
             rate_limiter: RateLimiter::new(1.0, 1.0),
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
             skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
@@ -5937,6 +6078,7 @@ mod tests {
             rate_limiter: RateLimiter::new(100.0, 100.0), // high rate limit
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
             skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
@@ -6033,6 +6175,7 @@ mod tests {
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
             skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
@@ -6054,6 +6197,8 @@ mod tests {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),
@@ -8012,6 +8157,127 @@ mod tests {
                 .unwrap();
         let latency = stored.latency_ms.expect("latency_ms should be populated");
         assert!(latency >= 0);
+    }
+
+    /// #1306: a normal `/v1/authorize` call with no `nonce`/`timestamp`
+    /// fields is completely unaffected by replay protection (opt-in,
+    /// backwards compatible, AC #5).
+    #[tokio::test]
+    async fn authorize_without_nonce_is_unaffected() {
+        let (state, tenant_id, agent_token) = setup_state("replay_no_nonce").await;
+
+        let response = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+        assert_eq!(response.decision, "allow");
+
+        // A second, identical call (still no nonce) is also unaffected --
+        // no 409 from replay protection.
+        let response2 = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+        assert_eq!(response2.decision, "allow");
+    }
+
+    /// #1306 AC #2/#6: a replayed request with a duplicate nonce is
+    /// rejected with 409 Conflict + `reason: replay_nonce_reused`.
+    #[tokio::test]
+    async fn authorize_rejects_duplicate_nonce() {
+        let (state, tenant_id, agent_token) = setup_state("replay_dup_nonce").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.nonce = Some("nonce-abc-123".to_string());
+        request.timestamp = Some(Utc::now());
+
+        // First request succeeds normally.
+        let first = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Json(request.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        // Replaying the exact same nonce is rejected.
+        let second = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Json(request.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+
+        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["reason"], "replay_nonce_reused");
+    }
+
+    /// #1306 AC #3: a request with `nonce` set and a `timestamp` more than 5
+    /// minutes old is rejected with 409 Conflict + `reason:
+    /// replay_timestamp_expired`, before the nonce dedup check even runs.
+    #[tokio::test]
+    async fn authorize_rejects_stale_timestamp() {
+        let (state, tenant_id, agent_token) = setup_state("replay_stale_timestamp").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.nonce = Some("nonce-stale-1".to_string());
+        request.timestamp = Some(Utc::now() - Duration::seconds(301));
+
+        let response = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Json(request),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["reason"], "replay_timestamp_expired");
+    }
+
+    /// #1306: two requests with different nonces (both fresh timestamps) are
+    /// both allowed through -- proves the dedup cache isn't over-broad.
+    #[tokio::test]
+    async fn authorize_allows_different_nonces() {
+        let (state, tenant_id, agent_token) = setup_state("replay_diff_nonces").await;
+
+        let mut request1 = mcp_authorize_request("filesystem", "read_file");
+        request1.nonce = Some("nonce-one".to_string());
+        request1.timestamp = Some(Utc::now());
+
+        let mut request2 = mcp_authorize_request("filesystem", "read_file");
+        request2.nonce = Some("nonce-two".to_string());
+        request2.timestamp = Some(Utc::now());
+
+        let first = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Json(request1),
+        )
+        .await
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Json(request2),
+        )
+        .await
+        .into_response();
+        assert_eq!(second.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -11770,6 +12036,8 @@ mod tests {
         let auth_payload = AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),
@@ -11823,6 +12091,8 @@ mod tests {
         let auth_payload = AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),
@@ -13044,6 +13314,8 @@ mod tests {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),
@@ -13093,6 +13365,8 @@ mod tests {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            nonce: None,
+            timestamp: None,
             agent: AuthorizeAgentContext {
                 id: "routes-agent".to_string(),
                 environment: "production".to_string(),
@@ -13208,6 +13482,7 @@ mod tests {
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
             skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
         });
