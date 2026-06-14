@@ -19,6 +19,7 @@ This folder is the **single source for AegisAgent product documentation**. It re
 | [SOC Console UI](AegisAgent_SOC_UI_Design.md) | The dashboard (Kibana + Grafana model) — overview, explore, incidents, approvals |
 | [Agent Workforce Governance](AegisAgent_Agent_Workforce_Governance.md) | Govern your AI agents as a digital workforce — directory, lifecycle, fleet rollup |
 | [Action Receipt Spec](action-receipt-spec.md) | The open, hash-chained verifiable-receipt format (the evidence standard) |
+| [SDK Parity Status](sdk-parity-status.md) | Feature matrix for Python, Go, and TypeScript SDKs |
 
 ---
 
@@ -31,6 +32,7 @@ This folder is the **single source for AegisAgent product documentation**. It re
 | [Agent Workflow](AegisAgent_Agent_Workflow.md) | The seven workflows: authorization, approval integrity, audit, SOC |
 | [Threat Model](AegisAgent_Threat_Model.md) | T-A approval manipulation · T-B confused deputy · T-C evidence tampering · T-D attacks on the SOC |
 | [Operational Design](AegisAgent_Operational_Design.md) | Deployment, SLOs, fail-closed behavior, canonicalization & receipt-chain ops |
+| [Database Schema (ERD)](database-schema.md) | Entity-relationship diagram and migration notes |
 
 ---
 
@@ -65,10 +67,13 @@ This folder is the **single source for AegisAgent product documentation**. It re
 
 ## Publishing
 
-**Now (GitHub):** this folder is the docs home — every doc is plain Markdown and renders on GitHub. Browsing to `docs/` shows this index.
+The documentation is published to **<https://lavkushry.github.io/AegisAgent/>** using **MkDocs Material**. The site is auto-deployed on every push to `main` via the [`.github/workflows/docs.yml`](../.github/workflows/docs.yml) workflow.
 
-**Later (website):** point a static-site generator at this folder — the section headings above become the site nav:
-- **MkDocs + Material** (lightest: a `mkdocs.yml` listing the Product + Architecture docs), or
-- **Docusaurus** (richer: versioned docs, search, blog).
+**Published sections:** 📖 Product Documentation + 🏗 Architecture & Security. **Excluded:** 🧭 Strategy & PM docs (those are internal and listed in `mkdocs.yml` → `exclude_docs`). No files need to move — publishing is just a nav config over this folder.
 
-When you publish, include **📖 Product Documentation** + **🏗 Architecture & Security**, and **exclude 🧭 Strategy & PM** (those are internal). No files need to move — publishing is just a nav config over this folder.
+To build and preview locally:
+
+```bash
+pip install -r requirements-docs.txt
+mkdocs serve
+```

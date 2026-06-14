@@ -20,23 +20,40 @@ Every protected action emits a verifiable, hash-chained **action receipt** suita
 
 > ℹ️ **Positioning context (June 2026):** the generic "intercept → policy → allow/deny → audit → approval" loop is now commodity, including free OSS. AegisAgent deliberately competes only on *integrity + provenance + verifiable evidence*. See [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md) for the full competitor analysis and rationale.
 
+## Architecture
+
+AegisAgent runs two planes — a synchronous inline path for real-time decisions and an asynchronous SOC plane for monitoring:
+
+```text
+INLINE PLANE (synchronous, <75 ms — the action path)
+  Agent SDK ──► Gateway ──► Cedar ──► allow | deny | require_approval
+       │ freezes action_hash · binds approval · emits receipt
+       ▼ emit Agent Security Event (fire-and-forget)
+ASYNC SOC PLANE (out-of-band — never adds latency)
+  Event bus ──► detect ──► correlate ──► alert ──► { respond · index · notify · RCA }
+```
+
 ## Current Status
 
 | Capability | State |
 | --- | --- |
-| **Canonicalization `aegis-jcs-1`** (byte-identical SDK + gateway) | SDK verified · gateway locked by shared corpus, verified in CI |
+| **Canonicalization `aegis-jcs-1`** | Byte-identical across Python, Go, TypeScript SDKs + Rust gateway; locked by shared corpora, verified in CI (4-language gate) |
 | **Approval integrity** — action-hash binding, expiry, single-use consume | SDK fail-closed verified · gateway enforcement verified in CI |
 | **Trust-provenance gate** (deterministic 6-level, classifiers may only tighten) | Cedar policy pack + demo |
-| **Verifiable action receipts** (per-tenant hash chain) | Format + reference verifier + `aegis-verify-receipts` CLI verified; gateway emission + `GET /v1/receipts/:id/verify` verified in CI |
-| Python SDK (`AegisClient`, `@protect_tool`) | 26/26 unit tests + runnable demos |
-| Rust gateway (Axum, SQLite/SQLx tenant-scoped, Cedar) | `cargo test/fmt/clippy` gated in CI |
-| MCP Gateway Lite | Server registration, manifest discovery, approve/disable, unknown-tool deny, MCP audit events |
-| Docs | Quickstart, security policy, contribution guide, roadmap, dashboard mock, open receipt spec |
+| **Verifiable action receipts** (per-tenant hash chain) | Format + reference verifier + `aegis-verify-receipts` CLI + gateway emission + `GET /v1/receipts/:id/verify` + optional Ed25519 signing |
+| **Python SDK** (`AegisClient`, `AegisAsyncClient`, `@protect_tool`) | 174 unit tests + runnable demos + CLI tools |
+| **Go SDK** (`aegis.Client`, `aegis.Protect`, receipts) | Full parity · cross-language corpus gate in CI |
+| **TypeScript SDK** (`AegisClient`, `protect()`, canon) | Full parity · cross-language corpus gate in CI |
+| **Rust gateway** (Axum, SQLite/SQLx tenant-scoped, Cedar) | 53 tests · `cargo test/fmt/clippy` gated in CI (stable + beta + MSRV 1.88) |
+| **Agent SOC** — detect, correlate, alert, respond, index, notify, RCA | Phases 0-3, 5, 6 implemented; Phase 4 response engine complete |
+| **Agentless ingestion** (`POST /v1/ingest`) | GitHub webhooks, OpenAI traces → normalize → detect pipeline |
+| **Behavioral baselining** | Per-agent action frequency baselines with anomaly detection |
+| **MCP Gateway Lite** | Server registration, manifest discovery, approve/disable, unknown-tool deny, quarantine/restore |
+| **Kubernetes probes** | `/livez`, `/readyz`, `/startupz` |
+| **Webhook notifications** | HMAC-SHA256 signed, circuit breaker, Slack callback support |
+| Docs | Quickstart, MkDocs Material site, security policy, contribution guide, roadmap, dashboard mock, open receipt spec |
 
-> **Verification note.** The Python SDK is fully unit-tested locally. The Rust gateway's tests
-> (`canonical_action_matches_shared_corpus`, `expired_approval_is_reported_and_cannot_be_approved`,
-> `receipt_chain_matches_shared_corpus`, `authorize_emits_verifiable_receipt`, `consume_is_single_use`)
-> run in CI on every push and pull request — CI is the source of truth for gateway green.
+> **CI gate.** The CI runs on every push and PR: Rust (stable + beta + MSRV 1.88), Python (3.9–3.12), Go, TypeScript, cross-language corpus byte-equality, Docker Compose E2E, and dependency audits.
 
 ## 5-Step Quickstart
 
@@ -61,7 +78,7 @@ Expected health output in another terminal:
 
 ```bash
 curl http://127.0.0.1:8080/health
-# healthy
+# {"status":"healthy","version":"0.1.0","db":"up"}
 ```
 
 ### 3. Seed demo data
@@ -128,42 +145,101 @@ Starter behavior:
 
 ## Key API Endpoints
 
+### Core (inline path)
+
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | Local healthcheck |
+| `GET /health` | Readiness probe (pings DB) |
+| `GET /livez` | Kubernetes liveness (no I/O) |
+| `GET /readyz` | Kubernetes readiness (pings DB) |
+| `GET /startupz` | Kubernetes startup probe |
 | `POST /v1/agents/register` | Register or retrieve an agent token |
 | `POST /v1/tools` | Register static tool actions |
-| `POST /v1/mcp/servers` | Register MCP servers |
-| `GET/POST /v1/mcp/servers/:server_key/tools` | Show/discover MCP tools |
-| `POST /v1/mcp/servers/:server_key/tools/:tool_key/approve` | Approve an MCP tool |
-| `POST /v1/mcp/servers/:server_key/tools/:tool_key/disable` | Disable an MCP tool |
-| `POST /v1/authorize` | Authorize an intercepted tool call |
-| `GET /v1/approvals/:id` | Poll approval status |
+| `POST /v1/authorize` | Authorize an intercepted tool call (returns decision, `action_hash`, approval info) |
+| `GET /v1/approvals/:id` | Poll approval status (returns `EXPIRED` for stale) |
 | `POST /v1/approvals/:id/approve` | Approve a paused action |
 | `POST /v1/approvals/:id/reject` | Reject a paused action |
 | `POST /v1/approvals/:id/edit` | Approve with edited parameters (re-hash + re-evaluate) |
 | `POST /v1/approvals/:id/consume` | Single-use consume before execution (409 if already used/expired) |
 | `GET /v1/receipts/:id/verify` | Recompute a receipt's hash and report `verified` |
+
+### MCP Gateway Lite
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/mcp/servers` | Register MCP servers |
+| `GET/POST /v1/mcp/servers/:server_key/tools` | Show/discover MCP tools |
+| `POST /v1/mcp/servers/:server_key/tools/:tool_key/approve` | Approve an MCP tool |
+| `POST /v1/mcp/servers/:server_key/tools/:tool_key/disable` | Disable an MCP tool |
+| `POST /v1/mcp/servers/:server_key/quarantine` | Quarantine an MCP server |
+| `POST /v1/mcp/servers/:server_key/restore` | Restore a quarantined server |
+
+### Management & query (tenant-scoped, paginated)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/agents` | List agents |
+| `GET/PATCH/DELETE /v1/agents/:id` | Agent CRUD |
+| `POST /v1/agents/:id/freeze\|unfreeze\|revoke` | Agent lifecycle control |
+| `GET /v1/decisions` | List decisions (filter by `agent_id`, `decision`) |
+| `GET /v1/approvals` | List pending approvals |
+| `GET /v1/receipts` | List receipts |
+| `POST /v1/receipts/verify-chain` | Verify per-tenant receipt chain integrity |
+| `GET/POST /v1/policies` | Policy CRUD |
+| `POST /v1/policies/reload` | Hot-reload Cedar policies |
+| `GET/POST /v1/tenants` | Tenant management |
+| `GET /v1/tenants/:id/export` | GDPR data-portability bundle |
 | `GET /v1/audit/events` | View recent audit events |
-| `GET /v1/runs/:id/timeline` | View run-specific audit timeline |
+| `GET /v1/runs/:id/timeline` | Run-specific audit timeline |
+| `GET /v1/stats` | Database size and row counts |
+| `GET /v1/version` | Gateway version and build hash |
+| `GET /v1/openapi.json` | OpenAPI spec |
+
+### Agent SOC
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/alerts` | List SOC alerts |
+| `GET /v1/incidents` | List SOC incidents |
+| `GET /v1/incidents/:id` | Incident detail |
+| `POST /v1/incidents/:id/close` | Close an incident |
+| `GET /v1/incidents/:id/narrate` | RCA narrative (sandboxed LLM) |
+| `GET /v1/soc/summary` | SOC overview dashboard data |
+| `POST /v1/ingest` | Agentless ingestion (GitHub webhooks, OpenAI traces) |
+| `GET /v1/ws/events` | WebSocket live SOC event stream |
+
+## SDKs
+
+AegisAgent ships three first-class SDKs — all canonicalize with `aegis-jcs-1` byte-identically and enforce the fail-closed contract. See [`docs/sdk-parity-status.md`](docs/sdk-parity-status.md) for the full parity matrix.
+
+| SDK | Package | Key features |
+| --- | --- | --- |
+| **Python** (reference) | `sdk-python/` | `AegisClient`, `AegisAsyncClient`, `@protect_tool`, `async_protect_tool`, receipt verifier, CLI tools, evidence packs, webhook handler |
+| **Go** | `sdk-go/` | `aegis.Client`, `aegis.Protect`, receipt verifier, cross-language corpus CI gate |
+| **TypeScript** | `sdk-typescript/` | `AegisClient`, `protect()`, canon, cross-language corpus CI gate |
 
 ## Development Validation
 
 ```bash
+# Rust gateway
 cargo test --manifest-path gateway/Cargo.toml
-python3 -m unittest discover -s sdk-python/tests
-```
-
-Optional checks:
-
-```bash
-cargo fmt --manifest-path gateway/Cargo.toml -- --check
+cargo fmt  --manifest-path gateway/Cargo.toml -- --check
 cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
+
+# Python SDK (174 tests)
+python3 -m pip install -e "sdk-python[dev]"
+python3 -m unittest discover -s sdk-python/tests
+
+# Go SDK
+cd sdk-go && go test ./...
+
+# TypeScript SDK
+cd sdk-typescript && npm ci && npx tsc --noEmit && npm test
 ```
 
 ## Project Docs
 
-> 📖 **Full documentation site:** <https://lavkushry.github.io/AegisAgent/> — published from this `docs/` folder with MkDocs Material. Browse the index in [`docs/README.md`](docs/README.md). Product + architecture docs are public; strategy/PM docs stay internal.
+> 📖 **Full documentation site:** <https://lavkushry.github.io/AegisAgent/> — published from this `docs/` folder with MkDocs Material on every push to `main`. Browse the index in [`docs/README.md`](docs/README.md).
 
 > 📌 The strategy docs in `docs/` were re-anchored on 2026-06-02 from the original "Agent Action Firewall" framing to the **integrity-layer** positioning above. Start with the reassessment doc.
 
@@ -173,6 +249,8 @@ cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 - [`docs/AegisAgent_Technical_Design.md`](docs/AegisAgent_Technical_Design.md) — architecture (Approval Integrity Engine, Trust-Provenance Gate, Verifiable Receipts).
 - [`docs/AegisAgent_Threat_Model.md`](docs/AegisAgent_Threat_Model.md) — foregrounds approval manipulation, confused-deputy, and evidence tampering.
 - [`docs/action-receipt-spec.md`](docs/action-receipt-spec.md) — the open, hash-chained action-receipt format.
+- [`docs/sdk-parity-status.md`](docs/sdk-parity-status.md) — SDK feature parity matrix (Python, Go, TypeScript).
+- [`docs/database-schema.md`](docs/database-schema.md) — database ERD and schema reference.
 - Background & strategy: [`docs/AegisAgent_Agent_Workflow.md`](docs/AegisAgent_Agent_Workflow.md), [`docs/AegisAgent_Vision.md`](docs/AegisAgent_Vision.md), [`docs/AegisAgent_Market_Gap_Analysis.md`](docs/AegisAgent_Market_Gap_Analysis.md), [`docs/AegisAgent_Problem_Definition.md`](docs/AegisAgent_Problem_Definition.md), [`docs/AegisAgent_Operational_Design.md`](docs/AegisAgent_Operational_Design.md), [`docs/AegisAgent_Product_Research.md`](docs/AegisAgent_Product_Research.md).
 - `CLAUDE.md` — agent/developer commands, security rules, and API contracts.
 - `AGENTS.md` — persona boundaries for Architect, Developer, SecurityAuditor, and Ops agents.
