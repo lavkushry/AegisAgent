@@ -7,6 +7,22 @@ reaches 1.0.
 
 ## [Unreleased]
 
+### Performance
+
+- **In-memory compiled policy cache verified** (#1314): `PolicyEngine`
+  (`gateway/src/policy.rs`) already compiled `policies.cedar` once at startup
+  and cached per-tenant merged `PolicySet`s in a `RwLock<HashMap<...>>`, with
+  `authorize` never re-parsing Cedar source on the hot path and
+  `POST /v1/policies/reload` invalidating the cache. A new isolated
+  micro-benchmark (`gateway/benches/policy_eval_benchmark.rs`) confirms
+  `PolicyEngine::authorize` takes ~131-137µs — well under the issue's <1ms
+  target — for both the base-policy-set fallback and a tenant with a cached
+  merged set. No code changes were required; see
+  `docs/performance-baseline.md#policy-evaluation-cache-1314` for the full
+  writeup, including a separate pre-existing bug found and filed as #1352
+  (custom policies fail to merge into a tenant's cached set due to
+  `PolicySet` id collisions).
+
 ### Added
 
 - **`/v1/authorize` latency baseline** (#1313): added a criterion benchmark
