@@ -54,3 +54,7 @@ tempfile = "3.10"
 [[bench]]
 name = "authorize_benchmark"
 harness = false
+
+[[bench]]
+name = "policy_eval_benchmark"
+harness = false

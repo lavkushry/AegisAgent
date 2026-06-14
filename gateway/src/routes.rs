@@ -5145,16 +5145,14 @@ pub async fn ws_events(
                 Json(json!({"error": "Invalid or expired JWT token"})),
             )
                 .into_response();
+        } else if token.starts_with("tenant_") {
+            token.to_string()
         } else {
-            if token.starts_with("tenant_") {
-                token.to_string()
-            } else {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
-                )
-                    .into_response();
-            }
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
+            )
+                .into_response();
         }
     } else {
         let auth_header = headers.get("Authorization").and_then(|h| h.to_str().ok());
@@ -5171,16 +5169,14 @@ pub async fn ws_events(
                         Json(json!({"error": "Invalid or expired JWT token"})),
                     )
                         .into_response();
+                } else if token.starts_with("tenant_") {
+                    token.to_string()
                 } else {
-                    if token.starts_with("tenant_") {
-                        token.to_string()
-                    } else {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
-                        )
-                            .into_response();
-                    }
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
+                    )
+                        .into_response();
                 }
             } else {
                 return (

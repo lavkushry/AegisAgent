@@ -582,14 +582,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
             return Err("AEGIS_JWT_SECRET cannot be empty or 'default_secret' when AEGIS_JWT_REQUIRED is true.".into());
         }
-    } else {
-        if let Ok(jwt_secret) = std::env::var("AEGIS_JWT_SECRET") {
-            if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
-                tracing::warn!("AEGIS_JWT_SECRET is set to an empty or default value ('default_secret'). JWT validation will be disabled for security.");
-            }
-        } else {
-            tracing::warn!("AEGIS_JWT_SECRET is not set. JWT validation will be disabled.");
+    } else if let Ok(jwt_secret) = std::env::var("AEGIS_JWT_SECRET") {
+        if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
+            tracing::warn!("AEGIS_JWT_SECRET is set to an empty or default value ('default_secret'). JWT validation will be disabled for security.");
         }
+    } else {
+        tracing::warn!("AEGIS_JWT_SECRET is not set. JWT validation will be disabled.");
     }
 
     // Database setup (local SQLite file)
