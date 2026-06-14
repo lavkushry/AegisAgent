@@ -786,6 +786,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/policies/:id",
             put(routes::update_policy).delete(routes::delete_policy),
         )
+        .route("/v1/policies/:id/rollback", post(routes::rollback_policy))
         .route("/v1/policies/reload", post(routes::reload_global_policies))
         .route(
             "/v1/webhook_subscriptions",

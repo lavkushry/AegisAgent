@@ -9,6 +9,21 @@ reaches 1.0.
 
 ### Added
 
+- **Policy rollback** (#1302): `POST /v1/policies/:id/rollback` restores a
+  policy's most recently archived `policy_versions` row onto the live
+  `policies` row. The current live row is itself archived first (so the
+  rollback can be reversed), `version` is bumped monotonically from the
+  current version (never reused/decreased), the Cedar engine is hot-reloaded
+  for the tenant, and a tenant-scoped `policy_rolled_back` audit event is
+  written via `db::insert_audit_event` recording the policy id/key, the
+  restored name/body, the version rolled back to, and the new version.
+  `db::insert_policy_version` now caps `policy_versions` at 10 rows per
+  `(tenant_id, policy_id)`, deleting the oldest beyond the 10 most recent by
+  `version` on every insert. `PolicyVersionRecord` and
+  `db::list_policy_versions` are no longer test-only. Returns 404
+  `{"error": "Policy not found"}` for an unknown/cross-tenant policy id, and
+  404 `{"error": "No previous version to roll back to"}` if no version has
+  ever been archived for the policy.
 - **TASK-0088 (#934): `detection_rules` table + management API**. New
   migration `0008_detection_rules.sql` adds a tenant-scoped, indexed table
   (`rule_key`, `name`, `severity`, `condition`, `summary_template`,
