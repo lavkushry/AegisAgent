@@ -1524,6 +1524,66 @@ pub async fn delete_policy(
     Ok(result.rows_affected() > 0)
 }
 
+/// TASK-0092 (#938): register a tenant-managed webhook subscription.
+/// `secret_hash` is `sha256(secret)`, computed by the caller — the plaintext
+/// secret is never persisted. Tenant-scoped, parameterized.
+pub async fn insert_webhook_subscription(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    url: &str,
+    secret_hash: Option<&str>,
+    event_types: &str,
+) -> Result<WebhookSubscriptionRecord, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO webhook_subscriptions (id, tenant_id, url, secret_hash, event_types, status) \
+         VALUES (?, ?, ?, ?, ?, 'active')",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(url)
+    .bind(secret_hash)
+    .bind(event_types)
+    .execute(pool)
+    .await?;
+
+    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+        "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(&id)
+    .fetch_one(pool)
+    .await
+}
+
+/// TASK-0092 (#938): list webhook subscriptions for a tenant, most recent first.
+pub async fn list_webhook_subscriptions(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<WebhookSubscriptionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+        "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// TASK-0092 (#938): delete a tenant's webhook subscription. Returns `true`
+/// if a row was deleted.
+pub async fn delete_webhook_subscription(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?")
+        .bind(tenant_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_skill(
     pool: &SqlitePool,
