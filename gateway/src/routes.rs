@@ -763,6 +763,22 @@ async fn write_decision_and_audit(
 
     db::insert_decision(pool, &decision_record).await?;
 
+    // TASK-0089 (#935): best-effort historical risk-score sample, so
+    // operators can see an agent's risk trend over time. Never blocks the
+    // decision response.
+    if let Err(e) = db::insert_agent_risk_score(
+        pool,
+        tenant_id,
+        agent_id,
+        &decision_id.to_string(),
+        risk_score,
+        reason,
+    )
+    .await
+    {
+        error!("Failed to record agent risk score: {:?}", e);
+    }
+
     let audit_record = AuditEventRecord {
         id: Uuid::new_v4().to_string(),
         tenant_id: tenant_id.to_string(),
@@ -5972,6 +5988,35 @@ mod tests {
         assert_eq!(response.decision, "allow");
         assert_eq!(response.risk_level, "low");
         assert_eq!(response.risk_score, 10);
+    }
+
+    /// TASK-0089 (#935): every `/v1/authorize` decision writes a historical
+    /// risk-score sample to `agent_risk_scores`, linked to the decision that
+    /// produced it.
+    #[tokio::test]
+    async fn authorize_records_agent_risk_score() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_risk_score").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "allow");
+        assert_eq!(response.risk_score, 10);
+
+        let decisions = db::list_decisions(&state.pool, &tenant_id, 10, 0, None, None)
+            .await
+            .unwrap();
+        let decision = decisions.first().expect("expected a decision row");
+
+        let scores = db::list_agent_risk_scores(&state.pool, &tenant_id, &decision.agent_id)
+            .await
+            .unwrap();
+        assert_eq!(scores.len(), 1);
+        assert_eq!(scores[0].decision_id, decision.id);
+        assert_eq!(scores[0].score, 10);
     }
 
     /// #0118: a mutating action whose triggering content has untrusted
