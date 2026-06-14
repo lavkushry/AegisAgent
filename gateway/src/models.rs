@@ -638,6 +638,34 @@ pub struct ActionReceiptRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// #1312: tamper-evident, append-only transparency-log entry for a policy
+/// change (create/update/delete/rollback). Hash-chained like
+/// [`ActionReceiptRecord`] — `entry_hash` covers `prev_hash`, so the chain can
+/// be re-verified end-to-end (see `routes::policy_audit_log_entry_value`).
+/// The `policy_audit_log` table additionally has SQLite triggers that abort
+/// any `UPDATE`/`DELETE`, making it append-only at the database level.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct PolicyAuditLogRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub policy_id: String,
+    pub policy_key: String,
+    /// One of `created` | `updated` | `deleted` | `rolled_back`.
+    pub action: String,
+    /// Identity of the actor that made the change, if known.
+    pub changed_by: Option<String>,
+    /// `sha256:<hex>` of the resulting policy body (the body being deleted,
+    /// for `deleted`).
+    pub body_hash: String,
+    /// Short human-readable description of what changed.
+    pub diff_summary: String,
+    /// `entry_hash` of the previous entry in this tenant's chain, or `""` for
+    /// the chain's genesis entry.
+    pub prev_hash: String,
+    pub entry_hash: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTenantRequest {
     pub id: String,
