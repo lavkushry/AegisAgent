@@ -2483,9 +2483,18 @@ pub async fn insert_audit_event(
     pool: &SqlitePool,
     record: &AuditEventRecord,
 ) -> Result<(), sqlx::Error> {
+    // #1303: persist the caller-supplied `created_at` at microsecond
+    // precision rather than relying on the column's `DEFAULT
+    // CURRENT_TIMESTAMP` (second precision, assigned at insert time). Without
+    // this, events emitted within the same wall-clock second sort by
+    // insertion order rather than their logical timestamps, putting timeline
+    // views out of chronological order. "%F %T%.6f" is SQLite's native
+    // datetime format with a fractional-second suffix, so it stays
+    // lexicographically sortable and is decoded by sqlx's chrono support.
+    let created_at = record.created_at.format("%F %T%.6f").to_string();
     sqlx::query(
-        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -2503,6 +2512,7 @@ pub async fn insert_audit_event(
     .bind(&record.output_hash)
     .bind(&record.decision_id)
     .bind(&record.approval_id)
+    .bind(created_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -2665,7 +2675,7 @@ pub async fn get_audit_events_by_run(
     run_id: &str,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
     sqlx::query_as::<_, AuditEventRecord>(
-        "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC",
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC, rowid ASC",
     )
     .bind(tenant_id)
     .bind(run_id)
@@ -2683,7 +2693,7 @@ pub async fn get_all_audit_events(
     decision_id: Option<&str>,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
     sqlx::query_as::<_, AuditEventRecord>(
-        "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC LIMIT 100",
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 100",
     )
     .bind(tenant_id)
     .bind(decision_id)
