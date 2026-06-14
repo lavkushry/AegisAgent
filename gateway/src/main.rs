@@ -898,6 +898,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(routes::get_tenant).delete(routes::delete_tenant),
         )
         .route("/v1/tenants/:id/export", get(routes::export_tenant))
+        // Compliance Evidence Pack (#1298): SOC 2 Type II / EU AI Act Art. 14
+        .route(
+            "/v1/compliance/evidence-pack",
+            get(routes::get_evidence_pack),
+        )
         // WebSocket live event stream
         .route("/v1/ws/events", get(routes::ws_events))
         // Statistics
