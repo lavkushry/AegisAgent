@@ -3527,6 +3527,8 @@ pub async fn rollback_policy(
                 .unwrap_or_default(),
                 input_hash: None,
                 output_hash: None,
+                decision_id: None,
+                approval_id: None,
                 created_at: Utc::now(),
             };
             if let Err(e) = db::insert_audit_event(&state.pool, &audit_record).await {
@@ -10742,7 +10744,7 @@ mod tests {
         .into_response();
         assert_eq!(response_rollback.status(), StatusCode::OK);
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id)
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
             .await
             .unwrap();
         let rollback_event = events
