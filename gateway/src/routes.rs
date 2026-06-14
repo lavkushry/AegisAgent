@@ -834,6 +834,28 @@ pub(crate) fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
     sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
 }
 
+/// #1312: the hashed body of a `policy_audit_log` entry — every semantic field
+/// plus the chain link, excluding `entry_hash` and the volatile DB
+/// `created_at`. Mirrors [`receipt_body_value`]'s shape for the policy
+/// transparency log. Scheme aegis-jcs-1.
+pub(crate) fn policy_audit_log_entry_value(rec: &PolicyAuditLogRecord) -> Value {
+    json!({
+        "id": rec.id,
+        "tenant_id": rec.tenant_id,
+        "policy_id": rec.policy_id,
+        "policy_key": rec.policy_key,
+        "action": rec.action,
+        "changed_by": rec.changed_by,
+        "body_hash": rec.body_hash,
+        "diff_summary": rec.diff_summary,
+        "prev_hash": rec.prev_hash,
+    })
+}
+
+pub(crate) fn compute_policy_audit_log_entry_hash(rec: &PolicyAuditLogRecord) -> String {
+    sha256_hex(canonical_value_string(&policy_audit_log_entry_value(rec)).as_bytes())
+}
+
 /// Optionally attach an Ed25519 signature OVER the already-computed `receipt_hash`.
 ///
 /// This runs AFTER `compute_receipt_hash` and never feeds back into the hash: the
@@ -1860,11 +1882,47 @@ pub async fn discover_mcp_tools(
                 // denies every tool call until an operator verifies the new manifest
                 // out-of-band and explicitly restores the server. Best-effort: a DB
                 // error is logged and never blocks the discovery response.
-                if let Err(e) =
-                    db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, "quarantined")
-                        .await
+                match db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, "quarantined")
+                    .await
                 {
-                    error!("Failed to auto-quarantine drifted MCP server: {:?}", e);
+                    Ok(_) => {
+                        // #1332: record a dedicated, queryable audit event (distinct
+                        // from the manual `mcp_server_quarantined` event written by
+                        // `update_mcp_server_quarantine`) carrying the drift details
+                        // that triggered the auto-quarantine.
+                        let audit_record = AuditEventRecord {
+                            id: Uuid::new_v4().to_string(),
+                            tenant_id: tenant_id.clone(),
+                            event_type: "mcp_server_auto_quarantined".to_string(),
+                            agent_id: None,
+                            user_id: None,
+                            run_id: None,
+                            trace_id: None,
+                            span_id: None,
+                            skill: Some(format!("mcp:{}", server_key)),
+                            action: None,
+                            resource: Some(server_key.clone()),
+                            event_json: serde_json::to_string(&json!({
+                                "server_key": server_key,
+                                "owner_team": server.owner_team,
+                                "classification": classification,
+                                "severity": severity,
+                                "pinned_manifest_hash": pinned,
+                                "observed_manifest_hash": new_manifest_hash,
+                                "diff": diff,
+                            }))
+                            .unwrap_or_default(),
+                            input_hash: None,
+                            output_hash: None,
+                            decision_id: None,
+                            approval_id: None,
+                            created_at: Utc::now(),
+                        };
+                        let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+                    }
+                    Err(e) => {
+                        error!("Failed to auto-quarantine drifted MCP server: {:?}", e);
+                    }
                 }
             }
             if pinned != new_manifest_hash {
@@ -4080,6 +4138,47 @@ pub async fn ingest_event(
     }
 }
 
+/// #1312: append a hash-chained `policy_audit_log` entry for a policy
+/// create/update/delete/rollback. `body` is the resulting policy body (the
+/// body being deleted, for `action == "deleted"`) and is hashed into
+/// `body_hash`, never stored verbatim. Best-effort: a failure here is logged
+/// but never blocks the policy operation that triggered it.
+async fn record_policy_audit_log(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+    policy_id: &str,
+    policy_key: &str,
+    action: &str,
+    body: &str,
+    diff_summary: String,
+) {
+    let body_hash = format!("sha256:{}", sha256_hex(body.as_bytes()));
+    let policy_id = policy_id.to_string();
+    let policy_key = policy_key.to_string();
+    let action = action.to_string();
+    if let Err(e) = db::append_policy_audit_log_entry_atomic(pool, tenant_id, move |prev_hash| {
+        let mut rec = PolicyAuditLogRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_id,
+            policy_key,
+            action,
+            changed_by: None,
+            body_hash,
+            diff_summary,
+            prev_hash,
+            entry_hash: String::new(),
+            created_at: Utc::now(),
+        };
+        rec.entry_hash = compute_policy_audit_log_entry_hash(&rec);
+        rec
+    })
+    .await
+    {
+        error!("Failed to append policy_audit_log entry: {:?}", e);
+    }
+}
+
 pub async fn list_policies(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -4135,6 +4234,19 @@ pub async fn create_policy(
             {
                 error!("Failed to hot-reload policies after create: {:?}", e);
             }
+            record_policy_audit_log(
+                &state.pool,
+                &tenant_id,
+                &record.id,
+                &record.policy_key,
+                "created",
+                &record.body,
+                format!(
+                    "Policy '{}' created (version {})",
+                    record.name, record.version
+                ),
+            )
+            .await;
             (StatusCode::CREATED, Json(record)).into_response()
         }
         Err(e) => {
@@ -4177,10 +4289,19 @@ pub async fn update_policy(
     // operators can inspect/restore prior policy versions.
     let previous = record.clone();
 
+    // #1312: track which fields changed for the transparency-log diff summary.
+    let mut changed_fields: Vec<&str> = Vec::new();
+
     if let Some(policy_key) = payload.policy_key {
+        if policy_key != record.policy_key {
+            changed_fields.push("policy_key");
+        }
         record.policy_key = policy_key;
     }
     if let Some(name) = payload.name {
+        if name != record.name {
+            changed_fields.push("name");
+        }
         record.name = name;
     }
     if let Some(body) = payload.body {
@@ -4192,9 +4313,15 @@ pub async fn update_policy(
             )
                 .into_response();
         }
+        if body != record.body {
+            changed_fields.push("body");
+        }
         record.body = body;
     }
     if let Some(status) = payload.status {
+        if status != record.status {
+            changed_fields.push("status");
+        }
         record.status = status;
     }
     record.version += 1;
@@ -4214,6 +4341,29 @@ pub async fn update_policy(
             {
                 error!("Failed to hot-reload policies after update: {:?}", e);
             }
+            let diff_summary = if changed_fields.is_empty() {
+                format!(
+                    "Policy '{}' updated to version {}",
+                    record.name, record.version
+                )
+            } else {
+                format!(
+                    "Policy '{}' updated to version {} (changed: {})",
+                    record.name,
+                    record.version,
+                    changed_fields.join(", ")
+                )
+            };
+            record_policy_audit_log(
+                &state.pool,
+                &tenant_id,
+                &record.id,
+                &record.policy_key,
+                "updated",
+                &record.body,
+                diff_summary,
+            )
+            .await;
             (StatusCode::OK, Json(record)).into_response()
         }
         Err(e) => {
@@ -4345,6 +4495,20 @@ pub async fn rollback_policy(
                 error!("Failed to write policy_rolled_back audit event: {:?}", e);
             }
 
+            record_policy_audit_log(
+                &state.pool,
+                &tenant_id,
+                &record.id,
+                &record.policy_key,
+                "rolled_back",
+                &record.body,
+                format!(
+                    "Policy '{}' rolled back to version {} (new version {})",
+                    record.name, previous_version.version, record.version
+                ),
+            )
+            .await;
+
             (StatusCode::OK, Json(record)).into_response()
         }
         Err(e) => {
@@ -4363,6 +4527,20 @@ pub async fn delete_policy(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // #1312: fetch the policy before deleting so the transparency-log entry
+    // can record its `policy_key` and a hash of the deleted body.
+    let existing = match db::get_policy_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to lookup policy for delete: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
     match db::delete_policy(&state.pool, &tenant_id, &id).await {
         Ok(true) => {
             // Trigger hot-reload
@@ -4372,6 +4550,21 @@ pub async fn delete_policy(
                 .await
             {
                 error!("Failed to hot-reload policies after delete: {:?}", e);
+            }
+            if let Some(policy) = existing {
+                record_policy_audit_log(
+                    &state.pool,
+                    &tenant_id,
+                    &policy.id,
+                    &policy.policy_key,
+                    "deleted",
+                    &policy.body,
+                    format!(
+                        "Policy '{}' (version {}) deleted",
+                        policy.name, policy.version
+                    ),
+                )
+                .await;
             }
             (
                 StatusCode::OK,
@@ -4386,6 +4579,31 @@ pub async fn delete_policy(
             .into_response(),
         Err(e) => {
             error!("Failed to delete policy: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1312: GET /v1/policies/audit-log — tenant-scoped, paginated transparency
+/// log of policy create/update/delete/rollback operations, newest first.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+pub async fn list_policy_audit_log(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+
+    match db::list_policy_audit_log(&state.pool, &tenant_id, limit, offset).await {
+        Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
+        Err(e) => {
+            error!("Failed to list policy audit log: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
@@ -9073,6 +9291,107 @@ mod tests {
         );
     }
 
+    /// #1303: `insert_audit_event` must persist the caller-supplied
+    /// `created_at` (microsecond precision) instead of relying on the
+    /// column's `DEFAULT CURRENT_TIMESTAMP` (second precision, assigned at
+    /// insert time). Without this, two events emitted within the same wall-
+    /// clock second always sort by insertion order rather than their actual
+    /// logical timestamps, which can put them out of chronological order on
+    /// the timeline.
+    #[tokio::test]
+    async fn insert_audit_event_persists_microsecond_created_at_for_chronological_ordering() {
+        let (state, tenant_id, _agent_token) =
+            setup_state("audit_event_microsecond_created_at").await;
+        let run_id = "run-microsecond-order";
+
+        fn event_at(
+            tenant_id: &str,
+            run_id: &str,
+            label: &str,
+            created_at: DateTime<Utc>,
+        ) -> AuditEventRecord {
+            AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                event_type: "test_event".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: Some(run_id.to_string()),
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: None,
+                resource: Some(label.to_string()),
+                event_json: "{}".to_string(),
+                input_hash: None,
+                output_hash: None,
+                decision_id: None,
+                approval_id: None,
+                created_at,
+            }
+        }
+
+        // All three events fall within the same wall-clock second but have
+        // distinct logical timestamps (microseconds apart). Insert them in a
+        // scrambled order — "first" (earliest) is inserted last.
+        let base = Utc::now();
+        db::insert_audit_event(
+            &state.pool,
+            &event_at(
+                &tenant_id,
+                run_id,
+                "second",
+                base + Duration::microseconds(2000),
+            ),
+        )
+        .await
+        .unwrap();
+        db::insert_audit_event(
+            &state.pool,
+            &event_at(
+                &tenant_id,
+                run_id,
+                "third",
+                base + Duration::microseconds(3000),
+            ),
+        )
+        .await
+        .unwrap();
+        db::insert_audit_event(
+            &state.pool,
+            &event_at(
+                &tenant_id,
+                run_id,
+                "first",
+                base + Duration::microseconds(1000),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let response = get_timeline(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path(run_id.to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<AuditEventRecord> = serde_json::from_slice(&body).unwrap();
+        let resources: Vec<&str> = events
+            .iter()
+            .map(|e| e.resource.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            resources,
+            vec!["first", "second", "third"],
+            "events within the same wall-clock second must still sort by their \
+             microsecond-precision created_at, not by insertion order"
+        );
+    }
+
     /// #0119: a mutating action whose triggering content has
     /// `semi_trusted_customer` provenance is paused for human review rather
     /// than auto-allowed or auto-denied.
@@ -11057,6 +11376,84 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(server.status, "quarantined");
+    }
+
+    /// #1332 AC#5: auto-quarantining a drifted MCP server must write a
+    /// dedicated, queryable `audit_events` row (`mcp_server_auto_quarantined`)
+    /// distinct from the manual `mcp_server_quarantined` event, carrying the
+    /// drift classification/severity/hashes/owner so operators and compliance
+    /// can see *why* the server was auto-quarantined without reading SOC events.
+    #[tokio::test]
+    async fn discover_drift_auto_quarantine_writes_audit_event() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_drift_audit").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform-team"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        // 1) First discovery pins the manifest — no drift.
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![drift_tool("create_issue", "medium")],
+            }),
+        )
+        .await;
+
+        // 2) Manifest changes (a tool is added) — must drift and auto-quarantine.
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![
+                    drift_tool("create_issue", "medium"),
+                    drift_tool("delete_repo", "critical"),
+                ],
+            }),
+        )
+        .await;
+
+        let server = db::get_mcp_server_by_key(&state.pool, &tenant_id, "github-mcp")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.status, "quarantined");
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        let audit_event = events
+            .iter()
+            .find(|e| e.event_type == "mcp_server_auto_quarantined")
+            .expect("auto-quarantine must write a mcp_server_auto_quarantined audit event");
+        assert_eq!(audit_event.resource.as_deref(), Some("github-mcp"));
+        assert_eq!(audit_event.skill.as_deref(), Some("mcp:github-mcp"));
+
+        let details: serde_json::Value = serde_json::from_str(&audit_event.event_json).unwrap();
+        assert_eq!(details["server_key"], "github-mcp");
+        assert_eq!(details["owner_team"], "platform-team");
+        assert_eq!(details["classification"], "tool_added");
+        assert_eq!(details["severity"], "high");
+        assert!(details["pinned_manifest_hash"].is_string());
+        assert!(details["observed_manifest_hash"].is_string());
+        assert_ne!(
+            details["pinned_manifest_hash"],
+            details["observed_manifest_hash"]
+        );
+        assert!(details["diff"].is_string());
     }
 
     /// #1336 acceptance criterion: adding an optional parameter to an existing

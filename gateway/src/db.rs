@@ -2483,9 +2483,18 @@ pub async fn insert_audit_event(
     pool: &SqlitePool,
     record: &AuditEventRecord,
 ) -> Result<(), sqlx::Error> {
+    // #1303: persist the caller-supplied `created_at` at microsecond
+    // precision rather than relying on the column's `DEFAULT
+    // CURRENT_TIMESTAMP` (second precision, assigned at insert time). Without
+    // this, events emitted within the same wall-clock second sort by
+    // insertion order rather than their logical timestamps, putting timeline
+    // views out of chronological order. "%F %T%.6f" is SQLite's native
+    // datetime format with a fractional-second suffix, so it stays
+    // lexicographically sortable and is decoded by sqlx's chrono support.
+    let created_at = record.created_at.format("%F %T%.6f").to_string();
     sqlx::query(
-        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -2503,6 +2512,7 @@ pub async fn insert_audit_event(
     .bind(&record.output_hash)
     .bind(&record.decision_id)
     .bind(&record.approval_id)
+    .bind(created_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -2659,13 +2669,98 @@ pub async fn get_action_receipt_by_id(
     .await
 }
 
+/// #1312: append a hash-chained entry to the tenant's `policy_audit_log`.
+///
+/// Mirrors [`append_action_receipt_atomic`]: `BEGIN IMMEDIATE` serializes
+/// concurrent appenders, the current chain head is read, and `build` receives
+/// that head's `entry_hash` (`""` for the genesis entry) and returns the
+/// fully-hashed record to insert. The `policy_audit_log` table additionally
+/// has SQLite triggers that abort any `UPDATE`/`DELETE`, making the chain
+/// tamper-evident at the database level.
+pub async fn append_policy_audit_log_entry_atomic<F>(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    build: F,
+) -> Result<PolicyAuditLogRecord, sqlx::Error>
+where
+    F: FnOnce(String) -> PolicyAuditLogRecord,
+{
+    let mut conn = pool.acquire().await?;
+
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+    async fn rollback(conn: &mut sqlx::SqliteConnection) {
+        let _ = sqlx::query("ROLLBACK").execute(conn).await;
+    }
+
+    let head: Option<(String,)> = match sqlx::query_as(
+        "SELECT entry_hash FROM policy_audit_log WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&mut *conn)
+    .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            rollback(&mut conn).await;
+            return Err(e);
+        }
+    };
+    let prev = head.map(|(h,)| h).unwrap_or_default();
+
+    let record = build(prev);
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO policy_audit_log (id, tenant_id, policy_id, policy_key, action, changed_by, body_hash, diff_summary, prev_hash, entry_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.policy_id)
+    .bind(&record.policy_key)
+    .bind(&record.action)
+    .bind(&record.changed_by)
+    .bind(&record.body_hash)
+    .bind(&record.diff_summary)
+    .bind(&record.prev_hash)
+    .bind(&record.entry_hash)
+    .execute(&mut *conn)
+    .await
+    {
+        rollback(&mut conn).await;
+        return Err(e);
+    }
+
+    sqlx::query("COMMIT").execute(&mut *conn).await?;
+    Ok(record)
+}
+
+/// #1312: tenant-scoped, paginated listing of the policy transparency log,
+/// newest first.
+pub async fn list_policy_audit_log(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<PolicyAuditLogRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    sqlx::query_as::<_, PolicyAuditLogRecord>(
+        "SELECT * FROM policy_audit_log WHERE tenant_id = ? ORDER BY rowid DESC LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_audit_events_by_run(
     pool: &SqlitePool,
     tenant_id: &str,
     run_id: &str,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
     sqlx::query_as::<_, AuditEventRecord>(
-        "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC",
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC, rowid ASC",
     )
     .bind(tenant_id)
     .bind(run_id)
@@ -2683,7 +2778,7 @@ pub async fn get_all_audit_events(
     decision_id: Option<&str>,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
     sqlx::query_as::<_, AuditEventRecord>(
-        "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC LIMIT 100",
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 100",
     )
     .bind(tenant_id)
     .bind(decision_id)
