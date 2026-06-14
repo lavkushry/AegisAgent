@@ -115,6 +115,14 @@ pub fn normalize_openai_trace(tenant_id: &str, payload: &Value) -> Option<AseEve
 /// Dispatch to the normalizer for `source`. Returns `Ok(None)` for an
 /// unrecognized payload shape (missing required fields), `Err(())` for an
 /// unsupported `source` value.
+// TASK-1313: `ingest` became part of the gateway's `pub` library surface
+// (gateway/src/lib.rs) so benchmarks can exercise the crate end-to-end. That
+// makes this function subject to clippy's `result_unit_err` "public API"
+// lint, which wasn't triggered while `ingest` was binary-crate-private. A
+// dedicated error enum is out of scope for TASK-1313; the `()` error is an
+// internal dispatch signal (unsupported `source`) already handled by the
+// sole caller (`routes::ingest_event`), not part of any external contract.
+#[allow(clippy::result_unit_err)]
 pub fn normalize(tenant_id: &str, source: &str, payload: &Value) -> Result<Option<AseEvent>, ()> {
     match source {
         "github_webhook" => Ok(normalize_github_webhook(tenant_id, payload)),

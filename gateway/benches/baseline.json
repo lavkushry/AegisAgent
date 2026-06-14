@@ -1,0 +1,8 @@
+{
+  "_comment": "TASK-1313: checked-in baseline for the /v1/authorize criterion benchmark regression gate (gateway/scripts/check_bench_regression.py). Captured from a local run of `cargo bench --manifest-path gateway/Cargo.toml` on this sandbox (sample_size=30, see benches/authorize_benchmark.rs). 'mean_ns' is criterion's mean.point_estimate (nanoseconds, from estimates.json) for authorize_action/allow_readonly_filesystem_read_file. CI hardware will differ from this sandbox, so this baseline should be re-captured from a CI run before the regression gate is relied upon for real PRs; it establishes the mechanism and a starting point.",
+  "benchmark": "authorize_action/allow_readonly_filesystem_read_file",
+  "mean_ns": 6710827.025753356,
+  "mean_ms": 6.710827025753356,
+  "sample_size": 30,
+  "captured_at": "2026-06-14"
+}

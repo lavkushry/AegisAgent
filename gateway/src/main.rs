@@ -17,21 +17,12 @@ use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
-mod baseline;
-mod correlate;
-mod db;
-mod detect;
-mod events;
-mod ingest;
-mod jobs;
-mod metrics;
-mod models;
-mod narrate;
-mod notify;
-mod policy;
-mod respond;
-mod routes;
-mod sign;
+use gateway::db;
+use gateway::events;
+use gateway::jobs;
+use gateway::metrics;
+use gateway::policy;
+use gateway::routes;
 
 use routes::AppState;
 

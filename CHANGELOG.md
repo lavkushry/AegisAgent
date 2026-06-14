@@ -9,18 +9,20 @@ reaches 1.0.
 
 ### Added
 
-- **Replay protection nonce** (#1306): `POST /v1/authorize` accepts optional
-  `nonce` and `timestamp` fields. When `nonce` is present, the gateway
-  rejects a `(tenant, agent, nonce)` repeat with `409 Conflict` +
-  `reason: replay_nonce_reused`, and rejects a `timestamp` more than 5
-  minutes outside the current time with `409 Conflict` +
-  `reason: replay_timestamp_expired`. Dedup is backed by a new in-memory LRU
-  (`ReplayNonceCache`, capacity 10,000, configurable via
-  `AEGIS_REPLAY_NONCE_CACHE_CAPACITY`) rather than the database, keeping the
-  hot path fast; the LRU plus the timestamp check together approximate the
-  5-minute replay window. Entirely opt-in — requests without `nonce` are
-  unaffected (backwards compatible).
-
+- **`/v1/authorize` latency baseline** (#1313): added a criterion benchmark
+  (`gateway/benches/authorize_benchmark.rs`) that exercises the real
+  `authorize_action` handler end-to-end against a real SQLite pool seeded
+  with 100 agents + 1000 decisions — measured mean **~6.7ms** (sample_size=30),
+  comfortably under the p50 < 10ms target. A `gateway/src/lib.rs` was added so
+  the gateway crate can be exercised from `benches/` (the binary is now a thin
+  wrapper over the library). Added HTTP-level load test scripts
+  (`gateway/benchmarks/authorize_load.sh` using vegeta — p50 10.24ms / p95
+  13.80ms / p99 17.58ms, all within target; plus an untested `.k6.js` variant
+  and a stdlib-only Python fallback). Documented methodology, results, and a
+  code-reading flame-graph substitute (no `perf` in CI sandbox) in
+  `docs/performance-baseline.md`. Added a CI regression gate
+  (`gateway/scripts/check_bench_regression.py` + `gateway/benches/baseline.json`)
+  that fails if the benchmark's mean latency regresses by more than 25%.
 - **Policy rollback** (#1302): `POST /v1/policies/:id/rollback` restores a
   policy's most recently archived `policy_versions` row onto the live
   `policies` row. The current live row is itself archived first (so the
@@ -135,6 +137,39 @@ reaches 1.0.
 
 ### Fixed
 
+- **#1300: Approval approve/reject/edit TOCTOU race on expiry**.
+  `db::update_approval_status` (used by `approve_approval` and
+  `reject_approval`) and `db::update_approval_edit` (used by `edit_approval`)
+  were unconditional `UPDATE`s with no `status = 'created'` or expiry guard.
+  Most seriously, `reject_approval` had **no pre-check at all** — a reject
+  callback arriving after an approval had already been `APPROVED` (or
+  otherwise decided) would silently overwrite its status to `REJECTED`,
+  violating "never re-decide a decided approval." `approve_approval` and
+  `edit_approval` had a read-then-write TOCTOU window: the pre-check
+  (`status != "created"` / `approval_is_expired`) could pass and then the
+  approval could be decided or expire before the subsequent unconditional
+  write. Both functions are now atomic, conditional `UPDATE`s — mirroring
+  `db::consume_approval`'s pattern (`WHERE ... AND status = 'created' AND
+  (expires_at IS NULL OR expires_at > ?)`) — and return `bool` (whether this
+  call performed the transition). The handlers treat the UPDATE itself as the
+  authority: a `false` result means the approval was no longer pending or has
+  expired, and the handler responds `409 CONFLICT` with a `"reason"` field —
+  `"approval_expired"` (also emitting a `tamper_attempt` receipt, as
+  `approve_approval` already did for its pre-check expiry case) or
+  `"approval_already_decided"` (including the current `status`).
+  `approve_approval`'s existing pre-check expiry 409 also now carries
+  `"reason": "approval_expired"` for response-shape consistency.
+  `reject_approval` and `edit_approval` gained the same expiry/already-decided
+  409s. A new concurrent-race test (`concurrent_approve_and_reject_only_one_wins`)
+  proves that of two simultaneous approve/reject calls against the same
+  pending approval, exactly one succeeds (200) and the other is rejected (409
+  `approval_already_decided`) — the final stored status reflects only the
+  winner, never both, never neither. **Out of scope**: the issue's AC #2
+  ("Slack message updated to show 'Expired' status") is not implemented —
+  this gateway has no interactive Slack-app message-update integration (no
+  stored Slack message timestamps/channel ids; `notify.rs` is a
+  fire-and-forget outbound webhook POST only), so there is nothing to wire a
+  live message edit to. This is an intentional deferral, not a regression.
 - **#1301: Audit event missing decision_id linkage**. `audit_events` (and
   its `audit_events_archive` counterpart) gained nullable `decision_id` and
   `approval_id` columns (migration `0009_audit_events_decision_linkage.sql`,
