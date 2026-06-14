@@ -7,8 +7,54 @@ reaches 1.0.
 
 ## [Unreleased]
 
+### Performance
+
+- **In-memory compiled policy cache verified** (#1314): `PolicyEngine`
+  (`gateway/src/policy.rs`) already compiled `policies.cedar` once at startup
+  and cached per-tenant merged `PolicySet`s in a `RwLock<HashMap<...>>`, with
+  `authorize` never re-parsing Cedar source on the hot path and
+  `POST /v1/policies/reload` invalidating the cache. A new isolated
+  micro-benchmark (`gateway/benches/policy_eval_benchmark.rs`) confirms
+  `PolicyEngine::authorize` takes ~131-137µs — well under the issue's <1ms
+  target — for both the base-policy-set fallback and a tenant with a cached
+  merged set. No code changes were required; see
+  `docs/performance-baseline.md#policy-evaluation-cache-1314` for the full
+  writeup, including a separate pre-existing bug found and filed as #1352
+  (custom policies fail to merge into a tenant's cached set due to
+  `PolicySet` id collisions).
+
 ### Added
 
+- **#1307: rate limiting on approval-decision callbacks (anti-brute-force)**.
+  `POST /v1/approvals/:id/{approve,reject,edit}` had no rate limiting, so an
+  attacker could brute-force `approval_id` UUIDs. Two independent limiters
+  are now checked at the top of all three handlers (`approval_callback_rate_limit_guard`):
+  (1) **per-source-IP** (`AppState.approval_callback_ip_limiter`, a
+  `RateLimiter` token bucket — capacity 10, refilling at 10/min, configurable
+  via `AEGIS_APPROVAL_CALLBACK_IP_LIMIT`), wired up via
+  `axum::extract::ConnectInfo<SocketAddr>` (the production server now serves
+  via `into_make_service_with_connect_info::<SocketAddr>()`); and (2)
+  **per-`approval_id` failed-attempt count** (`AppState.approval_attempt_tracker`,
+  a new `ApprovalAttemptTracker` — max 5 failed (4xx: 404/409) attempts per
+  `approval_id` per hour, configurable via `AEGIS_APPROVAL_ATTEMPT_LIMIT` /
+  `AEGIS_APPROVAL_ATTEMPT_WINDOW_SECS`; successful 2xx decisions never count).
+  Either limit being exceeded returns `429 Too Many Requests` with
+  `{"reason": "rate_limited_ip"}` or `{"reason": "rate_limited_approval_attempts"}`
+  respectively. **AC#4 (admin bypass)**: there is no "admin token"/admin-role
+  concept anywhere in this codebase (no admin claim on agents, tenants, or
+  JWTs). Rather than invent a new credential type, an `X-Aegis-Admin-Key`
+  header matching an `active` tenant-scoped API key (`api_keys` table, #939 —
+  `db::is_active_api_key`, a new tenant-scoped parameterized lookup) bypasses
+  both limits — the closest existing analogue to a trusted-automation
+  credential. New tests:
+  `approve_approval_rate_limited_after_10_per_ip_per_minute` (20 attempts,
+  each against a distinct pending approval, from one IP -> first 10 succeed,
+  11-20 are 429 `rate_limited_ip`),
+  `reject_and_edit_approval_covered_by_ip_rate_limiter`,
+  `approve_approval_rate_limited_after_5_failed_attempts_per_approval_id` (6
+  attempts against one nonexistent `approval_id` from 6 distinct IPs -> the
+  6th is 429 `rate_limited_approval_attempts`), and
+  `approve_approval_admin_key_bypasses_rate_limits`.
 - **`/v1/authorize` latency baseline** (#1313): added a criterion benchmark
   (`gateway/benches/authorize_benchmark.rs`) that exercises the real
   `authorize_action` handler end-to-end against a real SQLite pool seeded

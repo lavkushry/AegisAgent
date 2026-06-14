@@ -1,7 +1,6 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
-    body::Bytes,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
@@ -10,6 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -116,6 +116,78 @@ impl QuotaManager {
         } else {
             false
         }
+    }
+}
+
+/// Per-`approval_id` failed-attempt tracker (#1307, AC#2): brute-forcing
+/// approval IDs against `POST /v1/approvals/:id/{approve,reject,edit}`
+/// produces a stream of 404 (unknown id) or 409 (already-decided/expired)
+/// responses for the *same* `approval_id`. This counts only those failure
+/// outcomes (never successful 200s) in a fixed window and fails closed with
+/// 429 once the limit is reached, independent of the per-IP limiter (an
+/// attacker rotating source IPs cannot bypass this).
+#[derive(Debug)]
+pub struct ApprovalAttemptTracker {
+    attempts: Mutex<HashMap<String, (u64, Instant)>>,
+    pub limit: u64,
+    pub window_secs: u64,
+}
+
+impl ApprovalAttemptTracker {
+    pub fn new(limit: u64, window_secs: u64) -> Self {
+        Self {
+            attempts: Mutex::new(HashMap::new()),
+            limit,
+            window_secs,
+        }
+    }
+
+    /// Returns `true` if `approval_id` has already accumulated `limit` or
+    /// more failed attempts within the current window (i.e. the caller
+    /// should respond 429 without performing any DB work). Does not mutate
+    /// state — call [`record_failure`](Self::record_failure) separately
+    /// once an attempt is determined to have failed.
+    pub fn is_blocked(&self, approval_id: &str) -> bool {
+        if self.limit == 0 {
+            return false;
+        }
+
+        let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        match attempts.get_mut(approval_id) {
+            Some((count, window_start)) => {
+                if now.duration_since(*window_start).as_secs() >= self.window_secs {
+                    *count = 0;
+                    *window_start = now;
+                    false
+                } else {
+                    *count >= self.limit
+                }
+            }
+            None => false,
+        }
+    }
+
+    /// Records a failed (4xx) approval-decision attempt for `approval_id`.
+    pub fn record_failure(&self, approval_id: &str) {
+        if self.limit == 0 {
+            return;
+        }
+
+        let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        let entry = attempts
+            .entry(approval_id.to_string())
+            .or_insert_with(|| (0, now));
+
+        if now.duration_since(entry.1).as_secs() >= self.window_secs {
+            entry.0 = 0;
+            entry.1 = now;
+        }
+
+        entry.0 += 1;
     }
 }
 
@@ -310,6 +382,14 @@ pub struct AppState {
     pub approval_ttl_secs: i64,
     pub rate_limiter: RateLimiter,
     pub quota_manager: QuotaManager,
+    /// Per-source-IP rate limiter for approval-decision callbacks (#1307,
+    /// AC#1): `POST /v1/approvals/:id/{approve,reject,edit}`. Capacity 10,
+    /// refilling at 10/min — independent of the per-tenant `rate_limiter`
+    /// above (which guards `/v1/authorize`).
+    pub approval_callback_ip_limiter: RateLimiter,
+    /// Per-`approval_id` failed-attempt tracker for approval-decision
+    /// callbacks (#1307, AC#2). See [`ApprovalAttemptTracker`].
+    pub approval_attempt_tracker: ApprovalAttemptTracker,
     /// Read-through cache for registered-action metadata (#899).
     pub skill_cache: SkillActionCache,
     /// Opt-in replay-protection nonce dedup cache (#1306). See
@@ -937,6 +1017,113 @@ async fn emit_tamper_attempt_receipt(
 /// whose `expires_at` is in the past.
 fn approval_is_expired(app: &ApprovalRecord) -> bool {
     app.expires_at.map(|e| e < Utc::now()).unwrap_or(false)
+}
+
+/// #1307: anti-brute-force header carrying a tenant-scoped API key (#939,
+/// `api_keys` table) that — if it matches an `active` key for the requesting
+/// tenant — bypasses both the per-IP (AC#1) and per-approval-id (AC#2) rate
+/// limits on approval-decision callbacks (AC#4). There is no separate
+/// "admin token" concept in this codebase; a tenant's own active API key is
+/// the closest existing analogue to a trusted-automation credential, so it
+/// is reused here rather than inventing a new credential type.
+const ADMIN_BYPASS_HEADER: &str = "X-Aegis-Admin-Key";
+
+/// Returns `true` if `headers` carries an `X-Aegis-Admin-Key` that matches an
+/// `active` API key for `tenant_id`. Fails closed (`false`) on any missing
+/// header, malformed value, or DB error.
+async fn has_admin_bypass(pool: &sqlx::SqlitePool, tenant_id: &str, headers: &HeaderMap) -> bool {
+    let Some(key) = headers
+        .get(ADMIN_BYPASS_HEADER)
+        .and_then(|h| h.to_str().ok())
+    else {
+        return false;
+    };
+    if key.is_empty() {
+        return false;
+    }
+    let key_hash = db::hash_token(key);
+    db::is_active_api_key(pool, tenant_id, &key_hash)
+        .await
+        .unwrap_or(false)
+}
+
+/// #1307: shared anti-brute-force guard for `POST /v1/approvals/:id/{approve,
+/// reject,edit}`.
+///
+/// - **AC#1** (max 10 attempts/IP/minute): checks `approval_callback_ip_limiter`
+///   keyed by the caller's source IP (`ConnectInfo`).
+/// - **AC#2** (max 5 failed attempts/approval_id/hour): checks
+///   `approval_attempt_tracker.is_blocked(approval_id)` — this only reflects
+///   *previously recorded* failures (404/409 outcomes), so it never blocks the
+///   very first few attempts against a real, pending approval.
+/// - **AC#4**: an `X-Aegis-Admin-Key` matching an active tenant API key (#939)
+///   bypasses both checks.
+///
+/// Returns `Some(response)` with a 429 if either limit is exceeded and no
+/// bypass applies, else `None` (caller should proceed).
+async fn approval_callback_rate_limit_guard(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+    approval_id: &Uuid,
+    addr: SocketAddr,
+    headers: &HeaderMap,
+) -> Option<axum::response::Response> {
+    if has_admin_bypass(&state.pool, tenant_id, headers).await {
+        return None;
+    }
+
+    if !state
+        .approval_callback_ip_limiter
+        .check_rate_limit(&addr.ip().to_string())
+    {
+        return Some(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({
+                    "error": "Too many approval attempts from this IP. Try again later.",
+                    "reason": "rate_limited_ip",
+                })),
+            )
+                .into_response(),
+        );
+    }
+
+    if state
+        .approval_attempt_tracker
+        .is_blocked(&approval_id.to_string())
+    {
+        return Some(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({
+                    "error": "Too many failed attempts for this approval. Try again later.",
+                    "approval_id": approval_id,
+                    "reason": "rate_limited_approval_attempts",
+                })),
+            )
+                .into_response(),
+        );
+    }
+
+    None
+}
+
+/// #1307 (AC#2): record a failed approval-decision attempt for `approval_id`
+/// if `response` is a 4xx outcome (404 unknown approval, 409 already-decided
+/// or expired, etc.). 429s from [`approval_callback_rate_limit_guard`] are
+/// never passed here (the guard returns early), and successful 2xx
+/// decisions never count — the approval is decided either way, and any
+/// further attempts against it will already 409.
+fn record_approval_attempt_failure(
+    state: &Arc<AppState>,
+    response: &axum::response::Response,
+    approval_id: &Uuid,
+) {
+    if response.status().is_client_error() {
+        state
+            .approval_attempt_tracker
+            .record_failure(&approval_id.to_string());
+    }
 }
 
 /// #1300: build the 409 CONFLICT response when an atomic conditional approval
@@ -2761,10 +2948,29 @@ pub async fn verify_receipt(
 // Approve Handler
 pub async fn approve_approval(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
+    headers: HeaderMap,
     Json(payload): Json<ApproveRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    if let Some(resp) =
+        approval_callback_rate_limit_guard(&state, &tenant_id, &approval_id, addr, &headers).await
+    {
+        return resp;
+    }
+
+    let response = approve_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
+    record_approval_attempt_failure(&state, &response, &approval_id);
+    response
+}
+
+async fn approve_approval_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    approval_id: Uuid,
+    payload: ApproveRequest,
+) -> axum::response::Response {
     // Load the approval first so we can fail closed on stale or already-decided
     // requests instead of blindly transitioning to APPROVED.
     let approval =
@@ -2899,10 +3105,29 @@ pub async fn approve_approval(
 // Reject Handler
 pub async fn reject_approval(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
+    headers: HeaderMap,
     Json(payload): Json<ApproveRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    if let Some(resp) =
+        approval_callback_rate_limit_guard(&state, &tenant_id, &approval_id, addr, &headers).await
+    {
+        return resp;
+    }
+
+    let response = reject_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
+    record_approval_attempt_failure(&state, &response, &approval_id);
+    response
+}
+
+async fn reject_approval_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    approval_id: Uuid,
+    payload: ApproveRequest,
+) -> axum::response::Response {
     // 404 if the approval doesn't exist for this tenant.
     let approval =
         match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
@@ -2999,10 +3224,29 @@ pub async fn reject_approval(
 // Edit parameters handler
 pub async fn edit_approval(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
+    headers: HeaderMap,
     Json(payload): Json<EditApprovalRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    if let Some(resp) =
+        approval_callback_rate_limit_guard(&state, &tenant_id, &approval_id, addr, &headers).await
+    {
+        return resp;
+    }
+
+    let response = edit_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
+    record_approval_attempt_failure(&state, &response, &approval_id);
+    response
+}
+
+async fn edit_approval_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    approval_id: Uuid,
+    payload: EditApprovalRequest,
+) -> axum::response::Response {
     // Load the approval first so we can fail closed on stale or already-decided
     // requests instead of blindly transitioning to EDITED (#0131).
     let approval =
@@ -4986,16 +5230,14 @@ pub async fn ws_events(
                 Json(json!({"error": "Invalid or expired JWT token"})),
             )
                 .into_response();
+        } else if token.starts_with("tenant_") {
+            token.to_string()
         } else {
-            if token.starts_with("tenant_") {
-                token.to_string()
-            } else {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
-                )
-                    .into_response();
-            }
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
+            )
+                .into_response();
         }
     } else {
         let auth_header = headers.get("Authorization").and_then(|h| h.to_str().ok());
@@ -5012,16 +5254,14 @@ pub async fn ws_events(
                         Json(json!({"error": "Invalid or expired JWT token"})),
                     )
                         .into_response();
+                } else if token.starts_with("tenant_") {
+                    token.to_string()
                 } else {
-                    if token.starts_with("tenant_") {
-                        token.to_string()
-                    } else {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
-                        )
-                            .into_response();
-                    }
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
+                    )
+                        .into_response();
                 }
             } else {
                 return (
@@ -5778,12 +6018,13 @@ pub mod benchutil {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1_000_000.0, 1_000_000.0),
             quota_manager: QuotaManager::new(0, 86400), // 0 == quota disabled
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
-
-            github_webhook_secret: None,
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
         });
 
         Ok((state, tenant_id, agent_token))
@@ -5929,6 +6170,20 @@ mod tests {
 
     fn get_env_lock() -> &'static tokio::sync::Mutex<()> {
         ENV_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    /// Default `ConnectInfo` for tests that don't exercise the per-IP
+    /// approval-callback rate limiter (#1307) and just need a placeholder
+    /// source address.
+    fn test_conn_info() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 0))
+    }
+
+    /// Build a `ConnectInfo` for a distinct synthetic client IP, for tests
+    /// that need to isolate per-IP rate limiting (#1307, AC#1) from one
+    /// another.
+    fn conn_info_for_ip(octet: u8) -> SocketAddr {
+        SocketAddr::from(([10, 0, 0, octet], 0))
     }
 
     #[tokio::test]
@@ -6135,6 +6390,8 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1.0, 1.0),
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
@@ -6170,6 +6427,8 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(100.0, 100.0), // high rate limit
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
@@ -6299,6 +6558,8 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
@@ -6627,8 +6888,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -6679,8 +6942,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -6733,8 +6998,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -6800,8 +7067,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -6827,8 +7096,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer-42".to_string(),
                 reason: None,
@@ -6854,8 +7125,10 @@ mod tests {
 
         let reject = reject_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: Some("not safe to ship".to_string()),
@@ -6884,8 +7157,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -6935,8 +7210,10 @@ mod tests {
 
         let approve_resp = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -6972,8 +7249,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -6985,8 +7264,10 @@ mod tests {
 
         let reject = reject_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: Some("too late".to_string()),
@@ -7030,8 +7311,10 @@ mod tests {
 
         let reject = reject_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: Some("too late".to_string()),
@@ -7078,8 +7361,10 @@ mod tests {
 
         let edit_resp = edit_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(EditApprovalRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: Some("tightening scope".to_string()),
@@ -7122,8 +7407,10 @@ mod tests {
         let (approve_resp, reject_resp) = tokio::join!(
             approve_approval(
                 State(state.clone()),
+                ConnectInfo(test_conn_info()),
                 TenantId(tenant_id.clone()),
                 Path(approval_id),
+                HeaderMap::new(),
                 Json(ApproveRequest {
                     approver_user_id: "reviewer-a".to_string(),
                     reason: None,
@@ -7131,8 +7418,10 @@ mod tests {
             ),
             reject_approval(
                 State(state.clone()),
+                ConnectInfo(test_conn_info()),
                 TenantId(tenant_id.clone()),
                 Path(approval_id),
+                HeaderMap::new(),
                 Json(ApproveRequest {
                     approver_user_id: "reviewer-b".to_string(),
                     reason: Some("racing reject".to_string()),
@@ -7185,8 +7474,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -7227,8 +7518,10 @@ mod tests {
 
         let edit = edit_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(EditApprovalRequest {
                 approver_user_id: "reviewer".to_string(),
                 edited_tool_call: edited_tool_call.clone(),
@@ -7260,8 +7553,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -7286,8 +7581,10 @@ mod tests {
 
         let edit = edit_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(EditApprovalRequest {
                 approver_user_id: "reviewer".to_string(),
                 edited_tool_call,
@@ -7297,6 +7594,211 @@ mod tests {
         .await
         .into_response();
         assert_eq!(edit.status(), StatusCode::CONFLICT);
+    }
+
+    /// #1307 (AC#1/AC#5): the per-IP rate limiter on approval-decision
+    /// callbacks allows the first 10 attempts per minute and 429s the rest.
+    /// 20 rapid `approve_approval` attempts from the same source IP, each
+    /// against its own distinct pending approval (so the per-approval-id
+    /// failure tracker, AC#2, never factors in) -> the first 10 succeed
+    /// (200 OK) and attempts 11-20 get 429 with reason `rate_limited_ip`.
+    #[tokio::test]
+    async fn approve_approval_rate_limited_after_10_per_ip_per_minute() {
+        let (state, tenant_id, agent_token) = setup_state("approve_ip_rate_limit").await;
+
+        for attempt in 1..=20u32 {
+            let (approval_id, _hash) =
+                create_pending_approval(&state, &tenant_id, &agent_token, &format!("2{attempt}"))
+                    .await;
+
+            let resp = approve_approval(
+                State(state.clone()),
+                ConnectInfo(test_conn_info()),
+                TenantId(tenant_id.clone()),
+                Path(approval_id),
+                HeaderMap::new(),
+                Json(ApproveRequest {
+                    approver_user_id: "reviewer".to_string(),
+                    reason: None,
+                }),
+            )
+            .await
+            .into_response();
+
+            if attempt <= 10 {
+                assert_eq!(
+                    resp.status(),
+                    StatusCode::OK,
+                    "attempt {attempt} should succeed"
+                );
+            } else {
+                assert_eq!(
+                    resp.status(),
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "attempt {attempt} should be rate limited"
+                );
+                let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+                let json: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(json["reason"], "rate_limited_ip");
+            }
+        }
+    }
+
+    /// #1307 (AC#3): `reject_approval` and `edit_approval` are also covered
+    /// by the per-IP rate limiter — exhaust the bucket via `approve_approval`
+    /// against 10 distinct pending approvals (so AC#2's per-approval-id
+    /// tracker never factors in) and confirm a subsequent
+    /// `reject_approval`/`edit_approval` from the same IP are 429'd with
+    /// reason `rate_limited_ip`.
+    #[tokio::test]
+    async fn reject_and_edit_approval_covered_by_ip_rate_limiter() {
+        let (state, tenant_id, agent_token) = setup_state("reject_edit_ip_rate_limit").await;
+
+        // Exhaust the 10-token bucket for this IP via 10 approvals of 10
+        // distinct pending approvals.
+        for i in 1..=10u32 {
+            let (other_approval_id, _hash) =
+                create_pending_approval(&state, &tenant_id, &agent_token, &format!("3{i}")).await;
+            let resp = approve_approval(
+                State(state.clone()),
+                ConnectInfo(test_conn_info()),
+                TenantId(tenant_id.clone()),
+                Path(other_approval_id),
+                HeaderMap::new(),
+                Json(ApproveRequest {
+                    approver_user_id: "reviewer".to_string(),
+                    reason: None,
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "399").await;
+
+        let reject = reject_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(reject.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = to_bytes(reject.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reason"], "rate_limited_ip");
+
+        let edited_tool_call = mcp_authorize_request("github", "merge_pull_request").tool_call;
+        let edit = edit_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                edited_tool_call,
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = to_bytes(edit.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reason"], "rate_limited_ip");
+    }
+
+    /// #1307 (AC#2): 6 failed approval attempts against the same
+    /// `approval_id` (a nonexistent one, so each is a 404) from *different*
+    /// source IPs (isolating from AC#1's per-IP limit) -> the 6th gets 429
+    /// with reason `rate_limited_approval_attempts`.
+    #[tokio::test]
+    async fn approve_approval_rate_limited_after_5_failed_attempts_per_approval_id() {
+        let (state, tenant_id, _agent_token) = setup_state("approve_attempt_limit").await;
+        let nonexistent_approval_id = Uuid::new_v4();
+
+        for attempt in 1..=6u32 {
+            let resp = approve_approval(
+                State(state.clone()),
+                ConnectInfo(conn_info_for_ip(attempt as u8)),
+                TenantId(tenant_id.clone()),
+                Path(nonexistent_approval_id),
+                HeaderMap::new(),
+                Json(ApproveRequest {
+                    approver_user_id: "reviewer".to_string(),
+                    reason: None,
+                }),
+            )
+            .await
+            .into_response();
+
+            if attempt <= 5 {
+                assert_eq!(
+                    resp.status(),
+                    StatusCode::NOT_FOUND,
+                    "attempt {attempt} should be a plain 404"
+                );
+            } else {
+                assert_eq!(
+                    resp.status(),
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "attempt {attempt} should be rate limited"
+                );
+                let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+                let json: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(json["reason"], "rate_limited_approval_attempts");
+            }
+        }
+    }
+
+    /// #1307 (AC#4): a valid `X-Aegis-Admin-Key` (a tenant-scoped API key,
+    /// #939) bypasses both the per-IP (AC#1) and per-approval-id (AC#2)
+    /// rate limits.
+    #[tokio::test]
+    async fn approve_approval_admin_key_bypasses_rate_limits() {
+        let (state, tenant_id, agent_token) = setup_state("approve_admin_bypass").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "102").await;
+
+        let (_id, plaintext_key) = db::create_api_key(&state.pool, &tenant_id, "admin-bypass")
+            .await
+            .expect("create api key");
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Aegis-Admin-Key", plaintext_key.parse().unwrap());
+
+        // 15 attempts (> both the 10/min IP limit and the 5/hr attempt
+        // limit) from the same IP, all carrying the admin key.
+        for attempt in 1..=15u32 {
+            let resp = approve_approval(
+                State(state.clone()),
+                ConnectInfo(test_conn_info()),
+                TenantId(tenant_id.clone()),
+                Path(approval_id),
+                headers.clone(),
+                Json(ApproveRequest {
+                    approver_user_id: "reviewer".to_string(),
+                    reason: None,
+                }),
+            )
+            .await
+            .into_response();
+
+            assert_ne!(
+                resp.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "attempt {attempt} with valid admin key should never be rate limited"
+            );
+        }
     }
 
     #[tokio::test]
@@ -7560,8 +8062,10 @@ mod tests {
         // approve_approval refuses to grant an expired approval.
         let approve_resp = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -8568,8 +9072,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -8656,8 +9162,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -8748,8 +9256,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -8928,8 +9438,10 @@ mod tests {
 
         let approve = approve_approval(
             State(state.clone()),
+            ConnectInfo(test_conn_info()),
             TenantId(tenant_id.clone()),
             Path(approval_id),
+            HeaderMap::new(),
             Json(ApproveRequest {
                 approver_user_id: "reviewer".to_string(),
                 reason: None,
@@ -13768,6 +14280,8 @@ mod tests {
             approval_ttl_secs: 1800,
             rate_limiter: RateLimiter::new(1000.0, 1000.0),
             quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
