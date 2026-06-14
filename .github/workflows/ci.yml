@@ -50,6 +50,23 @@ jobs:
         if: matrix.rust == 'stable'
       - name: Tests
         run: cargo test --manifest-path gateway/Cargo.toml
+      # ── TASK-1313: /v1/authorize latency regression gate ─────────────────
+      # Runs the criterion benchmark (reduced sample size, see
+      # benches/authorize_benchmark.rs) and compares the mean latency of the
+      # steady-state allow hot path against the checked-in baseline
+      # (benches/baseline.json), failing if it regresses by more than 25%.
+      # See docs/performance-baseline.md for methodology and the mean-vs-p99
+      # approximation this gate makes.
+      - name: Authorize latency benchmark
+        if: matrix.rust == 'stable'
+        run: cargo bench --manifest-path gateway/Cargo.toml
+      - name: Check benchmark regression (>25% mean latency)
+        if: matrix.rust == 'stable'
+        run: |
+          python3 gateway/scripts/check_bench_regression.py \
+            --baseline gateway/benches/baseline.json \
+            --estimates gateway/target/criterion/authorize_action/allow_readonly_filesystem_read_file/new/estimates.json \
+            --threshold 0.25
 
   # ── TEST-002 (#1162): canonicalization fuzz smoke gate ───────────────────────
   # Fuzzes aegis-canon::canonicalize_json / canonical_value_string (the

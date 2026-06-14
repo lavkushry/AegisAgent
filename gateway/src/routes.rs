@@ -5477,6 +5477,215 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
     (StatusCode::OK, Json(spec))
 }
 
+/// Test/benchmark-only helpers for constructing a real [`AppState`] backed by
+/// a real SQLite pool with migrations applied (TASK-1313).
+///
+/// This mirrors the `setup_state_with_events_capacity` helper in
+/// `mod tests` below, but is `pub` so the criterion benchmark in
+/// `benches/authorize_benchmark.rs` can build an end-to-end harness for
+/// `authorize_action` without duplicating the seeding logic. Kept out of
+/// `#[cfg(test)]` so it is compiled for `cargo bench` (which builds with
+/// `--release` and without `cfg(test)`), but it is not part of the gateway's
+/// public HTTP API or invariants — it exists purely to exercise the real
+/// handler in benchmarks.
+pub mod benchutil {
+    use super::*;
+    use crate::events::EventSink;
+    use crate::policy::PolicyEngine;
+
+    /// Build a fresh [`AppState`] against a tempfile SQLite DB with
+    /// migrations applied, a registered tenant, and a registered agent whose
+    /// plaintext token is returned alongside the tenant id.
+    ///
+    /// `db_path` should be a unique filesystem path (e.g. under a tempdir)
+    /// so repeated benchmark setups don't collide.
+    pub async fn setup_bench_state(
+        db_path: &str,
+    ) -> Result<(Arc<AppState>, String, String), sqlx::Error> {
+        let db_url = format!("sqlite://{}", db_path);
+        let pool = db::init_db(&db_url).await?;
+
+        let tenant_id = "tenant_bench".to_string();
+        db::register_tenant(&pool, &tenant_id, "Bench Tenant", "developer").await?;
+
+        let agent_id = Uuid::new_v4().to_string();
+        let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+        let agent = AgentRecord {
+            id: agent_id,
+            tenant_id: tenant_id.clone(),
+            agent_key: "bench-agent".to_string(),
+            agent_token: db::hash_token(&agent_token),
+            name: "Bench Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&pool, &agent).await?;
+
+        let policy_engine = PolicyEngine::init("policies.cedar")
+            .await
+            .map_err(|e| sqlx::Error::Configuration(format!("{:?}", e).into()))?;
+        // Use a generously-sized channel and never drain it in the benchmark —
+        // SOC event emission is fire-and-forget (`try_send`, non-blocking) per
+        // the gateway's design, so an undrained channel does not slow down
+        // `authorize_action` until it fills. 100k is far larger than any
+        // single benchmark run's iteration count needs to be accurate.
+        let (events, _events_rx) = EventSink::channel(100_000);
+
+        let state = Arc::new(AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics: crate::metrics::SecurityMetrics::new(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1_000_000.0, 1_000_000.0),
+            quota_manager: QuotaManager::new(0, 86400), // 0 == quota disabled
+            skill_cache: SkillActionCache::new(1024),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        Ok((state, tenant_id, agent_token))
+    }
+
+    /// Register `n` additional agents in `tenant_id` (TASK-1313 seed data:
+    /// 100 agents). These agents are not used directly by the hot-path
+    /// benchmark request (which always authenticates as the primary bench
+    /// agent from [`setup_bench_state`]), but their presence in the `agents`
+    /// table makes the agent lookup query representative of a populated
+    /// tenant rather than a near-empty table.
+    pub async fn seed_extra_agents(
+        pool: &sqlx::SqlitePool,
+        tenant_id: &str,
+        n: usize,
+    ) -> Result<(), sqlx::Error> {
+        for i in 0..n {
+            let agent = AgentRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                agent_key: format!("bench-seed-agent-{}", i),
+                agent_token: db::hash_token(&format!("seed_tok_{}", Uuid::new_v4().simple())),
+                name: format!("Bench Seed Agent {}", i),
+                owner_team: Some("platform".to_string()),
+                owner_email: None,
+                environment: "production".to_string(),
+                framework: None,
+                model_provider: None,
+                model_name: None,
+                purpose: None,
+                risk_tier: "low".to_string(),
+                status: "active".to_string(),
+                last_seen_at: None,
+                frozen_reason: None,
+                force_approval: false,
+                quarantined_at: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            db::insert_agent(pool, &agent).await?;
+        }
+        Ok(())
+    }
+
+    /// Insert `n` historical decision rows for `agent_id` in `tenant_id`
+    /// (TASK-1313 seed data: 1000 prior decisions), so the `decisions` table
+    /// is representative of a tenant with real history. The hot-path
+    /// `/v1/authorize` query doesn't read this table directly, but a
+    /// populated table is more representative for any future benchmarks that
+    /// touch `GET /v1/decisions` or audit endpoints, and exercises realistic
+    /// SQLite file sizes/indexes.
+    pub async fn seed_decisions(
+        pool: &sqlx::SqlitePool,
+        tenant_id: &str,
+        agent_id: &str,
+        n: usize,
+    ) -> Result<(), sqlx::Error> {
+        for i in 0..n {
+            let record = DecisionRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                agent_id: agent_id.to_string(),
+                user_id: None,
+                run_id: Some(format!("run_seed_{}", i)),
+                trace_id: Some(format!("trace_seed_{}", i)),
+                skill: "filesystem".to_string(),
+                action: "read_file".to_string(),
+                resource: Some(format!("file_{}.txt", i)),
+                input_json: "{}".to_string(),
+                decision: "allow".to_string(),
+                risk_score: Some(1),
+                reason: Some("seed".to_string()),
+                matched_policy_ids: None,
+                request_id: None,
+                latency_ms: Some(1),
+                created_at: Utc::now(),
+            };
+            db::insert_decision(pool, &record).await?;
+        }
+        Ok(())
+    }
+
+    /// Build headers for an authenticated `/v1/authorize` call.
+    pub fn agent_headers(agent_token: &str, tenant_id: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", agent_token)
+                .parse()
+                .expect("valid header value"),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            tenant_id.parse().expect("valid header value"),
+        );
+        headers
+    }
+
+    /// Build a steady-state `AuthorizeRequest` for the read-only
+    /// `filesystem.read_file` action — `mutates_state: false` with
+    /// `trust_level: trusted_internal_signed`, which the default policy pack
+    /// permits instantly (`allow`, no approval). This is the common-case hot
+    /// path TASK-1313 targets.
+    pub fn allow_authorize_request() -> AuthorizeRequest {
+        AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            agent: AuthorizeAgentContext {
+                id: "bench-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "filesystem".to_string(),
+                action: "read_file".to_string(),
+                resource: Some("bench.txt".to_string()),
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: Some(AuthorizeTraceContext {
+                run_id: "run_bench".to_string(),
+                trace_id: "trace_bench".to_string(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
