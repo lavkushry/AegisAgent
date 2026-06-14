@@ -732,6 +732,7 @@ const TAMPER_DECISION: &str = "tamper_attempt";
 /// tag for the violation; `action_hash` is the bound hash (never a payload). Also
 /// mirrors the event into the audit log. Best-effort: a write failure is logged and
 /// does not change the caller's response.
+#[allow(clippy::too_many_arguments)]
 async fn emit_tamper_attempt_receipt(
     pool: &sqlx::SqlitePool,
     events: &EventSink,
@@ -740,6 +741,7 @@ async fn emit_tamper_attempt_receipt(
     kind: &str,
     approval_id: &str,
     action_hash: Option<String>,
+    decision_id: Option<&str>,
 ) {
     let kind_owned = kind.to_string();
     let action_hash_for_receipt = action_hash.clone();
@@ -801,6 +803,8 @@ async fn emit_tamper_attempt_receipt(
         .unwrap_or_default(),
         input_hash: None,
         output_hash: None,
+        decision_id: decision_id.map(|s| s.to_string()),
+        approval_id: Some(approval_id.to_string()),
         created_at: Utc::now(),
     };
     if let Err(e) = db::insert_audit_event(pool, &audit_record).await {
@@ -926,6 +930,8 @@ async fn write_decision_and_audit(
         event_json: serde_json::to_string(&decision_record).unwrap_or_default(),
         input_hash: None,
         output_hash: None,
+        decision_id: Some(decision_id.to_string()),
+        approval_id: None,
         created_at: Utc::now(),
     };
     db::insert_audit_event(pool, &audit_record).await?;
@@ -1048,6 +1054,8 @@ pub async fn register_agent(
         event_json: serde_json::to_string(&agent_record).unwrap_or_default(),
         input_hash: None,
         output_hash: None,
+        decision_id: None,
+        approval_id: None,
         created_at: Utc::now(),
     };
     let _ = db::insert_audit_event(&state.pool, &audit_record).await;
@@ -1418,6 +1426,8 @@ pub async fn discover_mcp_tools(
             event_json: serde_json::to_string(tool).unwrap_or_default(),
             input_hash: None,
             output_hash: None,
+            decision_id: None,
+            approval_id: None,
             created_at: Utc::now(),
         };
         let _ = db::insert_audit_event(&state.pool, &audit_record).await;
@@ -1636,6 +1646,8 @@ async fn update_mcp_tool_status(
                 .unwrap_or_default(),
                 input_hash: None,
                 output_hash: None,
+                decision_id: None,
+                approval_id: None,
                 created_at: Utc::now(),
             };
             let _ = db::insert_audit_event(&state.pool, &audit_record).await;
@@ -2291,6 +2303,8 @@ pub async fn authorize_action(
             event_json: serde_json::to_string(&approval_record).unwrap_or_default(),
             input_hash: Some(original_call_hash.clone()),
             output_hash: None,
+            decision_id: Some(decision_id.to_string()),
+            approval_id: Some(approval_id.to_string()),
             created_at: Utc::now(),
         };
         let _ = db::insert_audit_event(&state.pool, &audit_app_record).await;
@@ -2404,11 +2418,15 @@ pub async fn consume_approval(
         // A consume of an already-used / expired / not-approved approval is an
         // attack on the evidence chain (replay / T-D): record it as a tamper-attempt
         // receipt so the chain itself captures the attempt. Hashes only, no payloads.
-        let bound_hash = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
-            .await
-            .ok()
-            .flatten()
-            .map(|a| a.original_call_hash);
+        let bound_approval =
+            db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+                .await
+                .ok()
+                .flatten();
+        let bound_hash = bound_approval
+            .as_ref()
+            .map(|a| a.original_call_hash.clone());
+        let bound_decision_id = bound_approval.as_ref().map(|a| a.decision_id.clone());
         // The approval record does not carry the agent id; the SOC event uses the
         // "unknown" placeholder (the violation tag + approval id are the evidence).
         emit_tamper_attempt_receipt(
@@ -2419,6 +2437,7 @@ pub async fn consume_approval(
             "consume_not_consumable",
             &approval_id.to_string(),
             bound_hash,
+            bound_decision_id.as_deref(),
         )
         .await;
         return (
@@ -2579,6 +2598,7 @@ pub async fn approve_approval(
             "approve_expired",
             &approval_id.to_string(),
             Some(approval.original_call_hash.clone()),
+            Some(&approval.decision_id),
         )
         .await;
         return (
@@ -2632,6 +2652,8 @@ pub async fn approve_approval(
         .unwrap_or_default(),
         input_hash: None,
         output_hash: None,
+        decision_id: Some(approval.decision_id.clone()),
+        approval_id: Some(approval.id.clone()),
         created_at: Utc::now(),
     };
     let _ = db::insert_audit_event(&state.pool, &audit_record).await;
@@ -2670,6 +2692,15 @@ pub async fn reject_approval(
             .into_response();
     }
 
+    // #1301: best-effort lookup of the approval's bound decision_id for audit
+    // linkage. Never blocks the response on failure.
+    let linked_decision_id =
+        db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+            .await
+            .ok()
+            .flatten()
+            .map(|a| a.decision_id);
+
     // Write audit event
     let audit_record = AuditEventRecord {
         id: Uuid::new_v4().to_string(),
@@ -2691,6 +2722,8 @@ pub async fn reject_approval(
         .unwrap_or_default(),
         input_hash: None,
         output_hash: None,
+        decision_id: linked_decision_id,
+        approval_id: Some(approval_id.to_string()),
         created_at: Utc::now(),
     };
     let _ = db::insert_audit_event(&state.pool, &audit_record).await;
@@ -2793,6 +2826,8 @@ pub async fn edit_approval(
         .unwrap_or_default(),
         input_hash: None,
         output_hash: None,
+        decision_id: Some(approval.decision_id.clone()),
+        approval_id: Some(approval.id.clone()),
         created_at: Utc::now(),
     };
     let _ = db::insert_audit_event(&state.pool, &audit_record).await;
@@ -2823,12 +2858,17 @@ pub async fn get_timeline(
     }
 }
 
-// Get All Audit Events Logs
+/// GET /v1/audit/events — list audit events for the authenticated tenant.
+///
+/// Query params:
+///   `decision_id` — optional equality filter (#1301).
 pub async fn get_audit_events(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    match db::get_all_audit_events(&state.pool, &tenant_id).await {
+    let decision_id = parse_filter(raw_query.as_deref(), "decision_id");
+    match db::get_all_audit_events(&state.pool, &tenant_id, decision_id.as_deref()).await {
         Ok(events) => (StatusCode::OK, Json(events)).into_response(),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
@@ -3948,6 +3988,8 @@ pub async fn close_incident(
         .unwrap_or_default(),
         input_hash: None,
         output_hash: None,
+        decision_id: None,
+        approval_id: None,
         created_at: Utc::now(),
     };
     let _ = db::insert_audit_event(&state.pool, &audit).await;
@@ -4092,6 +4134,8 @@ async fn set_agent_operational_status(
                 .unwrap_or_default(),
                 input_hash: None,
                 output_hash: None,
+                decision_id: None,
+                approval_id: None,
                 created_at: Utc::now(),
             };
             let _ = db::insert_audit_event(&state.pool, &audit).await;
@@ -4164,6 +4208,8 @@ async fn update_mcp_server_quarantine(
                 .unwrap_or_default(),
                 input_hash: None,
                 output_hash: None,
+                decision_id: None,
+                approval_id: None,
                 created_at: Utc::now(),
             };
             let _ = db::insert_audit_event(&state.pool, &audit).await;
@@ -6686,9 +6732,13 @@ mod tests {
         let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
         assert_eq!(response.decision, "allow");
 
-        let audit_response = get_audit_events(State(state), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let audit_response = get_audit_events(
+            State(state),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(audit_response.status(), StatusCode::OK);
 
         let body = to_bytes(audit_response.into_body(), usize::MAX)
@@ -6707,6 +6757,109 @@ mod tests {
         let event_json: serde_json::Value = serde_json::from_str(&event.event_json).unwrap();
         assert_eq!(event_json["decision"], "allow");
         assert_eq!(event_json["id"], response.decision_id.to_string());
+
+        // #1301: the audit event must carry the decision_id of the decision
+        // that produced it, matching `AuthorizeResponse.decision_id`.
+        assert_eq!(
+            event.decision_id.as_deref(),
+            Some(response.decision_id.to_string().as_str()),
+            "tool_call_intercepted audit event must link back to its decision_id"
+        );
+    }
+
+    /// #1301: a `require_approval` decision must write an `approval_created`
+    /// audit event carrying both the `decision_id` and `approval_id` of the
+    /// resulting decision/approval pair.
+    #[tokio::test]
+    async fn approval_created_audit_event_has_decision_and_approval_ids() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_approval_audit_linkage").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "semi_trusted_customer".to_string();
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "require_approval");
+        let approval = response.approval.expect("approval info should be present");
+
+        let audit_response = get_audit_events(
+            State(state),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(audit_response.status(), StatusCode::OK);
+
+        let body = to_bytes(audit_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let events: Vec<AuditEventRecord> = serde_json::from_slice(&body).unwrap();
+
+        let event = events
+            .iter()
+            .find(|e| e.event_type == "approval_created")
+            .expect("require_approval decision must write an approval_created audit event");
+
+        assert_eq!(
+            event.decision_id.as_deref(),
+            Some(response.decision_id.to_string().as_str()),
+            "approval_created audit event must link back to its decision_id"
+        );
+        assert_eq!(
+            event.approval_id.as_deref(),
+            Some(approval.approval_id.to_string().as_str()),
+            "approval_created audit event must link back to its approval_id"
+        );
+    }
+
+    /// #1301: `GET /v1/audit/events?decision_id=<id>` filters audit events to
+    /// only those linked to the given decision, while remaining
+    /// tenant-scoped.
+    #[tokio::test]
+    async fn get_audit_events_filters_by_decision_id() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_audit_decision_filter").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request1 = mcp_authorize_request("deployer", "ship");
+        request1.tool_call.mutates_state = false;
+        request1.context.source_trust = "trusted_internal_signed".to_string();
+        let response1 = call_authorize(state.clone(), &tenant_id, &agent_token, request1).await;
+        assert_eq!(response1.decision, "allow");
+
+        let mut request2 = mcp_authorize_request("deployer", "ship");
+        request2.tool_call.mutates_state = false;
+        request2.context.source_trust = "trusted_internal_signed".to_string();
+        let response2 = call_authorize(state.clone(), &tenant_id, &agent_token, request2).await;
+        assert_eq!(response2.decision, "allow");
+
+        assert_ne!(response1.decision_id, response2.decision_id);
+
+        let filter = format!("decision_id={}", response1.decision_id);
+        let audit_response = get_audit_events(
+            State(state),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some(filter)),
+        )
+        .await
+        .into_response();
+        assert_eq!(audit_response.status(), StatusCode::OK);
+
+        let body = to_bytes(audit_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let events: Vec<AuditEventRecord> = serde_json::from_slice(&body).unwrap();
+
+        assert!(!events.is_empty(), "expected at least one matching event");
+        for event in &events {
+            assert_eq!(event.tenant_id, tenant_id);
+            assert_eq!(
+                event.decision_id.as_deref(),
+                Some(response1.decision_id.to_string().as_str()),
+                "filtered results must only contain events for the requested decision_id"
+            );
+        }
     }
 
     /// TASK-0160 (#1006): `GET /v1/audit/events` must (a) only return the
@@ -6737,6 +6890,8 @@ mod tests {
                 event_json: "{}".to_string(),
                 input_hash: None,
                 output_hash: None,
+                decision_id: None,
+                approval_id: None,
                 created_at: Utc::now(),
             }
         }
@@ -6752,9 +6907,13 @@ mod tests {
             .await
             .unwrap();
 
-        let response = get_audit_events(State(state), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response = get_audit_events(
+            State(state),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -6796,6 +6955,8 @@ mod tests {
                 event_json: "{}".to_string(),
                 input_hash: None,
                 output_hash: None,
+                decision_id: None,
+                approval_id: None,
                 created_at: Utc::now() - Duration::seconds(age_secs),
             }
         }

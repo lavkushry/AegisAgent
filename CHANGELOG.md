@@ -108,6 +108,17 @@ reaches 1.0.
 
 ### Fixed
 
+- **#1301: Audit event missing decision_id linkage**. `audit_events` (and
+  its `audit_events_archive` counterpart) gained nullable `decision_id` and
+  `approval_id` columns (migration `0009_audit_events_decision_linkage.sql`,
+  plus a new `idx_audit_events_tenant_decision` index), so operators and
+  compliance can correlate the full audit trail for a single authorization
+  decision or approval. Every decision-related audit event
+  (`tool_call_intercepted`, etc.) now carries its `decision_id`, and every
+  approval-lifecycle event (`approval_created`, `approval_decided`,
+  `tamper_attempt`) carries both `approval_id` and the originating
+  `decision_id`. `GET /v1/audit/events` accepts an optional `?decision_id=`
+  filter (tenant-scoped, parameterized `(? IS NULL OR decision_id = ?)`).
 - **#1299: High-risk action allowed when audit writer is unavailable**. The
   `/v1/authorize` decision path could return `allow`/`require_approval` for a
   mutating or high-risk action even when the audit trail for that decision

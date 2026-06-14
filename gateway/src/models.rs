@@ -507,6 +507,13 @@ pub struct AuditEventRecord {
     pub event_json: String,
     pub input_hash: Option<String>,
     pub output_hash: Option<String>,
+    /// #1301: links this audit event back to the authorization decision that
+    /// produced it, so operators/compliance can correlate the full trail for
+    /// a single decision.
+    pub decision_id: Option<String>,
+    /// #1301: for approval-lifecycle events (`approval_created`,
+    /// `approval_decided`, etc.), the approval this event relates to.
+    pub approval_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

@@ -2307,8 +2307,8 @@ pub async fn insert_audit_event(
     record: &AuditEventRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -2324,6 +2324,8 @@ pub async fn insert_audit_event(
     .bind(&record.event_json)
     .bind(&record.input_hash)
     .bind(&record.output_hash)
+    .bind(&record.decision_id)
+    .bind(&record.approval_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -2341,8 +2343,8 @@ pub async fn archive_audit_events_older_than(
 
     sqlx::query(
         "INSERT INTO audit_events_archive
-            (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, created_at)
-         SELECT id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, created_at
+            (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+         SELECT id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at
          FROM audit_events
          WHERE created_at < ?",
     )
@@ -2494,14 +2496,21 @@ pub async fn get_audit_events_by_run(
     .await
 }
 
+/// List audit events for a tenant, optionally filtered by `decision_id`
+/// (#1301), so operators/compliance can correlate every audit event with a
+/// specific authorization decision. Always tenant-scoped; the optional
+/// filter uses the `(? IS NULL OR col = ?)` static-SQL pattern (CWE-89 safe).
 pub async fn get_all_audit_events(
     pool: &SqlitePool,
     tenant_id: &str,
+    decision_id: Option<&str>,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
     sqlx::query_as::<_, AuditEventRecord>(
-        "SELECT * FROM audit_events WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 100",
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC LIMIT 100",
     )
     .bind(tenant_id)
+    .bind(decision_id)
+    .bind(decision_id)
     .fetch_all(pool)
     .await
 }
@@ -3465,6 +3474,8 @@ mod tests {
             event_json: "{}".to_string(),
             input_hash: None,
             output_hash: None,
+            decision_id: None,
+            approval_id: None,
             created_at: Utc::now(),
         };
         let new_event = AuditEventRecord {

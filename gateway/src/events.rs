@@ -382,6 +382,8 @@ pub async fn drain(mut rx: mpsc::Receiver<AseEvent>, pool: SqlitePool) -> usize 
                         event_json: action.description.clone(),
                         input_hash: None,
                         output_hash: None,
+                        decision_id: None,
+                        approval_id: None,
                         created_at: chrono::Utc::now(),
                     };
                     if let Err(e) = db::insert_audit_event(&pool, &audit_record).await {
