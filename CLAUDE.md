@@ -29,7 +29,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - `aegis-jcs-1` canonicalizer (`src/canon.ts`), `AegisClient`, `protect()`.
 - `tsc --noEmit` build + `node --test` suite + cross-language corpus CI gate.
 
-**Rust gateway — 412 tests, verified on `main`:**
+**Rust gateway — 413 tests, verified on `main`:**
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
 - Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409).
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
@@ -55,7 +55,7 @@ Baseline: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`po
 ```bash
 # Gateway (Rust)
 cargo check  --manifest-path gateway/Cargo.toml
-cargo test   --manifest-path gateway/Cargo.toml        # 412 tests
+cargo test   --manifest-path gateway/Cargo.toml        # 413 tests
 cargo fmt    --manifest-path gateway/Cargo.toml -- --check
 cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080

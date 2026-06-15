@@ -17544,4 +17544,289 @@ mod tests {
         .into_response();
         assert_eq!(response_cross.status(), StatusCode::NOT_FOUND);
     }
+
+    /// #1304: cross-tenant isolation stress test for the `/v1/graph/*` query
+    /// API. Two tenants each have an agent, decision, approval, receipt, and
+    /// incident, with decisions from *both* tenants sharing the same
+    /// `run_id` (an arbitrary SDK-supplied string, not a uniqueness-enforced
+    /// id — the realistic collision vector). Every graph query for tenant A
+    /// must return zero nodes/edges built from tenant B's rows (CWE-284).
+    #[tokio::test]
+    async fn graph_queries_never_leak_cross_tenant_nodes_with_colliding_ids() {
+        let (state, tenant_a, _agent_token) = setup_state("graph_cross_tenant_stress").await;
+        let tenant_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
+        db::register_tenant(&state.pool, &tenant_b, "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // Seed both tenants with rows that share the same ids but carry
+        // tenant-distinguishing labels/content.
+        for (tenant_id, agent_name, skill, action, approval_status, policy_name) in [
+            (
+                tenant_a.clone(),
+                "Tenant A Agent",
+                "github",
+                "merge_pull_request",
+                "pending",
+                "policy_tenant_a",
+            ),
+            (
+                tenant_b.clone(),
+                "Tenant B Agent",
+                "slack",
+                "post_message",
+                "rejected",
+                "policy_tenant_b",
+            ),
+        ] {
+            let agent =
+                make_graph_test_agent(&format!("agent_{tenant_id}"), &tenant_id, agent_name);
+            db::insert_agent(&state.pool, &agent).await.unwrap();
+
+            let mut decision = make_graph_test_decision(
+                &format!("decision_{tenant_id}"),
+                &tenant_id,
+                &agent.id,
+                Some("shared_run"),
+                "require_approval",
+                Some(policy_name),
+            );
+            decision.skill = skill.to_string();
+            decision.action = action.to_string();
+            db::insert_decision(&state.pool, &decision).await.unwrap();
+
+            let mut approval = make_test_approval(
+                Some(Utc::now() + chrono::Duration::hours(1)),
+                approval_status,
+            );
+            approval.id = format!("shared_approval_{tenant_id}");
+            approval.tenant_id = tenant_id.clone();
+            approval.decision_id = decision.id.clone();
+            db::insert_approval(&state.pool, &approval).await.unwrap();
+
+            db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
+                let mut r = unsigned_receipt_template(&tenant_id);
+                r.decision_id = Some(decision.id.clone());
+                r.prev_receipt_hash = prev;
+                r.receipt_hash = compute_receipt_hash(&r);
+                r
+            })
+            .await
+            .unwrap();
+
+            let audit_event = AuditEventRecord {
+                id: format!("shared_event_{tenant_id}"),
+                tenant_id: tenant_id.clone(),
+                event_type: "decision".to_string(),
+                agent_id: Some(agent.id.clone()),
+                user_id: None,
+                run_id: Some("shared_run".to_string()),
+                trace_id: None,
+                span_id: None,
+                skill: Some(skill.to_string()),
+                action: Some(action.to_string()),
+                resource: None,
+                event_json: "{}".to_string(),
+                input_hash: None,
+                output_hash: None,
+                decision_id: Some(decision.id.clone()),
+                approval_id: None,
+                created_at: Utc::now(),
+            };
+            db::insert_audit_event(&state.pool, &audit_event)
+                .await
+                .unwrap();
+
+            let incident = crate::models::SocIncidentRecord {
+                id: format!("incident_{tenant_id}"),
+                tenant_id: tenant_id.clone(),
+                kind: "deny_storm".to_string(),
+                severity: "high".to_string(),
+                agent_id: agent.id.clone(),
+                summary: format!("Incident for {tenant_id}"),
+                source_event_ids: serde_json::to_string(&vec![audit_event.id.clone()]).unwrap(),
+                opened_at: "2026-06-06T10:00:00Z".to_string(),
+                status: "open".to_string(),
+                closed_at: None,
+            };
+            db::insert_soc_incident(&state.pool, &incident)
+                .await
+                .unwrap();
+        }
+
+        use crate::graph::NodeType;
+
+        async fn fetch_graph(
+            state: &Arc<AppState>,
+            tenant_id: &str,
+            path: &str,
+            depth: Option<u32>,
+        ) -> crate::graph::EvidenceGraph {
+            let response = match path.split_once(':') {
+                Some(("run", run_id)) => get_graph_for_run(
+                    State(state.clone()),
+                    TenantId(tenant_id.to_string()),
+                    Path(run_id.to_string()),
+                )
+                .await
+                .into_response(),
+                Some(("incident", incident_id)) => get_graph_for_incident(
+                    State(state.clone()),
+                    TenantId(tenant_id.to_string()),
+                    Path(incident_id.to_string()),
+                )
+                .await
+                .into_response(),
+                Some(("agent", agent_id)) => get_graph_for_agent(
+                    State(state.clone()),
+                    TenantId(tenant_id.to_string()),
+                    Path(agent_id.to_string()),
+                    axum::extract::Query(GraphDepthParams { depth }),
+                )
+                .await
+                .into_response(),
+                _ => unreachable!(),
+            };
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice(&body).unwrap()
+        }
+
+        // Run graph: tenant A must only see its own agent name, skill/action,
+        // policy, and approval — never tenant B's.
+        let run_graph_a = fetch_graph(&state, &tenant_a, "run:shared_run", None).await;
+        assert!(run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::Agent && n.label == "Tenant A Agent"));
+        assert!(!run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.label == "Tenant B Agent"));
+        assert!(run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::ToolCall && n.label == "github.merge_pull_request"));
+        assert!(!run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.label == "slack.post_message"));
+        assert!(run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::Policy && n.id == "policy:policy_tenant_a"));
+        assert!(!run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.id == "policy:policy_tenant_b"));
+        assert!(run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::Approval
+                && n.id == format!("approval:shared_approval_{tenant_a}")));
+        assert!(!run_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.id == format!("approval:shared_approval_{tenant_b}")));
+        // Exactly one node per type (no duplicate/leaked rows).
+        for node_type in [
+            NodeType::Agent,
+            NodeType::ToolCall,
+            NodeType::Decision,
+            NodeType::Approval,
+            NodeType::Receipt,
+            NodeType::Policy,
+        ] {
+            assert_eq!(
+                run_graph_a
+                    .nodes
+                    .iter()
+                    .filter(|n| n.group == node_type)
+                    .count(),
+                1,
+                "expected exactly one {node_type:?} node for tenant A's run graph"
+            );
+        }
+
+        // Incident graph: tenant A's incident must only link to tenant A's data.
+        let incident_graph_a = fetch_graph(
+            &state,
+            &tenant_a,
+            &format!("incident:incident_{tenant_a}"),
+            None,
+        )
+        .await;
+        assert!(incident_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::Agent && n.label == "Tenant A Agent"));
+        assert!(!incident_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.label == "Tenant B Agent"));
+        assert!(incident_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::ToolCall && n.label == "github.merge_pull_request"));
+        assert!(!incident_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.label == "slack.post_message"));
+
+        // Agent graph at depth=3: tenant A's agent must only show its own
+        // decision/policy/incident, never tenant B's despite the colliding ids.
+        let agent_graph_a = fetch_graph(
+            &state,
+            &tenant_a,
+            &format!("agent:agent_{tenant_a}"),
+            Some(3),
+        )
+        .await;
+        assert!(agent_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::Agent && n.label == "Tenant A Agent"));
+        assert!(agent_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::ToolCall && n.label == "github.merge_pull_request"));
+        assert!(!agent_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.label == "slack.post_message"));
+        assert!(agent_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::Policy && n.id == "policy:policy_tenant_a"));
+        assert!(!agent_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.id == "policy:policy_tenant_b"));
+        assert!(agent_graph_a.nodes.iter().any(
+            |n| n.group == NodeType::Incident && n.label == format!("Incident for {tenant_a}")
+        ));
+        assert!(!agent_graph_a
+            .nodes
+            .iter()
+            .any(|n| n.label == format!("Incident for {tenant_b}")));
+
+        // Symmetric check from tenant B's perspective.
+        let run_graph_b = fetch_graph(&state, &tenant_b, "run:shared_run", None).await;
+        assert!(run_graph_b
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::Agent && n.label == "Tenant B Agent"));
+        assert!(!run_graph_b
+            .nodes
+            .iter()
+            .any(|n| n.label == "Tenant A Agent"));
+        assert!(run_graph_b
+            .nodes
+            .iter()
+            .any(|n| n.group == NodeType::ToolCall && n.label == "slack.post_message"));
+        assert!(!run_graph_b
+            .nodes
+            .iter()
+            .any(|n| n.label == "github.merge_pull_request"));
+    }
 }
