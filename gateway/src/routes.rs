@@ -15774,6 +15774,46 @@ mod tests {
         assert_eq!(json["reason"], "invalid_signature");
     }
 
+    /// #1329: a captured valid (timestamp, signature) pair replayed against a
+    /// modified body is rejected with `401`/`invalid_signature` — the HMAC
+    /// covers the body, so tampering after signing invalidates it.
+    #[tokio::test]
+    async fn slack_callback_rejects_tampered_body_with_401() {
+        let (state, _tenant_id, _agent_token) =
+            setup_state_with_slack_secret("slack_tampered_body", "test_secret").await;
+
+        let original_body =
+            slack_callback_body("approve", "tenant:00000000-0000-0000-0000-000000000000");
+        let ts = Utc::now().timestamp().to_string();
+        // Signature is computed over the original body...
+        let sig = slack_signature_header("test_secret", &ts, &original_body);
+
+        // ...but the attacker swaps in a different body (e.g. a different
+        // action_id/approval id) while keeping the original signature/timestamp.
+        let tampered_body =
+            slack_callback_body("reject", "tenant:11111111-1111-1111-1111-111111111111");
+        assert_ne!(original_body, tampered_body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, tampered_body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["reason"], "invalid_signature");
+    }
+
     /// #1276: a validly-signed callback with `action_id: "approve"` and
     /// `value: "{tenant_id}:{approval_id}"` transitions the matching pending
     /// approval to `APPROVED`.
