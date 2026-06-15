@@ -1345,7 +1345,10 @@ pub async fn register_agent(
     // Check if agent already exists
     match db::get_agent_by_key(&state.pool, &tenant_id, &payload.agent_key).await {
         Ok(Some(agent)) => {
-            info!("Agent already registered: {}", payload.agent_key);
+            info!(
+                "Agent already registered: {} — rotating token",
+                payload.agent_key
+            );
             let id = match Uuid::parse_str(&agent.id) {
                 Ok(id) => id,
                 Err(e) => {
@@ -1357,12 +1360,28 @@ pub async fn register_agent(
                         .into_response();
                 }
             };
+
+            // Rotate the agent's token so the caller receives a usable
+            // plaintext credential instead of "[REDACTED]" — the previous
+            // token's hash cannot be reversed (see #1366).
+            let new_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+            if let Err(e) =
+                db::rotate_agent_token(&state.pool, &tenant_id, &agent.id, &new_token).await
+            {
+                error!("Failed to rotate agent token: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+
             return (
                 StatusCode::OK,
                 Json(RegisterAgentResponse {
                     id,
                     agent_key: agent.agent_key,
-                    agent_token: "[REDACTED]".to_string(),
+                    agent_token: new_token,
                 }),
             )
                 .into_response();
@@ -14441,6 +14460,7 @@ mod tests {
         use tower::ServiceExt;
 
         let (state, tenant_id, _agent_token) = setup_state("register_agent_dup").await;
+        let state_pool = state.pool.clone();
         let app = register_agent_router(state);
 
         let make_request = || {
@@ -14462,7 +14482,7 @@ mod tests {
             .unwrap();
         let first_parsed: RegisterAgentResponse = serde_json::from_slice(&first_body).unwrap();
 
-        let second = app.oneshot(make_request()).await.unwrap();
+        let second = app.clone().oneshot(make_request()).await.unwrap();
         assert_eq!(second.status(), StatusCode::OK);
         let second_body = axum::body::to_bytes(second.into_body(), usize::MAX)
             .await
@@ -14470,7 +14490,24 @@ mod tests {
         let second_parsed: RegisterAgentResponse = serde_json::from_slice(&second_body).unwrap();
 
         assert_eq!(second_parsed.id, first_parsed.id);
-        assert_eq!(second_parsed.agent_token, "[REDACTED]");
+        // The duplicate registration rotates the token and returns a usable
+        // plaintext credential — never the unrecoverable "[REDACTED]" stub (#1366).
+        assert_ne!(second_parsed.agent_token, "[REDACTED]");
+        assert!(!second_parsed.agent_token.is_empty());
+        assert_ne!(second_parsed.agent_token, first_parsed.agent_token);
+
+        // The old (first) token must no longer authenticate...
+        let old_agent = db::get_agent_by_token(&state_pool, &tenant_id, &first_parsed.agent_token)
+            .await
+            .unwrap();
+        assert!(old_agent.is_none());
+
+        // ...while the newly rotated token does.
+        let new_agent = db::get_agent_by_token(&state_pool, &tenant_id, &second_parsed.agent_token)
+            .await
+            .unwrap();
+        assert!(new_agent.is_some());
+        assert_eq!(new_agent.unwrap().id, second_parsed.id.to_string());
     }
 
     #[tokio::test]
