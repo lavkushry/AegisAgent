@@ -66,3 +66,7 @@ harness = false
 [[bench]]
 name = "policy_eval_benchmark"
 harness = false
+
+[[bench]]
+name = "audit_batch_benchmark"
+harness = false

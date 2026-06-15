@@ -18,6 +18,7 @@ use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
+use gateway::audit_batch;
 use gateway::db;
 use gateway::events;
 use gateway::jobs;
@@ -617,6 +618,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
     let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone(), metrics.clone()));
 
+    // #1315: audit-event write batching. The authorize hot path hands
+    // non-critical `audit_events` rows to this sink; a background task
+    // flushes them in bulk via `insert_audit_events_batch` once `batch_size`
+    // rows are buffered or `flush_interval` elapses. `audit_writer_unhealthy`
+    // is shared (`Arc`) so a failed flush surfaces on GET /readyz exactly
+    // like a failed synchronous write.
+    let audit_writer_unhealthy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (audit_batch, audit_batch_rx) =
+        audit_batch::AuditBatchSink::channel(audit_batch::DEFAULT_CAPACITY);
+    let audit_batch_handle = tokio::spawn(audit_batch::run_audit_batch_writer(
+        pool.clone(),
+        audit_batch_rx,
+        audit_batch::batch_size_from_env(),
+        audit_batch::flush_interval_from_env(),
+        audit_writer_unhealthy.clone(),
+    ));
+
     // #0107: periodic receipt chain integrity check across all tenants. Any
     // broken link or hash mismatch is recorded as a critical SOC alert.
     let receipt_integrity_interval_secs: u64 =
@@ -782,8 +800,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         skill_cache,
         replay_nonce_cache,
         startup_complete: std::sync::atomic::AtomicBool::new(false),
-        audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
-
+        audit_writer_unhealthy: audit_writer_unhealthy.clone(),
+        audit_batch,
         github_webhook_secret,
         slack_signing_secret,
     });
@@ -1010,6 +1028,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // #1315: flush any audit_events rows still buffered by the batch writer.
+    // Dropping `state` above dropped the last `AuditBatchSink` clone, closing
+    // the channel so `run_audit_batch_writer` flushes and returns.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(drain_timeout),
+        audit_batch_handle,
+    )
+    .await
+    {
+        Ok(Ok(n)) => info!("Flushed {} audit events during shutdown", n),
+        Ok(Err(e)) => tracing::error!("Audit batch writer task panicked: {:?}", e),
+        Err(_) => tracing::warn!(
+            "Audit batch writer drain timed out. Some audit events may have been lost."
+        ),
+    }
+
     info!("AegisAgent shut down gracefully.");
     Ok(())
 }
@@ -1203,7 +1237,8 @@ mod tests {
             skill_cache: routes::SkillActionCache::new(1024),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             slack_signing_secret: None,
@@ -1277,7 +1312,8 @@ mod tests {
             skill_cache: routes::SkillActionCache::new(1024),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             slack_signing_secret: None,

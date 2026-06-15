@@ -404,8 +404,17 @@ pub struct AppState {
     pub startup_complete: std::sync::atomic::AtomicBool,
     /// Set to `true` when the most recent attempt to persist a decision/audit
     /// record to SQLite failed. Cleared back to `false` on the next successful
-    /// write. Backs the `audit_writer` field on `GET /readyz` (#1299).
-    pub audit_writer_unhealthy: std::sync::atomic::AtomicBool,
+    /// write. Backs the `audit_writer` field on `GET /readyz` (#1299). Shared
+    /// (`Arc`) with the audit-batch writer task (#1315) so a failed batch
+    /// flush surfaces the same readiness signal as a failed synchronous write.
+    pub audit_writer_unhealthy: Arc<std::sync::atomic::AtomicBool>,
+    /// Non-blocking sink for batched `audit_events` writes (#1315). The
+    /// `/v1/authorize` hot path hands non-critical audit rows to this sink
+    /// instead of inserting them one at a time; a background task
+    /// ([`crate::audit_batch::run_audit_batch_writer`]) flushes them in
+    /// bulk. Critical events (deny on critical risk) bypass this sink and
+    /// are written synchronously.
+    pub audit_batch: crate::audit_batch::AuditBatchSink,
     /// Opt-in HMAC-SHA256 secret for verifying `X-Hub-Signature-256` on
     /// `POST /v1/ingest` requests with `source: "github_webhook"` (#1339).
     /// Configured via `AEGIS_GITHUB_WEBHOOK_SECRET`. When `None` (the
@@ -1237,6 +1246,7 @@ async fn write_decision_and_audit(
     pool: &sqlx::SqlitePool,
     events: &EventSink,
     metrics: &SecurityMetrics,
+    audit_batch: &crate::audit_batch::AuditBatchSink,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -1313,7 +1323,15 @@ async fn write_decision_and_audit(
         approval_id: None,
         created_at: Utc::now(),
     };
-    db::insert_audit_event(pool, &audit_record).await?;
+    // #1315: critical denials are written synchronously so they are visible
+    // immediately (audit trail for the highest-severity decisions must never
+    // wait on a batch flush); everything else goes through the non-blocking
+    // batch sink.
+    if decision == "deny" && risk_level_for_score(risk_score) == "critical" {
+        db::insert_audit_event(pool, &audit_record).await?;
+    } else {
+        audit_batch.emit(pool, audit_record).await?;
+    }
 
     // Phase 0 keystone: feed the async SOC stream. Non-blocking — the inline
     // decision has already been recorded above; emission never delays the caller.
@@ -2291,6 +2309,7 @@ pub async fn authorize_action(
             &state.pool,
             &state.events,
             &state.metrics,
+            &state.audit_batch,
             &tenant_id,
             &agent_id,
             &payload,
@@ -2397,6 +2416,7 @@ pub async fn authorize_action(
                     &state.pool,
                     &state.events,
                     &state.metrics,
+                    &state.audit_batch,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -2462,6 +2482,7 @@ pub async fn authorize_action(
                         &state.pool,
                         &state.events,
                         &state.metrics,
+                        &state.audit_batch,
                         &tenant_id,
                         &agent_id,
                         &payload,
@@ -2512,6 +2533,7 @@ pub async fn authorize_action(
                     &state.pool,
                     &state.events,
                     &state.metrics,
+                    &state.audit_batch,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -2656,6 +2678,7 @@ pub async fn authorize_action(
         &state.pool,
         &state.events,
         &state.metrics,
+        &state.audit_batch,
         &tenant_id,
         &agent_id,
         &payload,
@@ -6738,7 +6761,8 @@ pub mod benchutil {
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             slack_signing_secret: None,
         });
@@ -7115,7 +7139,8 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             slack_signing_secret: None,
@@ -7153,7 +7178,8 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             slack_signing_secret: None,
@@ -7209,7 +7235,8 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: Some(secret.to_string()),
             slack_signing_secret: None,
         });
@@ -7246,7 +7273,8 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             slack_signing_secret: Some(secret.to_string()),
         });
@@ -7334,13 +7362,63 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             slack_signing_secret: None,
         });
 
         (state, tenant_id, agent_token, events_rx)
+    }
+
+    /// Like [`setup_state`], but `audit_batch` is backed by a real channel
+    /// drained by a spawned [`crate::audit_batch::run_audit_batch_writer`]
+    /// (#1315), so batching behavior can be observed end-to-end.
+    async fn setup_state_with_audit_batch_writer(
+        test_name: &str,
+        batch_size: usize,
+        flush_interval: std::time::Duration,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
+
+        let (audit_batch, audit_batch_rx) =
+            crate::audit_batch::AuditBatchSink::channel(crate::audit_batch::DEFAULT_CAPACITY);
+        tokio::spawn(crate::audit_batch::run_audit_batch_writer(
+            state_raw.pool.clone(),
+            audit_batch_rx,
+            batch_size,
+            flush_interval,
+            state_raw.audit_writer_unhealthy.clone(),
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),
+            audit_batch,
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+        });
+
+        (state, tenant_id, agent_token)
     }
 
     fn agent_headers(agent_token: &str, tenant_id: &str) -> HeaderMap {
@@ -11896,6 +11974,80 @@ mod tests {
             .contains(&"agent_revoked".to_string()));
     }
 
+    /// #1315: non-critical decisions hand their `audit_events` row to the
+    /// batch sink instead of inserting synchronously. With a writer
+    /// configured to flush only every 60s, the row is not yet in the table
+    /// immediately after the response returns, but appears once the
+    /// flush-interval timer fires.
+    #[tokio::test]
+    async fn non_critical_decision_audit_row_is_batched_not_immediate() {
+        let (state, tenant_id, agent_token) = setup_state_with_audit_batch_writer(
+            "audit_batch_non_critical",
+            100,
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let allowed = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(allowed.decision, "allow");
+
+        // The decision row is written synchronously...
+        assert!(
+            db::get_decision_by_id(&state.pool, &tenant_id, &allowed.decision_id.to_string())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        // ...but the matching audit_events row is sitting in the batch
+        // channel, not yet flushed to the table.
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        assert!(events
+            .iter()
+            .all(|e| e.decision_id.as_deref() != Some(allowed.decision_id.to_string().as_str())));
+
+        // Once the flush-interval timer fires, the batch writer flushes the
+        // buffered row to the table.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|e| e.decision_id.as_deref() == Some(allowed.decision_id.to_string().as_str())));
+    }
+
+    /// #1315: critical denials (risk_score >= 95) bypass the batch sink and
+    /// write their `audit_events` row synchronously, so it is visible
+    /// immediately — even with nothing draining the batch channel.
+    #[tokio::test]
+    async fn critical_denial_audit_row_is_written_synchronously() {
+        let (state, tenant_id, agent_token) = setup_state("audit_batch_critical").await;
+
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent.id, "frozen")
+                .await
+                .unwrap()
+        );
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let denied = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(denied.decision, "deny");
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|e| e.decision_id.as_deref() == Some(denied.decision_id.to_string().as_str())));
+    }
+
     /// #1184 (Phase 4 response engine completion): once `agents.force_approval`
     /// is set (e.g. by the SOC Response Engine after a `trust_escalation`
     /// incident), every otherwise-`allow` decision for that agent is downgraded
@@ -15259,7 +15411,8 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
-            audit_writer_unhealthy: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             slack_signing_secret: None,
