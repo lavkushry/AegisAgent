@@ -56,6 +56,8 @@ futures-util = "0.3"
 # can benchmark the real (async) `authorize_action` handler.
 criterion = { version = "0.5", features = ["async_tokio"] }
 tempfile = "3.10"
+# TEST-003 (#1163): property-based tests for receipt chain integrity.
+proptest = "1"
 
 [[bench]]
 name = "authorize_benchmark"

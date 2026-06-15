@@ -25,17 +25,16 @@ pub const DEFAULT_APPROVAL_CLEANUP_INTERVAL_SECS: u64 = 86400;
 /// Default approvals retention window before stale rows are deleted.
 pub const DEFAULT_APPROVAL_RETENTION_DAYS: i64 = 30;
 
-/// Walk a single tenant's receipt chain (oldest-first) and verify that every
+/// Walk a chain of receipts (oldest-first) and verify that every
 /// `receipt_hash` matches its recomputed value and that `prev_receipt_hash`
 /// links form a single unbroken chain starting from the empty string. Returns
 /// `Err(reason)` describing the first break found, if any.
-pub async fn verify_tenant_receipt_chain(pool: &SqlitePool, tenant_id: &str) -> Result<(), String> {
-    let receipts = db::list_action_receipts_chain_order(pool, tenant_id)
-        .await
-        .map_err(|e| format!("failed to load receipt chain: {e}"))?;
-
+///
+/// Pure (no DB access) so it can be exercised directly by property-based
+/// tests (#1163) without needing a `SqlitePool`.
+pub fn verify_chain_records(receipts: &[crate::models::ActionReceiptRecord]) -> Result<(), String> {
     let mut prev = String::new();
-    for receipt in &receipts {
+    for receipt in receipts {
         if receipt.prev_receipt_hash != prev {
             return Err(format!(
                 "receipt {} has prev_receipt_hash '{}' but expected '{}'",
@@ -52,6 +51,17 @@ pub async fn verify_tenant_receipt_chain(pool: &SqlitePool, tenant_id: &str) -> 
         prev = receipt.receipt_hash.clone();
     }
     Ok(())
+}
+
+/// Walk a single tenant's receipt chain (oldest-first) and verify it via
+/// [`verify_chain_records`]. Returns `Err(reason)` describing the first break
+/// found, if any.
+pub async fn verify_tenant_receipt_chain(pool: &SqlitePool, tenant_id: &str) -> Result<(), String> {
+    let receipts = db::list_action_receipts_chain_order(pool, tenant_id)
+        .await
+        .map_err(|e| format!("failed to load receipt chain: {e}"))?;
+
+    verify_chain_records(&receipts)
 }
 
 /// Verify the receipt chain for every tenant. Any tenant whose chain fails
@@ -238,5 +248,137 @@ mod tests {
         assert!(alerts
             .iter()
             .any(|a| a.rule == "receipt_chain_integrity_failure" && a.severity == "critical"));
+    }
+}
+
+/// Property-based tests for `verify_chain_records` (#1163 / TEST-003).
+///
+/// These generate random but internally-consistent receipt chains (built with
+/// real `compute_receipt_hash` calls) and check two invariants:
+///  1. An intact chain always verifies as `Ok`.
+///  2. A chain with exactly one tampered receipt (bad `receipt_hash`, bad
+///     `prev_receipt_hash`, or a body field mutated post-hash) always
+///     verifies as `Err`.
+#[cfg(test)]
+mod chain_proptests {
+    use super::verify_chain_records;
+    use crate::models::ActionReceiptRecord;
+    use crate::routes::{compute_receipt_hash, CANON_VERSION};
+    use chrono::Utc;
+    use proptest::prelude::*;
+    use uuid::Uuid;
+
+    fn action_strategy() -> impl Strategy<Value = String> {
+        "[a-z_]{3,12}"
+    }
+
+    fn decision_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("allow".to_string()),
+            Just("deny".to_string()),
+            Just("require_approval".to_string()),
+        ]
+    }
+
+    fn source_trust_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("trusted_internal_signed".to_string()),
+            Just("trusted_internal_unsigned".to_string()),
+            Just("semi_trusted_customer".to_string()),
+            Just("untrusted_external".to_string()),
+            Just("malicious_suspected".to_string()),
+            Just("unknown".to_string()),
+        ]
+    }
+
+    fn seed_strategy() -> impl Strategy<Value = (String, String, String)> {
+        (
+            action_strategy(),
+            decision_strategy(),
+            source_trust_strategy(),
+        )
+    }
+
+    fn chain_seeds_strategy() -> impl Strategy<Value = Vec<(String, String, String)>> {
+        proptest::collection::vec(seed_strategy(), 1..=10)
+    }
+
+    /// Build a chain of receipts whose `prev_receipt_hash`/`receipt_hash`
+    /// links are computed for real via `compute_receipt_hash`, so the chain
+    /// is internally consistent by construction.
+    fn build_chain(
+        seeds: &[(String, String, String)],
+        tenant_id: &str,
+    ) -> Vec<ActionReceiptRecord> {
+        let mut chain = Vec::with_capacity(seeds.len());
+        let mut prev = String::new();
+        for (action, decision, source_trust) in seeds {
+            let mut rec = ActionReceiptRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                decision_id: Some(Uuid::new_v4().to_string()),
+                ts: Utc::now().to_rfc3339(),
+                agent_id: Some("proptest-agent".to_string()),
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                tool: Some("github".to_string()),
+                action: Some(action.clone()),
+                resource: None,
+                source_trust: source_trust.clone(),
+                decision: decision.clone(),
+                approver: None,
+                action_hash: Some("sha256:deadbeef".to_string()),
+                prev_receipt_hash: prev.clone(),
+                receipt_hash: String::new(),
+                canon_version: CANON_VERSION.to_string(),
+                signature: None,
+                signer_public_key: None,
+                created_at: Utc::now(),
+            };
+            rec.receipt_hash = compute_receipt_hash(&rec);
+            prev = rec.receipt_hash.clone();
+            chain.push(rec);
+        }
+        chain
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 1000, .. ProptestConfig::default() })]
+
+        /// Any chain built by `build_chain` is internally consistent and
+        /// must verify as `Ok`.
+        #[test]
+        fn intact_chain_always_verifies(seeds in chain_seeds_strategy()) {
+            let chain = build_chain(&seeds, "tenant_proptest_intact");
+            prop_assert!(verify_chain_records(&chain).is_ok());
+        }
+
+        /// Tampering with exactly one receipt's `receipt_hash`,
+        /// `prev_receipt_hash`, or a hashed body field must always be
+        /// detected.
+        #[test]
+        fn tampered_chain_always_fails(
+            seeds in chain_seeds_strategy(),
+            idx_seed in any::<usize>(),
+            tamper_kind in 0u8..3,
+        ) {
+            let mut chain = build_chain(&seeds, "tenant_proptest_tampered");
+            let idx = idx_seed % chain.len();
+            match tamper_kind {
+                0 => {
+                    chain[idx].receipt_hash = format!("sha256:tampered-{}", chain[idx].receipt_hash);
+                }
+                1 => {
+                    chain[idx].prev_receipt_hash =
+                        format!("sha256:bogus-prev-{}", chain[idx].prev_receipt_hash);
+                }
+                _ => {
+                    let action = chain[idx].action.clone().unwrap_or_default();
+                    chain[idx].action = Some(format!("{}-tampered", action));
+                }
+            }
+            prop_assert!(verify_chain_records(&chain).is_err());
+        }
     }
 }
