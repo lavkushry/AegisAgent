@@ -2497,19 +2497,24 @@ pub async fn update_approval_status(
     .await
 }
 
+/// Format an [`AuditEventRecord::created_at`] at microsecond precision
+/// (#1303) rather than relying on the column's `DEFAULT CURRENT_TIMESTAMP`
+/// (second precision, assigned at insert time). Without this, events emitted
+/// within the same wall-clock second sort by insertion order rather than
+/// their logical timestamps, putting timeline views out of chronological
+/// order. "%F %T%.6f" is SQLite's native datetime format with a
+/// fractional-second suffix, so it stays lexicographically sortable and is
+/// decoded by sqlx's chrono support. Shared by [`insert_audit_event`] and
+/// [`insert_audit_events_batch`] so both paths order identically (#1315).
+fn format_audit_created_at(created_at: chrono::DateTime<Utc>) -> String {
+    created_at.format("%F %T%.6f").to_string()
+}
+
 pub async fn insert_audit_event(
     pool: &SqlitePool,
     record: &AuditEventRecord,
 ) -> Result<(), sqlx::Error> {
-    // #1303: persist the caller-supplied `created_at` at microsecond
-    // precision rather than relying on the column's `DEFAULT
-    // CURRENT_TIMESTAMP` (second precision, assigned at insert time). Without
-    // this, events emitted within the same wall-clock second sort by
-    // insertion order rather than their logical timestamps, putting timeline
-    // views out of chronological order. "%F %T%.6f" is SQLite's native
-    // datetime format with a fractional-second suffix, so it stays
-    // lexicographically sortable and is decoded by sqlx's chrono support.
-    let created_at = record.created_at.format("%F %T%.6f").to_string();
+    let created_at = format_audit_created_at(record.created_at);
     sqlx::query(
         "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -2533,6 +2538,48 @@ pub async fn insert_audit_event(
     .bind(created_at)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Insert a batch of audit events in a single transaction (#1315). A no-op
+/// for an empty slice. Used by the audit-event batch writer to amortize
+/// per-INSERT overhead for high-volume `/v1/authorize` traffic; produces
+/// identical rows (including the microsecond-precision `created_at`) to
+/// calling [`insert_audit_event`] once per record.
+pub async fn insert_audit_events_batch(
+    pool: &SqlitePool,
+    records: &[AuditEventRecord],
+) -> Result<(), sqlx::Error> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+    let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at) "
+    );
+    qb.push_values(records, |mut b, record| {
+        let created_at = format_audit_created_at(record.created_at);
+        b.push_bind(record.id.clone())
+            .push_bind(record.tenant_id.clone())
+            .push_bind(record.event_type.clone())
+            .push_bind(record.agent_id.clone())
+            .push_bind(record.user_id.clone())
+            .push_bind(record.run_id.clone())
+            .push_bind(record.trace_id.clone())
+            .push_bind(record.span_id.clone())
+            .push_bind(record.skill.clone())
+            .push_bind(record.action.clone())
+            .push_bind(record.resource.clone())
+            .push_bind(record.event_json.clone())
+            .push_bind(record.input_hash.clone())
+            .push_bind(record.output_hash.clone())
+            .push_bind(record.decision_id.clone())
+            .push_bind(record.approval_id.clone())
+            .push_bind(created_at);
+    });
+    qb.build().execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -5177,5 +5224,78 @@ mod tests {
         assert_eq!(incidents.len(), 2);
 
         std::env::remove_var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS");
+    }
+
+    fn make_audit_event(id: &str, tenant_id: &str) -> AuditEventRecord {
+        AuditEventRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            event_type: "decision".to_string(),
+            agent_id: Some("agent_1".to_string()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: None,
+            action: Some("read".to_string()),
+            resource: Some("repo".to_string()),
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: None,
+            approval_id: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// #1315: an empty batch is a no-op (no transaction error).
+    #[tokio::test]
+    async fn insert_audit_events_batch_empty_is_noop() {
+        let pool = setup_pool("audit_batch_empty").await;
+        insert_audit_events_batch(&pool, &[]).await.unwrap();
+    }
+
+    /// #1315: a batch insert of N records produces the same rows (same
+    /// columns, same microsecond-precision `created_at` ordering) as N
+    /// sequential `insert_audit_event` calls.
+    #[tokio::test]
+    async fn insert_audit_events_batch_matches_sequential_inserts() {
+        let pool = setup_pool("audit_batch_parity").await;
+        register_tenant(&pool, "tenant_batch", "Batch Tenant", "developer")
+            .await
+            .unwrap();
+
+        let sequential = vec![
+            make_audit_event("evt_seq_0", "tenant_batch"),
+            make_audit_event("evt_seq_1", "tenant_batch"),
+        ];
+        for record in &sequential {
+            insert_audit_event(&pool, record).await.unwrap();
+        }
+
+        let batched = vec![
+            make_audit_event("evt_batch_0", "tenant_batch"),
+            make_audit_event("evt_batch_1", "tenant_batch"),
+            make_audit_event("evt_batch_2", "tenant_batch"),
+        ];
+        insert_audit_events_batch(&pool, &batched).await.unwrap();
+
+        let all = get_all_audit_events(&pool, "tenant_batch", None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), sequential.len() + batched.len());
+        for record in batched.iter().chain(sequential.iter()) {
+            assert!(
+                all.iter().any(|row| row.id == record.id
+                    && row.tenant_id == record.tenant_id
+                    && row.event_type == record.event_type
+                    && row.agent_id == record.agent_id
+                    && row.action == record.action
+                    && row.resource == record.resource
+                    && row.event_json == record.event_json),
+                "missing or mismatched row for {}",
+                record.id
+            );
+        }
     }
 }
