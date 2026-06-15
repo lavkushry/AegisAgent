@@ -189,6 +189,9 @@ pub struct AuthorizeResponse {
     pub decision: String, // allow, deny, require_approval, quarantine, log_only
     pub risk_score: i32,
     pub risk_level: String,
+    /// Advisory composite risk score (#1289), `0..=100`. Display metadata
+    /// only — never gates `decision` (Law 1).
+    pub composite_risk_score: i32,
     pub reason: String,
     pub matched_policies: Vec<String>,
     pub approval: Option<ApprovalResponseInfo>,
@@ -427,6 +430,12 @@ pub struct DecisionRecord {
     /// re-evaluation. Additive (#0081) — surfaced for SOC/perf dashboards.
     #[serde(default)]
     pub latency_ms: Option<i64>,
+    /// Advisory composite risk score (#1289), `0..=100`. Computed by
+    /// `risk::compute_composite_risk_score` and never used to gate the
+    /// `decision` itself (Law 1). NULL on rows written before this column
+    /// existed and on idempotent replays that predate it.
+    #[serde(default)]
+    pub composite_risk_score: Option<i32>,
     pub created_at: DateTime<Utc>,
 }
 

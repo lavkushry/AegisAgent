@@ -27,5 +27,6 @@ pub mod narrate;
 pub mod notify;
 pub mod policy;
 pub mod respond;
+pub mod risk;
 pub mod routes;
 pub mod sign;

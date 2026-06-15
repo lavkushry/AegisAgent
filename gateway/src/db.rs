@@ -317,6 +317,7 @@ async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     ensure_decisions_request_id_column(pool).await?;
     ensure_decisions_latency_ms_column(pool).await?;
+    ensure_decisions_composite_risk_score_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS approvals (
@@ -583,6 +584,140 @@ async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // #1289: per-tenant overrides for the composite-risk-score weights. A
+    // missing row means "use risk::RiskWeights::from_env()" — this table only
+    // needs a row when a tenant wants to deviate from the env-configured
+    // defaults.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tenant_risk_weights (
+            tenant_id TEXT PRIMARY KEY,
+            environment_weight_mutating INTEGER NOT NULL,
+            context_trust_penalty_trusted_internal_signed INTEGER NOT NULL,
+            context_trust_penalty_trusted_internal_unsigned INTEGER NOT NULL,
+            context_trust_penalty_semi_trusted_customer INTEGER NOT NULL,
+            context_trust_penalty_untrusted_external INTEGER NOT NULL,
+            context_trust_penalty_malicious_suspected INTEGER NOT NULL,
+            context_trust_penalty_unknown INTEGER NOT NULL,
+            mcp_trust_penalty INTEGER NOT NULL,
+            anomaly_weight_pct INTEGER NOT NULL,
+            approval_credit INTEGER NOT NULL,
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_tenant_risk_weights_tenant_id ON tenant_risk_weights(tenant_id);",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Row shape for `tenant_risk_weights`, matching [`crate::risk::RiskWeights`]'s
+/// field order. Factored out to satisfy `clippy::type_complexity`.
+type RiskWeightsRow = (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32);
+
+/// #1289: read per-tenant composite-risk-score weights, falling back to
+/// [`crate::risk::RiskWeights::from_env`] when no override row exists.
+/// Tenant-scoped, parameterized.
+pub async fn get_risk_weights(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<crate::risk::RiskWeights, sqlx::Error> {
+    let row: Option<RiskWeightsRow> = sqlx::query_as(
+        "SELECT environment_weight_mutating,
+                context_trust_penalty_trusted_internal_signed,
+                context_trust_penalty_trusted_internal_unsigned,
+                context_trust_penalty_semi_trusted_customer,
+                context_trust_penalty_untrusted_external,
+                context_trust_penalty_malicious_suspected,
+                context_trust_penalty_unknown,
+                mcp_trust_penalty,
+                anomaly_weight_pct,
+                approval_credit
+         FROM tenant_risk_weights WHERE tenant_id = ?",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(match row {
+        Some((
+            environment_weight_mutating,
+            context_trust_penalty_trusted_internal_signed,
+            context_trust_penalty_trusted_internal_unsigned,
+            context_trust_penalty_semi_trusted_customer,
+            context_trust_penalty_untrusted_external,
+            context_trust_penalty_malicious_suspected,
+            context_trust_penalty_unknown,
+            mcp_trust_penalty,
+            anomaly_weight_pct,
+            approval_credit,
+        )) => crate::risk::RiskWeights {
+            environment_weight_mutating,
+            context_trust_penalty_trusted_internal_signed,
+            context_trust_penalty_trusted_internal_unsigned,
+            context_trust_penalty_semi_trusted_customer,
+            context_trust_penalty_untrusted_external,
+            context_trust_penalty_malicious_suspected,
+            context_trust_penalty_unknown,
+            mcp_trust_penalty,
+            anomaly_weight_pct,
+            approval_credit,
+        },
+        None => crate::risk::RiskWeights::from_env(),
+    })
+}
+
+/// #1289: upsert per-tenant composite-risk-score weight overrides.
+/// Tenant-scoped, parameterized.
+pub async fn upsert_risk_weights(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    weights: &crate::risk::RiskWeights,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO tenant_risk_weights (
+            tenant_id,
+            environment_weight_mutating,
+            context_trust_penalty_trusted_internal_signed,
+            context_trust_penalty_trusted_internal_unsigned,
+            context_trust_penalty_semi_trusted_customer,
+            context_trust_penalty_untrusted_external,
+            context_trust_penalty_malicious_suspected,
+            context_trust_penalty_unknown,
+            mcp_trust_penalty,
+            anomaly_weight_pct,
+            approval_credit
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(tenant_id) DO UPDATE SET
+            environment_weight_mutating = excluded.environment_weight_mutating,
+            context_trust_penalty_trusted_internal_signed = excluded.context_trust_penalty_trusted_internal_signed,
+            context_trust_penalty_trusted_internal_unsigned = excluded.context_trust_penalty_trusted_internal_unsigned,
+            context_trust_penalty_semi_trusted_customer = excluded.context_trust_penalty_semi_trusted_customer,
+            context_trust_penalty_untrusted_external = excluded.context_trust_penalty_untrusted_external,
+            context_trust_penalty_malicious_suspected = excluded.context_trust_penalty_malicious_suspected,
+            context_trust_penalty_unknown = excluded.context_trust_penalty_unknown,
+            mcp_trust_penalty = excluded.mcp_trust_penalty,
+            anomaly_weight_pct = excluded.anomaly_weight_pct,
+            approval_credit = excluded.approval_credit",
+    )
+    .bind(tenant_id)
+    .bind(weights.environment_weight_mutating)
+    .bind(weights.context_trust_penalty_trusted_internal_signed)
+    .bind(weights.context_trust_penalty_trusted_internal_unsigned)
+    .bind(weights.context_trust_penalty_semi_trusted_customer)
+    .bind(weights.context_trust_penalty_untrusted_external)
+    .bind(weights.context_trust_penalty_malicious_suspected)
+    .bind(weights.context_trust_penalty_unknown)
+    .bind(weights.mcp_trust_penalty)
+    .bind(weights.anomaly_weight_pct)
+    .bind(weights.approval_credit)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -672,6 +807,28 @@ async fn ensure_decisions_latency_ms_column(pool: &SqlitePool) -> Result<(), sql
         .any(|(_, name, _, _, _, _)| name == "latency_ms")
     {
         sqlx::query("ALTER TABLE decisions ADD COLUMN latency_ms INTEGER")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Additive migration (#1289): advisory composite risk score, `0..=100`,
+/// computed by `risk::compute_composite_risk_score`. NULL on legacy rows and
+/// on idempotent replays that predate this column.
+async fn ensure_decisions_composite_risk_score_column(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(decisions)")
+            .fetch_all(pool)
+            .await?;
+
+    if !columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "composite_risk_score")
+    {
+        sqlx::query("ALTER TABLE decisions ADD COLUMN composite_risk_score INTEGER")
             .execute(pool)
             .await?;
     }
@@ -2146,8 +2303,8 @@ pub async fn insert_decision(
     record: &DecisionRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -2165,6 +2322,7 @@ pub async fn insert_decision(
     .bind(&record.matched_policy_ids)
     .bind(&record.request_id)
     .bind(record.latency_ms)
+    .bind(record.composite_risk_score)
     .execute(pool)
     .await?;
     Ok(())
@@ -2225,7 +2383,7 @@ pub async fn get_decision_by_request_id(
     request_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
          FROM decisions
          WHERE tenant_id = ? AND agent_id = ? AND request_id = ?",
     )
@@ -2263,7 +2421,7 @@ pub async fn list_decisions(
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
          FROM decisions
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
@@ -2288,7 +2446,7 @@ pub async fn get_decision_by_id(
     decision_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
          FROM decisions
          WHERE tenant_id = ? AND id = ?",
     )
@@ -3952,6 +4110,7 @@ mod tests {
             matched_policy_ids: None,
             request_id: None,
             latency_ms: None,
+            composite_risk_score: None,
             created_at: Utc::now(),
         };
 

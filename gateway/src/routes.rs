@@ -579,6 +579,7 @@ async fn idempotent_replay_response(
         Err(_) => Uuid::nil(),
     };
     let risk_score = record.risk_score.unwrap_or(0);
+    let composite_risk_score = record.composite_risk_score.unwrap_or(risk_score);
     let matched_policies: Vec<String> = record
         .matched_policy_ids
         .as_deref()
@@ -610,6 +611,7 @@ async fn idempotent_replay_response(
             decision: record.decision,
             risk_score,
             risk_level: risk_level_for_score(risk_score),
+            composite_risk_score,
             reason: record.reason.unwrap_or_default(),
             matched_policies,
             approval,
@@ -1257,7 +1259,7 @@ async fn write_decision_and_audit(
     matched_policies: &[String],
     audit_event_type: &str,
     started_at: std::time::Instant,
-) -> Result<(), sqlx::Error> {
+) -> Result<i32, sqlx::Error> {
     // OBS-001 (#1154): record the inline /v1/authorize latency on the
     // Prometheus histogram. Recorded here (once per decision write) rather
     // than as middleware, so it shares the exact `started_at` already used
@@ -1265,6 +1267,28 @@ async fn write_decision_and_audit(
     metrics.authorize_duration.observe(started_at.elapsed());
     // OBS-002 (#1155): per-outcome decision counter.
     metrics.inc_decision(decision);
+
+    // #1289: advisory composite risk score (Law 1 — never gates `decision`,
+    // computed only for display/audit metadata). Per-tenant weight overrides
+    // fall back to env-configured defaults inside `db::get_risk_weights`.
+    let composite_risk_score = {
+        let weights = db::get_risk_weights(pool, tenant_id)
+            .await
+            .unwrap_or_default();
+        let is_mcp_call =
+            mcp_server_key_from_tool(&normalize_tool_identifier(&payload.tool_call.tool)).is_some();
+        crate::risk::compute_composite_risk_score(
+            &crate::risk::RiskInputs {
+                base_action_risk: risk_score,
+                mutates_state: payload.tool_call.mutates_state,
+                source_trust: &payload.context.source_trust,
+                is_mcp_call,
+                anomaly_score: 0,
+                had_prior_approval: false,
+            },
+            &weights,
+        )
+    };
 
     let decision_record = DecisionRecord {
         id: decision_id.to_string(),
@@ -1283,6 +1307,7 @@ async fn write_decision_and_audit(
         matched_policy_ids: Some(matched_policies.join(",")),
         request_id: payload.request_id.clone(),
         latency_ms: Some(started_at.elapsed().as_millis() as i64),
+        composite_risk_score: Some(composite_risk_score),
         created_at: Utc::now(),
     };
 
@@ -1352,7 +1377,7 @@ async fn write_decision_and_audit(
         matched_policies: matched_policies.to_vec(),
     });
 
-    Ok(())
+    Ok(composite_risk_score)
 }
 
 pub async fn register_agent(
@@ -2305,7 +2330,7 @@ pub async fn authorize_action(
             "tool_call_intercepted"
         };
 
-        if let Err(e) = write_decision_and_audit(
+        let composite_risk_score = match write_decision_and_audit(
             &state.pool,
             &state.events,
             &state.metrics,
@@ -2323,13 +2348,16 @@ pub async fn authorize_action(
         )
         .await
         {
-            error!("Failed to write agent-frozen denial: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
-        }
+            Ok(score) => score,
+            Err(e) => {
+                error!("Failed to write agent-frozen denial: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
 
         return (
             StatusCode::OK,
@@ -2338,6 +2366,7 @@ pub async fn authorize_action(
                 decision: "deny".to_string(),
                 risk_score,
                 risk_level,
+                composite_risk_score,
                 reason,
                 matched_policies,
                 approval: None,
@@ -2412,7 +2441,7 @@ pub async fn authorize_action(
                 risk_level = "critical".to_string();
                 risk_score = 100;
 
-                if let Err(e) = write_decision_and_audit(
+                let composite_risk_score = match write_decision_and_audit(
                     &state.pool,
                     &state.events,
                     &state.metrics,
@@ -2430,13 +2459,16 @@ pub async fn authorize_action(
                 )
                 .await
                 {
-                    error!("Failed to write quarantined-server denial: {:?}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": "Database error"})),
-                    )
-                        .into_response();
-                }
+                    Ok(score) => score,
+                    Err(e) => {
+                        error!("Failed to write quarantined-server denial: {:?}", e);
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({"error": "Database error"})),
+                        )
+                            .into_response();
+                    }
+                };
 
                 return (
                     StatusCode::OK,
@@ -2445,6 +2477,7 @@ pub async fn authorize_action(
                         decision: "deny".to_string(),
                         risk_score,
                         risk_level,
+                        composite_risk_score,
                         reason,
                         matched_policies,
                         approval: None,
@@ -2478,7 +2511,7 @@ pub async fn authorize_action(
                     );
                     let matched_policies = vec!["mcp_tool_status".to_string()];
 
-                    if let Err(e) = write_decision_and_audit(
+                    let composite_risk_score = match write_decision_and_audit(
                         &state.pool,
                         &state.events,
                         &state.metrics,
@@ -2496,13 +2529,16 @@ pub async fn authorize_action(
                     )
                     .await
                     {
-                        error!("Failed to write MCP denial decision: {:?}", e);
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({"error": "Database error"})),
-                        )
-                            .into_response();
-                    }
+                        Ok(score) => score,
+                        Err(e) => {
+                            error!("Failed to write MCP denial decision: {:?}", e);
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error": "Database error"})),
+                            )
+                                .into_response();
+                        }
+                    };
 
                     return (
                         StatusCode::OK,
@@ -2511,6 +2547,7 @@ pub async fn authorize_action(
                             decision: "deny".to_string(),
                             risk_score,
                             risk_level,
+                            composite_risk_score,
                             reason,
                             matched_policies,
                             approval: None,
@@ -2529,7 +2566,7 @@ pub async fn authorize_action(
                 risk_level = "critical".to_string();
                 risk_score = 100;
 
-                if let Err(e) = write_decision_and_audit(
+                let composite_risk_score = match write_decision_and_audit(
                     &state.pool,
                     &state.events,
                     &state.metrics,
@@ -2547,13 +2584,16 @@ pub async fn authorize_action(
                 )
                 .await
                 {
-                    error!("Failed to write unknown MCP denial decision: {:?}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": "Database error"})),
-                    )
-                        .into_response();
-                }
+                    Ok(score) => score,
+                    Err(e) => {
+                        error!("Failed to write unknown MCP denial decision: {:?}", e);
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({"error": "Database error"})),
+                        )
+                            .into_response();
+                    }
+                };
 
                 return (
                     StatusCode::OK,
@@ -2562,6 +2602,7 @@ pub async fn authorize_action(
                         decision: "deny".to_string(),
                         risk_score,
                         risk_level,
+                        composite_risk_score,
                         reason,
                         matched_policies,
                         approval: None,
@@ -2666,6 +2707,7 @@ pub async fn authorize_action(
                 decision: "deny".to_string(),
                 risk_score,
                 risk_level,
+                composite_risk_score: risk_score,
                 reason: "Audit writer unavailable (SOC event stream full): action denied (audit_writer_unavailable, fail-closed).".to_string(),
                 matched_policies: vec!["audit_writer_unavailable".to_string()],
                 approval: None,
@@ -2674,7 +2716,7 @@ pub async fn authorize_action(
             .into_response();
     }
 
-    if let Err(e) = write_decision_and_audit(
+    let composite_risk_score = match write_decision_and_audit(
         &state.pool,
         &state.events,
         &state.metrics,
@@ -2692,55 +2734,61 @@ pub async fn authorize_action(
     )
     .await
     {
-        error!(
-            "Failed to write decision/audit record (audit writer unavailable): {:?}",
-            e
-        );
-        state
-            .audit_writer_unhealthy
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(score) => {
+            state
+                .audit_writer_unhealthy
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            score
+        }
+        Err(e) => {
+            error!(
+                "Failed to write decision/audit record (audit writer unavailable): {:?}",
+                e
+            );
+            state
+                .audit_writer_unhealthy
+                .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        if is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state) {
+            if is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state) {
+                return (
+                    StatusCode::OK,
+                    Json(AuthorizeResponse {
+                        decision_id,
+                        decision: "deny".to_string(),
+                        risk_score,
+                        risk_level,
+                        composite_risk_score: risk_score,
+                        reason: "Audit writer unavailable (database write failed): action denied (audit_writer_unavailable, fail-closed).".to_string(),
+                        matched_policies: vec!["audit_writer_unavailable".to_string()],
+                        approval: None,
+                    }),
+                )
+                    .into_response();
+            }
+
+            // Low-risk, non-mutating action: degrade gracefully — allow without a
+            // persisted audit record, but log a warning so operators can see the gap.
+            tracing::warn!(
+                tool = %payload.tool_call.tool,
+                action = %payload.tool_call.action,
+                "Audit writer unavailable for low-risk action; allowing without persisted audit record"
+            );
             return (
                 StatusCode::OK,
                 Json(AuthorizeResponse {
                     decision_id,
-                    decision: "deny".to_string(),
+                    decision: decision_str,
                     risk_score,
                     risk_level,
-                    reason: "Audit writer unavailable (database write failed): action denied (audit_writer_unavailable, fail-closed).".to_string(),
-                    matched_policies: vec!["audit_writer_unavailable".to_string()],
+                    composite_risk_score: risk_score,
+                    reason,
+                    matched_policies,
                     approval: None,
                 }),
             )
                 .into_response();
         }
-
-        // Low-risk, non-mutating action: degrade gracefully — allow without a
-        // persisted audit record, but log a warning so operators can see the gap.
-        tracing::warn!(
-            tool = %payload.tool_call.tool,
-            action = %payload.tool_call.action,
-            "Audit writer unavailable for low-risk action; allowing without persisted audit record"
-        );
-        return (
-            StatusCode::OK,
-            Json(AuthorizeResponse {
-                decision_id,
-                decision: decision_str,
-                risk_score,
-                risk_level,
-                reason,
-                matched_policies,
-                approval: None,
-            }),
-        )
-            .into_response();
-    } else {
-        state
-            .audit_writer_unhealthy
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-    }
+    };
 
     // Emit a verifiable, hash-chained receipt for this decision (non-fatal).
     emit_action_receipt(
@@ -2837,6 +2885,7 @@ pub async fn authorize_action(
             decision: decision_str,
             risk_score,
             risk_level,
+            composite_risk_score,
             reason,
             matched_policies,
             approval: approval_info,
@@ -4222,6 +4271,46 @@ async fn record_policy_audit_log(
     .await
     {
         error!("Failed to append policy_audit_log entry: {:?}", e);
+    }
+}
+
+/// #1289: returns the effective per-tenant composite-risk-score weights
+/// (DB override if present, otherwise `RiskWeights::from_env()`). Advisory
+/// configuration only — never affects `allow`/`deny`/`require_approval`.
+pub async fn get_tenant_risk_weights(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::get_risk_weights(&state.pool, &tenant_id).await {
+        Ok(weights) => (StatusCode::OK, Json(weights)).into_response(),
+        Err(e) => {
+            error!("Failed to get tenant risk weights: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1289: upserts per-tenant composite-risk-score weight overrides.
+/// Advisory configuration only — never affects `allow`/`deny`/`require_approval`.
+pub async fn put_tenant_risk_weights(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(weights): Json<crate::risk::RiskWeights>,
+) -> impl IntoResponse {
+    match db::upsert_risk_weights(&state.pool, &tenant_id, &weights).await {
+        Ok(_) => (StatusCode::OK, Json(weights)).into_response(),
+        Err(e) => {
+            error!("Failed to upsert tenant risk weights: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -6376,6 +6465,20 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     }
                 }
             },
+            "/v1/tenants/risk-weights": {
+                "get": {
+                    "summary": "Get the tenant's composite risk score weights (#1289, advisory)",
+                    "responses": {
+                        "200": { "description": "Effective risk weights (per-tenant override or env-configured defaults)" }
+                    }
+                },
+                "put": {
+                    "summary": "Set the tenant's composite risk score weight overrides (#1289, advisory)",
+                    "responses": {
+                        "200": { "description": "Risk weights updated" }
+                    }
+                }
+            },
             "/v1/webhook_subscriptions": {
                 "get": {
                     "summary": "List tenant webhook subscriptions",
@@ -6840,6 +6943,7 @@ pub mod benchutil {
                 matched_policy_ids: None,
                 request_id: None,
                 latency_ms: Some(1),
+                composite_risk_score: Some(1),
                 created_at: Utc::now(),
             };
             db::insert_decision(pool, &record).await?;
@@ -12288,6 +12392,7 @@ mod tests {
             matched_policy_ids: None,
             request_id: None,
             latency_ms: None,
+            composite_risk_score: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record1).await.unwrap();
@@ -12310,6 +12415,7 @@ mod tests {
             matched_policy_ids: None,
             request_id: None,
             latency_ms: None,
+            composite_risk_score: None,
             created_at: Utc::now() - Duration::seconds(10),
         };
         db::insert_decision(&state.pool, &record2).await.unwrap();
@@ -12405,6 +12511,7 @@ mod tests {
             matched_policy_ids: None,
             request_id: None,
             latency_ms: None,
+            composite_risk_score: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record_dec).await.unwrap();
@@ -16132,5 +16239,140 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// #1289: every `/v1/authorize` response carries an advisory
+    /// `composite_risk_score` in `0..=100`, computed *after* the Cedar
+    /// decision and never gating it (Law 1).
+    #[tokio::test]
+    async fn authorize_allow_response_has_composite_risk_score() {
+        let (state, tenant_id, agent_token) = setup_state("composite_risk_allow").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "allow");
+        assert!((0..=100).contains(&response.composite_risk_score));
+    }
+
+    /// #1289: a denied decision (here, an untrusted mutating action) still
+    /// carries a `composite_risk_score` — the score is display metadata and
+    /// does not influence the `deny` outcome.
+    #[tokio::test]
+    async fn authorize_deny_response_has_composite_risk_score() {
+        let (state, tenant_id, agent_token) = setup_state("composite_risk_deny").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "untrusted_external".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "deny");
+        assert!((0..=100).contains(&response.composite_risk_score));
+    }
+
+    /// #1289: a `require_approval` decision carries a `composite_risk_score`
+    /// that reflects the untrusted-provenance penalty (semi_trusted_customer
+    /// is penalized less than untrusted_external, but more than
+    /// trusted_internal_signed for an otherwise-identical action).
+    #[tokio::test]
+    async fn authorize_require_approval_response_has_composite_risk_score() {
+        let (state, tenant_id, agent_token) = setup_state("composite_risk_approval").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "semi_trusted_customer".to_string();
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "require_approval");
+        assert!((0..=100).contains(&response.composite_risk_score));
+        // semi_trusted_customer + mutating > a plain trusted_internal_signed,
+        // non-mutating read carries less risk.
+        assert!(response.composite_risk_score > 0);
+    }
+
+    /// #1289: an idempotent replay (`request_id` reuse) returns the same
+    /// `composite_risk_score` as the original decision.
+    #[tokio::test]
+    async fn authorize_idempotent_replay_preserves_composite_risk_score() {
+        let (state, tenant_id, agent_token) = setup_state("composite_risk_replay").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.context.source_trust = "trusted_internal_signed".to_string();
+        request.request_id = Some("composite-risk-replay-1".to_string());
+
+        let first = call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        let second = call_authorize(state, &tenant_id, &agent_token, request).await;
+
+        assert_eq!(first.decision, second.decision);
+        assert_eq!(first.composite_risk_score, second.composite_risk_score);
+    }
+
+    /// #1289: `GET /v1/tenants/risk-weights` returns the built-in defaults
+    /// when no per-tenant override has been configured.
+    #[tokio::test]
+    async fn get_tenant_risk_weights_returns_defaults_when_unset() {
+        let (state, tenant_id, _) = setup_state("risk_weights_get_default").await;
+
+        let response = get_tenant_risk_weights(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let weights: crate::risk::RiskWeights = serde_json::from_slice(&body).unwrap();
+        assert_eq!(weights, crate::risk::RiskWeights::from_env());
+    }
+
+    /// #1289: `PUT /v1/tenants/risk-weights` persists an override, and a
+    /// subsequent `GET` returns it; a different tenant's weights are
+    /// unaffected (tenant isolation).
+    #[tokio::test]
+    async fn put_tenant_risk_weights_round_trips_and_is_tenant_scoped() {
+        let (state, tenant_id, _) = setup_state("risk_weights_put_roundtrip").await;
+        let other_tenant = "tenant_other_risk_weights";
+        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
+            .await
+            .unwrap();
+
+        let mut custom = crate::risk::RiskWeights::DEFAULT;
+        custom.environment_weight_mutating = 42;
+        custom.mcp_trust_penalty = 7;
+
+        let response_put = put_tenant_risk_weights(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(custom),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_put.status(), StatusCode::OK);
+
+        // GET for the configured tenant returns the override.
+        let response_get =
+            get_tenant_risk_weights(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
+        assert_eq!(response_get.status(), StatusCode::OK);
+        let body_get = to_bytes(response_get.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let weights_get: crate::risk::RiskWeights = serde_json::from_slice(&body_get).unwrap();
+        assert_eq!(weights_get, custom);
+
+        // GET for a different tenant is unaffected (still defaults).
+        let response_other =
+            get_tenant_risk_weights(State(state.clone()), TenantId(other_tenant.to_string()))
+                .await
+                .into_response();
+        assert_eq!(response_other.status(), StatusCode::OK);
+        let body_other = to_bytes(response_other.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let weights_other: crate::risk::RiskWeights = serde_json::from_slice(&body_other).unwrap();
+        assert_eq!(weights_other, crate::risk::RiskWeights::from_env());
     }
 }
