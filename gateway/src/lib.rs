@@ -19,6 +19,7 @@ pub mod correlate;
 pub mod db;
 pub mod detect;
 pub mod events;
+pub mod graph;
 pub mod ingest;
 pub mod jobs;
 pub mod metrics;

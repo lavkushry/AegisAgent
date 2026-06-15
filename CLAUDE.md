@@ -29,7 +29,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - `aegis-jcs-1` canonicalizer (`src/canon.ts`), `AegisClient`, `protect()`.
 - `tsc --noEmit` build + `node --test` suite + cross-language corpus CI gate.
 
-**Rust gateway — 398 tests, verified on `main`:**
+**Rust gateway — 406 tests, verified on `main`:**
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
 - Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409).
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
@@ -42,6 +42,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - **Behavioral baselining** (`baseline.rs`): per-agent action frequency baselines with anomaly detection.
 - **Kubernetes probes**: `/livez`, `/readyz`, `/startupz`.
 - **Composite risk score** (`risk.rs`, #1289): advisory `composite_risk_score` (0-100) on every `/v1/authorize` response and `decisions` row — base risk + environment/context-trust/MCP penalties + anomaly score - approval credit; per-tenant weight overrides via `GET|PUT /v1/tenants/risk-weights` (env-configured defaults otherwise). Display/audit metadata only — never gates `decision` (Law 1).
+- **Evidence graph schema** (`graph.rs`, #1271): `EvidenceGraph { nodes: Vec<GraphNode>, edges: Vec<GraphEdge> }` — `GraphNode` (`id`/`group: NodeType`/`label`/`timestamp`/`metadata`) and `GraphEdge` (`from`/`to`/`label: EdgeType`/`timestamp`) serialize directly to vis.js Network's expected field names. `NodeType` covers `agent|run|tool_call|decision|approval|receipt|incident|mcp_server|policy`; `EdgeType` covers `triggered_by|executed|decided|approved|produced|linked_to`. Pure data-model only — no DB/endpoint changes yet; #1272 will add `/v1/graph/*` query endpoints that build an `EvidenceGraph` from existing tables at query time.
 - Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
 
 **Next:** real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend, Kubernetes/Helm packaging.
