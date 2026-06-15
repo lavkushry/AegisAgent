@@ -894,6 +894,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(routes::get_soc_rules).post(routes::create_soc_rule),
         )
         .route("/v1/soc/rules/reload", post(routes::reload_soc_rules))
+        // #1272: Evidence Graph Query API
+        .route("/v1/graph/run/:run_id", get(routes::get_graph_for_run))
+        .route(
+            "/v1/graph/incident/:incident_id",
+            get(routes::get_graph_for_incident),
+        )
+        .route(
+            "/v1/graph/agent/:agent_id",
+            get(routes::get_graph_for_agent),
+        )
         .route(
             "/v1/api_keys",
             get(routes::list_api_keys).post(routes::create_api_key),

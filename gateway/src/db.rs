@@ -2456,6 +2456,63 @@ pub async fn get_decision_by_id(
     .await
 }
 
+/// #1272: all decisions for a single agent run, tenant-scoped. Used to build
+/// the `GET /v1/graph/run/:run_id` evidence subgraph.
+pub async fn list_decisions_by_run_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    run_id: &str,
+) -> Result<Vec<DecisionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND run_id = ?
+         ORDER BY created_at ASC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(SOC_MAX_LIMIT)
+    .fetch_all(pool)
+    .await
+}
+
+/// #1272: the receipt produced for a decision (if any), tenant-scoped. Used
+/// to add a `Receipt` node to the `GET /v1/graph/*` evidence subgraph.
+pub async fn get_action_receipt_by_decision_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_id: &str,
+) -> Result<Option<ActionReceiptRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ActionReceiptRecord>(
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
+         FROM action_receipts
+         WHERE tenant_id = ? AND decision_id = ?",
+    )
+    .bind(tenant_id)
+    .bind(decision_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// #1272: the `decision_id` an audit event was linked to (#1301), tenant-scoped.
+/// Used to walk `soc_incidents.source_event_ids` -> `decisions` for the
+/// `GET /v1/graph/incident/:incident_id` evidence subgraph.
+pub async fn get_audit_event_decision_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    event_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT decision_id FROM audit_events WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await
+    .map(|opt| opt.flatten())
+}
+
 pub async fn insert_approval(
     pool: &SqlitePool,
     record: &ApprovalRecord,
