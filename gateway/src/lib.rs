@@ -29,4 +29,5 @@ pub mod policy;
 pub mod respond;
 pub mod risk;
 pub mod routes;
+pub mod rule_dsl;
 pub mod sign;

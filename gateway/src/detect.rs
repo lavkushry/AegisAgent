@@ -1,9 +1,9 @@
 //! Phase 1 — the deterministic detection rule engine (the SOC's "rules").
 //!
 //! The Phase 0 [`crate::events::drain`] consumer feeds every [`AseEvent`] through
-//! a [`Detector`]. Each rule is a **pure, atomic** function
-//! `(&AseEvent) -> Option<Alert>` — it inspects exactly one already-decided event
-//! and emits at most one [`Alert`]. The engine obeys the Agent-SOC design laws:
+//! a [`Detector`]. Each rule is a [`crate::rule_dsl::YamlRule`] — a pure,
+//! deterministic match against one already-decided event, producing at most one
+//! [`Alert`] per rule. The engine obeys the Agent-SOC design laws:
 //!
 //! * **Law 1 — deterministic only.** Rules match on the Cedar verdict and policy
 //!   identifiers, never on a tunable score. `risk_score` is read only where Cedar
@@ -17,8 +17,14 @@
 //!
 //! Alerts carry identifiers and a human summary only — never raw payloads or
 //! secrets (the moat's redaction invariant).
+//!
+//! #1282: the rule set is now YAML-driven ([`crate::rule_dsl`]). The
+//! gateway's built-in rules ([`crate::rule_dsl::default_rules`]) are the YAML
+//! equivalents of the original hardcoded Rust functions; tenant-custom rules
+//! loaded from `detection_rules` are evaluated the same way.
 
 use crate::events::AseEvent;
+use crate::rule_dsl::YamlRule;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -34,7 +40,7 @@ pub struct Alert {
     pub tenant_id: String,
     /// Stable rule identifier that fired (e.g. `"confused_deputy_block"`).
     pub rule: String,
-    /// `"high"` | `"info"`.
+    /// `"high"` | `"medium"` | `"low"` | `"info"`.
     pub severity: String,
     pub agent_id: String,
     /// Human-readable, secret-free description of why the rule fired.
@@ -44,199 +50,61 @@ pub struct Alert {
 }
 
 impl Alert {
-    /// Build an alert from the triggering event, inheriting its tenant, agent,
-    /// timestamp, and id as immutable evidence references.
-    fn from_event(event: &AseEvent, rule: &str, severity: &str, summary: String) -> Self {
+    /// Build an alert from the triggering event and the [`YamlRule`] that
+    /// matched, inheriting the event's tenant, agent, timestamp, and id as
+    /// immutable evidence references.
+    fn from_match(event: &AseEvent, rule: &YamlRule) -> Self {
         Alert {
             alert_id: Uuid::new_v4().to_string(),
             occurred_at: event.occurred_at.clone(),
             tenant_id: event.tenant_id.clone(),
-            rule: rule.to_string(),
-            severity: severity.to_string(),
+            rule: rule.name.clone(),
+            severity: rule.severity.clone(),
             agent_id: event.agent_id.clone(),
-            summary,
+            summary: rule.render_summary(event),
             source_event_id: event.event_id.clone(),
         }
     }
 }
 
-/// `risk_score` the gateway pins to the `critical` registered tier
-/// (`routes::risk_score_for_level`). Used only to recognize an already-critical
-/// Cedar decision — never to gate one (Law 1).
-const CRITICAL_RISK_SCORE: i32 = 100;
-
-/// True if any matched policy or the decision reason carries a substring (ASCII
-/// case-insensitive). Deterministic field matching only.
-fn signals(event: &AseEvent, needles: &[&str]) -> bool {
-    let reason = event.reason.to_ascii_lowercase();
-    let policies: Vec<String> = event
-        .matched_policies
-        .iter()
-        .map(|p| p.to_ascii_lowercase())
-        .collect();
-    needles.iter().any(|needle| {
-        let n = needle.to_ascii_lowercase();
-        reason.contains(&n) || policies.iter().any(|p| p.contains(&n))
-    })
-}
-
-/// Rule (a) `confused_deputy_block` — HIGH.
-///
-/// A `deny` whose matched policy / reason shows the trigger came from untrusted or
-/// malicious-suspected provenance and the action mutates state. This is the
-/// confused-deputy / indirect-prompt-injection signature (ATLAS AML.T0051 /
-/// OWASP LLM01): external content drove a mutating action and Cedar denied it.
-pub fn confused_deputy_block(event: &AseEvent) -> Option<Alert> {
-    if event.decision != "deny" {
-        return None;
-    }
-    let untrusted_provenance = signals(event, &["untrusted", "malicious"]);
-    let mutating = signals(event, &["mutat", "mutation"]);
-    if untrusted_provenance && mutating {
-        return Some(Alert::from_event(
-            event,
-            "confused_deputy_block",
-            "high",
-            format!(
-                "Mutating action {}/{} denied: triggered by untrusted/malicious provenance \
-                 (confused-deputy / indirect prompt injection)",
-                event.tool, event.action
-            ),
-        ));
-    }
-    None
-}
-
-/// Rule (b) `approval_required_surface` — INFO.
-///
-/// Surfaces every `require_approval` decision so the SOC console / notify sink
-/// can show a human-in-the-loop gate was hit. Informational only.
-pub fn approval_required_surface(event: &AseEvent) -> Option<Alert> {
-    if event.decision != "require_approval" {
-        return None;
-    }
-    Some(Alert::from_event(
-        event,
-        "approval_required_surface",
-        "info",
-        format!(
-            "Human approval required for {}/{}",
-            event.tool, event.action
-        ),
-    ))
-}
-
-/// Rule (c) `critical_deny` — HIGH.
-///
-/// A decision Cedar already pinned to the critical tier (`risk_score >= 100`) or
-/// one matched against a critical / unknown-MCP-tool policy. Catches
-/// fail-closed denials of unknown MCP tools (ATLAS AML.T0010 / OWASP LLM03) and
-/// any critical-tier action. The score is only *recognized* here, never used to
-/// decide — the inline Cedar verdict already stands (Law 1).
-pub fn critical_deny(event: &AseEvent) -> Option<Alert> {
-    let critical_score = event.risk_score >= CRITICAL_RISK_SCORE;
-    let critical_policy = signals(event, &["mcp_unknown_tool", "critical"]);
-    if critical_score || critical_policy {
-        return Some(Alert::from_event(
-            event,
-            "critical_deny",
-            "high",
-            format!(
-                "Critical-tier or unknown-MCP-tool action {}/{} (decision={})",
-                event.tool, event.action, event.decision
-            ),
-        ));
-    }
-    None
-}
-
-/// Rule (d) `replay_attempt` — HIGH.
-///
-/// An approval-integrity violation surfaced off the inline authorize path: a
-/// consume of an already-used / expired approval (replay, T-A3 / T-D), or an
-/// attempt to grant an expired approval. The gateway's tamper path
-/// (`routes::emit_tamper_attempt_receipt`) records a tamper-evident receipt and
-/// also emits an `AseEvent` with `kind == "replay_attempt"`. This rule closes the
-/// integrity→SOC loop: every such attempt becomes a HIGH SOC alert visible in
-/// `GET /v1/alerts`, not only in the receipt chain. Deterministic field match on
-/// the event kind only (Laws 1–2); carries ids + violation tag, no payloads.
-pub fn replay_attempt(event: &AseEvent) -> Option<Alert> {
-    if event.kind != "replay_attempt" {
-        return None;
-    }
-    Some(Alert::from_event(
-        event,
-        "replay_attempt",
-        "high",
-        format!(
-            "Approval-integrity violation ({}/{}) — replay/tamper attempt: {}",
-            event.tool, event.action, event.reason
-        ),
-    ))
-}
-
-/// MCP tool-manifest drift: an MCP server's advertised tool manifest changed
-/// versus the hash pinned at an earlier discovery. The gateway recomputes a
-/// server-integrity hash on every `discover_mcp_tools` and emits an `AseEvent`
-/// with `kind == "mcp_manifest_drift"` when it diverges from the pin. Drift is a
-/// supply-chain / tool-hijack signal — the manifest the operator approved is not
-/// the one now being advertised.
-///
-/// #1336: severity is no longer a flat "high" for every drift — the gateway
-/// classifies *what* changed (`tool_added`/`tool_removed` vs `tool_modified` vs
-/// `metadata_changed`) and encodes that classification's severity in
-/// `event.risk_score` using the same buckets as `risk_score_for_level`
-/// (high >= 75, medium >= 40, else low). Deterministic field match on the event
-/// kind + risk_score only (Laws 1–2); carries the server key + hashes + a
-/// tool-key-only diff, no payloads.
-pub fn mcp_manifest_drift(event: &AseEvent) -> Option<Alert> {
-    if event.kind != "mcp_manifest_drift" {
-        return None;
-    }
-    let severity = if event.risk_score >= 75 {
-        "high"
-    } else if event.risk_score >= 40 {
-        "medium"
-    } else {
-        "low"
-    };
-    Some(Alert::from_event(
-        event,
-        "mcp_manifest_drift",
-        severity,
-        format!(
-            "MCP tool-manifest drift on '{}' — advertised manifest differs from the pinned hash: {}",
-            event.resource.as_deref().unwrap_or(event.tool.as_str()),
-            event.reason
-        ),
-    ))
-}
-
-/// The deterministic detection engine. Holds the ordered list of atomic rules and
-/// runs every one over each event.
+/// The deterministic detection engine. Evaluates the built-in
+/// [`crate::rule_dsl::default_rules`] (cached once) plus any tenant-custom
+/// rules passed to [`Detector::evaluate`].
 pub struct Detector {
-    rules: Vec<fn(&AseEvent) -> Option<Alert>>,
+    default_rules: Vec<YamlRule>,
 }
 
 impl Default for Detector {
     fn default() -> Self {
         Detector {
-            rules: vec![
-                confused_deputy_block,
-                approval_required_surface,
-                critical_deny,
-                replay_attempt,
-                mcp_manifest_drift,
-            ],
+            default_rules: crate::rule_dsl::default_rules(),
         }
     }
 }
 
 impl Detector {
-    /// Run every atomic rule over one event, collecting all alerts that fire.
-    /// Pure: no I/O, no shared state, no correlation across events (Laws 1–3).
-    pub fn evaluate(&self, event: &AseEvent) -> Vec<Alert> {
-        self.rules.iter().filter_map(|rule| rule(event)).collect()
+    /// Run the built-in rules plus `tenant_rules` over one event, collecting
+    /// every alert that fires. Pure: no I/O, no shared state, no correlation
+    /// across events (Laws 1-3).
+    ///
+    /// Alerts are deduplicated by `(rule_name, source_event_id)`, keeping the
+    /// first match — this preserves the pre-#1282 semantics where
+    /// `critical_deny` and `mcp_manifest_drift` each fired at most once per
+    /// event even though multiple conditions could independently match.
+    pub fn evaluate(&self, event: &AseEvent, tenant_rules: &[YamlRule]) -> Vec<Alert> {
+        let mut alerts: Vec<Alert> = Vec::new();
+        let mut seen_rule_names: Vec<&str> = Vec::new();
+        for rule in self.default_rules.iter().chain(tenant_rules.iter()) {
+            if !rule.matches(event) {
+                continue;
+            }
+            if seen_rule_names.contains(&rule.name.as_str()) {
+                continue;
+            }
+            seen_rule_names.push(&rule.name);
+            alerts.push(Alert::from_match(event, rule));
+        }
+        alerts
     }
 }
 
@@ -263,17 +131,21 @@ mod tests {
         }
     }
 
-    // --- Rule (a): confused_deputy_block ---
+    // --- confused_deputy_block ---
 
     #[test]
     fn mutating_deny_with_untrusted_provenance_fires_confused_deputy() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.reason = "Mutating action from untrusted_external content".to_string();
         ev.matched_policies = vec!["forbid-untrusted-mutation".to_string()];
 
-        let alert = confused_deputy_block(&ev).expect("rule should fire");
-        assert_eq!(alert.rule, "confused_deputy_block");
+        let alerts = det.evaluate(&ev, &[]);
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule == "confused_deputy_block")
+            .expect("rule should fire");
         assert_eq!(alert.severity, "high");
         assert_eq!(alert.tenant_id, "tenant_123");
         assert_eq!(alert.agent_id, "coding-agent-prod");
@@ -283,89 +155,140 @@ mod tests {
 
     #[test]
     fn malicious_suspected_mutation_fires_confused_deputy() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.reason = "denied".to_string();
         ev.matched_policies = vec!["forbid-malicious-mutation".to_string()];
-        assert!(confused_deputy_block(&ev).is_some());
+        let alerts = det.evaluate(&ev, &[]);
+        assert!(alerts.iter().any(|a| a.rule == "confused_deputy_block"));
     }
 
     #[test]
     fn allow_decision_never_fires_confused_deputy() {
+        let det = Detector::default();
         let ev = base_event(); // decision == "allow"
-        assert!(confused_deputy_block(&ev).is_none());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .all(|a| a.rule != "confused_deputy_block"));
     }
 
     #[test]
     fn deny_without_untrusted_provenance_does_not_fire_confused_deputy() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.reason = "Mutating action denied (critical tier)".to_string();
         ev.matched_policies = vec!["forbid-critical".to_string()];
         // mutating but no untrusted/malicious provenance signal -> not confused deputy
-        assert!(confused_deputy_block(&ev).is_none());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .all(|a| a.rule != "confused_deputy_block"));
     }
 
     #[test]
     fn deny_untrusted_but_non_mutating_does_not_fire_confused_deputy() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.reason = "untrusted_external read denied".to_string();
         ev.matched_policies = vec!["forbid-untrusted-read".to_string()];
-        assert!(confused_deputy_block(&ev).is_none());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .all(|a| a.rule != "confused_deputy_block"));
     }
 
-    // --- Rule (b): approval_required_surface ---
+    // --- approval_required_surface ---
 
     #[test]
     fn require_approval_fires_info_surface() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "require_approval".to_string();
-        let alert = approval_required_surface(&ev).expect("rule should fire");
-        assert_eq!(alert.rule, "approval_required_surface");
-        assert_eq!(alert.severity, "info");
+        let alerts = det.evaluate(&ev, &[]);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule, "approval_required_surface");
+        assert_eq!(alerts[0].severity, "info");
     }
 
     #[test]
     fn allow_does_not_fire_approval_surface() {
+        let det = Detector::default();
         let ev = base_event();
-        assert!(approval_required_surface(&ev).is_none());
+        assert!(det.evaluate(&ev, &[]).is_empty());
     }
 
-    // --- Rule (c): critical_deny ---
+    // --- critical_deny ---
 
     #[test]
     fn unknown_mcp_tool_fires_critical_deny_high() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.tool = "unknown-mcp".to_string();
         ev.reason = "Unknown MCP tool".to_string();
         ev.matched_policies = vec!["mcp_unknown_tool".to_string()];
-        let alert = critical_deny(&ev).expect("rule should fire");
-        assert_eq!(alert.rule, "critical_deny");
+        let alerts = det.evaluate(&ev, &[]);
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule == "critical_deny")
+            .expect("rule should fire");
         assert_eq!(alert.severity, "high");
     }
 
     #[test]
     fn critical_risk_score_fires_critical_deny() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.risk_score = 100;
-        assert!(critical_deny(&ev).is_some());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .any(|a| a.rule == "critical_deny"));
     }
 
     #[test]
     fn critical_policy_substring_fires_critical_deny() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.matched_policies = vec!["forbid-critical-action".to_string()];
-        assert!(critical_deny(&ev).is_some());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .any(|a| a.rule == "critical_deny"));
     }
 
     #[test]
     fn non_critical_allow_does_not_fire_critical_deny() {
+        let det = Detector::default();
         let ev = base_event(); // risk 40, no critical/mcp policy
-        assert!(critical_deny(&ev).is_none());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .all(|a| a.rule != "critical_deny"));
+    }
+
+    #[test]
+    fn risk_score_and_policy_both_matching_fires_critical_deny_once() {
+        // Both `critical_deny_risk_score` and `critical_deny_policy` could
+        // independently match — dedup by rule name keeps this at one alert,
+        // preserving pre-#1282 single-alert semantics.
+        let det = Detector::default();
+        let mut ev = base_event();
+        ev.decision = "deny".to_string();
+        ev.risk_score = 100;
+        ev.matched_policies = vec!["mcp_unknown_tool".to_string()];
+        let all_alerts = det.evaluate(&ev, &[]);
+        let alerts: Vec<&Alert> = all_alerts
+            .iter()
+            .filter(|a| a.rule == "critical_deny")
+            .collect();
+        assert_eq!(alerts.len(), 1);
     }
 
     // --- Detector::evaluate (all rules) ---
@@ -374,7 +297,7 @@ mod tests {
     fn evaluate_allow_produces_no_alerts() {
         let det = Detector::default();
         let ev = base_event();
-        assert!(det.evaluate(&ev).is_empty());
+        assert!(det.evaluate(&ev, &[]).is_empty());
     }
 
     #[test]
@@ -382,7 +305,7 @@ mod tests {
         let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "require_approval".to_string();
-        let alerts = det.evaluate(&ev);
+        let alerts = det.evaluate(&ev, &[]);
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].rule, "approval_required_surface");
         assert_eq!(alerts[0].severity, "info");
@@ -395,7 +318,7 @@ mod tests {
         ev.decision = "deny".to_string();
         ev.reason = "Mutating action from untrusted_external content".to_string();
         ev.matched_policies = vec!["forbid-untrusted-mutation".to_string()];
-        let alerts = det.evaluate(&ev);
+        let alerts = det.evaluate(&ev, &[]);
         assert!(alerts
             .iter()
             .any(|a| a.rule == "confused_deputy_block" && a.severity == "high"));
@@ -408,23 +331,27 @@ mod tests {
         ev.decision = "deny".to_string();
         ev.reason = "Unknown MCP tool".to_string();
         ev.matched_policies = vec!["mcp_unknown_tool".to_string()];
-        let alerts = det.evaluate(&ev);
+        let alerts = det.evaluate(&ev, &[]);
         assert!(alerts
             .iter()
             .any(|a| a.rule == "critical_deny" && a.severity == "high"));
     }
 
-    // --- Rule (d): replay_attempt ---
+    // --- replay_attempt ---
 
     #[test]
     fn replay_attempt_event_fires_high_alert() {
+        let det = Detector::default();
         let mut ev = base_event();
         ev.kind = "replay_attempt".to_string();
         ev.decision = "deny".to_string();
         ev.tool = "consume_not_consumable".to_string();
         ev.action = "tamper_attempt".to_string();
-        let alert = replay_attempt(&ev).expect("rule should fire");
-        assert_eq!(alert.rule, "replay_attempt");
+        let alerts = det.evaluate(&ev, &[]);
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule == "replay_attempt")
+            .expect("rule should fire");
         assert_eq!(alert.severity, "high");
         assert_eq!(alert.tenant_id, "tenant_123");
         assert_eq!(alert.source_event_id, "evt_test_1");
@@ -432,8 +359,12 @@ mod tests {
 
     #[test]
     fn authorize_decision_does_not_fire_replay_attempt() {
+        let det = Detector::default();
         let ev = base_event(); // kind == "authorize_decision"
-        assert!(replay_attempt(&ev).is_none());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .all(|a| a.rule != "replay_attempt"));
     }
 
     #[test]
@@ -444,7 +375,7 @@ mod tests {
         ev.decision = "deny".to_string();
         ev.tool = "consume_not_consumable".to_string();
         ev.action = "tamper_attempt".to_string();
-        let alerts = det.evaluate(&ev);
+        let alerts = det.evaluate(&ev, &[]);
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].rule, "replay_attempt");
         assert_eq!(alerts[0].severity, "high");
@@ -454,10 +385,13 @@ mod tests {
     fn evaluate_normal_authorize_decision_does_not_fire_replay_attempt() {
         let det = Detector::default();
         let ev = base_event(); // kind == "authorize_decision", decision == "allow"
-        assert!(det.evaluate(&ev).iter().all(|a| a.rule != "replay_attempt"));
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .all(|a| a.rule != "replay_attempt"));
     }
 
-    // --- Rule (e): mcp_manifest_drift ---
+    // --- mcp_manifest_drift ---
 
     fn drift_event() -> AseEvent {
         let mut ev = base_event();
@@ -476,9 +410,13 @@ mod tests {
 
     #[test]
     fn mcp_manifest_drift_event_fires_high_alert() {
+        let det = Detector::default();
         let ev = drift_event();
-        let alert = mcp_manifest_drift(&ev).expect("rule should fire");
-        assert_eq!(alert.rule, "mcp_manifest_drift");
+        let alerts = det.evaluate(&ev, &[]);
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule == "mcp_manifest_drift")
+            .expect("rule should fire");
         assert_eq!(alert.severity, "high");
         assert_eq!(alert.tenant_id, "tenant_123");
         assert_eq!(alert.source_event_id, "evt_test_1");
@@ -487,14 +425,18 @@ mod tests {
 
     #[test]
     fn authorize_decision_does_not_fire_mcp_manifest_drift() {
+        let det = Detector::default();
         let ev = base_event(); // kind == "authorize_decision"
-        assert!(mcp_manifest_drift(&ev).is_none());
+        assert!(det
+            .evaluate(&ev, &[])
+            .iter()
+            .all(|a| a.rule != "mcp_manifest_drift"));
     }
 
     #[test]
     fn evaluate_mcp_manifest_drift_produces_single_high_alert() {
         let det = Detector::default();
-        let alerts = det.evaluate(&drift_event());
+        let alerts = det.evaluate(&drift_event(), &[]);
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].rule, "mcp_manifest_drift");
         assert_eq!(alerts[0].severity, "high");
@@ -505,12 +447,17 @@ mod tests {
     /// medium-severity alert, not the flat "high" of every prior drift.
     #[test]
     fn mcp_manifest_drift_tool_modified_fires_medium_alert() {
+        let det = Detector::default();
         let mut ev = drift_event();
         ev.risk_score = 40;
         ev.reason = "MCP tool-manifest drift on server 'github' (tool_modified): pinned \
                       sha256:aaa != observed sha256:bbb — tools modified: create_issue"
             .to_string();
-        let alert = mcp_manifest_drift(&ev).expect("rule should fire");
+        let alerts = det.evaluate(&ev, &[]);
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule == "mcp_manifest_drift")
+            .expect("rule should fire");
         assert_eq!(alert.severity, "medium");
     }
 
@@ -518,28 +465,81 @@ mod tests {
     /// `risk_score: 10` and must surface as a low-severity alert.
     #[test]
     fn mcp_manifest_drift_metadata_changed_fires_low_alert() {
+        let det = Detector::default();
         let mut ev = drift_event();
         ev.risk_score = 10;
         ev.reason = "MCP tool-manifest drift on server 'github' (metadata_changed): pinned \
                       sha256:aaa != observed sha256:bbb — metadata changed: create_issue"
             .to_string();
-        let alert = mcp_manifest_drift(&ev).expect("rule should fire");
+        let alerts = det.evaluate(&ev, &[]);
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule == "mcp_manifest_drift")
+            .expect("rule should fire");
         assert_eq!(alert.severity, "low");
     }
 
     #[test]
     fn evaluate_critical_untrusted_mutation_can_produce_two_alerts() {
         // A deny that is BOTH untrusted-mutating AND critical-tier fires two
-        // independent atomic rules — each rule is evaluated in isolation.
+        // independent rules — each rule is evaluated in isolation.
         let det = Detector::default();
         let mut ev = base_event();
         ev.decision = "deny".to_string();
         ev.risk_score = 100;
         ev.reason = "Mutating action from untrusted_external content".to_string();
         ev.matched_policies = vec!["forbid-untrusted-critical-mutation".to_string()];
-        let alerts = det.evaluate(&ev);
+        let alerts = det.evaluate(&ev, &[]);
         assert_eq!(alerts.len(), 2);
         assert!(alerts.iter().any(|a| a.rule == "confused_deputy_block"));
         assert!(alerts.iter().any(|a| a.rule == "critical_deny"));
+    }
+
+    // --- tenant-custom rules ---
+
+    #[test]
+    fn tenant_custom_rule_fires_alongside_default_rules() {
+        let det = Detector::default();
+        let custom = YamlRule {
+            rule_key: "custom_github_deny".to_string(),
+            name: "custom_github_deny".to_string(),
+            severity: "medium".to_string(),
+            condition: crate::rule_dsl::RuleCondition {
+                decision: Some("deny".to_string()),
+                tool: Some("github".to_string()),
+                ..Default::default()
+            },
+            summary_template: "Custom rule: {tool}.{action} denied".to_string(),
+        };
+        let mut ev = base_event();
+        ev.decision = "deny".to_string();
+        let alerts = det.evaluate(&ev, &[custom]);
+        assert!(alerts.iter().any(|a| a.rule == "custom_github_deny"));
+    }
+
+    #[test]
+    fn tenant_custom_rule_with_same_name_as_default_does_not_duplicate() {
+        let det = Detector::default();
+        // Same `name` as the built-in approval_required_surface rule —
+        // dedup keeps the default's alert and skips this one.
+        let custom = YamlRule {
+            rule_key: "custom_dup".to_string(),
+            name: "approval_required_surface".to_string(),
+            severity: "high".to_string(),
+            condition: crate::rule_dsl::RuleCondition {
+                decision: Some("require_approval".to_string()),
+                ..Default::default()
+            },
+            summary_template: "duplicate".to_string(),
+        };
+        let mut ev = base_event();
+        ev.decision = "require_approval".to_string();
+        let alerts = det.evaluate(&ev, &[custom]);
+        let matching: Vec<&Alert> = alerts
+            .iter()
+            .filter(|a| a.rule == "approval_required_surface")
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].severity, "info"); // default's severity wins
     }
 }

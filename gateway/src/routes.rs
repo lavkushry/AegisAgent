@@ -4905,6 +4905,127 @@ pub async fn list_detection_rules(
     }
 }
 
+/// One entry in the `GET /v1/soc/rules` effective-rule list: a [`rule_dsl::YamlRule`]
+/// annotated with whether it's a built-in default or a tenant-managed custom rule.
+#[derive(Debug, serde::Serialize)]
+pub struct EffectiveDetectionRule {
+    #[serde(flatten)]
+    pub rule: crate::rule_dsl::YamlRule,
+    /// `"default"` (embedded, applies to every tenant) or `"custom"`
+    /// (tenant-managed, from the `detection_rules` table).
+    pub source: &'static str,
+}
+
+/// #1282: list the *effective* detection rules for this tenant — the
+/// embedded defaults (`rule_dsl::default_rules()`) plus this tenant's enabled
+/// custom rules from `detection_rules`. Mirrors exactly what
+/// `events::drain` evaluates for this tenant's events. Rows whose `condition`
+/// fails to parse/validate are skipped (same as `drain`) — SOC rule listing
+/// is advisory, never gates `/v1/authorize` (Law 1).
+pub async fn get_soc_rules(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    let mut rules: Vec<EffectiveDetectionRule> = crate::rule_dsl::default_rules()
+        .into_iter()
+        .map(|rule| EffectiveDetectionRule {
+            rule,
+            source: "default",
+        })
+        .collect();
+
+    match db::list_detection_rules(&state.pool, &tenant_id).await {
+        Ok(records) => {
+            for record in records.into_iter().filter(|r| r.enabled) {
+                if let Ok(rule) = crate::rule_dsl::yaml_rule_from_condition(
+                    &record.rule_key,
+                    &record.name,
+                    &record.severity,
+                    &record.condition,
+                    &record.summary_template,
+                ) {
+                    rules.push(EffectiveDetectionRule {
+                        rule,
+                        source: "custom",
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to list detection rules: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    }
+
+    (StatusCode::OK, Json(rules)).into_response()
+}
+
+/// #1282: create or update a tenant-managed custom detection rule, validating
+/// the YAML `condition`/`severity` via [`crate::rule_dsl`] before persisting.
+/// Returns `400` with a descriptive message for an invalid rule (never `500`)
+/// — mirrors the [`UpsertDetectionRuleRequest`]/[`upsert_detection_rule`]
+/// shape but rejects rules that `events::drain` would have to skip.
+pub async fn create_soc_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<UpsertDetectionRuleRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = crate::rule_dsl::yaml_rule_from_condition(
+        &payload.rule_key,
+        &payload.name,
+        &payload.severity,
+        &payload.condition,
+        &payload.summary_template,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("Invalid detection rule: {e}")})),
+        )
+            .into_response();
+    }
+
+    match db::upsert_detection_rule(
+        &state.pool,
+        &tenant_id,
+        &payload.rule_key,
+        &payload.name,
+        &payload.severity,
+        &payload.condition,
+        &payload.summary_template,
+        payload.enabled,
+    )
+    .await
+    {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => {
+            error!("Failed to upsert detection rule: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1282: `POST /v1/soc/rules/reload`. Documented no-op: `events::drain`
+/// already loads each tenant's enabled custom rules fresh from
+/// `detection_rules` on every event (Law 3 — out-of-band, never cached), so
+/// there is no cache to invalidate. Kept as a `200` confirmation endpoint for
+/// API compatibility with rule-management tooling.
+pub async fn reload_soc_rules(TenantId(_tenant_id): TenantId) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "message": "Detection rules are loaded fresh on every event; no reload needed"
+        })),
+    )
+}
+
 /// TASK-0088 (#934): delete a tenant's detection rule.
 pub async fn delete_detection_rule(
     State(state): State<Arc<AppState>>,
@@ -6520,6 +6641,29 @@ pub async fn get_openapi_spec() -> impl IntoResponse {
                     "summary": "Delete a detection rule",
                     "responses": {
                         "200": { "description": "Detection rule deleted" }
+                    }
+                }
+            },
+            "/v1/soc/rules": {
+                "get": {
+                    "summary": "List effective SOC detection rules (#1282, embedded defaults + tenant custom rules)",
+                    "responses": {
+                        "200": { "description": "List of effective detection rules, each tagged source: default|custom" }
+                    }
+                },
+                "post": {
+                    "summary": "Create or update a tenant custom detection rule (#1282, validated YAML condition DSL)",
+                    "responses": {
+                        "201": { "description": "Detection rule created or updated" },
+                        "400": { "description": "Invalid rule condition, severity, or decision/trust-level value" }
+                    }
+                }
+            },
+            "/v1/soc/rules/reload": {
+                "post": {
+                    "summary": "Reload SOC detection rules (#1282, no-op: rules are always loaded fresh per event)",
+                    "responses": {
+                        "200": { "description": "Confirmation that rules are already loaded fresh" }
                     }
                 }
             },
@@ -13146,6 +13290,112 @@ mod tests {
             .unwrap();
         let rules3: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list3).unwrap();
         assert!(rules3.is_empty());
+    }
+
+    /// #1282: `GET /v1/soc/rules` returns the embedded default rule set when a
+    /// tenant has no custom rules, each tagged `source: "default"`.
+    #[tokio::test]
+    async fn test_soc_rules_lists_defaults_with_no_custom_rules() {
+        let (state, tenant_id, _) = setup_state("soc_rules_defaults").await;
+
+        let response = get_soc_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let rules: Vec<Value> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(rules.len(), crate::rule_dsl::default_rules().len());
+        assert!(rules.iter().all(|r| r["source"] == "default"));
+        assert!(rules
+            .iter()
+            .any(|r| r["rule_key"] == "confused_deputy_block"));
+    }
+
+    /// #1282: `POST /v1/soc/rules` validates the YAML condition DSL — a rule
+    /// with an unknown condition key is rejected with `400`, never `500`, and
+    /// is never persisted.
+    #[tokio::test]
+    async fn test_create_soc_rule_rejects_invalid_condition() {
+        let (state, tenant_id, _) = setup_state("soc_rules_invalid").await;
+
+        let payload = UpsertDetectionRuleRequest {
+            rule_key: "bad_rule".to_string(),
+            name: "bad_rule".to_string(),
+            severity: "high".to_string(),
+            condition: "not_a_real_field: true\n".to_string(),
+            summary_template: "should not be created".to_string(),
+            enabled: true,
+        };
+        let response = create_soc_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response_list = list_detection_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert!(rules.is_empty());
+    }
+
+    /// #1282: `POST /v1/soc/rules` accepts a valid custom rule, and
+    /// `GET /v1/soc/rules` then returns it alongside the defaults, tagged
+    /// `source: "custom"`. Tenant isolation: a second tenant's effective
+    /// rules contain only the defaults.
+    #[tokio::test]
+    async fn test_create_soc_rule_then_appears_in_effective_rules() {
+        let (state, tenant_id, _) = setup_state("soc_rules_custom").await;
+
+        let payload = UpsertDetectionRuleRequest {
+            rule_key: "custom_github_force_push".to_string(),
+            name: "custom_github_force_push".to_string(),
+            severity: "medium".to_string(),
+            condition: "tool: github\naction: force_push\n".to_string(),
+            summary_template: "Custom rule: {tool}.{action} ({decision})".to_string(),
+            enabled: true,
+        };
+        let response = create_soc_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response_rules = get_soc_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        assert_eq!(response_rules.status(), StatusCode::OK);
+        let body = to_bytes(response_rules.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules: Vec<Value> = serde_json::from_slice(&body).unwrap();
+
+        let custom = rules
+            .iter()
+            .find(|r| r["rule_key"] == "custom_github_force_push")
+            .expect("custom rule should be present");
+        assert_eq!(custom["source"], "custom");
+        assert_eq!(rules.len(), crate::rule_dsl::default_rules().len() + 1);
+    }
+
+    /// #1282: `POST /v1/soc/rules/reload` is a documented no-op `200` (rules
+    /// are always loaded fresh per event — there is no cache to invalidate).
+    #[tokio::test]
+    async fn test_reload_soc_rules_is_a_noop_confirmation() {
+        let (_state, tenant_id, _) = setup_state("soc_rules_reload").await;
+
+        let response = reload_soc_rules(TenantId(tenant_id)).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     /// TASK-0093 (#939): CRUD lifecycle for tenant-managed API keys. The

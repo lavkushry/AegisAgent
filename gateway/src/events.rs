@@ -263,7 +263,40 @@ pub async fn drain(
         }
 
         // Phase 1: deterministic, atomic detection over the single event.
-        for alert in detector.evaluate(&ev) {
+        // #1282: load this tenant's enabled custom rules fresh from the DB
+        // (out-of-band, Law 3) and evaluate alongside the embedded defaults.
+        let tenant_rules: Vec<crate::rule_dsl::YamlRule> =
+            match db::list_detection_rules(&pool, &ev.tenant_id).await {
+                Ok(records) => records
+                    .into_iter()
+                    .filter(|r| r.enabled)
+                    .filter_map(|r| {
+                        crate::rule_dsl::yaml_rule_from_condition(
+                            &r.rule_key,
+                            &r.name,
+                            &r.severity,
+                            &r.condition,
+                            &r.summary_template,
+                        )
+                        .map_err(|e| {
+                            warn!(
+                                tenant = %ev.tenant_id,
+                                rule_key = %r.rule_key,
+                                "#1282: skipping invalid custom detection rule: {e}"
+                            );
+                        })
+                        .ok()
+                    })
+                    .collect(),
+                Err(e) => {
+                    error!(
+                        tenant = %ev.tenant_id,
+                        "#1282: failed to load custom detection rules: {:?}", e
+                    );
+                    Vec::new()
+                }
+            };
+        for alert in detector.evaluate(&ev, &tenant_rules) {
             handle_alert(&alert, sink.as_ref(), &pool, notify_enabled, &metrics).await;
         }
 
