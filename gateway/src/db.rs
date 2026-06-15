@@ -1367,6 +1367,24 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Rotate an agent's token: persist the SHA-256 hash of `new_token`,
+/// scoped by `tenant_id` and `agent_id` (CWE-284 tenant isolation).
+pub async fn rotate_agent_token(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    new_token: &str,
+) -> Result<(), sqlx::Error> {
+    let hashed = hash_token(new_token);
+    sqlx::query("UPDATE agents SET agent_token = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND id = ?")
+        .bind(hashed)
+        .bind(tenant_id)
+        .bind(agent_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn get_agent_by_token(
     pool: &SqlitePool,
     tenant_id: &str,
