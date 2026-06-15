@@ -890,6 +890,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::delete(routes::delete_detection_rule),
         )
         .route(
+            "/v1/soc/rules",
+            get(routes::get_soc_rules).post(routes::create_soc_rule),
+        )
+        .route("/v1/soc/rules/reload", post(routes::reload_soc_rules))
+        .route(
             "/v1/api_keys",
             get(routes::list_api_keys).post(routes::create_api_key),
         )

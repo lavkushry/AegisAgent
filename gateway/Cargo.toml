@@ -19,6 +19,8 @@ sqlx = { version = "0.8.1", features = ["runtime-tokio", "sqlite", "uuid", "chro
 cedar-policy = "3.2.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# YAML detection rule DSL (#1282) — deserialize-only, no custom tags.
+serde_yaml = "0.9.34"
 sha2 = "0.10"
 # GitHub webhook signature verification (X-Hub-Signature-256, #1339).
 # `Mac::verify_slice` performs a constant-time comparison.
