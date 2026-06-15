@@ -87,6 +87,7 @@ nav:
       - Threat model: AegisAgent_Threat_Model.md
       - Operational design: AegisAgent_Operational_Design.md
   - Reference:
+      - Fail-closed behavior guide: fail-closed-behavior.md
       - Action receipt spec: action-receipt-spec.md
       - Database schema (ERD): database-schema.md
       - SDK parity status: sdk-parity-status.md
