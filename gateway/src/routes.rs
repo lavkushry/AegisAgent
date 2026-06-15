@@ -3161,6 +3161,7 @@ async fn approve_approval_inner(
                 "error": "Approval already decided",
                 "status": approval.status,
                 "approval_id": approval_id,
+                "reason": "approval_already_decided",
             })),
         )
             .into_response();
@@ -3438,6 +3439,7 @@ async fn edit_approval_inner(
                 "error": "Approval already decided",
                 "status": approval.status,
                 "approval_id": approval_id,
+                "reason": "approval_already_decided",
             })),
         )
             .into_response();
