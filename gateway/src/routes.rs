@@ -5673,7 +5673,9 @@ pub async fn get_graph_for_run(
 
     let agent_id = decisions[0].agent_id.clone();
     let agent_node_id = format!("agent:{agent_id}");
-    if let Ok(Some(agent)) = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+    if let Ok(Some(agent)) =
+        db::get_agent_by_id_any_status(&state.pool, &tenant_id, &agent_id).await
+    {
         seen.insert(agent_node_id.clone());
         graph.add_node(GraphNode::new(
             agent_node_id.clone(),
@@ -5742,7 +5744,8 @@ pub async fn get_graph_for_incident(
     ));
 
     let agent_node_id = format!("agent:{}", incident.agent_id);
-    if let Ok(Some(agent)) = db::get_agent_by_id(&state.pool, &tenant_id, &incident.agent_id).await
+    if let Ok(Some(agent)) =
+        db::get_agent_by_id_any_status(&state.pool, &tenant_id, &incident.agent_id).await
     {
         if seen.insert(agent_node_id.clone()) {
             graph.add_node(GraphNode::new(
@@ -17828,5 +17831,346 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.label == "github.merge_pull_request"));
+    }
+
+    /// #1327: every edge's `from`/`to` must reference a node id present in
+    /// `nodes` (no dangling edges), and every node must appear in at least
+    /// one edge (no orphans). Seeds a "rich" graph (agent, run, decision with
+    /// matched policies, approval, receipt, audit event, incident) and checks
+    /// all three `/v1/graph/*` endpoints.
+    #[tokio::test]
+    async fn evidence_graph_has_no_orphan_nodes_or_dangling_edges() {
+        let (state, tenant_id, _agent_token) = setup_state("graph_consistency").await;
+
+        let agent =
+            make_graph_test_agent("graph_consistency_agent", &tenant_id, "Consistency Agent");
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        let decision = make_graph_test_decision(
+            "graph_consistency_decision",
+            &tenant_id,
+            &agent.id,
+            Some("run_consistency"),
+            "require_approval",
+            Some("policy_x,policy_y"),
+        );
+        db::insert_decision(&state.pool, &decision).await.unwrap();
+
+        let mut approval =
+            make_test_approval(Some(Utc::now() + chrono::Duration::hours(1)), "pending");
+        approval.tenant_id = tenant_id.clone();
+        approval.decision_id = decision.id.clone();
+        db::insert_approval(&state.pool, &approval).await.unwrap();
+
+        db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
+            let mut r = unsigned_receipt_template(&tenant_id);
+            r.decision_id = Some(decision.id.clone());
+            r.prev_receipt_hash = prev;
+            r.receipt_hash = compute_receipt_hash(&r);
+            r
+        })
+        .await
+        .unwrap();
+
+        let audit_event = AuditEventRecord {
+            id: "graph_consistency_event".to_string(),
+            tenant_id: tenant_id.clone(),
+            event_type: "decision".to_string(),
+            agent_id: Some(agent.id.clone()),
+            user_id: None,
+            run_id: Some("run_consistency".to_string()),
+            trace_id: None,
+            span_id: None,
+            skill: Some(decision.skill.clone()),
+            action: Some(decision.action.clone()),
+            resource: None,
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: Some(decision.id.clone()),
+            approval_id: None,
+            created_at: Utc::now(),
+        };
+        db::insert_audit_event(&state.pool, &audit_event)
+            .await
+            .unwrap();
+
+        let incident = crate::models::SocIncidentRecord {
+            id: "graph_consistency_incident".to_string(),
+            tenant_id: tenant_id.clone(),
+            kind: "deny_storm".to_string(),
+            severity: "high".to_string(),
+            agent_id: agent.id.clone(),
+            summary: "Consistency incident".to_string(),
+            source_event_ids: serde_json::to_string(&vec![audit_event.id.clone()]).unwrap(),
+            opened_at: "2026-06-06T10:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
+        };
+        db::insert_soc_incident(&state.pool, &incident)
+            .await
+            .unwrap();
+
+        fn assert_no_orphans_or_dangling(graph: &crate::graph::EvidenceGraph, label: &str) {
+            let node_ids: std::collections::HashSet<&str> =
+                graph.nodes.iter().map(|n| n.id.as_str()).collect();
+            for edge in &graph.edges {
+                assert!(
+                    node_ids.contains(edge.from.as_str()),
+                    "{label}: edge.from {:?} references a missing node",
+                    edge.from
+                );
+                assert!(
+                    node_ids.contains(edge.to.as_str()),
+                    "{label}: edge.to {:?} references a missing node",
+                    edge.to
+                );
+            }
+            let referenced: std::collections::HashSet<&str> = graph
+                .edges
+                .iter()
+                .flat_map(|e| [e.from.as_str(), e.to.as_str()])
+                .collect();
+            for node in &graph.nodes {
+                assert!(
+                    referenced.contains(node.id.as_str()),
+                    "{label}: node {:?} ({:?}) has no edges (orphan)",
+                    node.id,
+                    node.group
+                );
+            }
+        }
+
+        let run_response = get_graph_for_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("run_consistency".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(run_response.status(), StatusCode::OK);
+        let body = to_bytes(run_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let run_graph: crate::graph::EvidenceGraph = serde_json::from_slice(&body).unwrap();
+        assert_no_orphans_or_dangling(&run_graph, "run graph");
+
+        let incident_response = get_graph_for_incident(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("graph_consistency_incident".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(incident_response.status(), StatusCode::OK);
+        let body = to_bytes(incident_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let incident_graph: crate::graph::EvidenceGraph = serde_json::from_slice(&body).unwrap();
+        assert_no_orphans_or_dangling(&incident_graph, "incident graph");
+
+        let agent_response = get_graph_for_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent.id.clone()),
+            axum::extract::Query(GraphDepthParams { depth: Some(5) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(agent_response.status(), StatusCode::OK);
+        let body = to_bytes(agent_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let agent_graph: crate::graph::EvidenceGraph = serde_json::from_slice(&body).unwrap();
+        assert_no_orphans_or_dangling(&agent_graph, "agent graph");
+    }
+
+    /// #1327: if the agent that triggered a run is later soft-deleted
+    /// (`status = 'deleted'`), `/v1/graph/run/:run_id` must still render the
+    /// `Agent` node (so the `TriggeredBy` edge doesn't dangle) rather than
+    /// silently dropping it while keeping the edge.
+    #[tokio::test]
+    async fn get_graph_for_run_includes_soft_deleted_agent_node_without_dangling_edges() {
+        let (state, tenant_id, _agent_token) = setup_state("graph_run_softdeleted_agent").await;
+
+        let agent =
+            make_graph_test_agent("graph_softdel_run_agent", &tenant_id, "Soon Deleted Agent");
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        let decision = make_graph_test_decision(
+            "graph_softdel_run_decision",
+            &tenant_id,
+            &agent.id,
+            Some("run_softdel"),
+            "allow",
+            None,
+        );
+        db::insert_decision(&state.pool, &decision).await.unwrap();
+
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent.id, "deleted")
+                .await
+                .unwrap()
+        );
+
+        let response = get_graph_for_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("run_softdel".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let graph: crate::graph::EvidenceGraph = serde_json::from_slice(&body).unwrap();
+
+        use crate::graph::{EdgeType, NodeType};
+
+        assert!(graph.nodes.iter().any(|n| n.group == NodeType::Agent
+            && n.id == "agent:graph_softdel_run_agent"
+            && n.label == "Soon Deleted Agent"));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|e| e.to == "agent:graph_softdel_run_agent" && e.label == EdgeType::TriggeredBy));
+
+        let node_ids: std::collections::HashSet<&str> =
+            graph.nodes.iter().map(|n| n.id.as_str()).collect();
+        for edge in &graph.edges {
+            assert!(node_ids.contains(edge.from.as_str()));
+            assert!(node_ids.contains(edge.to.as_str()));
+        }
+    }
+
+    /// #1327: same as above for `/v1/graph/incident/:incident_id` — an
+    /// incident's `Agent` node must survive a later soft-delete of that agent
+    /// so the `LinkedTo` edge from the incident doesn't dangle.
+    #[tokio::test]
+    async fn get_graph_for_incident_includes_soft_deleted_agent_node_without_dangling_edges() {
+        let (state, tenant_id, _agent_token) =
+            setup_state("graph_incident_softdeleted_agent").await;
+
+        let agent = make_graph_test_agent(
+            "graph_softdel_incident_agent",
+            &tenant_id,
+            "Soon Deleted Incident Agent",
+        );
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        let decision = make_graph_test_decision(
+            "graph_softdel_incident_decision",
+            &tenant_id,
+            &agent.id,
+            None,
+            "deny",
+            None,
+        );
+        db::insert_decision(&state.pool, &decision).await.unwrap();
+
+        let audit_event = AuditEventRecord {
+            id: "graph_softdel_incident_event".to_string(),
+            tenant_id: tenant_id.clone(),
+            event_type: "decision".to_string(),
+            agent_id: Some(agent.id.clone()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: Some(decision.skill.clone()),
+            action: Some(decision.action.clone()),
+            resource: None,
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: Some(decision.id.clone()),
+            approval_id: None,
+            created_at: Utc::now(),
+        };
+        db::insert_audit_event(&state.pool, &audit_event)
+            .await
+            .unwrap();
+
+        let incident = crate::models::SocIncidentRecord {
+            id: "graph_softdel_incident".to_string(),
+            tenant_id: tenant_id.clone(),
+            kind: "deny_storm".to_string(),
+            severity: "high".to_string(),
+            agent_id: agent.id.clone(),
+            summary: "Soft-delete incident".to_string(),
+            source_event_ids: serde_json::to_string(&vec![audit_event.id.clone()]).unwrap(),
+            opened_at: "2026-06-06T10:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
+        };
+        db::insert_soc_incident(&state.pool, &incident)
+            .await
+            .unwrap();
+
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent.id, "deleted")
+                .await
+                .unwrap()
+        );
+
+        let response = get_graph_for_incident(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("graph_softdel_incident".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let graph: crate::graph::EvidenceGraph = serde_json::from_slice(&body).unwrap();
+
+        use crate::graph::{EdgeType, NodeType};
+
+        assert!(graph.nodes.iter().any(|n| n.group == NodeType::Agent
+            && n.id == "agent:graph_softdel_incident_agent"
+            && n.label == "Soon Deleted Incident Agent"));
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.to == "agent:graph_softdel_incident_agent"
+                    && e.label == EdgeType::LinkedTo)
+        );
+
+        let node_ids: std::collections::HashSet<&str> =
+            graph.nodes.iter().map(|n| n.id.as_str()).collect();
+        for edge in &graph.edges {
+            assert!(node_ids.contains(edge.from.as_str()));
+            assert!(node_ids.contains(edge.to.as_str()));
+        }
+    }
+
+    /// #1327: `/v1/graph/agent/:agent_id` 404s for a soft-deleted agent — its
+    /// own dedicated graph view disappears (consistent with `get_agent_by_id`
+    /// elsewhere), even though `/v1/graph/run/*` and `/v1/graph/incident/*`
+    /// keep rendering its node for historical decisions/incidents.
+    #[tokio::test]
+    async fn get_graph_for_agent_returns_404_for_soft_deleted_agent() {
+        let (state, tenant_id, _agent_token) = setup_state("graph_agent_softdeleted").await;
+
+        let agent = make_graph_test_agent("graph_softdel_agent_self", &tenant_id, "Deleted Agent");
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        assert!(
+            db::set_agent_status(&state.pool, &tenant_id, &agent.id, "deleted")
+                .await
+                .unwrap()
+        );
+
+        let response = get_graph_for_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent.id.clone()),
+            axum::extract::Query(GraphDepthParams { depth: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
