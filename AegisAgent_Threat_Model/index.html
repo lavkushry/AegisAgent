@@ -1,0 +1,2105 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/AegisAgent_Threat_Model/">
+      
+      
+        <link rel="prev" href="../AegisAgent_Agent_Workflow/">
+      
+      
+        <link rel="next" href="../AegisAgent_Operational_Design/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Threat model - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#aegisagent-threat-model-june-2026-reset" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Threat model
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Integration & connectivity
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../AegisAgent_Technical_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../runtime-authorization-api/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Executive summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-research-foundation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Research foundation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-system-under-threat-assets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. System under threat &amp; assets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-trust-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Trust boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-primary-threat-class-t-a-approval-manipulation-headline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Primary threat class T-A — Approval manipulation (headline)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-primary-threat-class-t-b-confused-deputy-via-provenance-second-headline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Primary threat class T-B — Confused deputy via provenance (second headline)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-primary-threat-class-t-c-evidence-tampering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Primary threat class T-C — Evidence tampering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-primary-threat-class-t-d-attacks-on-the-integrity-anchored-soc-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Primary threat class T-D — Attacks on the integrity-anchored SOC (new)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-threats-against-aegisagent-as-a-control-plane-table-stakes-still-defended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Threats against AegisAgent as a control plane (table stakes, still defended)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-stride-summary-integrity-anchored-soc-aware" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. STRIDE summary (integrity-anchored, SOC-aware)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-assurance-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Assurance &amp; testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-governing-principle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Governing principle
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Operational_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fail-closed-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Executive summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-research-foundation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Research foundation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-system-under-threat-assets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. System under threat &amp; assets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-trust-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Trust boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-primary-threat-class-t-a-approval-manipulation-headline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Primary threat class T-A — Approval manipulation (headline)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-primary-threat-class-t-b-confused-deputy-via-provenance-second-headline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Primary threat class T-B — Confused deputy via provenance (second headline)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-primary-threat-class-t-c-evidence-tampering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Primary threat class T-C — Evidence tampering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-primary-threat-class-t-d-attacks-on-the-integrity-anchored-soc-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Primary threat class T-D — Attacks on the integrity-anchored SOC (new)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-threats-against-aegisagent-as-a-control-plane-table-stakes-still-defended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Threats against AegisAgent as a control plane (table stakes, still defended)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-stride-summary-integrity-anchored-soc-aware" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. STRIDE summary (integrity-anchored, SOC-aware)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-assurance-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Assurance &amp; testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-governing-principle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Governing principle
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/AegisAgent_Threat_Model.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="aegisagent-threat-model-june-2026-reset">AegisAgent — Threat Model (June 2026 reset)<a class="headerlink" href="#aegisagent-threat-model-june-2026-reset" title="Permanent link">&para;</a></h1>
+<p><strong>Product:</strong> AegisAgent
+<strong>Category:</strong> Agent Action Integrity → Integrity-anchored Agent SOC
+<strong>Version:</strong> v0.3 (re-anchored on the integrity-anchored Agent SOC)
+<strong>Date:</strong> 2026-06-05
+<strong>Owner:</strong> Lavkush Kumar
+<strong>Read first:</strong> <a href="../AegisAgent_Gap_Reassessment_2026-06/"><code>AegisAgent_Gap_Reassessment_2026-06.md</code></a> · <strong>Architecture:</strong> <a href="../AegisAgent_Agent_SOC_Design/"><code>AegisAgent_Agent_SOC_Design.md</code></a></p>
+<blockquote>
+<p>⚠️ <strong>Reset note (two layers).</strong> v0.1 covered the broad agent-security threat surface. v0.2 foregrounded the specific threats AegisAgent uniquely closes — approval manipulation (T-A), confused-deputy via untrusted provenance (T-B), and receipt tampering (T-C). <strong>v0.3 adds T-D: threats against the integrity-anchored SOC itself</strong> — because once you build a detection/response plane, <em>it</em> becomes attack surface. The most important new threat is <strong>second-order prompt injection</strong> (attacker content reaching an LLM "analyst"), which the design laws close by construction.</p>
+</blockquote>
+<hr />
+<h2 id="1-executive-summary">1. Executive summary<a class="headerlink" href="#1-executive-summary" title="Permanent link">&para;</a></h2>
+<p>AegisAgent is a runtime enforcement + evidence + monitoring layer, so it is itself security-critical. Its differentiated guarantees define its primary threat classes:</p>
+<blockquote>
+<p><strong>T-A (Approval manipulation):</strong> an attacker causes an action <em>different from the one a human approved</em> to execute, or reuses/forges an approval.
+<strong>T-B (Confused deputy via provenance):</strong> untrusted-origin content drives a privileged action.
+<strong>T-C (Evidence tampering):</strong> receipts/audit are altered, dropped, or forged so oversight cannot be proven.
+<strong>T-D (Attacks on the SOC):</strong> the detection/response plane is evaded, poisoned, weaponized, or — worst — turned into a <em>new</em> injection surface that re-introduces the very threat the product defends against.</p>
+</blockquote>
+<p>Governing rule:</p>
+<blockquote>
+<p><strong>If AegisAgent cannot prove the executed action equals the approved action, prove the trigger's provenance, and durably record a verifiable receipt — the action must not execute.</strong> (Fail closed.) <strong>And the SOC must detect deterministically, never let a score gate, and never let an LLM read attacker content into a decision.</strong></p>
+</blockquote>
+<hr />
+<h2 id="2-research-foundation">2. Research foundation<a class="headerlink" href="#2-research-foundation" title="Permanent link">&para;</a></h2>
+<p>OWASP AI Agent Security Cheat Sheet (names <strong>decision/approval manipulation</strong>, tool abuse, privilege escalation, memory poisoning, supply chain); OWASP Top 10 for Agentic Applications 2026 (human-agent trust exploitation, tool misuse, identity/privilege abuse, <strong>excessive agency</strong>); AgentDojo &amp; InjecAgent (indirect prompt injection via tool output); MCP security research + CoSAI; NIST AI RMF GenAI Profile; EU AI Act Article 14; MITRE ATLAS + OWASP LLM Top 10 (for the SOC's detection taxonomy). The Invariant Labs GitHub-MCP disclosure (malicious issue → private-repo data leaked to public repo) is the canonical real-world instance of T-B. The second-order-injection risk (T-D1) is the canonical failure mode of LLM-in-the-loop security tooling.</p>
+<hr />
+<h2 id="3-system-under-threat-assets">3. System under threat &amp; assets<a class="headerlink" href="#3-system-under-threat-assets" title="Permanent link">&para;</a></h2>
+<p>Components:
+- <strong>Inline plane:</strong> Agent Runtime → <strong>SDK (in trust boundary; performs fail-closed <code>action_hash</code> check)</strong> → Gateway (Identity Resolver, Trust-Provenance Gate, Policy Engine, Risk Engine, <strong>Approval Integrity Engine</strong>, MCP Gateway, Token Broker, <strong>Receipt + Audit Writer</strong>) → External Tools/MCP.
+- <strong>Async SOC plane:</strong> Event Bus → Normalizer → <strong>Detection Engine (deterministic)</strong> → Correlation Engine → Alert Builder → {Response Engine, Indexer, Notify, <strong>RCA narrator (sandboxed LLM)</strong>} → SOC Console.</p>
+<p>Protected assets: agent identities &amp; tokens; tool/MCP credentials; <strong>the binding between an approval and its <code>action_hash</code></strong>; canonical actions; <strong>receipt hash chain + signing keys</strong>; policy bundles; <strong>detection rules + correlation state</strong>; audit/traces; tenant config; provenance labels; approver identities/roles; <strong>the integrity of the SOC's verdicts and the agent <code>status</code> (active/frozen/revoked/quarantined)</strong>.</p>
+<hr />
+<h2 id="4-trust-boundaries">4. Trust boundaries<a class="headerlink" href="#4-trust-boundaries" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>B1 User/App         -&gt; Agent Runtime          (untrusted intent may enter)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>B2 Agent Runtime    -&gt; AegisAgent SDK          (agent may be compromised/hijacked)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>B3 SDK              -&gt; Gateway                  (authenticated; SDK enforces fail-closed hash check HERE)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>B4 Gateway          -&gt; Policy/Provenance        (internal; deterministic decision HERE)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>B5 Gateway          -&gt; External Tool/MCP        (tool output is UNTRUSTED data -&gt; provenance label)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>B6 Gateway          -&gt; Approval channel         (Slack/Teams/dashboard; signature-verified)
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>B7 Tenant data      -&gt; Shared SaaS infra        (tenant isolation)
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>B8 SOC evidence     -&gt; RCA narrator (LLM)       (ALL evidence is UNTRUSTED data; passed inert, never as instructions; LLM has no tools/authority)
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>B9 Response Engine  -&gt; Gateway control API      (authenticated; freeze/revoke/quarantine; fail-closed)
+</code></pre></div>
+<p>Key assumptions: (1) the agent process <strong>may be hijacked</strong> (indirect prompt injection) — enforcement checks integrity against the human-bound <code>action_hash</code> at B3 and gates provenance deterministically at B4. (2) <strong>All evidence flowing into the SOC may be attacker-authored</strong> — so at B8 the only LLM treats it as inert data, and at B4/detection no LLM and no score decides.</p>
+<hr />
+<h2 id="5-primary-threat-class-t-a-approval-manipulation-headline">5. Primary threat class T-A — Approval manipulation (headline)<a class="headerlink" href="#5-primary-threat-class-t-a-approval-manipulation-headline" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Threat</th>
+<th>Vector</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T-A1</td>
+<td><strong>Approve-then-swap</strong></td>
+<td>Get benign action A approved, execute different action B under it</td>
+<td>SDK recomputes hash(B) ≠ approved <code>action_hash(A)</code> → <strong>fail closed</strong></td>
+</tr>
+<tr>
+<td>T-A2</td>
+<td><strong>Post-approval parameter tampering</strong></td>
+<td>Mutate params after approval</td>
+<td>New canonical action → new hash → mismatch → fail closed; <code>edit</code> forces re-evaluation</td>
+</tr>
+<tr>
+<td>T-A3</td>
+<td><strong>Replay / reuse</strong></td>
+<td>Reuse an old/expired approval, or execute an approved action twice</td>
+<td>Bound <code>action_hash</code> + <code>expires_at</code> + <strong>single-use</strong>: atomic <code>consume</code> (<code>consumed_at</code> guard) before execution; SDK fails closed if consume is refused (409)</td>
+</tr>
+<tr>
+<td>T-A4</td>
+<td><strong>Render-vs-bytes</strong></td>
+<td>Approver sees friendly text; different bytes run</td>
+<td>Approval card renders the <em>canonical action that is hashed</em>; approval binds to that hash</td>
+</tr>
+<tr>
+<td>T-A5</td>
+<td><strong>Approval-callback forgery</strong></td>
+<td>Spoof a Slack/Teams "approve"</td>
+<td>Verify callback signature; bind approver identity + role; reject unsigned</td>
+</tr>
+<tr>
+<td>T-A6</td>
+<td><strong>Approver-role abuse</strong></td>
+<td>Unauthorized user approves</td>
+<td>Approver group/role lookup via SSO/OIDC; policy-scoped approver groups</td>
+</tr>
+<tr>
+<td>T-A7</td>
+<td><strong>Self-approval / collusion</strong></td>
+<td>Agent's owner approves own high-risk action</td>
+<td>Optional separation-of-duties + two-person approval for critical actions</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Residual risk:</strong> if SDK canonicalization diverges across languages/versions, hashes mismatch spuriously (availability) or a crafted divergence could mask a swap. Mitigation: pinned <code>aegis-jcs-1</code> scheme + CI byte-equality gate (Operational Design §4.1). Every T-A event is also emitted to the SOC as a high-severity detection.</p>
+<hr />
+<h2 id="6-primary-threat-class-t-b-confused-deputy-via-provenance-second-headline">6. Primary threat class T-B — Confused deputy via provenance (second headline)<a class="headerlink" href="#6-primary-threat-class-t-b-confused-deputy-via-provenance-second-headline" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Threat</th>
+<th>Vector</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T-B1</td>
+<td><strong>Indirect prompt injection → privileged action</strong></td>
+<td>Malicious GitHub issue / email / ticket / webpage hijacks agent</td>
+<td>Deterministic <code>forbid</code> for <code>mutates_state &amp;&amp; untrusted_external</code> — independent of text</td>
+</tr>
+<tr>
+<td>T-B2</td>
+<td><strong>Cross-repo/data-movement leak</strong> (Invariant Labs class)</td>
+<td>Untrusted issue triggers private read → public write</td>
+<td>Default policy forbids untrusted-triggered cross-repo movement; SOC sequence rule AEG-3007 correlates read→exfil</td>
+</tr>
+<tr>
+<td>T-B3</td>
+<td><strong>Classifier evasion</strong></td>
+<td>Benign-looking injected text bypasses scoring</td>
+<td>Provenance is deterministic; classifiers may only <em>tighten</em>, never <em>loosen</em></td>
+</tr>
+<tr>
+<td>T-B4</td>
+<td><strong>Provenance label spoofing</strong></td>
+<td>Forge a higher trust level</td>
+<td>Labels set server-side from authenticated source signals; signed sources for <code>trusted_internal_signed</code>; run carries lowest observed level</td>
+</tr>
+<tr>
+<td>T-B5</td>
+<td><strong>MCP manifest drift / tool poisoning</strong></td>
+<td>Swapped/altered MCP tool definition</td>
+<td>Pin + hash manifests; drift → downgrade provenance → deny/escalate; SOC drift detection AEG-4002</td>
+</tr>
+<tr>
+<td>T-B6</td>
+<td><strong>Memory/RAG poisoning</strong> (AgentPoison/PoisonedRAG)</td>
+<td>Poisoned memory drives later actions</td>
+<td>Provenance + approval on memory writes from untrusted sources (roadmap)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-primary-threat-class-t-c-evidence-tampering">7. Primary threat class T-C — Evidence tampering<a class="headerlink" href="#7-primary-threat-class-t-c-evidence-tampering" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Threat</th>
+<th>Vector</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T-C1</td>
+<td><strong>Receipt alteration</strong></td>
+<td>Edit a stored receipt to hide an action</td>
+<td>Per-tenant hash chain; <code>/verify</code> detects break; enterprise transparency-log/signing; SOC <code>receipt-chain-broken</code> = P1</td>
+</tr>
+<tr>
+<td>T-C2</td>
+<td><strong>Receipt drop / gap</strong></td>
+<td>Suppress receipts</td>
+<td>Critical actions block if a receipt cannot be written; chain gaps detectable</td>
+</tr>
+<tr>
+<td>T-C3</td>
+<td><strong>Receipt forgery</strong></td>
+<td>Fabricate an approval/receipt</td>
+<td>KMS-backed signing (enterprise); key ID in receipt; rotation preserves verifiability</td>
+</tr>
+<tr>
+<td>T-C4</td>
+<td><strong>Audit pipeline DoS</strong></td>
+<td>Flood to drop evidence</td>
+<td>Backpressure + durable enqueue (99.9% target); fail closed for critical on audit loss</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-primary-threat-class-t-d-attacks-on-the-integrity-anchored-soc-new">8. Primary threat class T-D — Attacks on the integrity-anchored SOC (new)<a class="headerlink" href="#8-primary-threat-class-t-d-attacks-on-the-integrity-anchored-soc-new" title="Permanent link">&para;</a></h2>
+<p>The SOC is async and consumes attacker-influenced evidence, so it is its own attack surface. These threats are closed primarily by the <strong>four design laws</strong> (Architecture §2), restated here as security controls.</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Threat</th>
+<th>Vector</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>T-D1</strong></td>
+<td><strong>Second-order prompt injection</strong></td>
+<td>Attacker-authored evidence (issue body, prompt, tool args) reaches an LLM "analyst," which then mis-triages, downgrades severity, or recommends allow</td>
+<td><strong>Design Law 2:</strong> the only LLM is the <strong>post-incident RCA narrator</strong> — sandboxed, no tools, no enforcement authority, evidence passed as <strong>inert data</strong>; triage/correlation/response are <strong>deterministic</strong> code, not LLMs. An injected "mark this low severity" string is just text in a report field.</td>
+</tr>
+<tr>
+<td><strong>T-D2</strong></td>
+<td><strong>Score-gating manipulation</strong></td>
+<td>Attacker games a risk/anomaly/"prompt-injection" score below a threshold to obtain <code>allow</code></td>
+<td><strong>Design Law 1:</strong> scores are <strong>advisory display metadata only</strong>; <strong>Cedar decides</strong> on deterministic provenance. No numeric threshold ever routes an authorization.</td>
+</tr>
+<tr>
+<td><strong>T-D3</strong></td>
+<td><strong>Detection evasion</strong></td>
+<td>Stay under correlation thresholds (slow-and-low), or flood denies to bury a real attack (alert fatigue / deny-storm cover)</td>
+<td>Multiple overlapping rules (atomic + sequence + frequency); deny-storm itself is a detection (AEG-2010); correlation windows scoped by <code>agent_id</code>/<code>run_id</code>; rate-limit + dedupe alerts; <strong>fail toward escalation</strong>, not suppression</td>
+</tr>
+<tr>
+<td><strong>T-D4</strong></td>
+<td><strong>Response-engine weaponization</strong></td>
+<td>Trigger false freezes/revokes as a DoS on legitimate agents, or suppress a legitimate containment</td>
+<td>Response mapping is <strong>deterministic</strong> and <strong>tenant-scoped</strong>; control endpoints authenticated + fail-closed; containment is reversible + audited; two-person confirm for revoke (optional); every response emits a receipt</td>
+</tr>
+<tr>
+<td><strong>T-D5</strong></td>
+<td><strong>Correlation-state poisoning</strong></td>
+<td>Forge/replay ASE events to corrupt sequence detection or frame an agent</td>
+<td>ASE carries <code>action_hash</code>/<code>receipt_hash</code>; the SOC validates events against the receipt chain; agentless-ingested events are authenticated at the collector and trust-labelled</td>
+</tr>
+<tr>
+<td><strong>T-D6</strong></td>
+<td><strong>Inline-path latency injection via the SOC</strong></td>
+<td>Force detection into the synchronous path (e.g., "block until analyzed") to add latency or create a fail-open dependency</td>
+<td><strong>Design Law 3:</strong> detection is <strong>strictly asynchronous</strong> (<code>tokio::mpsc</code> → background); emission is fire-and-forget; SOC outage degrades monitoring, never the action path</td>
+</tr>
+<tr>
+<td><strong>T-D7</strong></td>
+<td><strong>RCA exfiltration via the LLM</strong></td>
+<td>Prompt the RCA narrator (through evidence) to leak other-tenant data or secrets in its output</td>
+<td>RCA input is tenant-scoped, redacted (hashes not payloads), and the model has no retrieval/tools; output is reviewed before it leaves the tenant boundary</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Residual risk:</strong> deterministic detection can miss novel attack shapes (no ML generalization). Accepted trade-off: we prefer <strong>provable, non-injectable</strong> detection over broader-but-gameable ML; behavioural baselining is added later as <em>advisory</em> signal only (never gating).</p>
+<hr />
+<h2 id="9-threats-against-aegisagent-as-a-control-plane-table-stakes-still-defended">9. Threats against AegisAgent as a control plane (table stakes, still defended)<a class="headerlink" href="#9-threats-against-aegisagent-as-a-control-plane-table-stakes-still-defended" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Policy bypass / tampering:</strong> signed, versioned Cedar bundles; default-deny; dry-run before rollout; admin authz.</li>
+<li><strong>Fail-open risk:</strong> mutating/high-risk fail closed on any component outage; read-only fail-open only if explicitly configured; <strong>SOC async by construction never causes fail-open</strong>.</li>
+<li><strong>Agent identity spoofing / token theft:</strong> tenant-scoped tokens, short-lived creds, mTLS (enterprise), request signing; Token Broker so agents never hold raw tool creds.</li>
+<li><strong>SDK bypass:</strong> proxy-only credentials, direct-tool-use detection (as a SOC event), network guidance; a bypassed SDK is an incident.</li>
+<li><strong>Tenant isolation failure (SaaS):</strong> <code>tenant_id</code> on every query, parameterized SQLx, middleware scoping, optional row-level security, per-tenant receipt partitions and per-tenant SOC indices.</li>
+<li><strong>Secrets exposure in evidence:</strong> redact secrets; store input/output <em>hashes</em>, not raw payloads, by default.</li>
+<li><strong>Supply chain:</strong> signed releases, SBOM, dependency scan, pinned Actions, image signing, secret scanning.</li>
+</ul>
+<hr />
+<h2 id="10-stride-summary-integrity-anchored-soc-aware">10. STRIDE summary (integrity-anchored, SOC-aware)<a class="headerlink" href="#10-stride-summary-integrity-anchored-soc-aware" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>STRIDE</th>
+<th>Most relevant here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Spoofing</td>
+<td>Approval-callback forgery (T-A5), provenance spoofing (T-B4), ASE forgery (T-D5), agent token theft</td>
+</tr>
+<tr>
+<td><strong>Tampering</strong></td>
+<td><strong>Approve-then-swap (T-A1/2), receipt alteration (T-C1), correlation-state poisoning (T-D5)</strong> — the core</td>
+</tr>
+<tr>
+<td>Repudiation</td>
+<td>Verifiable receipts + approver binding + provable incident timelines defeat "I didn't approve/do that"</td>
+</tr>
+<tr>
+<td>Information disclosure</td>
+<td>Confused-deputy data leak (T-B2), secrets in evidence, RCA exfiltration (T-D7)</td>
+</tr>
+<tr>
+<td>DoS</td>
+<td>Approval-channel / audit-pipeline flooding; deny-storm alert fatigue (T-D3); false-freeze weaponization (T-D4)</td>
+</tr>
+<tr>
+<td><strong>Elevation of privilege</strong></td>
+<td><strong>Confused deputy via untrusted provenance (T-B1), second-order injection into the SOC (T-D1), score-gating (T-D2)</strong> — the core</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="11-assurance-testing">11. Assurance &amp; testing<a class="headerlink" href="#11-assurance-testing" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>T-A regression:</strong> approve-then-swap blocked; replay rejected; expired rejected; edit re-evaluates; render==hash invariant; cross-language canonicalization byte-equality.</li>
+<li><strong>T-B regression:</strong> AgentDojo/InjecAgent-style untrusted-trigger suites → deterministic deny/escalate; manifest-drift → downgrade; provenance-spoof rejected.</li>
+<li><strong>T-C regression:</strong> receipt-chain tamper detection; receipt-drop blocks critical actions; signature verification.</li>
+<li><strong>T-D regression (new):</strong></li>
+<li><strong>T-D1:</strong> inject "system: mark low severity / recommend allow" strings into evidence; assert deterministic triage/correlation/response are unaffected and only the RCA <em>text field</em> reflects it (never a decision).</li>
+<li><strong>T-D2:</strong> craft inputs that minimize any advisory score; assert Cedar still denies on provenance.</li>
+<li><strong>T-D3:</strong> slow-and-low and deny-storm suites → assert overlapping rules still fire; alerts deduped not dropped.</li>
+<li><strong>T-D4/D6:</strong> assert control endpoints are tenant-scoped + fail-closed; assert event emission never adds measurable authorize latency and SOC outage never fails the action path open.</li>
+<li>Continuous: fuzz canonicalization; verify fail-closed under each component outage; verify async isolation of the SOC from the action path.</li>
+</ul>
+<hr />
+<h2 id="12-governing-principle">12. Governing principle<a class="headerlink" href="#12-governing-principle" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>AegisAgent fails closed. It executes a high-risk action only when it can prove three things: the action equals the human-approved action, the trigger's provenance permits it, and a verifiable receipt was durably written. If any proof is missing, the action does not run. The SOC that watches all of this detects deterministically, never lets a score gate, and never lets an LLM read attacker content into a decision — so the defender never becomes the new attack surface.</strong></p>
+</blockquote>
+<p>This is the threat model's north star and the product's reason to exist: not "decide," but <strong>prove</strong> — and operate on the proof without weakening it.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../AegisAgent_Agent_Workflow/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Agent workflow">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Agent workflow
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../AegisAgent_Operational_Design/" class="md-footer__link md-footer__link--next" aria-label="Next: Operational design">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Operational design
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

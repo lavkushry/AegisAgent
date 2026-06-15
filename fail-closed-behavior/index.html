@@ -1,0 +1,1867 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/fail-closed-behavior/">
+      
+      
+        <link rel="prev" href="../runtime-authorization-api/">
+      
+      
+        <link rel="next" href="../action-receipt-spec/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Fail-closed behavior guide - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#fail-closed-behavior-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Fail-closed behavior guide
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Integration & connectivity
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Technical_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../runtime-authorization-api/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Threat_Model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Operational_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick reference table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-this-table-against-the-test-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying this table against the test suite
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operator-takeaway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator takeaway
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-reference-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick reference table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-this-table-against-the-test-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying this table against the test suite
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operator-takeaway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator takeaway
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/fail-closed-behavior.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="fail-closed-behavior-guide">Fail-closed behavior guide<a class="headerlink" href="#fail-closed-behavior-guide" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Design philosophy:</strong> mutating or high-risk actions fail <strong>closed</strong> — the
+action is denied — whenever AegisAgent cannot positively confirm it is
+safe to proceed (unreachable component, expired/mismatched approval, full
+audit pipeline, unknown principal/tool, untrusted provenance). Only
+non-mutating, <strong>low</strong>-risk reads are ever allowed to degrade gracefully,
+and even then only where explicitly noted below. The SOC pipeline (alerts,
+incidents, notifications) is asynchronous by construction and its failure
+<strong>never</strong> flips an authorize decision from deny to allow.</p>
+<p>See <a href="../AegisAgent_Threat_Model/"><code>AegisAgent_Threat_Model.md</code></a> for the
+threat catalogue this table defends against, and
+<a href="../AegisAgent_Agent_Workflow/"><code>AegisAgent_Agent_Workflow.md</code></a> for the
+end-to-end request lifecycle.</p>
+</blockquote>
+<h2 id="quick-reference-table">Quick reference table<a class="headerlink" href="#quick-reference-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Failure mode</th>
+<th>Behavior</th>
+<th>What's denied</th>
+<th>What's allowed</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Gateway</strong> (<code>/v1/authorize</code>)</td>
+<td>Unreachable / network error from SDK</td>
+<td>SDK's <code>client.authorize()</code> catches the exception and returns a synthetic <code>decision: "deny"</code>, <code>reason: "Gateway network error ... Fail-closed."</code></td>
+<td>All tool calls via <code>@protect_tool</code> / <code>@async_protect_tool</code></td>
+<td>Nothing — the function body never executes</td>
+<td>Cannot verify a gateway-issued action hash exists, so nothing may run unverified</td>
+</tr>
+<tr>
+<td><strong>Gateway</strong></td>
+<td>Non-200 HTTP response (5xx, etc.)</td>
+<td>SDK returns synthetic <code>decision: "deny"</code>, <code>reason: "Gateway error: &lt;status&gt;. Fail-closed."</code></td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>Same as above — any non-<code>200</code> is treated as "cannot confirm allow"</td>
+</tr>
+<tr>
+<td><strong>Gateway</strong></td>
+<td>Agent never registered / no token resolved</td>
+<td><code>client.authorize()</code> short-circuits to <code>decision: "deny"</code>, <code>risk_level: "critical"</code>, <code>reason: "Agent not registered/token not resolved. Failing closed."</code></td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>Unknown principal → deny by default</td>
+</tr>
+<tr>
+<td><strong>Database (SQLite)</strong></td>
+<td>Lookup/query error during <code>authorize_action</code> (agent lookup, idempotency lookup, decision/audit write)</td>
+<td><code>500 Internal Server Error</code> returned to the SDK; SDK treats non-200 as <code>deny</code> (see above)</td>
+<td>The tool call (transitively, via the SDK's fail-closed mapping)</td>
+<td>Nothing for the in-flight call</td>
+<td>Errors are logged server-side only (<code>error!("Database lookup error: ...")</code>); the client never sees raw DB error text (CWE-209)</td>
+</tr>
+<tr>
+<td><strong>Database</strong></td>
+<td>On-disk schema version newer than the running binary supports</td>
+<td>Gateway <strong>refuses to start</strong></td>
+<td>The entire gateway process</td>
+<td>Nothing</td>
+<td>Running against a schema the binary doesn't understand risks silent data corruption — refuse to boot rather than guess</td>
+</tr>
+<tr>
+<td><strong>Policy engine (Cedar)</strong></td>
+<td><code>policies.cedar</code> fails to parse at startup</td>
+<td><code>PolicyEngine::init()</code> returns <code>Err</code>, gateway <strong>refuses to start</strong> (<code>main()</code> propagates the error via <code>?</code>)</td>
+<td>The entire gateway process</td>
+<td>Nothing</td>
+<td>An unparseable policy file means <em>no</em> authorization decision can be trusted — refuse to boot</td>
+</tr>
+<tr>
+<td><strong>Policy engine</strong></td>
+<td>No policy matches a <code>tool_call</code> / unregistered action</td>
+<td><code>decision: "deny"</code>, <code>matched_policies: ["registered_action_default_deny"]</code></td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>Default-deny: an action must be explicitly permitted, never implicitly</td>
+</tr>
+<tr>
+<td><strong>Audit / SOC event pipeline</strong></td>
+<td>In-memory SOC event channel (<code>EventSink</code>) is at capacity (<code>has_capacity() == false</code>) for a <strong>high-risk or mutating</strong> action</td>
+<td><code>decision: "deny"</code>, <code>matched_policies: ["audit_writer_unavailable"]</code>, <code>reason: "Audit writer unavailable (SOC event stream full): action denied ... fail-closed."</code> — checked <em>before</em> any DB write</td>
+<td>The tool call</td>
+<td>Low-risk, non-mutating reads continue to be evaluated normally</td>
+<td>If the action can't be durably recorded, a mutating action must not happen — there would be no evidence trail (EU AI Act Art. 14 / SOC 2)</td>
+</tr>
+<tr>
+<td><strong>Audit / SOC event pipeline</strong></td>
+<td><code>write_decision_and_audit</code> itself errors (DB write failure) after the decision was computed</td>
+<td><code>state.audit_writer_unhealthy</code> is set to <code>true</code> (surfaces via <code>/readyz</code>); <code>500 Internal Server Error</code> returned, which the SDK maps to <code>deny</code></td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>Same fail-closed mapping as a generic DB error; <code>/readyz</code> flips so orchestrators stop routing new traffic to this replica</td>
+</tr>
+<tr>
+<td><strong>Approval service — expiry</strong></td>
+<td>Approval window (<code>expires_at</code>) has passed when the SDK polls or the gateway processes <code>approve</code>/<code>reject</code>/<code>edit</code>/<code>consume</code></td>
+<td><code>GET /v1/approvals/:id</code> reports <code>status: "EXPIRED"</code>; <code>approve</code>/<code>reject</code>/<code>edit</code>/<code>consume</code> all return <code>409</code> with <code>reason: "approval_expired"</code>; SDK raises <code>PermissionError</code>/<code>TimeoutError</code> and never executes</td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>An approval is a time-bound human assertion; an expired one carries no authority</td>
+</tr>
+<tr>
+<td><strong>Approval service — hash mismatch</strong></td>
+<td>The action about to execute hashes to something other than the <code>action_hash</code> bound to the approval (approve-then-swap, post-approval edit without re-approval)</td>
+<td>SDK raises <code>PermissionError("... action hash mismatch. Failing closed.")</code> before calling the wrapped function; gateway emits a tamper-attempt receipt</td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>This is the core <strong>approval integrity</strong> guarantee (T-A1/T-A2) — the human approved <em>exactly</em> this action, not "an action like this"</td>
+</tr>
+<tr>
+<td><strong>Approval service — replay</strong></td>
+<td>A previously consumed (single-use) approval is presented again, or two concurrent <code>consume</code> calls race for the same approval</td>
+<td><code>consume_approval</code> atomically transitions <code>pending → consumed</code> exactly once; the loser gets <code>409</code> (<code>already_consumed</code>/<code>approval_expired</code>); SDK fails closed</td>
+<td>The tool call (second/replayed attempt)</td>
+<td>The first, legitimate consume</td>
+<td>Defends T-A3 (approval replay) — "approve once" must mean "execute once"</td>
+</tr>
+<tr>
+<td><strong>MCP server / tool registry</strong></td>
+<td><code>tool</code>/<code>action</code> resolves to an MCP server or tool not present in the registry (including percent-encoded / case-variant aliases of a known tool)</td>
+<td><code>decision: "deny"</code>, <code>matched_policies: ["mcp_unknown_tool"]</code></td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>Unregistered MCP surface = unknown blast radius → deny by default, independent of normalization tricks</td>
+</tr>
+<tr>
+<td><strong>MCP server</strong></td>
+<td>Live manifest hash differs from the pinned <code>manifest_hash</code> (drift)</td>
+<td>Action requires approval (or is denied, depending on policy) rather than silently executing against a changed tool surface</td>
+<td>The tool call (until a human re-approves the new manifest)</td>
+<td>Nothing automatically</td>
+<td>A tool's behavior can change without changing its name — manifest pinning catches supply-chain-style drift</td>
+</tr>
+<tr>
+<td><strong>Agent identity</strong></td>
+<td>Agent is <code>frozen</code> or <code>revoked</code> (via SOC response engine, manual freeze, or trust-escalation incident)</td>
+<td>Every <code>/v1/authorize</code> call for that agent returns <code>decision: "deny"</code>, <code>matched_policies: ["agent_&lt;status&gt;"]</code>, <code>reason: "Agent '&lt;key&gt;' is &lt;status&gt;; all tool calls are denied (fail-closed)."</code></td>
+<td>All tool calls for that agent</td>
+<td>Nothing</td>
+<td>Containment must be total and immediate — a frozen agent cannot "read its way around" the freeze</td>
+</tr>
+<tr>
+<td><strong>Agent identity</strong></td>
+<td>Action would be <code>allow</code>, but <code>risk_level == "critical"</code></td>
+<td>Decision is downgraded to <code>require_approval</code> (<code>matched_policies: ["critical_risk_requires_approval"]</code>)</td>
+<td>Immediate execution</td>
+<td>Execution after human approval</td>
+<td>Critical-risk actions always get a human in the loop, even if policy would otherwise permit them</td>
+</tr>
+<tr>
+<td><strong>Trust provenance</strong></td>
+<td><code>context.trust_level</code> is <code>untrusted_external</code> or <code>malicious_suspected</code> and the action <code>mutates_state == true</code></td>
+<td><code>forbid</code> policy matches → <code>decision: "deny"</code></td>
+<td>Any mutating action triggered from untrusted/malicious-flagged content</td>
+<td>Read-only actions may still be evaluated on their own merits</td>
+<td>Confused-deputy defense (T-B<em>): the </em>source* of the instruction, not its wording, gates mutation</td>
+</tr>
+<tr>
+<td><strong>Trust provenance</strong></td>
+<td><code>context.trust_level</code> is <code>semi_trusted_customer</code> or <code>unknown</code> and the action <code>mutates_state == true</code></td>
+<td><code>decision: "require_approval"</code></td>
+<td>Immediate execution</td>
+<td>Execution after human approval</td>
+<td>Same gate, one notch less severe — ambiguous provenance still needs a human</td>
+</tr>
+<tr>
+<td><strong>Replay / idempotency</strong></td>
+<td>A request arrives with a <code>nonce</code> whose <code>timestamp</code> is &gt;5 minutes old, or a <code>nonce</code> already seen for this <code>(tenant, agent)</code></td>
+<td><code>409 Conflict</code>, <code>reason: "replay_timestamp_expired"</code> or <code>"replay_nonce_reused"</code></td>
+<td>The tool call</td>
+<td>Nothing</td>
+<td>Defends against literal request replay independent of approval replay</td>
+</tr>
+<tr>
+<td><strong>Rate limit / quota</strong></td>
+<td>Tenant exceeds its configured rate limit or request quota</td>
+<td><code>429 Too Many Requests</code></td>
+<td>The tool call</td>
+<td>Nothing (caller should retry later)</td>
+<td>Prevents a runaway agent from drowning the gateway or its own audit trail</td>
+</tr>
+<tr>
+<td><strong>Webhook / Slack callback signature</strong></td>
+<td><code>X-Slack-Signature</code> doesn't match <code>HMAC-SHA256(secret, "v0:{timestamp}:{body}")</code>, the timestamp is &gt;5 min old, or the body was tampered with after signing</td>
+<td><code>401 Unauthorized</code>, <code>reason: "invalid_signature"</code> (or stale-timestamp equivalent)</td>
+<td>The callback (approve/reject action is <strong>not</strong> applied)</td>
+<td>Nothing</td>
+<td>Approval callbacks are themselves a privileged action — an unsigned/forged callback must not be able to approve anything</td>
+</tr>
+<tr>
+<td><strong>Webhook / Slack callback</strong></td>
+<td>Tenant has no callback secret configured for the approval</td>
+<td><code>404</code> returned — fail closed, since an unconfigured secret means the callback cannot be verified</td>
+<td>The callback</td>
+<td>Nothing</td>
+<td>Verifying nothing is not the same as verifying successfully</td>
+</tr>
+<tr>
+<td><strong>Kubernetes liveness/readiness</strong></td>
+<td><code>/readyz</code>: <code>audit_writer_unhealthy</code> flag set, or <code>db::health_check</code> fails</td>
+<td><code>/readyz</code> returns non-200</td>
+<td>New traffic is <em>not</em> routed to this replica by the orchestrator</td>
+<td>In-flight requests on this replica continue (each still fails closed per the rules above)</td>
+<td>Lets the orchestrator drain/restart an unhealthy replica without it ever silently fail-opening</td>
+</tr>
+<tr>
+<td><strong>Background SOC pipeline</strong> (<code>events::drain</code>, detection/correlation/notify)</td>
+<td>Detector, correlator, or notify sink errors, or the SOC event channel is dropped/lagging</td>
+<td>Logged and/or surfaced as a <code>ws_events</code> "lagged consumer" notice; the <em>authorize</em> decision already returned before this pipeline runs</td>
+<td>Nothing in the authorize path — this pipeline is purely observational/responsive</td>
+<td>The original decision stands as already made</td>
+<td>SOC is async by construction (design law 3): its failure can degrade detection/response speed but can <strong>never</strong> retroactively turn a <code>deny</code> into an <code>allow</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="verifying-this-table-against-the-test-suite">Verifying this table against the test suite<a class="headerlink" href="#verifying-this-table-against-the-test-suite" title="Permanent link">&para;</a></h2>
+<p>Each row above is backed by a test in <code>gateway/src/routes.rs</code> (Rust gateway,
+<code>cargo test --manifest-path gateway/Cargo.toml</code>) or <code>sdk-python/tests/</code>
+(Python SDK, <code>python3 -m unittest discover -s sdk-python/tests</code>):</p>
+<ul>
+<li><strong>Gateway unreachable / non-200 / network error</strong> —
+  <code>sdk-python/tests/test_sdk.py::test_authorize_deny</code>,
+  <code>sdk-python/tests/test_async_protect_tool.py::test_deny_raises_permission_error</code>,
+  <code>test_deny_not_executed</code>.</li>
+<li><strong>Approval expiry</strong> —
+  <code>gateway/src/routes.rs::approval_is_expired_detects_past_window</code>,
+  <code>consume_approval_rejects_expired_approval</code>,
+  <code>approve_approval_expired_response_includes_reason_field</code>,
+  <code>reject_approval_rejects_expired_approval</code>,
+  <code>edit_approval_rejects_expired_approval</code>,
+  <code>expired_approval_is_reported_and_cannot_be_approved</code>;
+  <code>sdk-python/tests/test_approval_expiry.py::test_approved_but_expired_fails_closed</code>.</li>
+<li><strong>Approval hash mismatch (approve-then-swap)</strong> —
+  <code>gateway/src/routes.rs::hash_mismatch_on_consume_increments_counter</code>,
+  <code>replay_consume_emits_tamper_receipt</code>, <code>approve_expired_emits_tamper_receipt</code>;
+  <code>sdk-python/tests/test_sdk.py::test_approval_hash_mismatch_fails_closed</code>,
+  <code>sdk-python/tests/test_async_protect_tool.py::test_approval_hash_mismatch_fails_closed</code>.</li>
+<li><strong>Single-use / replay</strong> —
+  <code>gateway/src/routes.rs::consume_is_single_use</code>,
+  <code>consume_approval_concurrent_race_only_one_succeeds</code>,
+  <code>consume_approval_returns_bound_action_hash</code>,
+  <code>edit_approval_rejects_if_already_consumed</code>,
+  <code>replay_consume_emits_replay_attempt_security_event</code>.</li>
+<li><strong>Unknown MCP tool / server</strong> —
+  <code>gateway/src/routes.rs::authorize_denies_unknown_mcp_tools_by_default</code>,
+  <code>authorize_denies_unknown_mcp_tool_with_encoded_or_cased_identifier</code>.</li>
+<li><strong>Frozen / revoked agent</strong> —
+  <code>gateway/src/routes.rs::authorize_action_denies_frozen_and_revoked_agent</code>,
+  <code>revoke_agent_sets_status_to_revoked</code>.</li>
+<li><strong>Trust-provenance gating</strong> —
+  Cedar policy tests in <code>gateway/src/policy.rs</code> (untrusted/malicious →
+  <code>forbid</code>; semi-trusted/unknown → <code>require_approval</code> for mutating actions).</li>
+<li><strong>Slack callback signature / replay / tamper</strong> —
+  <code>gateway/src/routes.rs::slack_callback_rejects_stale_timestamp_with_401</code>,
+  <code>slack_callback_rejects_invalid_signature_with_401</code>,
+  <code>slack_callback_rejects_tampered_body_with_401</code>.</li>
+<li><strong>Receipt-chain tamper detection</strong> —
+  see <a href="../action-receipt-spec/#verification"><code>action-receipt-spec.md</code></a>;
+  <code>verify_chain()</code> / <code>verify_receipt()</code> — any mismatch is invalid (fail closed).</li>
+</ul>
+<h2 id="operator-takeaway">Operator takeaway<a class="headerlink" href="#operator-takeaway" title="Permanent link">&para;</a></h2>
+<p>If you are running AegisAgent and a dependency (database, policy file,
+audit/event pipeline, approval store, MCP registry) becomes unavailable,
+<strong>every mutating or high-risk action is denied</strong> until the dependency
+recovers. Only low-risk, non-mutating reads may continue. No failure mode in
+this table results in a mutating action executing without a verified
+approval and a durable receipt.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../runtime-authorization-api/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Runtime authorization API">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Runtime authorization API
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../action-receipt-spec/" class="md-footer__link md-footer__link--next" aria-label="Next: Action receipt spec">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Action receipt spec
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2043 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/AegisAgent_Operational_Design/">
+      
+      
+        <link rel="prev" href="../AegisAgent_Threat_Model/">
+      
+      
+        <link rel="next" href="../runtime-authorization-api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Operational design - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#aegisagent-operational-design-community-june-2026-reset" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Operational design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Integration & connectivity
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../AegisAgent_Technical_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../runtime-authorization-api/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Threat_Model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-operating-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Operating posture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-community-distribution-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Community &amp; distribution operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-deployment-topologies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Deployment topologies
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Deployment topologies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-self-hosted-single-binary-first-class-the-neutrality-wedge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Self-hosted single binary (first-class — the neutrality wedge)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-saas-multi-tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 SaaS (multi-tenant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-enterprise-self-managed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Enterprise / self-managed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-operating-the-integrity-primitives-the-soc-the-parts-that-need-new-runbooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Operating the integrity primitives + the SOC (the parts that need new runbooks)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Operating the integrity primitives + the SOC (the parts that need new runbooks)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-canonicalization-versioning-critical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Canonicalization versioning (critical)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-receipt-chain-integrity-key-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Receipt-chain integrity &amp; key management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-approval-channel-reliability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Approval-channel reliability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-sdk-bypass-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4 SDK bypass detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-operating-the-soc-plane-new-p0-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.5 Operating the SOC plane (new — P0 invariants)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-slos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. SLOs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reliability-fail-closed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Reliability &amp; fail-closed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-security-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Security operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-support-billing-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Support, billing &amp; lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-operational-recommendation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Operational recommendation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fail-closed-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-operating-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Operating posture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-community-distribution-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Community &amp; distribution operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-deployment-topologies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Deployment topologies
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Deployment topologies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-self-hosted-single-binary-first-class-the-neutrality-wedge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Self-hosted single binary (first-class — the neutrality wedge)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-saas-multi-tenant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 SaaS (multi-tenant)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-enterprise-self-managed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Enterprise / self-managed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-operating-the-integrity-primitives-the-soc-the-parts-that-need-new-runbooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Operating the integrity primitives + the SOC (the parts that need new runbooks)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Operating the integrity primitives + the SOC (the parts that need new runbooks)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-canonicalization-versioning-critical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Canonicalization versioning (critical)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-receipt-chain-integrity-key-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Receipt-chain integrity &amp; key management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-approval-channel-reliability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Approval-channel reliability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-sdk-bypass-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4 SDK bypass detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-operating-the-soc-plane-new-p0-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.5 Operating the SOC plane (new — P0 invariants)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-slos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. SLOs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reliability-fail-closed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Reliability &amp; fail-closed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-security-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Security operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-support-billing-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Support, billing &amp; lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-operational-recommendation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Operational recommendation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/AegisAgent_Operational_Design.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="aegisagent-operational-design-community-june-2026-reset">AegisAgent — Operational Design &amp; Community (June 2026 reset)<a class="headerlink" href="#aegisagent-operational-design-community-june-2026-reset" title="Permanent link">&para;</a></h1>
+<p><strong>Product:</strong> AegisAgent
+<strong>Category:</strong> Agent Action Integrity → Integrity-anchored Agent SOC
+<strong>Version:</strong> v0.3 (re-anchored on the integrity-anchored Agent SOC)
+<strong>Date:</strong> 2026-06-05
+<strong>Owner:</strong> Lavkush Kumar
+<strong>Read first:</strong> <a href="../AegisAgent_Gap_Reassessment_2026-06/"><code>AegisAgent_Gap_Reassessment_2026-06.md</code></a> · <strong>SOC architecture:</strong> <a href="../AegisAgent_Agent_SOC_Design/"><code>AegisAgent_Agent_SOC_Design.md</code></a></p>
+<blockquote>
+<p>⚠️ <strong>Reset note (two layers).</strong> v0.1 framed operations around a developer-first "Agent Action Firewall." v0.2 re-anchored on the <strong>integrity layer</strong> and added canonicalization versioning, receipt-chain integrity + signing, approval-channel reliability, and self-hosted-first ops. <strong>v0.3 adds the operational invariants the SOC plane introduces</strong> (§4.5): async isolation of detection from the action path (P0), detection-rule + playbook lifecycle, Active-Response safety, and the RCA-LLM sandbox.</p>
+</blockquote>
+<hr />
+<h2 id="1-operating-posture">1. Operating posture<a class="headerlink" href="#1-operating-posture" title="Permanent link">&para;</a></h2>
+<p>AegisAgent is <strong>developer-first security infrastructure</strong> whose headline value (provable approvals + provenance gating + verifiable receipts, operated as a SOC) is also what compliance buyers pay for. Operations serve three audiences:</p>
+<ul>
+<li><strong>Developers</strong> — clean OSS, 10-minute self-hosted setup, fail-closed-by-default SDK, readable Cedar policies + detection rules, the open receipt spec.</li>
+<li><strong>Security/compliance</strong> — tenant isolation, signed receipts, SOC 2 / Article 14 evidence + provable incident records, self-hosting inside their trust boundary.</li>
+<li><strong>SOC analysts</strong> — a live decision feed, provenance-aware detections, provable incident timelines, and real-time containment.</li>
+</ul>
+<p>Market backdrop (see GTM doc): developers adopt agents heavily but distrust output (Stack Overflow 2026: ~84% use, ~29% trust); GitHub workflows are agentic; the Invariant Labs GitHub-MCP issue (a malicious issue leaking private-repo data) is the canonical real-world proof of the confused-deputy threat AegisAgent's provenance gate closes and the SOC correlates.</p>
+<hr />
+<h2 id="2-community-distribution-operations">2. Community &amp; distribution operations<a class="headerlink" href="#2-community-distribution-operations" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Optimize for OSS trust signals:</strong> clean README, 10-min quickstart, examples, SECURITY.md, CONTRIBUTING.md, transparent ROADMAP, changelog, GitHub stars/issues/discussions.</li>
+<li><strong>Two open specs are the flywheel.</strong> Publish (1) the verifiable action-receipt format and (2) the <strong>deterministic detection-rule format</strong>, both with reference implementations; invite gateways/SOCs to emit/consume them. Adoption of the <em>formats</em> is a leading indicator, tracked alongside stars.</li>
+<li><strong>Curated MCP security catalog:</strong> classify MCP servers by capability, auth model, credential handling, tool risk, manifest stability — feeds the provenance gate's default trust levels and the SOC's drift detection.</li>
+<li><strong>Content motion:</strong> lead with the approve-then-swap demo, the Article 14 evidence story, and "Wazuh for AI agents / why your SIEM can't watch your agents" (GTM §14).</li>
+</ul>
+<p><strong>Default GitHub policy (ships in OSS):</strong> treat public issue content as <code>untrusted_external</code>; forbid untrusted context from triggering private-repo reads or public/cross-repo writes; require approval for cross-repository data movement — directly mitigating the Invariant Labs class, and surfaced in the SOC as a confused-deputy detection.</p>
+<hr />
+<h2 id="3-deployment-topologies">3. Deployment topologies<a class="headerlink" href="#3-deployment-topologies" title="Permanent link">&para;</a></h2>
+<h3 id="31-self-hosted-single-binary-first-class-the-neutrality-wedge">3.1 Self-hosted single binary (first-class — the neutrality wedge)<a class="headerlink" href="#31-self-hosted-single-binary-first-class-the-neutrality-wedge" title="Permanent link">&para;</a></h3>
+<p>Rust gateway + SQLite (WAL) + embedded Cedar + local hash-chained receipts + <strong>in-proc SOC</strong> (<code>tokio::mpsc</code> bus, deterministic rule engine, local console). Runs inside the customer trust boundary; no prod tool calls leave their network. Target: <code>docker compose up</code> → first protected action &lt; 20 min.</p>
+<h3 id="32-saas-multi-tenant">3.2 SaaS (multi-tenant)<a class="headerlink" href="#32-saas-multi-tenant" title="Permanent link">&para;</a></h3>
+<p>Kubernetes; Postgres; <strong>event bus (Redis Streams → Kafka/NATS); ClickHouse SOC event tier; SOC worker pool (detection/correlation/response)</strong>; OTel collector → Grafana/Prometheus/Loki; Next.js console; hosted Slack/Teams approvals. Tenant isolation on every query (<code>tenant_id</code>), incl. SOC tables/indices.</p>
+<h3 id="33-enterprise-self-managed">3.3 Enterprise / self-managed<a class="headerlink" href="#33-enterprise-self-managed" title="Permanent link">&para;</a></h3>
+<p>Helm chart; external Postgres/Redis; OIDC/SAML; SIEM export; <strong>transparency-log / receipt signing</strong> (KMS-backed); <strong>multi-node SOC + Active-Response</strong>; air-gapped mode; long retention.</p>
+<hr />
+<h2 id="4-operating-the-integrity-primitives-the-soc-the-parts-that-need-new-runbooks">4. Operating the integrity primitives + the SOC (the parts that need new runbooks)<a class="headerlink" href="#4-operating-the-integrity-primitives-the-soc-the-parts-that-need-new-runbooks" title="Permanent link">&para;</a></h2>
+<h3 id="41-canonicalization-versioning-critical">4.1 Canonicalization versioning (critical)<a class="headerlink" href="#41-canonicalization-versioning-critical" title="Permanent link">&para;</a></h3>
+<p>The fail-closed guarantee depends on the Go, TS, and Python SDKs and the Rust gateway producing <strong>byte-identical</strong> canonical actions (now verified across all three via the shared corpus). Pin the scheme (<code>aegis-jcs-1</code>); a change is a <strong>breaking change</strong> (bump scheme, support old+new during migration, never silently alter hashing); CI gate: cross-language byte-equality on a fixed corpus must pass before release.</p>
+<h3 id="42-receipt-chain-integrity-key-management">4.2 Receipt-chain integrity &amp; key management<a class="headerlink" href="#42-receipt-chain-integrity-key-management" title="Permanent link">&para;</a></h3>
+<p>Per-tenant hash chain; periodic checkpoint (anchor to an append-only/transparency log in enterprise); signing keys (enterprise) in KMS/Vault with a rotation runbook (key ID in receipt); <code>GET /v1/receipts/:id/verify</code> monitored — a <code>tampered</code> result pages security. <strong>The chain is also the SOC's evidence spine; a chain break is a P1 SOC detection.</strong></p>
+<h3 id="43-approval-channel-reliability">4.3 Approval-channel reliability<a class="headerlink" href="#43-approval-channel-reliability" title="Permanent link">&para;</a></h3>
+<p>Slack/Teams callback signatures verified; approver role lookup required; approvals single-use (<code>consumed_at</code>), time-boxed (<code>expires_at</code>), replay-checked; channel outage → pending + dashboard fallback + auto-deny on timeout. SLO: approval delivery p95 &lt; 5 s.</p>
+<h3 id="44-sdk-bypass-detection">4.4 SDK bypass detection<a class="headerlink" href="#44-sdk-bypass-detection" title="Permanent link">&para;</a></h3>
+<p>Agents must not hold raw tool credentials (Token Broker proxies sensitive calls). Detect direct tool use (network policy guidance, proxy-only creds) and <strong>raise it as a SOC event</strong>. A bypassed SDK is an incident.</p>
+<h3 id="45-operating-the-soc-plane-new-p0-invariants">4.5 Operating the SOC plane (new — P0 invariants)<a class="headerlink" href="#45-operating-the-soc-plane-new-p0-invariants" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Async isolation (P0).</strong> Event emission is fire-and-forget (<code>tokio::mpsc</code>, bounded). Under extreme backpressure the emitter <strong>drops + increments a metric</strong>; it MUST NEVER block or slow <code>/v1/authorize</code>. Runbook alert: <code>ase_emit_dropped_total</code> rising → scale SOC workers, never throttle the gateway. <strong>The SOC failing must never fail the action path open</strong> (Design Law 3).</li>
+<li><strong>Detection-rule &amp; playbook lifecycle.</strong> Rules/playbooks are versioned config (like Cedar): dry-run/simulate against recent events before activation; canary a new rule in <code>log_only</code> before it can trigger Active Response; changelog every rule edit. A rule that would gate on a <em>score</em> is rejected in review (Design Law 1).</li>
+<li><strong>Active-Response safety.</strong> <code>freeze</code>/<code>revoke</code>/<code>quarantine</code> are deterministic, tenant-scoped, <strong>reversible</strong>, audited, and rate-limited (guard against false-freeze DoS — T-D4). Critical responses (revoke) optionally require two-person confirm. Every response emits a receipt.</li>
+<li><strong>RCA-LLM sandbox.</strong> The only LLM runs <strong>post-incident</strong>, sandboxed, no tools/retrieval, evidence passed as <strong>inert data</strong> (redacted hashes, tenant-scoped), output reviewed before leaving the tenant boundary (closes T-D1 second-order injection and T-D7 exfiltration). No LLM anywhere in detection/correlation/enforcement.</li>
+<li><strong>Correlation-state hygiene.</strong> Sequence/window state is per-tenant and bounded; restart-safe (durable in SaaS) so attacks spanning a restart aren't lost; ASE events validated against the receipt chain to resist forgery (T-D5).</li>
+</ul>
+<hr />
+<h2 id="5-slos">5. SLOs<a class="headerlink" href="#5-slos" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Authorization API p95:        &lt; 150 ms
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>Policy evaluation p95:        &lt; 75 ms
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>action_hash compute:          &lt; 5 ms
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>ASE emit overhead:            &lt; 1 ms, non-blocking (MUST NOT affect authorize latency)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>Approval delivery p95:        &lt; 5 s
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>MCP proxy overhead p95:       &lt; 250 ms
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>Receipt/audit enqueue success: 99.9%
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>SOC detection latency (async): &lt; 2 s p95 event-&gt;alert
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>SOC mean-time-to-contain:     &lt; 30 s detection-&gt;freeze (auto-containment path)
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>SaaS availability (MVP):      99.5%  (enterprise target 99.9%)
+</code></pre></div>
+<p>Key metrics (alerting): <code>approval_hash_mismatch_total</code> (tamper attempts), <code>provenance_denials_total</code>, <code>receipt_verify_failures_total</code>, <code>canonicalization_version_skew</code>, <strong><code>ase_emit_dropped_total</code> (SOC backpressure), <code>soc_mttd_seconds</code>, <code>soc_mttc_seconds</code>, <code>incidents_open</code></strong>.</p>
+<hr />
+<h2 id="6-reliability-fail-closed">6. Reliability &amp; fail-closed<a class="headerlink" href="#6-reliability-fail-closed" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gateway/policy unreachable</td>
+<td>SDK fails closed for mutating/high-risk; read-only fail-open only if explicitly configured</td>
+</tr>
+<tr>
+<td>Approval channel down</td>
+<td>Pending + dashboard fallback + auto-deny on timeout</td>
+</tr>
+<tr>
+<td>Receipt/audit down</td>
+<td>Critical actions block until receipt writable; low-risk buffer+retry</td>
+</tr>
+<tr>
+<td>Hash mismatch / canon skew</td>
+<td>FAIL CLOSED; never execute; record tamper/skew event + SOC detection</td>
+</tr>
+<tr>
+<td><strong>SOC plane down (bus/workers/console)</strong></td>
+<td><strong>Action path UNAFFECTED (async by construction); monitoring degrades; events buffer/drop with metric; backfill on recovery</strong></td>
+</tr>
+<tr>
+<td><strong>Active-Response API unreachable</strong></td>
+<td>Containment queued + retried; deny-side safety unaffected (gateway already denied/escalated inline)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-security-operations">7. Security operations<a class="headerlink" href="#7-security-operations" title="Permanent link">&para;</a></h2>
+<p>Tenant isolation on every query (incl. SOC tables/indices); parameterized SQLx only; default-deny unknown agent/tool/MCP server/MCP tool; <strong>scores never gate; the only LLM is the sandboxed RCA narrator</strong>; secrets redacted from receipts and ASE (hash inputs/outputs); signed releases + SBOM + dependency scan + pinned Actions + image signing + secret scanning. Bind listeners to <code>127.0.0.1</code> in dev/test. Run <code>npx ecc-agentshield scan .</code> on harness/config per the security_scan runbook.</p>
+<hr />
+<h2 id="8-support-billing-lifecycle">8. Support, billing &amp; lifecycle<a class="headerlink" href="#8-support-billing-lifecycle" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Billing metric:</strong> verified high-risk actions / month + incidents contained (value = controlled, provable actions), not seats. Tiers per GTM §9.</li>
+<li><strong>Retention tiers:</strong> OSS local-only → Team 7–30d → Startup 90d → Growth 1y → Enterprise custom. (Receipt ledger is cold/immutable; event tier follows retention.)</li>
+<li><strong>Support:</strong> OSS community (GitHub issues/discussions); paid tiers add SLAs; enterprise adds self-hosted/air-gapped support + evidence-reporting assistance.</li>
+<li><strong>Policy &amp; rule lifecycle:</strong> versioned Cedar bundles <strong>and</strong> detection-rule/playbook configs; dry-run/simulation; canary (<code>log_only</code>) rollout; backward-compatible API versions.</li>
+</ul>
+<hr />
+<h2 id="9-operational-recommendation">9. Operational recommendation<a class="headerlink" href="#9-operational-recommendation" title="Permanent link">&para;</a></h2>
+<p>Run AegisAgent as a self-hosted-first, OSS-trust-optimized product whose unique operational burdens are <strong>(1) canonicalization stability</strong>, <strong>(2) receipt-chain integrity</strong>, and <strong>(3) the SOC's async isolation + deterministic detection</strong> — the three things that make "provable approvals operated as a SOC" actually hold. If those invariants hold, the compliance value (Article 14 / SOC 2 evidence + provable incident records) is real; if any slips — a canon skew, a tampered chain, a detection that gates on a score, or a SOC that backpressures the action path — the core promise breaks. Treat all three as P0 reliability surfaces.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../AegisAgent_Threat_Model/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Threat model">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Threat model
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../runtime-authorization-api/" class="md-footer__link md-footer__link--next" aria-label="Next: Runtime authorization API">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Runtime authorization API
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
