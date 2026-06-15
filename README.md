@@ -243,6 +243,7 @@ cd sdk-typescript && npm ci && npx tsc --noEmit && npm test
 
 > 📌 The strategy docs in `docs/` were re-anchored on 2026-06-02 from the original "Agent Action Firewall" framing to the **integrity-layer** positioning above. Start with the reassessment doc.
 
+- [`docs/mission.md`](docs/mission.md) — mission, category definition, the Five Dimensions, and the Six Laws.
 - [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md) — **source of truth**: June-2026 competitor matrix, the real gap, and repositioning.
 - `docs/AegisAgent_PRD.md` — product requirements (integrity primitives as headline features).
 - `docs/AegisAgent_GTM_Document.md` — positioning, ICP, pricing, competitive landscape.
