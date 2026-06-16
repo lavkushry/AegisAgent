@@ -173,6 +173,7 @@ mod tests {
             frozen_reason: None,
             quarantined_at: None,
             force_approval: false,
+            signing_key: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

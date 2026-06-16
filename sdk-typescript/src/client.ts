@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 /**
  * AegisAgent TypeScript SDK — HTTP client.
  *
@@ -89,6 +91,11 @@ export interface ClientOptions {
   tenantId: string;
   /** Request timeout in milliseconds. Default: 5000. */
   timeoutMs?: number;
+  /**
+   * When set, every POST /v1/authorize call includes an
+   * X-Aegis-Request-Signature: sha256=<hmac-hex> header.
+   */
+  signingKey?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,12 +109,14 @@ export class AegisClient {
   private readonly agentToken: string;
   private readonly tenantId: string;
   private readonly timeoutMs: number;
+  private readonly signingKey?: string;
 
   constructor(opts: ClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.agentToken = opts.agentToken;
     this.tenantId = opts.tenantId;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.signingKey = opts.signingKey;
   }
 
   // -------------------------------------------------------------------------
@@ -162,9 +171,16 @@ export class AegisClient {
       ...(req.sourceTrust !== undefined ? { source_trust: req.sourceTrust } : {}),
     });
 
+    const reqHeaders: Record<string, string> = this.headers();
+    if (this.signingKey) {
+      const mac = createHmac("sha256", this.signingKey);
+      mac.update(body);
+      reqHeaders["X-Aegis-Request-Signature"] = `sha256=${mac.digest("hex")}`;
+    }
+
     const resp = await this.fetchWithTimeout(`${this.baseUrl}/v1/authorize`, {
       method: "POST",
-      headers: this.headers(),
+      headers: reqHeaders,
       body,
     });
 

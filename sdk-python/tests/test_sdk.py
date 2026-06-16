@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -763,6 +766,89 @@ class TestAegisSDK(unittest.TestCase):
         self.assertEqual(log_json_exc["message"], "An exception occurred")
         self.assertIn("exc_info", log_json_exc)
         self.assertIn("ValueError: Something went wrong", log_json_exc["exc_info"])
+
+
+class TestRequestSigning(unittest.TestCase):
+    """Tests for HMAC-SHA256 request signing (#1403)."""
+
+    def _make_signed_client(self, key: str = "test-signing-key") -> AegisClient:
+        client = AegisClient(
+            api_key="test_key",
+            agent_id="test_agent",
+            endpoint="http://127.0.0.1:8080",
+            signing_key=key,
+        )
+        client.agent_token = "mock_agent_token"
+        return client
+
+    @patch("requests.Session.post")
+    def test_signed_request_includes_signature_header(
+        self, mock_post: MagicMock
+    ) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"decision": "allow", "reason": "ok"}
+        mock_post.return_value = mock_response
+
+        client = self._make_signed_client("secret123")
+        client.authorize(tool="github", action="list_prs", parameters={"repo": "aegis"})
+
+        self.assertTrue(mock_post.called)
+        call_kwargs = mock_post.call_args.kwargs
+        sig_header = call_kwargs.get("headers", {}).get("X-Aegis-Request-Signature", "")
+        self.assertTrue(sig_header.startswith("sha256="), f"bad header: {sig_header!r}")
+
+    @patch("requests.Session.post")
+    def test_signed_request_signature_is_correct(self, mock_post: MagicMock) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"decision": "allow"}
+        mock_post.return_value = mock_response
+
+        signing_key = "my-shared-secret"
+        client = self._make_signed_client(signing_key)
+        client.authorize(tool="github", action="merge", parameters={"pr": 42})
+
+        call_kwargs = mock_post.call_args.kwargs
+        body_bytes: bytes = call_kwargs["data"]
+        sig_header: str = call_kwargs["headers"]["X-Aegis-Request-Signature"]
+        hex_digest = sig_header.removeprefix("sha256=")
+
+        expected = hmac.new(
+            signing_key.encode("utf-8"), body_bytes, hashlib.sha256
+        ).hexdigest()
+        self.assertEqual(hex_digest, expected)
+
+    @patch("requests.Session.post")
+    def test_unsigned_client_sends_no_signature_header(
+        self, mock_post: MagicMock
+    ) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"decision": "allow"}
+        mock_post.return_value = mock_response
+
+        client = AegisClient(
+            api_key="test_key",
+            agent_id="test_agent",
+            endpoint="http://127.0.0.1:8080",
+        )
+        client.agent_token = "mock_agent_token"
+        client.authorize(tool="github", action="list_prs", parameters={})
+
+        call_kwargs = mock_post.call_args.kwargs
+        self.assertNotIn(
+            "X-Aegis-Request-Signature",
+            call_kwargs.get("headers", {}),
+        )
+
+    def test_signing_key_stored_on_client(self) -> None:
+        client = self._make_signed_client("key-xyz")
+        self.assertEqual(client.signing_key, "key-xyz")
+
+    def test_no_signing_key_is_none_by_default(self) -> None:
+        client = AegisClient(api_key="k", agent_id="a")
+        self.assertIsNone(client.signing_key)
 
 
 if __name__ == "__main__":

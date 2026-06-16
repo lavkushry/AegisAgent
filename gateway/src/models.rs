@@ -15,6 +15,10 @@ pub struct RegisterAgentRequest {
     pub model_name: Option<String>,
     pub risk_tier: String,
     pub purpose: Option<String>,
+    /// Optional HMAC-SHA256 signing key (#1403). When set, every
+    /// `/v1/authorize` call must carry `X-Aegis-Request-Signature: sha256=<hmac-hex>`.
+    #[serde(default)]
+    pub signing_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +267,11 @@ pub struct AgentRecord {
     /// agent into `require_approval` until an operator clears it. Additive.
     #[serde(default)]
     pub force_approval: bool,
+    /// HMAC-SHA256 signing key for request-body integrity verification (#1403).
+    /// `None` = opt-out (backwards compatible). When set, every `/v1/authorize`
+    /// call must carry a valid `X-Aegis-Request-Signature: sha256=<hex>` header.
+    #[serde(default)]
+    pub signing_key: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

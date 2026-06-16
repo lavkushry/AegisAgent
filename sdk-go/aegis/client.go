@@ -9,6 +9,9 @@ package aegis
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,6 +36,11 @@ type ClientOptions struct {
 	// TenantID is forwarded as the X-Aegis-Tenant-ID header on every request.
 	TenantID string
 
+	// SigningKey, when non-empty, enables HMAC-SHA256 request signing.
+	// Every POST /v1/authorize call will include an
+	// X-Aegis-Request-Signature: sha256=<hex> header.
+	SigningKey string
+
 	// HTTPClient overrides the default http.Client (useful in tests).
 	HTTPClient *http.Client
 }
@@ -43,6 +51,7 @@ type Client struct {
 	baseURL    string
 	agentToken string
 	tenantID   string
+	signingKey string
 	http       *http.Client
 }
 
@@ -56,6 +65,7 @@ func NewClient(opts ClientOptions) *Client {
 		baseURL:    strings.TrimRight(opts.BaseURL, "/"),
 		agentToken: opts.AgentToken,
 		tenantID:   opts.TenantID,
+		signingKey: opts.SigningKey,
 		http:       hc,
 	}
 }
@@ -184,6 +194,12 @@ func (c *Client) Authorize(payload AuthorizeRequest) (AuthorizeResponse, error) 
 		return AuthorizeResponse{}, fmt.Errorf("aegis: build authorize request: %w", err)
 	}
 	c.addHeaders(req)
+
+	if c.signingKey != "" {
+		mac := hmac.New(sha256.New, []byte(c.signingKey))
+		mac.Write(body)
+		req.Header.Set("X-Aegis-Request-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

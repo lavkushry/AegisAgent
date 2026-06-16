@@ -13,7 +13,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 
 ## Current status
 
-**Python SDK — 174 tests, fully verified on `main`:**
+**Python SDK — 179 tests, fully verified on `main`:**
 - `action_hash` canonicalization unified as scheme **`aegis-jcs-1`** in `sdk-python/aegisagent/canon.py`; SDK fails closed on hash mismatch, on approval expiry, **and if it cannot atomically consume a single-use approval** (replay defense).
 - Verifiable receipts: format + reference verifier (`aegisagent/receipts.py`), CLI (`aegis-verify-receipts`), shared corpus (`tests/receipt_chain_vectors.json`).
 - Async client (`AegisAsyncClient`) + `async_protect_tool` decorator.
@@ -29,7 +29,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - `aegis-jcs-1` canonicalizer (`src/canon.ts`), `AegisClient`, `protect()`.
 - `tsc --noEmit` build + `node --test` suite + cross-language corpus CI gate.
 
-**Rust gateway — 451 tests, verified on `main`:**
+**Rust gateway — 472 tests, verified on `main`:**
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
 - Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409).
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
@@ -48,6 +48,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - **Tenant isolation stress tests** (#1402): `tenant_isolation_audit_events_alerts_incidents_and_decision_by_id` seeds two independent tenants and asserts `GET /v1/audit/events`, `GET /v1/alerts`, `GET /v1/incidents`, and `GET /v1/decisions/:id` all respect tenant boundaries — no cross-tenant row leakage and a cross-tenant decision ID yields 404.
 - **GitHub App webhook receiver** (#1381): `POST /v1/webhooks/github` — dedicated endpoint accepting native GitHub event payloads (`pull_request`, `issues`, `issue_comment`) with mandatory HMAC-SHA256 `X-Hub-Signature-256` verification (fail-closed: 401 when `AEGIS_GITHUB_WEBHOOK_SECRET` is not set), tenant scoping via `X-Aegis-Tenant-ID`, and SOC pipeline integration. Unsupported event types return `202 ignored`. 21 new unit + integration tests.
 - **Event schema versioning** (`events.rs`, #1387): `AseEvent` gains `schema_version: u32` (default 1, `#[serde(default)]`). Old serialized events without the field deserialize to v1 (forward-compatible). All ~17 construction sites updated. 5 new tests covering new/legacy/round-trip/future-version paths.
+- **HMAC-SHA256 request signing** (#1403): optional `signing_key` on agents — when set, every `POST /v1/authorize` must carry `X-Aegis-Request-Signature: sha256=<hmac-hex>`; gateway verifies with constant-time `Mac::verify_slice` (401 on missing/invalid). `authorize_action` switched from `Json<>` to `Bytes` extractor. Migration `0011_agent_signing_key.sql`. 9 new gateway tests + 5 Python + 3 Go + 3 TypeScript tests.
 - Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
 
 **Next:** real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend, Kubernetes/Helm packaging.
@@ -59,14 +60,14 @@ Baseline: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`po
 ```bash
 # Gateway (Rust)
 cargo check  --manifest-path gateway/Cargo.toml
-cargo test   --manifest-path gateway/Cargo.toml        # 451 tests
+cargo test   --manifest-path gateway/Cargo.toml        # 472 tests
 cargo fmt    --manifest-path gateway/Cargo.toml -- --check
 cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080
 
 # SDK + demos (Python)
 python3 -m pip install -e sdk-python/
-python3 -m unittest discover -s sdk-python/tests       # 174 tests
+python3 -m unittest discover -s sdk-python/tests       # 179 tests
 python3 examples/integrity_demo.py                     # zero-setup wedge demo
 aegis-verify-receipts <receipts.json>                  # or: python3 -m aegisagent.verify_receipts <f>
 aegis-status --gateway http://127.0.0.1:8080           # gateway health + agent summary
