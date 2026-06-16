@@ -29,7 +29,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - `aegis-jcs-1` canonicalizer (`src/canon.ts`), `AegisClient`, `protect()`.
 - `tsc --noEmit` build + `node --test` suite + cross-language corpus CI gate.
 
-**Rust gateway — 434 tests, verified on `main`:**
+**Rust gateway — 446 tests, verified on `main`:**
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
 - Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409).
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
@@ -47,6 +47,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - **Audit-writer chaos hardening** (#1399): `write_decision_and_audit` retries `db::insert_decision` via `db::retry_on_busy` on transient `SQLITE_BUSY`/`SQLITE_LOCKED` before treating the audit write as failed. `db::init_db_with_busy_timeout` (parameterised variant for tests) lets a chaos test hold a real SQLite writer lock and verify: high-risk action denied with `audit_writer_unavailable` + `audit_writer_unhealthy=true` while locked; `audit_writer_unhealthy` resets to `false` and normal decisions resume once the lock clears (AC3 + AC5 of #1299/#1399).
 - **Tenant isolation stress tests** (#1402): `tenant_isolation_audit_events_alerts_incidents_and_decision_by_id` seeds two independent tenants and asserts `GET /v1/audit/events`, `GET /v1/alerts`, `GET /v1/incidents`, and `GET /v1/decisions/:id` all respect tenant boundaries — no cross-tenant row leakage and a cross-tenant decision ID yields 404.
 - **GitHub App webhook receiver** (#1381): `POST /v1/webhooks/github` — dedicated endpoint accepting native GitHub event payloads (`pull_request`, `issues`, `issue_comment`) with mandatory HMAC-SHA256 `X-Hub-Signature-256` verification (fail-closed: 401 when `AEGIS_GITHUB_WEBHOOK_SECRET` is not set), tenant scoping via `X-Aegis-Tenant-ID`, and SOC pipeline integration. Unsupported event types return `202 ignored`. 21 new unit + integration tests.
+- **GitHub App PR deny comment** (#1382): `gh_comment.rs` — when a GitHub PR-related action is denied, a templated comment is posted asynchronously to the PR via the GitHub API (bearer token from `AEGIS_GITHUB_APP_TOKEN`). Rate-limited to 5 comments per PR. Fire-and-forget: never blocks or changes the `authorize_action` decision. 12 new unit tests.
 - Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
 
 **Next:** real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend, Kubernetes/Helm packaging.
@@ -58,7 +59,7 @@ Baseline: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`po
 ```bash
 # Gateway (Rust)
 cargo check  --manifest-path gateway/Cargo.toml
-cargo test   --manifest-path gateway/Cargo.toml        # 434 tests
+cargo test   --manifest-path gateway/Cargo.toml        # 446 tests
 cargo fmt    --manifest-path gateway/Cargo.toml -- --check
 cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080

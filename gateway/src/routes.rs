@@ -427,6 +427,11 @@ pub struct AppState {
     /// request with `404` — fail closed, since an unconfigured secret means
     /// no valid signature can ever be verified.
     pub slack_signing_secret: Option<String>,
+    /// Optional GitHub App PR commenter (#1382). When `Some`, a background
+    /// task posts a deny comment on GitHub PRs when an agent's PR-related
+    /// action is denied. Configured via `AEGIS_GITHUB_APP_TOKEN`. When
+    /// `None`, PR comments are silently skipped.
+    pub github_pr_commenter: Option<std::sync::Arc<crate::gh_comment::GhPrCommenter>>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -2878,6 +2883,35 @@ pub async fn authorize_action(
             expires_at,
             action_hash: original_call_hash,
         });
+    }
+
+    // #1382: when a PR-related GitHub action is denied and the PR commenter is
+    // configured, spawn a background task to post an explanatory comment. This
+    // is fire-and-forget — it never blocks the authorize path or changes the
+    // decision (Law 3: SOC/notification work is always out-of-band).
+    if decision_str == "deny" {
+        if let Some(commenter) = state.github_pr_commenter.as_ref() {
+            if payload.tool_call.tool == "github" {
+                if let Some(resource) = payload.tool_call.resource.as_deref() {
+                    if let Some((repo, pr_number)) = crate::gh_comment::extract_pr_ref(resource) {
+                        let comment_body = crate::gh_comment::format_deny_comment(
+                            &reason,
+                            &matched_policies,
+                            risk_score,
+                            &decision_id.to_string(),
+                            &payload.tool_call.tool,
+                            &payload.tool_call.action,
+                        );
+                        crate::gh_comment::spawn_pr_comment(
+                            std::sync::Arc::clone(commenter),
+                            repo,
+                            pr_number,
+                            comment_body,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     (
@@ -7600,6 +7634,7 @@ pub mod benchutil {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         Ok((state, tenant_id, agent_token))
@@ -7980,6 +8015,7 @@ mod tests {
 
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -8019,6 +8055,7 @@ mod tests {
 
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         // First request is allowed through quota
@@ -8075,6 +8112,7 @@ mod tests {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: Some(secret.to_string()),
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         (state, tenant_id, agent_token)
@@ -8113,6 +8151,7 @@ mod tests {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             slack_signing_secret: Some(secret.to_string()),
+            github_pr_commenter: None,
         });
 
         (state, tenant_id, agent_token)
@@ -8203,6 +8242,7 @@ mod tests {
 
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -8252,6 +8292,7 @@ mod tests {
             audit_batch,
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         (state, tenant_id, agent_token)
@@ -16899,6 +16940,7 @@ mod tests {
 
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         register_high_risk_action(state.clone()).await;
@@ -17083,6 +17125,7 @@ mod tests {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         register_high_risk_action(state.clone()).await;
