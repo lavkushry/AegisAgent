@@ -223,14 +223,19 @@ impl PolicyEngine {
         for policy_id in response.diagnostics().reason() {
             matched_policies.push(policy_id.to_string());
             if let Some(policy) = policy_set.policy(policy_id) {
-                // If the decision is ALLOW but any of the satisfied policies annotations indicate
-                // `require_approval`, override the binary decision to `require_approval`.
-                if decision == "allow" {
+                // Escalate the binary Cedar `allow` using annotation overrides.
+                // Severity order: quarantine > require_approval > allow.
+                // Only escalate — never de-escalate a more severe decision.
+                if matches!(decision.as_str(), "allow" | "require_approval") {
                     if let Some(dec) = policy.annotation("decision") {
                         // Strip quotes from annotation string representation
                         let dec_clean = dec.trim_matches('"');
-                        if dec_clean == "require_approval" {
-                            decision = "require_approval".to_string();
+                        match dec_clean {
+                            "quarantine" => decision = "quarantine".to_string(),
+                            "require_approval" if decision == "allow" => {
+                                decision = "require_approval".to_string();
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -561,5 +566,112 @@ mod tests {
         // The custom forbid must now take effect for this tenant.
         let after = engine.authorize(tenant_id, &readonly_request).unwrap();
         assert_eq!(after.decision, "deny");
+    }
+
+    /// #1386: the `@decision("quarantine")` annotation on a permit rule overrides
+    /// the Cedar `allow` decision with `quarantine`. Calling the canary endpoint
+    /// (`quarantine_canary_trigger`) must return `decision == "quarantine"` via
+    /// the annotation escalation path.
+    #[tokio::test]
+    async fn test_quarantine_annotation_overrides_allow() {
+        let engine = setup_engine().await;
+        let request = AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            nonce: None,
+            timestamp: None,
+            agent: AuthorizeAgentContext {
+                id: "test-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "quarantine_canary".to_string(),
+                action: "trigger".to_string(),
+                resource: None,
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        let result = engine.authorize("test_tenant", &request).unwrap();
+        assert_eq!(result.decision, "quarantine");
+    }
+
+    /// #1386: `quarantine` is more severe than `require_approval` — if a policy
+    /// set produces both annotations on different matched rules, the final decision
+    /// must be `quarantine` (not `require_approval`).
+    #[tokio::test]
+    async fn test_quarantine_annotation_beats_require_approval() {
+        use crate::models::PolicyRecord;
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let engine = setup_engine().await;
+
+        // Register a tenant with a custom `require_approval` policy so that
+        // two policies match: the quarantine canary permit + a custom
+        // `require_approval` permit for the same resource.
+        let run_id = Uuid::new_v4().simple().to_string();
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!("sqlite://target/policy_quarantine_beats_{}.db", run_id);
+        let pool = crate::db::init_db(&db_url).await.unwrap();
+        let tenant_id_owned = format!("tenant_quarantine_beats_{}", &run_id[..8]);
+        let tenant_id = tenant_id_owned.as_str();
+        crate::db::register_tenant(&pool, tenant_id, "QA Tenant", "developer")
+            .await
+            .unwrap();
+
+        let extra_policy = PolicyRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_key: "also_require_approval".to_string(),
+            name: "Also require approval".to_string(),
+            language: "cedar".to_string(),
+            body: r#"@decision("require_approval") permit(principal, action == Action::"tool_call", resource == ToolAction::"quarantine_canary_trigger") when { context.mutates_state == false };"#.to_string(),
+            version: 1,
+            status: "active".to_string(),
+            created_by: None,
+            created_at: Utc::now(),
+        };
+        crate::db::insert_policy(&pool, &extra_policy)
+            .await
+            .unwrap();
+        engine
+            .reload_tenant_policies(&pool, tenant_id)
+            .await
+            .unwrap();
+
+        let request = AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            nonce: None,
+            timestamp: None,
+            agent: AuthorizeAgentContext {
+                id: "test-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "quarantine_canary".to_string(),
+                action: "trigger".to_string(),
+                resource: None,
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        let result = engine.authorize(tenant_id, &request).unwrap();
+        assert_eq!(result.decision, "quarantine");
     }
 }

@@ -957,10 +957,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator — on-demand, human-triggered, LAW-2 compliant
         .route("/v1/incidents/:id/narrate", get(routes::narrate_incident))
-        // SOC Phase 4: Response API — agent freeze/revoke, MCP quarantine
+        // SOC Phase 4: Response API — agent freeze/revoke/quarantine, MCP quarantine
         .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
         .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))
         .route("/v1/agents/:id/revoke", post(routes::revoke_agent))
+        .route("/v1/agents/:id/restore", post(routes::restore_agent))
         .route(
             "/v1/agents/:id/permissions",
             get(routes::list_agent_tool_permissions).post(routes::grant_agent_tool_permission),

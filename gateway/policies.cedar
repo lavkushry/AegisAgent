@@ -96,3 +96,19 @@ when {
     context.mutates_state == true &&
     context.trust_level == "semi_trusted_customer"
 };
+
+// Canary-endpoint quarantine: any call to the `quarantine_canary` tool
+// (tool="quarantine_canary", action="trigger") immediately quarantines the
+// calling agent. Operators can use this pattern to detect compromised agents by
+// registering honeypot endpoints. The agent must be manually restored via
+// `POST /v1/agents/:id/restore` after investigation.
+@decision("quarantine")
+@reason("Canary endpoint triggered — agent quarantined pending investigation")
+permit (
+    principal,
+    action == Action::"tool_call",
+    resource == ToolAction::"quarantine_canary_trigger"
+)
+when {
+    context.mutates_state == false
+};
