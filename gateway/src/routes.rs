@@ -1475,6 +1475,13 @@ pub async fn register_agent(
         force_approval: false,
         quarantined_at: None,
         signing_key: payload.signing_key,
+        allowed_environments: payload.allowed_environments.as_ref().and_then(|envs| {
+            if envs.is_empty() {
+                None
+            } else {
+                serde_json::to_string(envs).ok()
+            }
+        }),
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -2264,6 +2271,30 @@ pub async fn authorize_action(
                 Json(json!({"error": "invalid_request_signature"})),
             )
                 .into_response();
+        }
+    }
+
+    // Environment restriction (#1391): deny if the agent is not permitted
+    // to operate in the environment the caller declares. NULL = unrestricted.
+    if let Some(ref env_json) = agent.allowed_environments {
+        if let Ok(allowed) = serde_json::from_str::<Vec<String>>(env_json) {
+            if !allowed.is_empty() && !allowed.contains(&payload.agent.environment) {
+                warn!(
+                    "Environment restriction: agent={} tenant={} env={} not in allowed={:?}",
+                    agent_id, tenant_id, payload.agent.environment, allowed
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "decision": "deny",
+                        "reason": format!(
+                            "agent not permitted in environment '{}'",
+                            payload.agent.environment
+                        )
+                    })),
+                )
+                    .into_response();
+            }
         }
     }
 
@@ -7654,6 +7685,7 @@ pub mod benchutil {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -7725,6 +7757,7 @@ pub mod benchutil {
                 force_approval: false,
                 quarantined_at: None,
                 signing_key: None,
+                allowed_environments: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
@@ -8283,6 +8316,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -11656,6 +11690,7 @@ mod tests {
                 force_approval: false,
                 quarantined_at: None,
                 signing_key: None,
+                allowed_environments: None,
                 created_at: Utc::now() - Duration::hours(idx), // older first
                 updated_at: Utc::now(),
             };
@@ -11687,6 +11722,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -11748,6 +11784,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -11814,6 +11851,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -11906,6 +11944,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -13046,6 +13085,90 @@ mod tests {
             .contains(&"mcp_server_quarantined".to_string()));
     }
 
+    /// Setup helper for environment restriction tests (#1391): creates a standard
+    /// agent then sets `allowed_environments` to a JSON-encoded list. An empty
+    /// slice writes `[]`, which the gateway treats as unrestricted (same as NULL).
+    async fn setup_state_with_env_restriction(
+        test_name: &str,
+        envs: &[&str],
+    ) -> (Arc<AppState>, String, String) {
+        let (state, tenant_id, agent_token) = setup_state(test_name).await;
+        let json = serde_json::to_string(&envs).unwrap();
+        sqlx::query("UPDATE agents SET allowed_environments = ? WHERE tenant_id = ?")
+            .bind(&json)
+            .bind(&tenant_id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        (state, tenant_id, agent_token)
+    }
+
+    /// #1391: agent restricted to ["production"] — request from "staging" is
+    /// denied 403 FORBIDDEN before Cedar evaluation.
+    #[tokio::test]
+    async fn authorize_action_denies_agent_in_wrong_environment() {
+        let (state, tenant_id, agent_token) =
+            setup_state_with_env_restriction("env_deny", &["production"]).await;
+
+        let mut req = mcp_authorize_request("filesystem", "read_file");
+        req.agent.environment = "staging".to_string();
+
+        let response = authorize_action(
+            State(state),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["decision"], "deny");
+        assert!(
+            json["reason"].as_str().unwrap().contains("staging"),
+            "reason should name the rejected environment"
+        );
+    }
+
+    /// #1391: same agent restricted to ["production"] — request from "production"
+    /// passes the env check and Cedar decides (allow or require_approval).
+    #[tokio::test]
+    async fn authorize_action_allows_agent_in_correct_environment() {
+        let (state, tenant_id, agent_token) =
+            setup_state_with_env_restriction("env_allow", &["production"]).await;
+
+        // mcp_authorize_request defaults to environment = "production".
+        let resp = call_authorize(
+            state,
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+        assert!(
+            resp.decision == "allow" || resp.decision == "require_approval",
+            "expected allow or require_approval, got: {}",
+            resp.decision
+        );
+    }
+
+    /// #1391: agent with NULL allowed_environments is unrestricted — any
+    /// environment passes (backwards-compatible with pre-#1391 agents).
+    #[tokio::test]
+    async fn authorize_action_unrestricted_agent_allows_any_environment() {
+        let (state, tenant_id, agent_token) = setup_state("env_unrestricted").await;
+
+        let mut req = mcp_authorize_request("filesystem", "read_file");
+        req.agent.environment = "any_environment_whatsoever".to_string();
+
+        let resp = call_authorize(state, &tenant_id, &agent_token, req).await;
+        assert!(
+            resp.decision == "allow" || resp.decision == "require_approval",
+            "unrestricted agent must pass env check for any environment"
+        );
+    }
+
     #[tokio::test]
     async fn authorize_action_denies_frozen_and_revoked_agent() {
         let (state, tenant_id, agent_token) = setup_state("agent_frozen_revoked").await;
@@ -13385,6 +13508,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -16485,6 +16609,7 @@ mod tests {
                     force_approval: false,
                     quarantined_at: None,
                     signing_key: None,
+                    allowed_environments: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
@@ -16629,6 +16754,7 @@ mod tests {
                     force_approval: false,
                     quarantined_at: None,
                     signing_key: None,
+                    allowed_environments: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 },
@@ -17172,6 +17298,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -17361,6 +17488,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -17675,6 +17803,7 @@ mod tests {
                 risk_tier: "low".to_string(),
                 purpose: None,
                 signing_key: None,
+                allowed_environments: None,
             }),
         )
         .await
@@ -18204,6 +18333,7 @@ mod tests {
             force_approval: false,
             quarantined_at: None,
             signing_key: None,
+            allowed_environments: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
