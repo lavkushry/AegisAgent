@@ -1051,6 +1051,7 @@ async fn emit_tamper_attempt_receipt(
         run_id: None,
         trace_id: None,
         matched_policies: Vec::new(),
+        schema_version: 1,
     });
 }
 
@@ -1377,6 +1378,7 @@ async fn write_decision_and_audit(
         run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
         trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
         matched_policies: matched_policies.to_vec(),
+        schema_version: 1,
     });
 
     Ok(composite_risk_score)
@@ -1943,6 +1945,7 @@ pub async fn discover_mcp_tools(
                     run_id: None,
                     trace_id: None,
                     matched_policies: Vec::new(),
+                    schema_version: 1,
                 });
 
                 // Fail-closed response (Phase 4): drift is a tool-hijack signal, so
@@ -15441,6 +15444,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec![],
+            schema_version: 1,
         };
 
         sink.emit(event.clone());
@@ -16581,6 +16585,7 @@ mod tests {
                 run_id: None,
                 trace_id: None,
                 matched_policies: vec![],
+                schema_version: 1,
             }
         }
 
@@ -16661,6 +16666,7 @@ mod tests {
                 run_id: None,
                 trace_id: None,
                 matched_policies: vec![],
+                schema_version: 1,
             }
         }
 
@@ -16919,6 +16925,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec![],
+            schema_version: 1,
         });
         assert!(!state.events.has_capacity());
 
