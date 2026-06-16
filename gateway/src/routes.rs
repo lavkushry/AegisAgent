@@ -1311,7 +1311,9 @@ async fn write_decision_and_audit(
         created_at: Utc::now(),
     };
 
-    db::insert_decision(pool, &decision_record).await?;
+    // #1399: retry on transient SQLITE_BUSY/LOCKED before treating the audit
+    // write as failed (fail-closed only after retries are exhausted).
+    db::retry_on_busy(3, || db::insert_decision(pool, &decision_record)).await?;
 
     // TASK-0089 (#935): best-effort historical risk-score sample, so
     // operators can see an agent's risk trend over time. Never blocks the
@@ -16354,6 +16356,130 @@ mod tests {
         .await;
 
         assert_eq!(response.decision, "allow");
+    }
+
+    /// #1399 chaos test (AC3 + AC5): a `SQLITE_BUSY` on the decision write is
+    /// retried via `retry_on_busy`; once retries exhaust with the lock still
+    /// held, a high-risk/mutating action is denied with
+    /// `audit_writer_unavailable` (fail-closed). Once the lock is released,
+    /// normal operations resume and `audit_writer_unhealthy` resets to `false`.
+    #[tokio::test]
+    async fn authorize_denies_high_risk_action_when_db_locked_then_recovers() {
+        use std::time::Duration;
+
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/routes_audit_busy_{}.db",
+            Uuid::new_v4().simple()
+        );
+        // busy_timeout(0) → any concurrent writer lock surfaces as an
+        // immediate SQLITE_BUSY instead of SQLite's own multi-second
+        // busy-wait, so the test stays fast and deterministic.
+        let pool = db::init_db_with_busy_timeout(&db_url, Duration::from_millis(0))
+            .await
+            .unwrap();
+        let tenant_id = "tenant_routes".to_string();
+        db::register_tenant(&pool, &tenant_id, "Routes Tenant", "developer")
+            .await
+            .unwrap();
+
+        let agent_id = Uuid::new_v4().to_string();
+        let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+        let agent = AgentRecord {
+            id: agent_id,
+            tenant_id: tenant_id.clone(),
+            agent_key: "routes-agent".to_string(),
+            agent_token: db::hash_token(&agent_token),
+            name: "Routes Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&pool, &agent).await.unwrap();
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, _events_rx) = EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
+        let state = Arc::new(AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics,
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+        });
+
+        register_high_risk_action(state.clone()).await;
+
+        // Hold an exclusive write lock via a second connection so that
+        // INSERT into `decisions` from state.pool fails with SQLITE_BUSY
+        // immediately (busy_timeout=0 on state.pool).
+        let lock_pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&lock_pool)
+            .await
+            .unwrap();
+
+        // AC3: deny while locked, flag set.
+        let response = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            high_risk_authorize_request(),
+        )
+        .await;
+        assert_eq!(response.decision, "deny");
+        assert!(
+            response.reason.contains("audit_writer_unavailable"),
+            "reason was: {}",
+            response.reason
+        );
+        assert!(state
+            .audit_writer_unhealthy
+            .load(std::sync::atomic::Ordering::Relaxed));
+
+        // AC5: release lock — normal operations and flag reset.
+        sqlx::query("ROLLBACK").execute(&lock_pool).await.unwrap();
+        drop(lock_pool);
+
+        let response = call_authorize(
+            state.clone(),
+            &tenant_id,
+            &agent_token,
+            high_risk_authorize_request(),
+        )
+        .await;
+        assert_ne!(response.decision, "deny");
+        assert!(!response.reason.contains("audit_writer_unavailable"));
+        assert!(!state
+            .audit_writer_unhealthy
+            .load(std::sync::atomic::Ordering::Relaxed));
     }
 
     // ── #1298: Compliance Evidence Pack ─────────────────────────────────────

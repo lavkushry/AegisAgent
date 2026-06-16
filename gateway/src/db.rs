@@ -70,11 +70,23 @@ pub const SOC_DEFAULT_LIMIT: i64 = 50;
 pub const SOC_MAX_LIMIT: i64 = 200;
 
 pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
+    init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
+}
+
+/// Like [`init_db`], but allows overriding the SQLite `busy_timeout`. Used by
+/// the #1399 chaos tests to construct a pool with `busy_timeout(0)` so a
+/// concurrent writer lock surfaces as an immediate `SQLITE_BUSY` (code 5)
+/// rather than waiting up to 5 s — exercising the app-level `retry_on_busy`
+/// path deterministically without multi-second waits.
+pub async fn init_db_with_busy_timeout(
+    db_url: &str,
+    busy_timeout: std::time::Duration,
+) -> Result<SqlitePool, sqlx::Error> {
     // Enforce WAL mode and busy timeout on pool initialization
     let connection_options = sqlx::sqlite::SqliteConnectOptions::from_str(db_url)?
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .busy_timeout(std::time::Duration::from_secs(5))
+        .busy_timeout(busy_timeout)
         // #0098: enforce FK constraints on every connection (SQLite defaults
         // this off per-connection; without it, ON DELETE/UPDATE actions and
         // referential integrity checks declared in the schema are silently
