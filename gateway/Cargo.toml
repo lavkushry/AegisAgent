@@ -29,7 +29,7 @@ hmac = "0.12"
 # existing receipt_hash. Hermetic default is unsigned (no key configured). The
 # "std" feature gives us deterministic signing from a parsed secret key; no rng
 # is required at runtime (keys are provisioned out-of-band as hex).
-ed25519-dalek = { version = "=2.1.1", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }
 hex = "=0.4.3"
 uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
