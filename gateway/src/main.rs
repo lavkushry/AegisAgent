@@ -6,7 +6,7 @@ use axum::{
     http::{header, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde_json::json;
@@ -961,6 +961,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
         .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))
         .route("/v1/agents/:id/revoke", post(routes::revoke_agent))
+        .route(
+            "/v1/agents/:id/permissions",
+            get(routes::list_agent_tool_permissions).post(routes::grant_agent_tool_permission),
+        )
+        .route(
+            "/v1/agents/:id/permissions/:tool_key",
+            delete(routes::revoke_agent_tool_permission),
+        )
         .route(
             "/v1/mcp/servers/:server_key/quarantine",
             post(routes::quarantine_mcp_server),

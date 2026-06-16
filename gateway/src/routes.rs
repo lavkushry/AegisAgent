@@ -2298,6 +2298,45 @@ pub async fn authorize_action(
         }
     }
 
+    // Agent-to-tool permission check (#1390, opt-in fail-closed): if the agent
+    // has any explicit tool bindings, only those tools may be called. No
+    // bindings = unrestricted (backwards-compatible with pre-#1390 agents).
+    match db::agent_tool_permission_status(
+        &state.pool,
+        &tenant_id,
+        &agent_id,
+        &payload.tool_call.tool,
+    )
+    .await
+    {
+        Ok(Some(false)) => {
+            warn!(
+                "Tool permission denied: agent={} tenant={} tool={}",
+                agent_id, tenant_id, payload.tool_call.tool
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "decision": "deny",
+                    "reason": format!(
+                        "agent not permitted to call tool '{}'",
+                        payload.tool_call.tool
+                    )
+                })),
+            )
+                .into_response();
+        }
+        Ok(_) => {} // None = unrestricted; Some(true) = permitted
+        Err(e) => {
+            error!("DB error checking tool permissions: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    }
+
     // Replay protection (#1306, opt-in): only runs when the caller supplies
     // `nonce`. Placed after agent-token authentication (fail-closed: an
     // attacker without a valid token can't probe nonce/timestamp state) but
@@ -6249,6 +6288,136 @@ async fn set_agent_operational_status(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "Database error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── Agent-to-tool permission bindings (#1390) ─────────────────────────────────
+
+/// `POST /v1/agents/:id/permissions` — grant a tool permission to an agent.
+///
+/// Idempotent: granting the same tool twice is a no-op. Returns 200 on success
+/// and 404 when the agent does not exist (or belongs to a different tenant).
+pub async fn grant_agent_tool_permission(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<crate::models::GrantToolPermissionRequest>,
+) -> impl IntoResponse {
+    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Agent not found"})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("DB error checking agent for permission grant: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+        Ok(Some(_)) => {}
+    }
+
+    match db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, &payload.tool_key)
+        .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "agent_id": agent_id,
+                "tool_key": payload.tool_key,
+                "granted": true
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to grant tool permission: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /v1/agents/:id/permissions` — list all tool permissions for an agent.
+///
+/// Returns an empty array when no permissions are set (agent is unrestricted).
+/// 404 when the agent does not exist.
+pub async fn list_agent_tool_permissions(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Agent not found"})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("DB error checking agent for permission list: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+        Ok(Some(_)) => {}
+    }
+
+    match db::get_agent_tool_permissions(&state.pool, &tenant_id, &agent_id).await {
+        Ok(perms) => (StatusCode::OK, Json(json!({ "permissions": perms }))).into_response(),
+        Err(e) => {
+            error!("Failed to list tool permissions: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `DELETE /v1/agents/:id/permissions/:tool_key` — revoke a tool permission.
+///
+/// Returns 200 when deleted, 404 when no such binding exists (or agent not
+/// found in this tenant).
+pub async fn revoke_agent_tool_permission(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path((agent_id, tool_key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match db::revoke_agent_tool_permission(&state.pool, &tenant_id, &agent_id, &tool_key).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(json!({
+                "agent_id": agent_id,
+                "tool_key": tool_key,
+                "revoked": true
+            })),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Permission not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to revoke tool permission: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
             )
                 .into_response()
         }
@@ -13166,6 +13335,147 @@ mod tests {
         assert!(
             resp.decision == "allow" || resp.decision == "require_approval",
             "unrestricted agent must pass env check for any environment"
+        );
+    }
+
+    // ── Agent-to-tool permission binding tests (#1390) ───────────────────────
+
+    /// Grant a permission then list it — `GET /v1/agents/:id/permissions`
+    /// returns exactly the binding that was just created.
+    #[tokio::test]
+    async fn grant_and_list_tool_permissions() {
+        let (state, tenant_id, _agent_token) = setup_state("perm_grant_list").await;
+        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &_agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+
+        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+            .await
+            .unwrap();
+        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "filesystem")
+            .await
+            .unwrap();
+
+        let perms = db::get_agent_tool_permissions(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap();
+        assert_eq!(perms.len(), 2);
+        let keys: Vec<&str> = perms.iter().map(|p| p.tool_key.as_str()).collect();
+        assert!(keys.contains(&"github"));
+        assert!(keys.contains(&"filesystem"));
+    }
+
+    /// Revoking a permission removes it from the list; duplicate revoke → false.
+    #[tokio::test]
+    async fn revoke_tool_permission_removes_binding() {
+        let (state, tenant_id, agent_token) = setup_state("perm_revoke").await;
+        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+
+        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+            .await
+            .unwrap();
+
+        let deleted =
+            db::revoke_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+                .await
+                .unwrap();
+        assert!(deleted, "first revoke must return true");
+
+        let deleted2 =
+            db::revoke_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+                .await
+                .unwrap();
+        assert!(!deleted2, "duplicate revoke must return false");
+
+        let perms = db::get_agent_tool_permissions(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap();
+        assert!(perms.is_empty());
+    }
+
+    /// Agent has explicit permissions but NOT for the requested tool → 403 deny.
+    #[tokio::test]
+    async fn authorize_action_denies_tool_not_in_permission_list() {
+        let (state, tenant_id, agent_token) = setup_state("perm_deny_tool").await;
+        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        // Grant only "github"; request will use "filesystem".
+        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+            .await
+            .unwrap();
+
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let response = authorize_action(
+            State(state),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["decision"], "deny");
+        assert!(
+            json["reason"].as_str().unwrap().contains("filesystem"),
+            "reason should name the rejected tool"
+        );
+    }
+
+    /// Agent has a permission for the requested tool → env/perm checks pass,
+    /// Cedar decides (allow or require_approval).
+    #[tokio::test]
+    async fn authorize_action_allows_tool_in_permission_list() {
+        let (state, tenant_id, agent_token) = setup_state("perm_allow_tool").await;
+        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "filesystem")
+            .await
+            .unwrap();
+
+        let resp = call_authorize(
+            state,
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+        assert!(
+            resp.decision == "allow" || resp.decision == "require_approval",
+            "expected allow or require_approval, got: {}",
+            resp.decision
+        );
+    }
+
+    /// Agent with no permission rows is unrestricted — any tool is allowed
+    /// (backwards-compatible with pre-#1390 agents).
+    #[tokio::test]
+    async fn authorize_action_unrestricted_agent_allows_any_tool() {
+        let (state, tenant_id, agent_token) = setup_state("perm_unrestricted").await;
+        // No db::grant_agent_tool_permission calls → unrestricted.
+        let resp = call_authorize(
+            state,
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+        assert!(
+            resp.decision == "allow" || resp.decision == "require_approval",
+            "unrestricted agent must pass tool permission check"
         );
     }
 

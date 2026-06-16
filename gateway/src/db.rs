@@ -3868,6 +3868,108 @@ pub async fn backup_database_to(pool: &SqlitePool, dest_path: &str) -> Result<()
     Ok(())
 }
 
+// ── Agent-to-tool permission bindings (#1390) ─────────────────────────────────
+
+/// Grant a tool permission for an agent. Idempotent — a duplicate (tenant_id,
+/// agent_id, tool_key) triple is silently ignored (UNIQUE constraint).
+pub async fn grant_agent_tool_permission(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    tool_key: &str,
+) -> Result<(), sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT OR IGNORE INTO agent_tool_permissions (id, tenant_id, agent_id, tool_key, created_at)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(tool_key)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Return all tool permissions for `agent_id` within `tenant_id`.
+pub async fn get_agent_tool_permissions(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<Vec<crate::models::AgentToolPermission>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::AgentToolPermission>(
+        "SELECT id, tenant_id, agent_id, tool_key, created_at
+         FROM agent_tool_permissions
+         WHERE tenant_id = ? AND agent_id = ?
+         ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Revoke a single tool permission. Returns `true` if a row was deleted.
+pub async fn revoke_agent_tool_permission(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    tool_key: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM agent_tool_permissions
+         WHERE tenant_id = ? AND agent_id = ? AND tool_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(tool_key)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Check whether `agent_id` is permitted to call `tool_key` in `tenant_id`.
+///
+/// - `None` — no permissions configured for this agent; unrestricted
+///   (backwards-compatible with pre-#1390 agents).
+/// - `Some(true)` — the specific tool is in the agent's allow-list.
+/// - `Some(false)` — permissions exist but this tool is not allowed (deny).
+pub async fn agent_tool_permission_status(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    tool_key: &str,
+) -> Result<Option<bool>, sqlx::Error> {
+    // First check if any permission rows exist for this agent.
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM agent_tool_permissions WHERE tenant_id = ? AND agent_id = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .fetch_one(pool)
+    .await?;
+
+    if count.0 == 0 {
+        return Ok(None); // unrestricted
+    }
+
+    // Permissions exist — check if this specific tool is allowed.
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM agent_tool_permissions
+         WHERE tenant_id = ? AND agent_id = ? AND tool_key = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(tool_key)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(Some(row.0 > 0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

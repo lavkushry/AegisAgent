@@ -284,6 +284,22 @@ pub struct AgentRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A single agent-to-tool permission binding (#1390).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AgentToolPermission {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: String,
+    pub tool_key: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Request body for `POST /v1/agents/:id/permissions` (#1390).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GrantToolPermissionRequest {
+    pub tool_key: String,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SkillRecord {
