@@ -15882,6 +15882,257 @@ mod tests {
         }
     }
 
+    /// #1402 — tenant isolation across `audit_events`, `soc_alerts`,
+    /// `soc_incidents`, and `decisions/:id`. The 100-tenant stress above
+    /// already covers `agents`/`decisions`/`approvals`/`receipts` list
+    /// endpoints; this test covers the remaining list and point-lookup
+    /// endpoints that were not yet systematically stress-tested for
+    /// cross-tenant data leakage (CWE-284).
+    #[tokio::test]
+    async fn tenant_isolation_audit_events_alerts_incidents_and_decision_by_id() {
+        let (state, _unused, _) = setup_state("iso_audit_soc").await;
+
+        // ── Tenant A ──────────────────────────────────────────────────────────
+        let tenant_a = "iso_tenant_a".to_string();
+        let tenant_b = "iso_tenant_b".to_string();
+        for (tid, name) in [(&tenant_a, "Iso Tenant A"), (&tenant_b, "Iso Tenant B")] {
+            db::register_tenant(&state.pool, tid, name, "developer")
+                .await
+                .unwrap();
+        }
+
+        // Seed agents for each tenant (needed as FK for decisions / alerts /
+        // incidents).
+        let agent_a = Uuid::new_v4().to_string();
+        let agent_b = Uuid::new_v4().to_string();
+        let tok_a = format!("tok_iso_a_{}", Uuid::new_v4().simple());
+        let tok_b = format!("tok_iso_b_{}", Uuid::new_v4().simple());
+        for (tid, aid, tok) in [(&tenant_a, &agent_a, &tok_a), (&tenant_b, &agent_b, &tok_b)] {
+            db::insert_agent(
+                &state.pool,
+                &AgentRecord {
+                    id: aid.clone(),
+                    tenant_id: tid.clone(),
+                    agent_key: "iso-agent".to_string(),
+                    agent_token: db::hash_token(tok),
+                    name: format!("Iso Agent {tid}"),
+                    owner_team: None,
+                    owner_email: None,
+                    environment: "production".to_string(),
+                    framework: None,
+                    model_provider: None,
+                    model_name: None,
+                    purpose: None,
+                    risk_tier: "low".to_string(),
+                    status: "active".to_string(),
+                    last_seen_at: None,
+                    frozen_reason: None,
+                    force_approval: false,
+                    quarantined_at: None,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        // Produce a decision + audit event for each tenant via authorize so
+        // `decisions` and `audit_events` both have real rows.
+        let decision_a_id = call_authorize(
+            state.clone(),
+            &tenant_a,
+            &tok_a,
+            low_risk_authorize_request(),
+        )
+        .await
+        .decision_id
+        .to_string();
+        let decision_b_id = call_authorize(
+            state.clone(),
+            &tenant_b,
+            &tok_b,
+            low_risk_authorize_request(),
+        )
+        .await
+        .decision_id
+        .to_string();
+
+        // Seed a SOC alert and incident for each tenant directly (bypassing
+        // event pipeline to keep the test fast and deterministic).
+        let alert_a_id = Uuid::new_v4().to_string();
+        let alert_b_id = Uuid::new_v4().to_string();
+        for (tid, aid, alert_id) in [
+            (&tenant_a, &agent_a, &alert_a_id),
+            (&tenant_b, &agent_b, &alert_b_id),
+        ] {
+            db::insert_soc_alert(
+                &state.pool,
+                &crate::models::SocAlertRecord {
+                    id: alert_id.clone(),
+                    tenant_id: tid.clone(),
+                    rule: "iso_test_rule".to_string(),
+                    severity: "medium".to_string(),
+                    agent_id: aid.clone(),
+                    source_event_id: Uuid::new_v4().to_string(),
+                    summary: format!("Iso alert for {tid}"),
+                    created_at: Utc::now().to_rfc3339(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let incident_a_id = Uuid::new_v4().to_string();
+        let incident_b_id = Uuid::new_v4().to_string();
+        for (tid, aid, incident_id) in [
+            (&tenant_a, &agent_a, &incident_a_id),
+            (&tenant_b, &agent_b, &incident_b_id),
+        ] {
+            db::insert_soc_incident(
+                &state.pool,
+                &crate::models::SocIncidentRecord {
+                    id: incident_id.clone(),
+                    tenant_id: tid.clone(),
+                    kind: "iso_test_incident".to_string(),
+                    severity: "high".to_string(),
+                    agent_id: aid.clone(),
+                    summary: format!("Iso incident for {tid}"),
+                    source_event_ids: "[]".to_string(),
+                    opened_at: Utc::now().to_rfc3339(),
+                    status: "open".to_string(),
+                    closed_at: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        // ── Isolation assertions for Tenant A ─────────────────────────────────
+
+        let events_a: Vec<serde_json::Value> = serde_json::from_slice(
+            &to_bytes(
+                get_audit_events(
+                    State(state.clone()),
+                    TenantId(tenant_a.clone()),
+                    axum::extract::RawQuery(None),
+                )
+                .await
+                .into_response()
+                .into_body(),
+                usize::MAX,
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            events_a.iter().all(|e| e["tenant_id"] == json!(tenant_a)),
+            "audit_events for tenant_a leaked tenant_b rows"
+        );
+        assert!(
+            !events_a.iter().any(|e| e["tenant_id"] == json!(tenant_b)),
+            "audit_events for tenant_a contains tenant_b rows"
+        );
+
+        let alerts_a: Vec<serde_json::Value> = serde_json::from_slice(
+            &to_bytes(
+                list_alerts(
+                    State(state.clone()),
+                    TenantId(tenant_a.clone()),
+                    axum::extract::RawQuery(None),
+                )
+                .await
+                .into_response()
+                .into_body(),
+                usize::MAX,
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        // The events drain may produce additional alerts from detection rules
+        // firing on the authorize calls above; assert isolation semantics
+        // (no tenant_b data leaks) rather than an exact count.
+        assert!(
+            !alerts_a.is_empty(),
+            "tenant_a should see at least the seeded alert"
+        );
+        assert!(
+            alerts_a.iter().all(|a| a["tenant_id"] == json!(tenant_a)),
+            "list_alerts for tenant_a leaked tenant_b rows"
+        );
+        assert!(
+            alerts_a.iter().any(|a| a["id"] == json!(alert_a_id)),
+            "seeded alert_a_id must appear in tenant_a's list"
+        );
+        assert!(
+            !alerts_a.iter().any(|a| a["tenant_id"] == json!(tenant_b)),
+            "list_alerts for tenant_a must not contain tenant_b rows"
+        );
+
+        let incidents_a: Vec<serde_json::Value> = serde_json::from_slice(
+            &to_bytes(
+                list_incidents(
+                    State(state.clone()),
+                    TenantId(tenant_a.clone()),
+                    axum::extract::RawQuery(None),
+                )
+                .await
+                .into_response()
+                .into_body(),
+                usize::MAX,
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !incidents_a.is_empty(),
+            "tenant_a should see at least the seeded incident"
+        );
+        assert!(
+            incidents_a
+                .iter()
+                .all(|i| i["tenant_id"] == json!(tenant_a)),
+            "list_incidents for tenant_a leaked tenant_b rows"
+        );
+        assert!(
+            incidents_a.iter().any(|i| i["id"] == json!(incident_a_id)),
+            "seeded incident_a_id must appear in tenant_a's list"
+        );
+        assert!(
+            !incidents_a
+                .iter()
+                .any(|i| i["tenant_id"] == json!(tenant_b)),
+            "list_incidents for tenant_a must not contain tenant_b rows"
+        );
+
+        // Tenant A must not be able to fetch Tenant B's decision by ID.
+        let cross_resp = get_decision(
+            State(state.clone()),
+            TenantId(tenant_a.clone()),
+            Path(decision_b_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            cross_resp.status(),
+            StatusCode::NOT_FOUND,
+            "cross-tenant GET /v1/decisions/:id must return 404"
+        );
+
+        // Sanity: Tenant A can still fetch its OWN decision by ID.
+        let own_resp = get_decision(
+            State(state.clone()),
+            TenantId(tenant_a.clone()),
+            Path(decision_a_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(own_resp.status(), StatusCode::OK);
+    }
+
     /// #1169: a real WebSocket client connects to `/v1/ws/events`, receives
     /// `authorize_decision` events emitted for its own tenant within 100ms,
     /// and never receives events emitted for a different tenant.
