@@ -1636,8 +1636,8 @@ pub async fn get_agent_by_id(
 
 pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key, allowed_environments)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -1654,6 +1654,7 @@ pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(),
     .bind(&record.risk_tier)
     .bind(&record.status)
     .bind(&record.signing_key)
+    .bind(&record.allowed_environments)
     .execute(pool)
     .await?;
     Ok(())

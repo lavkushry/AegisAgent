@@ -19,6 +19,10 @@ pub struct RegisterAgentRequest {
     /// `/v1/authorize` call must carry `X-Aegis-Request-Signature: sha256=<hmac-hex>`.
     #[serde(default)]
     pub signing_key: Option<String>,
+    /// Environments this agent is permitted to call from (#1391).
+    /// `None` or empty = unrestricted. Stored as JSON in the DB.
+    #[serde(default)]
+    pub allowed_environments: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +276,10 @@ pub struct AgentRecord {
     /// call must carry a valid `X-Aegis-Request-Signature: sha256=<hex>` header.
     #[serde(default)]
     pub signing_key: Option<String>,
+    /// JSON-encoded list of environments this agent may call from (#1391), e.g.
+    /// `["production","staging"]`. `None` = unrestricted (backwards-compatible).
+    #[serde(default)]
+    pub allowed_environments: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

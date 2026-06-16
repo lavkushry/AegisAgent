@@ -174,6 +174,7 @@ mod tests {
             quarantined_at: None,
             force_approval: false,
             signing_key: None,
+            allowed_environments: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
