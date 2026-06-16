@@ -856,6 +856,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/authorize", post(routes::authorize_action))
         // SOC-004 (#1187): agentless ingestion of external event sources
         .route("/v1/ingest", post(routes::ingest_event))
+        // #1381: dedicated GitHub App webhook receiver with HMAC-SHA256 verification
+        .route("/v1/webhooks/github", post(routes::receive_github_webhook))
         .route("/v1/decisions", get(routes::list_decisions))
         .route("/v1/decisions/:id", get(routes::get_decision))
         .route(

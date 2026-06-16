@@ -112,6 +112,98 @@ pub fn normalize_openai_trace(tenant_id: &str, payload: &Value) -> Option<AseEve
     Some(event)
 }
 
+/// Normalize a native GitHub event from `POST /v1/webhooks/github` (#1381).
+///
+/// Unlike [`normalize_github_webhook`] (which wraps the payload in the
+/// `{source, payload}` envelope used by `/v1/ingest`), this function accepts
+/// the raw GitHub event body directly. The `event_type` comes from the
+/// `X-GitHub-Event` header.
+///
+/// Supported events:
+/// - `pull_request` with `action = "opened"` → `pull_request.opened`
+/// - `pull_request` with `action = "closed"` + `merged = true` → `pull_request.merged`
+/// - `issues` with `action = "opened"` → `issues.opened`
+/// - `issue_comment` with `action = "created"` → `issue_comment.created`
+///
+/// Returns `None` for unsupported event types or missing required fields —
+/// callers should acknowledge the webhook but not emit an event.
+pub fn normalize_github_native_event(
+    tenant_id: &str,
+    event_type: &str,
+    payload: &Value,
+) -> Option<AseEvent> {
+    let action = payload.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let sender = payload
+        .get("sender")
+        .and_then(|s| s.get("login"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let repo = payload
+        .get("repository")
+        .and_then(|r| r.get("full_name"))
+        .and_then(|v| v.as_str());
+
+    let (tool_action, resource): (String, Option<String>) = match event_type {
+        "pull_request" => {
+            let pr_number = payload.get("number").and_then(|v| v.as_u64());
+            let resource = match (repo, pr_number) {
+                (Some(r), Some(n)) => Some(format!("{}#{}", r, n)),
+                (Some(r), None) => Some(r.to_string()),
+                _ => None,
+            };
+            match action {
+                "opened" => ("pull_request.opened".to_string(), resource),
+                "closed" => {
+                    let merged = payload
+                        .get("pull_request")
+                        .and_then(|pr| pr.get("merged"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let evt = if merged {
+                        "pull_request.merged"
+                    } else {
+                        "pull_request.closed"
+                    };
+                    (evt.to_string(), resource)
+                }
+                _ => return None,
+            }
+        }
+        "issues" => {
+            if action != "opened" {
+                return None;
+            }
+            let issue_number = payload
+                .get("issue")
+                .and_then(|i| i.get("number"))
+                .and_then(|v| v.as_u64());
+            let resource = match (repo, issue_number) {
+                (Some(r), Some(n)) => Some(format!("{}#issue-{}", r, n)),
+                (Some(r), None) => Some(r.to_string()),
+                _ => None,
+            };
+            ("issues.opened".to_string(), resource)
+        }
+        "issue_comment" => {
+            if action != "created" {
+                return None;
+            }
+            (
+                "issue_comment.created".to_string(),
+                repo.map(|r| r.to_string()),
+            )
+        }
+        _ => return None,
+    };
+
+    let mut event = base_event(tenant_id, "external_event:github_webhook");
+    event.agent_id = sender.to_string();
+    event.tool = "github".to_string();
+    event.action = tool_action;
+    event.resource = resource;
+    Some(event)
+}
+
 /// Dispatch to the normalizer for `source`. Returns `Ok(None)` for an
 /// unrecognized payload shape (missing required fields), `Err(())` for an
 /// unsupported `source` value.
@@ -204,5 +296,134 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    // --- normalize_github_native_event tests (#1381) ---
+
+    #[test]
+    fn native_pull_request_opened_normalizes() {
+        let payload = json!({
+            "action": "opened",
+            "number": 42,
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "alice"},
+            "pull_request": {"merged": false}
+        });
+        let event = normalize_github_native_event("t1", "pull_request", &payload).unwrap();
+        assert_eq!(event.kind, "external_event:github_webhook");
+        assert_eq!(event.tool, "github");
+        assert_eq!(event.action, "pull_request.opened");
+        assert_eq!(event.agent_id, "alice");
+        assert_eq!(event.resource.as_deref(), Some("org/repo#42"));
+        assert_eq!(event.decision, "allow");
+        assert_eq!(event.risk_score, 0);
+    }
+
+    #[test]
+    fn native_pull_request_merged_normalizes() {
+        let payload = json!({
+            "action": "closed",
+            "number": 7,
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "bob"},
+            "pull_request": {"merged": true}
+        });
+        let event = normalize_github_native_event("t1", "pull_request", &payload).unwrap();
+        assert_eq!(event.action, "pull_request.merged");
+        assert_eq!(event.resource.as_deref(), Some("org/repo#7"));
+    }
+
+    #[test]
+    fn native_pull_request_closed_not_merged() {
+        let payload = json!({
+            "action": "closed",
+            "number": 3,
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "carol"},
+            "pull_request": {"merged": false}
+        });
+        let event = normalize_github_native_event("t1", "pull_request", &payload).unwrap();
+        assert_eq!(event.action, "pull_request.closed");
+    }
+
+    #[test]
+    fn native_pull_request_unsupported_action_returns_none() {
+        let payload = json!({
+            "action": "labeled",
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "alice"}
+        });
+        assert!(normalize_github_native_event("t1", "pull_request", &payload).is_none());
+    }
+
+    #[test]
+    fn native_issues_opened_normalizes() {
+        let payload = json!({
+            "action": "opened",
+            "issue": {"number": 99},
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "dave"}
+        });
+        let event = normalize_github_native_event("t1", "issues", &payload).unwrap();
+        assert_eq!(event.action, "issues.opened");
+        assert_eq!(event.agent_id, "dave");
+        assert_eq!(event.resource.as_deref(), Some("org/repo#issue-99"));
+    }
+
+    #[test]
+    fn native_issues_closed_returns_none() {
+        let payload = json!({
+            "action": "closed",
+            "issue": {"number": 1},
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "alice"}
+        });
+        assert!(normalize_github_native_event("t1", "issues", &payload).is_none());
+    }
+
+    #[test]
+    fn native_issue_comment_created_normalizes() {
+        let payload = json!({
+            "action": "created",
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "eve"},
+            "comment": {"body": "LGTM"}
+        });
+        let event = normalize_github_native_event("t1", "issue_comment", &payload).unwrap();
+        assert_eq!(event.action, "issue_comment.created");
+        assert_eq!(event.agent_id, "eve");
+        assert_eq!(event.resource.as_deref(), Some("org/repo"));
+    }
+
+    #[test]
+    fn native_issue_comment_edited_returns_none() {
+        let payload = json!({
+            "action": "edited",
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "alice"}
+        });
+        assert!(normalize_github_native_event("t1", "issue_comment", &payload).is_none());
+    }
+
+    #[test]
+    fn native_unknown_event_type_returns_none() {
+        let payload = json!({
+            "action": "pushed",
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "alice"}
+        });
+        assert!(normalize_github_native_event("t1", "push", &payload).is_none());
+    }
+
+    #[test]
+    fn native_sender_defaults_to_unknown_when_missing() {
+        let payload = json!({
+            "action": "opened",
+            "number": 1,
+            "repository": {"full_name": "org/repo"},
+            "pull_request": {"merged": false}
+        });
+        let event = normalize_github_native_event("t1", "pull_request", &payload).unwrap();
+        assert_eq!(event.agent_id, "unknown");
     }
 }
