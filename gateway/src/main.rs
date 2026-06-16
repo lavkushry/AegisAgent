@@ -1203,6 +1203,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec!["critical_policy".to_string()],
+            schema_version: 1,
         };
         events_sink.emit(event);
 

@@ -383,6 +383,7 @@ mod tests {
             run_id: Some("run_456".to_string()),
             trace_id: None,
             matched_policies: vec![],
+            schema_version: 1,
         }
     }
 

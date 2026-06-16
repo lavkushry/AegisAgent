@@ -26,9 +26,16 @@ use uuid::Uuid;
 /// Default in-memory buffer for the SOC event channel.
 pub const DEFAULT_CAPACITY: usize = 1024;
 
-/// An Agent Security Event — the unit the SOC plane consumes. v0 schema: a
-/// normalized record of one authorize decision. Carries no secrets (the moat's
-/// redaction rule); identifiers and the decision only.
+/// Schema version for forward-compatible deserialization. Starts at 1;
+/// increment when fields are added or semantics change in a breaking way.
+/// Existing serialized events that omit this field default to 1 (#1387).
+fn default_schema_version() -> u32 {
+    1
+}
+
+/// An Agent Security Event — the unit the SOC plane consumes. Schema v1:
+/// a normalized record of one authorize decision. Carries no secrets (the
+/// moat's redaction rule); identifiers and the decision only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AseEvent {
     /// Unique id for this event (not the decision id).
@@ -51,6 +58,11 @@ pub struct AseEvent {
     pub run_id: Option<String>,
     pub trace_id: Option<String>,
     pub matched_policies: Vec<String>,
+    /// Event schema version (#1387). Defaults to 1 when deserializing older
+    /// events that predate this field. Consumers should handle unknown future
+    /// versions gracefully (ignore unknown fields; reject only on breakage).
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
 }
 
 /// Non-blocking handle the authorize hot path holds to feed the SOC stream.
@@ -502,6 +514,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec!["untrusted-mutation-forbid".to_string()],
+            schema_version: 1,
         }
     }
 
@@ -608,5 +621,77 @@ mod tests {
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(format!("{}-shm", db_path));
         let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+
+    // --- schema_version (#1387) ---
+
+    #[test]
+    fn new_event_has_schema_version_1() {
+        let ev = deny_event("t1", "a1", "e1");
+        assert_eq!(ev.schema_version, 1);
+    }
+
+    #[test]
+    fn serialized_event_includes_schema_version() {
+        let ev = deny_event("t1", "a1", "e1");
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["schema_version"], 1u64);
+    }
+
+    #[test]
+    fn legacy_event_without_schema_version_deserializes_to_v1() {
+        let json = serde_json::json!({
+            "event_id": "evt_legacy",
+            "occurred_at": "2025-01-01T00:00:00Z",
+            "tenant_id": "t1",
+            "kind": "authorize_decision",
+            "agent_id": "a1",
+            "decision": "allow",
+            "tool": "github",
+            "action": "read",
+            "resource": null,
+            "risk_score": 0,
+            "reason": "ok",
+            "run_id": null,
+            "trace_id": null,
+            "matched_policies": []
+        });
+        let ev: AseEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            ev.schema_version, 1,
+            "legacy events must default to schema v1"
+        );
+    }
+
+    #[test]
+    fn future_event_with_higher_schema_version_deserializes_without_error() {
+        let json = serde_json::json!({
+            "event_id": "evt_future",
+            "occurred_at": "2027-01-01T00:00:00Z",
+            "tenant_id": "t1",
+            "kind": "authorize_decision",
+            "agent_id": "a1",
+            "decision": "allow",
+            "tool": "github",
+            "action": "read",
+            "resource": null,
+            "risk_score": 0,
+            "reason": "ok",
+            "run_id": null,
+            "trace_id": null,
+            "matched_policies": [],
+            "schema_version": 2
+        });
+        let ev: AseEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(ev.schema_version, 2);
+    }
+
+    #[test]
+    fn round_trip_preserves_schema_version() {
+        let ev = deny_event("t1", "a1", "e1");
+        let serialized = serde_json::to_string(&ev).unwrap();
+        let deserialized: AseEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.schema_version, 1);
+        assert_eq!(deserialized.event_id, ev.event_id);
     }
 }
