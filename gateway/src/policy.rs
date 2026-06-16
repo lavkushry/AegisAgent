@@ -236,23 +236,42 @@ impl PolicyEngine {
         let mut matched_policies = Vec::new();
         let mut approver_group = None;
         let mut reason = "Policy evaluation complete.".to_string();
+        let mut redacted_fields: Vec<String> = Vec::new();
 
         for policy_id in response.diagnostics().reason() {
             matched_policies.push(policy_id.to_string());
             if let Some(policy) = policy_set.policy(policy_id) {
                 // Escalate the binary Cedar `allow` using annotation overrides.
-                // Severity order: quarantine > require_approval > allow.
+                // Severity order (most → least restrictive):
+                //   quarantine > require_approval > redact > allow
                 // Only escalate — never de-escalate a more severe decision.
-                if matches!(decision.as_str(), "allow" | "require_approval") {
+                if matches!(decision.as_str(), "allow" | "redact" | "require_approval") {
                     if let Some(dec) = policy.annotation("decision") {
                         // Strip quotes from annotation string representation
                         let dec_clean = dec.trim_matches('"');
                         match dec_clean {
                             "quarantine" => decision = "quarantine".to_string(),
-                            "require_approval" if decision == "allow" => {
+                            "require_approval"
+                                if matches!(decision.as_str(), "allow" | "redact") =>
+                            {
                                 decision = "require_approval".to_string();
                             }
+                            "redact" if decision == "allow" => {
+                                decision = "redact".to_string();
+                            }
                             _ => {}
+                        }
+                    }
+                }
+
+                // Accumulate redact_fields from all matching policies that carry the
+                // @redact_fields annotation (comma-separated list, e.g. "ssn,api_key").
+                if let Some(fields_str) = policy.annotation("redact_fields") {
+                    let fields_clean = fields_str.trim_matches('"');
+                    for field in fields_clean.split(',') {
+                        let trimmed = field.trim().to_string();
+                        if !trimmed.is_empty() && !redacted_fields.contains(&trimmed) {
+                            redacted_fields.push(trimmed);
                         }
                     }
                 }
@@ -269,11 +288,18 @@ impl PolicyEngine {
             }
         }
 
+        // redacted_fields is only meaningful when the final decision is "redact";
+        // clear it for other decisions to avoid leaking policy internals.
+        if decision != "redact" {
+            redacted_fields.clear();
+        }
+
         Ok(AuthorizeDecision {
             decision,
             matched_policies,
             approver_group,
             reason,
+            redacted_fields,
         })
     }
 }
@@ -283,6 +309,9 @@ pub struct AuthorizeDecision {
     pub matched_policies: Vec<String>,
     pub approver_group: Option<String>,
     pub reason: String,
+    /// Fields to strip from the tool-call parameters before execution.
+    /// Populated when `decision == "redact"`. Empty otherwise.
+    pub redacted_fields: Vec<String>,
 }
 
 #[cfg(test)]
@@ -777,6 +806,122 @@ mod tests {
         assert_eq!(
             mixed_result.decision, canonical_result.decision,
             "mixed-case tool names must produce the same Cedar decision as lowercase"
+        );
+    }
+
+    // --- #1385: redact decision type tests ---
+
+    /// Cedar `@decision("redact")` annotation must escalate an `allow` to
+    /// `redact` and the `@redact_fields` list must be returned.
+    #[tokio::test]
+    async fn test_redact_annotation_returns_decision_and_fields() {
+        let engine = setup_engine().await;
+        let request = AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            nonce: None,
+            timestamp: None,
+            agent: AuthorizeAgentContext {
+                id: "test-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "secrets".to_string(),
+                action: "rotate_credential".to_string(),
+                resource: None,
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        let result = engine.authorize("test_tenant", &request).unwrap();
+        assert_eq!(result.decision, "redact");
+        assert!(
+            !result.redacted_fields.is_empty(),
+            "redact decision must carry a non-empty field list"
+        );
+        // The policy declares @redact_fields("api_key,password,secret,token")
+        assert!(result.redacted_fields.contains(&"api_key".to_string()));
+        assert!(result.redacted_fields.contains(&"password".to_string()));
+    }
+
+    /// `redact` severity is lower than `require_approval` — a matched
+    /// `require_approval` annotation must beat a `redact` annotation from
+    /// another matched policy, and `redacted_fields` must be cleared.
+    #[tokio::test]
+    async fn test_require_approval_beats_redact() {
+        use crate::models::PolicyRecord;
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let engine = setup_engine().await;
+
+        let run_id = Uuid::new_v4().simple().to_string();
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!("sqlite://target/policy_approval_beats_redact_{}.db", run_id);
+        let pool = crate::db::init_db(&db_url).await.unwrap();
+        let tenant_id_owned = format!("tenant_approval_beats_redact_{}", &run_id[..8]);
+        let tenant_id = tenant_id_owned.as_str();
+        crate::db::register_tenant(&pool, tenant_id, "Test Tenant", "developer")
+            .await
+            .unwrap();
+
+        // Add a custom require_approval policy for the same resource.
+        let extra_policy = PolicyRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_key: "also_require_approval".to_string(),
+            name: "Also require approval".to_string(),
+            language: "cedar".to_string(),
+            body: r#"@decision("require_approval") permit(principal, action == Action::"tool_call", resource == ToolAction::"secrets_rotate_credential") when { context.mutates_state == false };"#.to_string(),
+            version: 1,
+            status: "active".to_string(),
+            created_by: None,
+            created_at: Utc::now(),
+        };
+        crate::db::insert_policy(&pool, &extra_policy)
+            .await
+            .unwrap();
+        engine
+            .reload_tenant_policies(&pool, tenant_id)
+            .await
+            .unwrap();
+
+        let request = AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            nonce: None,
+            timestamp: None,
+            agent: AuthorizeAgentContext {
+                id: "test-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "secrets".to_string(),
+                action: "rotate_credential".to_string(),
+                resource: None,
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        let result = engine.authorize(tenant_id, &request).unwrap();
+        assert_eq!(result.decision, "require_approval");
+        assert!(
+            result.redacted_fields.is_empty(),
+            "redacted_fields must be cleared when decision escalates to require_approval"
         );
     }
 }

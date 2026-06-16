@@ -58,6 +58,10 @@ pub struct AseEvent {
     pub run_id: Option<String>,
     pub trace_id: Option<String>,
     pub matched_policies: Vec<String>,
+    /// Fields stripped from the tool-call parameters when `decision == "redact"` (#1385).
+    /// Empty for all other decision types.
+    #[serde(default)]
+    pub redacted_fields: Vec<String>,
     /// Event schema version (#1387). Defaults to 1 when deserializing older
     /// events that predate this field. Consumers should handle unknown future
     /// versions gracefully (ignore unknown fields; reject only on breakage).
@@ -514,6 +518,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec!["untrusted-mutation-forbid".to_string()],
+            redacted_fields: vec![],
             schema_version: 1,
         }
     }

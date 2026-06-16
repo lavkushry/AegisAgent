@@ -851,5 +851,104 @@ class TestRequestSigning(unittest.TestCase):
         self.assertIsNone(client.signing_key)
 
 
+class TestRedactDecision(unittest.TestCase):
+    """#1385: protect_tool strips redacted_fields when decision == 'redact'."""
+
+    def _make_client(self):
+        client = AegisClient(
+            api_key="test_key",
+            agent_id="agent_123",
+            endpoint="http://127.0.0.1:8080",
+        )
+        client.agent_token = "mock_agent_token"
+        return client
+
+    @patch("requests.Session.post")
+    def test_redact_strips_sensitive_kwargs(self, mock_post):
+        """Tool executes with sensitive kwargs replaced by '[REDACTED]'."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "decision": "redact",
+            "reason": "Sensitive fields must not reach tool execution unredacted",
+            "redacted_fields": ["api_key", "password"],
+            "action_hash": "sha256:00000000",
+        }
+        mock_post.return_value = mock_resp
+
+        client = self._make_client()
+        received = {}
+
+        @protect_tool(client, tool="secrets", action="rotate_credential")
+        def rotate(name, api_key, password):
+            received["name"] = name
+            received["api_key"] = api_key
+            received["password"] = password
+            return "ok"
+
+        result = rotate(name="cred-1", api_key="sk-secret", password="hunter2")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(received["name"], "cred-1")
+        self.assertEqual(received["api_key"], "[REDACTED]")
+        self.assertEqual(received["password"], "[REDACTED]")
+
+    @patch("requests.Session.post")
+    def test_redact_with_empty_field_list_executes_unchanged(self, mock_post):
+        """If redacted_fields is empty, the tool runs with original kwargs."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "decision": "redact",
+            "reason": "Redact",
+            "redacted_fields": [],
+            "action_hash": "sha256:00000000",
+        }
+        mock_post.return_value = mock_resp
+
+        client = self._make_client()
+        received = {}
+
+        @protect_tool(client, tool="secrets", action="rotate_credential")
+        def rotate(name, api_key):
+            received["name"] = name
+            received["api_key"] = api_key
+            return "ok"
+
+        result = rotate(name="cred-1", api_key="sk-real")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(received["api_key"], "sk-real")
+
+    @patch("requests.Session.post")
+    def test_redact_does_not_strip_unlisted_kwargs(self, mock_post):
+        """Fields not in redacted_fields pass through unchanged."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "decision": "redact",
+            "reason": "Redact",
+            "redacted_fields": ["password"],
+            "action_hash": "sha256:00000000",
+        }
+        mock_post.return_value = mock_resp
+
+        client = self._make_client()
+        received = {}
+
+        @protect_tool(client, tool="secrets", action="rotate_credential")
+        def rotate(name, api_key, password):
+            received["name"] = name
+            received["api_key"] = api_key
+            received["password"] = password
+            return "ok"
+
+        rotate(name="cred-1", api_key="sk-real", password="secret123")
+
+        self.assertEqual(received["name"], "cred-1")
+        self.assertEqual(received["api_key"], "sk-real")
+        self.assertEqual(received["password"], "[REDACTED]")
+
+
 if __name__ == "__main__":
     unittest.main()

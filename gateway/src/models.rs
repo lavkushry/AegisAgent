@@ -194,7 +194,7 @@ pub struct ApprovalResponseInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizeResponse {
     pub decision_id: Uuid,
-    pub decision: String, // allow, deny, require_approval, quarantine, log_only
+    pub decision: String, // allow, deny, require_approval, quarantine, redact, log_only
     pub risk_score: i32,
     pub risk_level: String,
     /// Advisory composite risk score (#1289), `0..=100`. Display metadata
@@ -203,6 +203,10 @@ pub struct AuthorizeResponse {
     pub reason: String,
     pub matched_policies: Vec<String>,
     pub approval: Option<ApprovalResponseInfo>,
+    /// Fields to strip from the tool-call parameters before execution (#1385).
+    /// Non-empty only when `decision == "redact"`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

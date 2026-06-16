@@ -38,6 +38,7 @@ fn base_event(tenant_id: &str, kind: &str) -> AseEvent {
         run_id: None,
         trace_id: None,
         matched_policies: Vec::new(),
+        redacted_fields: vec![],
         schema_version: 1,
     }
 }

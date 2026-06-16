@@ -97,6 +97,24 @@ when {
     context.trust_level == "semi_trusted_customer"
 };
 
+// Redact sensitive parameters for credential-adjacent tool calls.
+// When a tool call involves known sensitive fields (e.g. api_key, password),
+// the gateway returns decision="redact" with the list of fields to strip before
+// execution. The SDK intercepts this and removes the listed parameters so the
+// tool runs without receiving the raw secret. Operators can replace this example
+// with project-specific tool/action matchers via the custom policy API.
+@decision("redact")
+@redact_fields("api_key,password,secret,token")
+@reason("Sensitive fields must not reach tool execution unredacted")
+permit (
+    principal,
+    action == Action::"tool_call",
+    resource == ToolAction::"secrets_rotate_credential"
+)
+when {
+    context.mutates_state == false
+};
+
 // Canary-endpoint quarantine: any call to the `quarantine_canary` tool
 // (tool="quarantine_canary", action="trigger") immediately quarantines the
 // calling agent. Operators can use this pattern to detect compromised agents by

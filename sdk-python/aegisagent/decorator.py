@@ -223,6 +223,22 @@ def protect_tool(
                 logger.error(err_msg)
                 raise PermissionError(err_msg)
 
+            elif decision == "redact":
+                # Gateway policy requires sensitive fields be stripped before execution.
+                # Only keyword arguments can be redacted; positional-only args are not
+                # addressable by field name and are passed through unchanged.
+                fields_to_redact = auth_response.get("redacted_fields", [])
+                redacted_kwargs = {
+                    k: ("[REDACTED]" if k in fields_to_redact else v)
+                    for k, v in kwargs.items()
+                }
+                if fields_to_redact:
+                    logger.warning(
+                        f"Action '{tool}.{action}' allowed with REDACTED fields: "
+                        f"{fields_to_redact}. Reason: {reason}"
+                    )
+                return func(*args, **redacted_kwargs)
+
             elif decision == "require_approval":
                 approval = auth_response.get("approval")
                 if not approval:
@@ -432,6 +448,19 @@ def async_protect_tool(
                 err_msg = f"Action '{tool}.{action}' was DENIED. Reason: {reason}"
                 logger.error(err_msg)
                 raise PermissionError(err_msg)
+
+            elif decision == "redact":
+                fields_to_redact = auth_response.get("redacted_fields", [])
+                redacted_kwargs = {
+                    k: ("[REDACTED]" if k in fields_to_redact else v)
+                    for k, v in kwargs.items()
+                }
+                if fields_to_redact:
+                    logger.warning(
+                        f"Action '{tool}.{action}' allowed with REDACTED fields: "
+                        f"{fields_to_redact}. Reason: {reason}"
+                    )
+                return await func(*args, **redacted_kwargs)
 
             elif decision == "require_approval":
                 approval = auth_response.get("approval")
