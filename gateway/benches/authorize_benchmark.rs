@@ -101,12 +101,9 @@ fn authorize_allow_benchmark(c: &mut Criterion) {
             // end-to-end cost).
             let request = benchutil::allow_authorize_request();
             async move {
-                let response = routes::authorize_action(
-                    axum::extract::State(state),
-                    headers,
-                    axum::Json(request),
-                )
-                .await;
+                let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
+                let response =
+                    routes::authorize_action(axum::extract::State(state), headers, body).await;
                 // Force evaluation of the response (criterion's async iter
                 // already awaits it, but `into_response()` mirrors what Axum
                 // does on the wire and avoids the compiler optimizing away

@@ -1636,8 +1636,8 @@ pub async fn get_agent_by_id(
 
 pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -1653,9 +1653,30 @@ pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(),
     .bind(&record.purpose)
     .bind(&record.risk_tier)
     .bind(&record.status)
+    .bind(&record.signing_key)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Verify an `X-Aegis-Request-Signature: sha256=<hex>` header against the raw
+/// request body (#1403). Uses `Mac::verify_slice` for constant-time comparison.
+/// Returns `true` only when the signature is present, well-formed, and correct.
+pub fn verify_request_signature(signing_key: &str, body: &[u8], sig_header: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let Some(hex_digest) = sig_header.strip_prefix("sha256=") else {
+        return false;
+    };
+    let Ok(expected) = hex::decode(hex_digest) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(signing_key.as_bytes()) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&expected).is_ok()
 }
 
 pub async fn update_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {

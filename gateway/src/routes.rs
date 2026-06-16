@@ -1474,6 +1474,7 @@ pub async fn register_agent(
         frozen_reason: None,
         force_approval: false,
         quarantined_at: None,
+        signing_key: payload.signing_key,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -2169,11 +2170,24 @@ async fn update_mcp_tool_status(
 pub async fn authorize_action(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(payload): Json<AuthorizeRequest>,
+    body: Bytes,
 ) -> impl IntoResponse {
     // #0081: wall-clock time for this evaluation, persisted on the decision row
     // for SOC/perf dashboards. Captured first so it covers agent resolution too.
     let started_at = std::time::Instant::now();
+
+    // Parse JSON from raw bytes — keeping bytes for HMAC signature verification (#1403).
+    let payload: AuthorizeRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Invalid JSON body"})),
+            )
+                .into_response()
+        }
+    };
+
     // Resolve agent from Bearer agent_token
     let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
         Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
@@ -2217,6 +2231,41 @@ pub async fn authorize_action(
 
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
+
+    // Request signing (#1403, opt-in): verify X-Aegis-Request-Signature header
+    // when the agent has a signing key registered. Missing or incorrect
+    // signature is a hard 401 — fail-closed so a forged body can't bypass
+    // policy. Agents without a signing key are unaffected (backwards compat).
+    if let Some(ref signing_key) = agent.signing_key {
+        let sig_header = match headers
+            .get("x-aegis-request-signature")
+            .and_then(|h| h.to_str().ok())
+        {
+            Some(s) => s.to_string(),
+            None => {
+                warn!(
+                    "Request signature missing for agent={} tenant={}",
+                    agent_id, tenant_id
+                );
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "missing_request_signature"})),
+                )
+                    .into_response();
+            }
+        };
+        if !db::verify_request_signature(signing_key, &body, &sig_header) {
+            warn!(
+                "Request signature invalid for agent={} tenant={}",
+                agent_id, tenant_id
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "invalid_request_signature"})),
+            )
+                .into_response();
+        }
+    }
 
     // Replay protection (#1306, opt-in): only runs when the caller supplies
     // `nonce`. Placed after agent-token authentication (fail-closed: an
@@ -7604,6 +7653,7 @@ pub mod benchutil {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -7674,6 +7724,7 @@ pub mod benchutil {
                 frozen_reason: None,
                 force_approval: false,
                 quarantined_at: None,
+                signing_key: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
@@ -7944,9 +7995,13 @@ mod tests {
             format!("Bearer {}", agent_token).parse().unwrap(),
         );
 
-        let response = authorize_action(State(state), headers, Json(request))
-            .await
-            .into_response();
+        let response = authorize_action(
+            State(state),
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -8025,17 +8080,25 @@ mod tests {
         let headers = agent_headers(&agent_token, &tenant_id);
 
         // First request is allowed through rate limiter
-        let resp1 = authorize_action(State(state.clone()), headers.clone(), Json(request.clone()))
-            .await
-            .into_response();
+        let resp1 = authorize_action(
+            State(state.clone()),
+            headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
         // Since we don't have "mcp:server:tool" registered/approved in the database for this test setup,
         // it will be denied (403 or similar) or return require_approval/etc., but NOT 429!
         assert_ne!(resp1.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Immediate second request is blocked by rate limiter (429)
-        let resp2 = authorize_action(State(state.clone()), headers.clone(), Json(request.clone()))
-            .await
-            .into_response();
+        let resp2 = authorize_action(
+            State(state.clone()),
+            headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
         assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Now test quota
@@ -8065,7 +8128,7 @@ mod tests {
         let resp3 = authorize_action(
             State(state_quota.clone()),
             headers.clone(),
-            Json(request.clone()),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
         )
         .await
         .into_response();
@@ -8075,7 +8138,7 @@ mod tests {
         let resp4 = authorize_action(
             State(state_quota.clone()),
             headers.clone(),
-            Json(request.clone()),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
         )
         .await
         .into_response();
@@ -8219,6 +8282,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -8349,7 +8413,7 @@ mod tests {
         let response = authorize_action(
             State(state),
             agent_headers(agent_token, tenant_id),
-            Json(request),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
         )
         .await
         .into_response();
@@ -10663,7 +10727,7 @@ mod tests {
         let first = authorize_action(
             State(state.clone()),
             agent_headers(&agent_token, &tenant_id),
-            Json(request.clone()),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
         )
         .await
         .into_response();
@@ -10673,7 +10737,7 @@ mod tests {
         let second = authorize_action(
             State(state.clone()),
             agent_headers(&agent_token, &tenant_id),
-            Json(request.clone()),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
         )
         .await
         .into_response();
@@ -10698,7 +10762,7 @@ mod tests {
         let response = authorize_action(
             State(state.clone()),
             agent_headers(&agent_token, &tenant_id),
-            Json(request),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
         )
         .await
         .into_response();
@@ -10726,7 +10790,7 @@ mod tests {
         let first = authorize_action(
             State(state.clone()),
             agent_headers(&agent_token, &tenant_id),
-            Json(request1),
+            Bytes::from(serde_json::to_vec(&request1).unwrap()),
         )
         .await
         .into_response();
@@ -10735,11 +10799,181 @@ mod tests {
         let second = authorize_action(
             State(state.clone()),
             agent_headers(&agent_token, &tenant_id),
-            Json(request2),
+            Bytes::from(serde_json::to_vec(&request2).unwrap()),
         )
         .await
         .into_response();
         assert_eq!(second.status(), StatusCode::OK);
+    }
+
+    // --- request signing (#1403) ---
+
+    /// Compute `X-Aegis-Request-Signature: sha256=<hex>` for test helpers.
+    fn signing_header(key: &str, body: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes()).unwrap();
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    /// Register an agent with a signing key and return (state, tenant_id, agent_token).
+    async fn setup_state_with_signing_key(
+        test_name: &str,
+        signing_key: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state, tenant_id, agent_token) = setup_state(test_name).await;
+
+        // Update the agent's signing_key column directly.
+        sqlx::query("UPDATE agents SET signing_key = ? WHERE tenant_id = ?")
+            .bind(signing_key)
+            .bind(&tenant_id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        (state, tenant_id, agent_token)
+    }
+
+    #[tokio::test]
+    async fn request_signing_valid_signature_allows() {
+        let key = "test-signing-key-valid";
+        let (state, tenant_id, agent_token) =
+            setup_state_with_signing_key("signing_valid", key).await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let body = Bytes::from(serde_json::to_vec(&request).unwrap());
+        let sig = signing_header(key, &body);
+
+        let mut headers = agent_headers(&agent_token, &tenant_id);
+        headers.insert("x-aegis-request-signature", sig.parse().unwrap());
+
+        let resp = authorize_action(State(state), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn request_signing_missing_header_returns_401() {
+        let key = "test-signing-key-missing";
+        let (state, tenant_id, agent_token) =
+            setup_state_with_signing_key("signing_missing", key).await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let body = Bytes::from(serde_json::to_vec(&request).unwrap());
+
+        // No X-Aegis-Request-Signature header
+        let headers = agent_headers(&agent_token, &tenant_id);
+
+        let resp = authorize_action(State(state), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["error"], "missing_request_signature");
+    }
+
+    #[tokio::test]
+    async fn request_signing_invalid_signature_returns_401() {
+        let key = "test-signing-key-invalid";
+        let (state, tenant_id, agent_token) =
+            setup_state_with_signing_key("signing_invalid", key).await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let body = Bytes::from(serde_json::to_vec(&request).unwrap());
+
+        let mut headers = agent_headers(&agent_token, &tenant_id);
+        // Forged signature (wrong key)
+        let forged = signing_header("wrong-key", &body);
+        headers.insert("x-aegis-request-signature", forged.parse().unwrap());
+
+        let resp = authorize_action(State(state), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["error"], "invalid_request_signature");
+    }
+
+    #[tokio::test]
+    async fn request_signing_forged_body_returns_401() {
+        let key = "test-signing-key-forged-body";
+        let (state, tenant_id, agent_token) =
+            setup_state_with_signing_key("signing_forged_body", key).await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let original_body = Bytes::from(serde_json::to_vec(&request).unwrap());
+        let sig = signing_header(key, &original_body);
+
+        // Sign the original body, but send a tampered body
+        let mut tampered = request.clone();
+        tampered.tool_call.action = "delete_all".to_string();
+        let tampered_body = Bytes::from(serde_json::to_vec(&tampered).unwrap());
+
+        let mut headers = agent_headers(&agent_token, &tenant_id);
+        headers.insert("x-aegis-request-signature", sig.parse().unwrap());
+
+        let resp = authorize_action(State(state), headers, tampered_body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["error"], "invalid_request_signature");
+    }
+
+    #[tokio::test]
+    async fn request_signing_unsigned_agent_does_not_require_signature() {
+        // Agents without a signing key registered are unaffected (opt-in).
+        let (state, tenant_id, agent_token) = setup_state("signing_unsigned_agent_ok").await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let body = Bytes::from(serde_json::to_vec(&request).unwrap());
+
+        // No signature header — should still pass since agent has no signing_key
+        let headers = agent_headers(&agent_token, &tenant_id);
+        let resp = authorize_action(State(state), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn request_signing_db_verify_helper_accepts_valid_signature() {
+        let key = "unit-test-key";
+        let body = b"hello world";
+        let sig = signing_header(key, body);
+        assert!(db::verify_request_signature(key, body, &sig));
+    }
+
+    #[tokio::test]
+    async fn request_signing_db_verify_helper_rejects_wrong_key() {
+        let body = b"hello world";
+        let sig = signing_header("correct-key", body);
+        assert!(!db::verify_request_signature("wrong-key", body, &sig));
+    }
+
+    #[tokio::test]
+    async fn request_signing_db_verify_helper_rejects_tampered_body() {
+        let key = "integrity-key";
+        let sig = signing_header(key, b"original body");
+        assert!(!db::verify_request_signature(key, b"tampered body", &sig));
+    }
+
+    #[tokio::test]
+    async fn request_signing_db_verify_helper_rejects_malformed_header() {
+        let key = "format-key";
+        // No sha256= prefix
+        assert!(!db::verify_request_signature(
+            key,
+            b"body",
+            "not-a-valid-sig"
+        ));
+        // Non-hex after prefix
+        assert!(!db::verify_request_signature(key, b"body", "sha256=ZZZZ"));
     }
 
     #[tokio::test]
@@ -11421,6 +11655,7 @@ mod tests {
                 frozen_reason: None,
                 force_approval: false,
                 quarantined_at: None,
+                signing_key: None,
                 created_at: Utc::now() - Duration::hours(idx), // older first
                 updated_at: Utc::now(),
             };
@@ -11451,6 +11686,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -11511,6 +11747,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -11576,6 +11813,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -11667,6 +11905,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -13145,6 +13384,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -15245,7 +15485,12 @@ mod tests {
             axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
         );
 
-        let _ = authorize_action(State(state.clone()), headers, Json(auth_payload)).await;
+        let _ = authorize_action(
+            State(state.clone()),
+            headers,
+            Bytes::from(serde_json::to_vec(&auth_payload).unwrap()),
+        )
+        .await;
 
         // Query stats
         let stats_resp = get_tenant_stats(State(state.clone()), TenantId(tenant_id.clone()))
@@ -15300,7 +15545,12 @@ mod tests {
             axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
         );
 
-        let _ = authorize_action(State(state.clone()), headers, Json(auth_payload)).await;
+        let _ = authorize_action(
+            State(state.clone()),
+            headers,
+            Bytes::from(serde_json::to_vec(&auth_payload).unwrap()),
+        )
+        .await;
 
         let resp = get_db_stats(State(state.clone())).await.into_response();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -16234,6 +16484,7 @@ mod tests {
                     frozen_reason: None,
                     force_approval: false,
                     quarantined_at: None,
+                    signing_key: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
@@ -16377,6 +16628,7 @@ mod tests {
                     frozen_reason: None,
                     force_approval: false,
                     quarantined_at: None,
+                    signing_key: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 },
@@ -16919,6 +17171,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -17107,6 +17360,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -17420,6 +17674,7 @@ mod tests {
                 model_name: None,
                 risk_tier: "low".to_string(),
                 purpose: None,
+                signing_key: None,
             }),
         )
         .await
@@ -17948,6 +18203,7 @@ mod tests {
             frozen_reason: None,
             force_approval: false,
             quarantined_at: None,
+            signing_key: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

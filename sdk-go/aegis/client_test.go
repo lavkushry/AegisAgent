@@ -1,9 +1,14 @@
 package aegis_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/lavkushry/aegisagent/sdk-go/aegis"
@@ -135,5 +140,97 @@ func TestConsumeApproval_409_ReturnsError(t *testing.T) {
 	_, err := client.ConsumeApproval("appr-dup")
 	if err == nil {
 		t.Fatal("expected error on 409, got nil")
+	}
+}
+
+// ---------- Request signing (#1403) -----------------------------------------
+
+func TestAuthorize_WithSigningKey_SendsSignatureHeader(t *testing.T) {
+	const signingKey = "test-signing-secret"
+	var gotSig string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSig = r.Header.Get("X-Aegis-Request-Signature")
+		serveJSON(w, http.StatusOK, map[string]any{
+			"decision":    "allow",
+			"action_hash": "abc",
+		})
+	}))
+	defer srv.Close()
+
+	client := aegis.NewClient(aegis.ClientOptions{
+		BaseURL:    srv.URL,
+		AgentToken: "tok",
+		TenantID:   "tid",
+		SigningKey: signingKey,
+	})
+	_, err := client.Authorize(aegis.AuthorizeRequest{
+		Tool:       "github",
+		Action:     "list_prs",
+		Parameters: map[string]any{"repo": "aegis"},
+	})
+	if err != nil {
+		t.Fatalf("Authorize error: %v", err)
+	}
+	if !strings.HasPrefix(gotSig, "sha256=") {
+		t.Fatalf("expected X-Aegis-Request-Signature to start with sha256=, got %q", gotSig)
+	}
+}
+
+func TestAuthorize_WithSigningKey_SignatureIsCorrect(t *testing.T) {
+	const signingKey = "my-hmac-key"
+	var capturedBody []byte
+	var capturedSig string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		capturedSig = r.Header.Get("X-Aegis-Request-Signature")
+		serveJSON(w, http.StatusOK, map[string]any{"decision": "allow", "action_hash": "x"})
+	}))
+	defer srv.Close()
+
+	client := aegis.NewClient(aegis.ClientOptions{
+		BaseURL:    srv.URL,
+		AgentToken: "tok",
+		TenantID:   "tid",
+		SigningKey: signingKey,
+	})
+	_, err := client.Authorize(aegis.AuthorizeRequest{
+		Tool:       "s3",
+		Action:     "delete_bucket",
+		Parameters: map[string]any{"bucket": "prod"},
+	})
+	if err != nil {
+		t.Fatalf("Authorize error: %v", err)
+	}
+
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	mac.Write(capturedBody)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if capturedSig != expected {
+		t.Errorf("signature mismatch: got %q, want %q", capturedSig, expected)
+	}
+}
+
+func TestAuthorize_WithoutSigningKey_NoSignatureHeader(t *testing.T) {
+	var gotSig string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSig = r.Header.Get("X-Aegis-Request-Signature")
+		serveJSON(w, http.StatusOK, map[string]any{"decision": "allow", "action_hash": "y"})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(srv.URL)
+	_, err := client.Authorize(aegis.AuthorizeRequest{
+		Tool:       "github",
+		Action:     "list_prs",
+		Parameters: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Authorize error: %v", err)
+	}
+	if gotSig != "" {
+		t.Errorf("expected no signature header, got %q", gotSig)
 	}
 }

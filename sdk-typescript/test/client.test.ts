@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { createHmac } from "node:crypto";
 import { AegisClient, AegisGatewayError } from "../src/client.ts";
 
 // ---------------------------------------------------------------------------
@@ -196,6 +197,74 @@ test("AegisClient.consumeApproval — 409 throws AegisGatewayError", async () =>
         return true;
       }
     );
+  } finally {
+    close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Request signing (#1403)
+// ---------------------------------------------------------------------------
+
+test("AegisClient.authorize — signingKey sends X-Aegis-Request-Signature header", async () => {
+  let capturedSig = "";
+  const { url, close } = await startServer((req, res) => {
+    capturedSig = req.headers["x-aegis-request-signature"] as string ?? "";
+    serveJSON(res, 200, { decision: "allow", action_hash: "abc" });
+  });
+
+  try {
+    const client = new AegisClient({
+      baseUrl: url,
+      agentToken: "tok",
+      tenantId: "tid",
+      signingKey: "secret-key",
+    });
+    await client.authorize({ tool: "github", action: "list_prs", mutatesState: false, parameters: {} });
+    assert.ok(capturedSig.startsWith("sha256="), `expected sha256= prefix, got: ${capturedSig}`);
+  } finally {
+    close();
+  }
+});
+
+test("AegisClient.authorize — signingKey signature is correct HMAC-SHA256", async () => {
+  const signingKey = "my-hmac-key";
+  let capturedBody = "";
+  let capturedSig = "";
+
+  const { url, close } = await startServer((req, res) => {
+    capturedSig = req.headers["x-aegis-request-signature"] as string ?? "";
+    req.setEncoding("utf-8");
+    const chunks: string[] = [];
+    req.on("data", (c: string) => chunks.push(c));
+    req.on("end", () => {
+      capturedBody = chunks.join("");
+      serveJSON(res, 200, { decision: "allow", action_hash: "x" });
+    });
+  });
+
+  try {
+    const client = new AegisClient({ baseUrl: url, agentToken: "tok", tenantId: "tid", signingKey });
+    await client.authorize({ tool: "s3", action: "delete", mutatesState: true, parameters: { bucket: "prod" } });
+
+    const expected = "sha256=" + createHmac("sha256", signingKey).update(capturedBody).digest("hex");
+    assert.equal(capturedSig, expected);
+  } finally {
+    close();
+  }
+});
+
+test("AegisClient.authorize — no signingKey sends no signature header", async () => {
+  let capturedSig: string | undefined;
+  const { url, close } = await startServer((req, res) => {
+    capturedSig = req.headers["x-aegis-request-signature"] as string | undefined;
+    serveJSON(res, 200, { decision: "allow", action_hash: "y" });
+  });
+
+  try {
+    const client = newClient(url);
+    await client.authorize({ tool: "github", action: "list_prs", mutatesState: false, parameters: {} });
+    assert.equal(capturedSig, undefined);
   } finally {
     close();
   }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac as _hmac
 import inspect
 import json
 import logging
@@ -115,11 +117,13 @@ class AegisBaseClient:
         agent_id: str,
         environment: str = "production",
         endpoint: str = "http://127.0.0.1:8080",
+        signing_key: Optional[str] = None,
     ):
         self.api_key = api_key
         self.agent_id = agent_id
         self.environment = environment
         self.endpoint = endpoint.rstrip("/")
+        self.signing_key = signing_key
         self.agent_token: Optional[str] = None
 
     def __repr__(self) -> str:
@@ -177,8 +181,9 @@ class AegisClient(AegisBaseClient):
         agent_id: str,
         environment: str = "production",
         endpoint: str = "http://127.0.0.1:8080",
+        signing_key: Optional[str] = None,
     ):
-        super().__init__(api_key, agent_id, environment, endpoint)
+        super().__init__(api_key, agent_id, environment, endpoint, signing_key)
         self.session = requests.Session()
         from urllib3.util import Retry
         from requests.adapters import HTTPAdapter
@@ -339,10 +344,19 @@ class AegisClient(AegisBaseClient):
             },
         }
 
-        try:
-            response = self._request(
-                "POST", "/v1/authorize", json=payload, headers=headers, timeout=5
+        request_kwargs: Dict[str, Any] = {"headers": headers, "timeout": 5}
+        if self.signing_key:
+            body_bytes = json.dumps(payload).encode("utf-8")
+            mac = _hmac.new(
+                self.signing_key.encode("utf-8"), body_bytes, hashlib.sha256
             )
+            headers["X-Aegis-Request-Signature"] = f"sha256={mac.hexdigest()}"
+            request_kwargs["data"] = body_bytes
+        else:
+            request_kwargs["json"] = payload
+
+        try:
+            response = self._request("POST", "/v1/authorize", **request_kwargs)
             if response.status_code == 200:
                 return response.json()
             else:
@@ -699,13 +713,14 @@ class AegisAsyncClient(AegisBaseClient):
         agent_id: str,
         environment: str = "production",
         endpoint: str = "http://127.0.0.1:8080",
+        signing_key: Optional[str] = None,
     ):
         if httpx is None:
             raise ImportError(
                 "The 'httpx' library is required to use AegisAsyncClient. "
                 "Install it with 'pip install httpx'."
             )
-        super().__init__(api_key, agent_id, environment, endpoint)
+        super().__init__(api_key, agent_id, environment, endpoint, signing_key)
         self.session = httpx.AsyncClient(timeout=httpx.Timeout(5.0))
 
     async def close(self) -> None:
@@ -853,9 +868,20 @@ class AegisAsyncClient(AegisBaseClient):
             },
         }
 
+        async_request_kwargs: Dict[str, Any] = {"headers": headers, "timeout": 5.0}
+        if self.signing_key:
+            body_bytes = json.dumps(payload).encode("utf-8")
+            mac = _hmac.new(
+                self.signing_key.encode("utf-8"), body_bytes, hashlib.sha256
+            )
+            headers["X-Aegis-Request-Signature"] = f"sha256={mac.hexdigest()}"
+            async_request_kwargs["data"] = body_bytes
+        else:
+            async_request_kwargs["json"] = payload
+
         try:
             response = await self._request(
-                "POST", "/v1/authorize", json=payload, headers=headers, timeout=5.0
+                "POST", "/v1/authorize", **async_request_kwargs
             )
             if response.status_code == 200:
                 return response.json()
