@@ -4237,6 +4237,122 @@ pub async fn ingest_event(
     }
 }
 
+/// `POST /v1/webhooks/github` (#1381) — dedicated GitHub App webhook receiver.
+///
+/// Accepts native GitHub webhook event payloads with:
+/// - `X-GitHub-Event` header: event type (`pull_request`, `issues`,
+///   `issue_comment`)
+/// - `X-Hub-Signature-256` header: HMAC-SHA256 over the raw body — **always
+///   required** when [`AppState::github_webhook_secret`] is configured; 401
+///   when the secret is absent (fail-closed: unconfigured endpoint rejects all)
+/// - `X-Aegis-Tenant-ID` or `X-Tenant-ID` header: target tenant
+///
+/// Supported events are forwarded into the same SOC pipeline as
+/// `/v1/authorize`. Unrecognized event types or actions are silently
+/// acknowledged (`202 ignored`) without emitting an event — this avoids
+/// polluting the SOC stream with GitHub events we don't model yet.
+pub async fn receive_github_webhook(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    // Tenant identification — same header as authorize_action.
+    let tenant_id = match get_runtime_tenant_from_headers(&headers) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "missing X-Aegis-Tenant-ID header"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Signature verification — fail-closed: require signature always; 401 if
+    // the secret is not configured so the endpoint cannot be used accidentally.
+    match state.github_webhook_secret.as_ref() {
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "webhook not configured: AEGIS_GITHUB_WEBHOOK_SECRET is not set",
+                    "reason": "webhook_not_configured",
+                })),
+            )
+                .into_response();
+        }
+        Some(secret) => match headers.get("X-Hub-Signature-256") {
+            None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "error": "missing X-Hub-Signature-256 header",
+                        "reason": "missing_signature",
+                    })),
+                )
+                    .into_response();
+            }
+            Some(sig_header) => {
+                if !verify_github_webhook_signature(secret, &body, sig_header) {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({
+                            "error": "invalid webhook signature",
+                            "reason": "invalid_signature",
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        },
+    }
+
+    // Event type from X-GitHub-Event header.
+    let event_type = match headers.get("X-GitHub-Event").and_then(|h| h.to_str().ok()) {
+        Some(et) => et.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "missing X-GitHub-Event header",
+                    "reason": "missing_event_type",
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Parse body.
+    let payload: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid JSON body: {}", e)})),
+            )
+                .into_response();
+        }
+    };
+
+    // Normalize and emit.
+    match crate::ingest::normalize_github_native_event(&tenant_id, &event_type, &payload) {
+        None => (
+            StatusCode::ACCEPTED,
+            Json(json!({"status": "ignored", "reason": "unsupported_event_type"})),
+        )
+            .into_response(),
+        Some(event) => {
+            let event_id = event.event_id.clone();
+            state.events.emit(event);
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({"status": "accepted", "event_id": event_id})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// #1312: append a hash-chained `policy_audit_log` entry for a policy
 /// create/update/delete/rollback. `body` is the resulting policy body (the
 /// body being deleted, for `action == "deleted"`) and is hashed into
@@ -14589,6 +14705,293 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- receive_github_webhook tests (#1381) ---
+
+    /// Helper: build an HMAC-SHA256 `sha256=<hex>` signature over `body`.
+    fn github_sig(secret: &str, body: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    /// Build the common headers for a GitHub webhook request.
+    fn gh_headers(event_type: &str, sig: &str, tenant_id: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "X-GitHub-Event",
+            axum::http::HeaderValue::from_str(event_type).unwrap(),
+        );
+        h.insert(
+            "X-Hub-Signature-256",
+            axum::http::HeaderValue::from_str(sig).unwrap(),
+        );
+        h.insert(
+            "X-Aegis-Tenant-ID",
+            axum::http::HeaderValue::from_str(tenant_id).unwrap(),
+        );
+        h
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_pull_request_opened_returns_202() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_pr_opened", "whsecret").await;
+
+        let body_json = serde_json::json!({
+            "action": "opened",
+            "number": 1,
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "alice"},
+            "pull_request": {"merged": false}
+        });
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let sig = github_sig("whsecret", &body);
+        let headers = gh_headers("pull_request", &sig, &tenant_id);
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["status"], "accepted");
+        assert!(v["event_id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_issues_opened_returns_202() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_issues_opened", "whsecret").await;
+
+        let body_json = serde_json::json!({
+            "action": "opened",
+            "issue": {"number": 42},
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "bob"}
+        });
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let sig = github_sig("whsecret", &body);
+        let headers = gh_headers("issues", &sig, &tenant_id);
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["status"], "accepted");
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_issue_comment_created_returns_202() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_comment_created", "whsecret").await;
+
+        let body_json = serde_json::json!({
+            "action": "created",
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "carol"},
+            "comment": {"body": "looks good"}
+        });
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let sig = github_sig("whsecret", &body);
+        let headers = gh_headers("issue_comment", &sig, &tenant_id);
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_pull_request_merged_returns_202() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_pr_merged", "whsecret").await;
+
+        let body_json = serde_json::json!({
+            "action": "closed",
+            "number": 5,
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "dave"},
+            "pull_request": {"merged": true}
+        });
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let sig = github_sig("whsecret", &body);
+        let headers = gh_headers("pull_request", &sig, &tenant_id);
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["status"], "accepted");
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_invalid_signature_returns_401() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_bad_sig", "whsecret").await;
+
+        let body_json = serde_json::json!({"action": "opened", "sender": {"login": "alice"}});
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let bad_sig = "sha256=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-GitHub-Event",
+            axum::http::HeaderValue::from_str("pull_request").unwrap(),
+        );
+        headers.insert(
+            "X-Hub-Signature-256",
+            axum::http::HeaderValue::from_str(bad_sig).unwrap(),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
+        );
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["reason"], "invalid_signature");
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_missing_signature_header_returns_401() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_missing_sig", "whsecret").await;
+
+        let body_json = serde_json::json!({"action": "opened"});
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-GitHub-Event",
+            axum::http::HeaderValue::from_str("pull_request").unwrap(),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
+        );
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["reason"], "missing_signature");
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_no_secret_configured_returns_401() {
+        // `setup_state` creates state with `github_webhook_secret: None`.
+        let (state, tenant_id, _) = setup_state("gh_wh_no_secret").await;
+
+        let body_json = serde_json::json!({"action": "opened"});
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-GitHub-Event",
+            axum::http::HeaderValue::from_str("pull_request").unwrap(),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
+        );
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["reason"], "webhook_not_configured");
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_missing_event_header_returns_400() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_no_event_hdr", "whsecret").await;
+
+        let body_json = serde_json::json!({"action": "opened"});
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let sig = github_sig("whsecret", &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Hub-Signature-256",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
+        );
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["reason"], "missing_event_type");
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_missing_tenant_header_returns_400() {
+        let (state, _, _) = setup_state_with_github_secret("gh_wh_no_tenant", "whsecret").await;
+
+        let body_json = serde_json::json!({"action": "opened"});
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let sig = github_sig("whsecret", &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-GitHub-Event",
+            axum::http::HeaderValue::from_str("pull_request").unwrap(),
+        );
+        headers.insert(
+            "X-Hub-Signature-256",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn receive_github_webhook_unsupported_event_type_returns_202_ignored() {
+        let (state, tenant_id, _) =
+            setup_state_with_github_secret("gh_wh_unsupported_evt", "whsecret").await;
+
+        let body_json = serde_json::json!({
+            "action": "pushed",
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "alice"}
+        });
+        let body = Bytes::from(serde_json::to_vec(&body_json).unwrap());
+        let sig = github_sig("whsecret", &body);
+        let headers = gh_headers("push", &sig, &tenant_id);
+
+        let resp = receive_github_webhook(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["status"], "ignored");
+        assert_eq!(v["reason"], "unsupported_event_type");
     }
 
     #[tokio::test]
