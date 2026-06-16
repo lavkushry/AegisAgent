@@ -2930,6 +2930,47 @@ pub async fn authorize_action(
     )
     .await;
 
+    // Cedar @decision("quarantine"): quarantine the agent after the decision has
+    // been recorded so the triggering action is auditable. Subsequent authorize
+    // calls from this agent are auto-denied because `get_agent_by_token` filters
+    // `status != 'quarantined'` (fail-closed). Best-effort: a DB error is logged
+    // but never changes the returned decision.
+    if decision_str == "quarantine" {
+        match db::set_agent_status(&state.pool, &tenant_id, &agent_id, "quarantined").await {
+            Ok(_) => {
+                info!(
+                    agent_id = %agent_id,
+                    tenant_id = %tenant_id,
+                    "Agent quarantined by Cedar policy"
+                );
+                // Emit SOC event out-of-band (Law 3 — never blocks authorize path).
+                state.events.emit(AseEvent {
+                    event_id: Uuid::new_v4().to_string(),
+                    occurred_at: Utc::now().to_rfc3339(),
+                    tenant_id: tenant_id.clone(),
+                    kind: "agent_quarantined".to_string(),
+                    agent_id: agent_id.clone(),
+                    decision: "quarantine".to_string(),
+                    tool: payload.tool_call.tool.clone(),
+                    action: payload.tool_call.action.clone(),
+                    resource: payload.tool_call.resource.clone(),
+                    risk_score,
+                    reason: reason.clone(),
+                    run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
+                    trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
+                    matched_policies: matched_policies.clone(),
+                    schema_version: 1,
+                });
+            }
+            Err(e) => {
+                error!(
+                    "Failed to quarantine agent {} after Cedar policy decision: {:?}",
+                    agent_id, e
+                );
+            }
+        }
+    }
+
     let mut approval_info = None;
 
     if decision_str == "require_approval" {
@@ -6237,6 +6278,17 @@ pub async fn revoke_agent(
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
     set_agent_operational_status(state, tenant_id, agent_id, "revoked").await
+}
+
+/// Restore a quarantined agent to active status (#1386).
+/// Sets `status = 'active'`, which clears `quarantined_at`; subsequent
+/// `/v1/authorize` calls resolve the agent normally again.
+pub async fn restore_agent(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    set_agent_operational_status(state, tenant_id, agent_id, "active").await
 }
 
 async fn set_agent_operational_status(
@@ -13477,6 +13529,136 @@ mod tests {
             resp.decision == "allow" || resp.decision == "require_approval",
             "unrestricted agent must pass tool permission check"
         );
+    }
+
+    // ── Cedar @decision("quarantine") tests (#1386) ──────────────────────────
+
+    /// Calling the quarantine canary endpoint returns `decision: "quarantine"`
+    /// and sets the agent's DB status to `quarantined`.
+    #[tokio::test]
+    async fn authorize_action_quarantine_decision_quarantines_agent() {
+        let (state, tenant_id, agent_token) = setup_state("cedar_quarantine_trigger").await;
+
+        // quarantine_canary / trigger → ToolAction::"quarantine_canary_trigger"
+        // matches the @decision("quarantine") canary policy in policies.cedar.
+        let req = mcp_authorize_request("quarantine_canary", "trigger");
+        let resp = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["decision"], "quarantine",
+            "response must surface quarantine decision"
+        );
+
+        // Agent row must now be quarantined in the DB.
+        // Use a raw query instead of get_agent_by_token (which filters quarantined agents).
+        let agent_id: String =
+            sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
+                .bind(&tenant_id)
+                .bind(db::hash_token(&agent_token))
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        // get_agent_by_id only filters `status != 'deleted'`, so quarantined rows are returned.
+        let agent_record = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent_record.status, "quarantined");
+    }
+
+    /// After quarantine, subsequent authorize calls from the same agent are
+    /// auto-denied (401) — `get_agent_by_token` filters `status != 'quarantined'`.
+    #[tokio::test]
+    async fn authorize_action_quarantined_agent_subsequent_calls_denied() {
+        let (state, tenant_id, agent_token) = setup_state("cedar_quarantine_subsequent").await;
+
+        // First call: trigger quarantine.
+        let req = mcp_authorize_request("quarantine_canary", "trigger");
+        let _ = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await;
+
+        // Second call: any tool — must be 401 (agent no longer resolvable).
+        let req2 = mcp_authorize_request("filesystem", "read_file");
+        let resp2 = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req2).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// `POST /v1/agents/:id/restore` sets a quarantined agent back to `active`
+    /// and subsequent authorize calls resolve normally.
+    #[tokio::test]
+    async fn restore_agent_reactivates_quarantined_agent() {
+        let (state, tenant_id, agent_token) = setup_state("cedar_quarantine_restore").await;
+
+        // Retrieve agent id for the restore call.
+        let agent_id: String =
+            sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
+                .bind(&tenant_id)
+                .bind(db::hash_token(&agent_token))
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+
+        // Quarantine the agent directly via DB (simulates Cedar-triggered quarantine).
+        db::set_agent_status(&state.pool, &tenant_id, &agent_id, "quarantined")
+            .await
+            .unwrap();
+
+        // Verify the agent is quarantined (authorize returns 401).
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp_before = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_before.status(), StatusCode::UNAUTHORIZED);
+
+        // Restore the agent.
+        let restore_resp = restore_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(restore_resp.status(), StatusCode::OK);
+        let restore_body = to_bytes(restore_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let restore_json: serde_json::Value = serde_json::from_slice(&restore_body).unwrap();
+        assert_eq!(restore_json["status"], "active");
+
+        // After restore, authorize should work again.
+        let req2 = mcp_authorize_request("filesystem", "read_file");
+        let resp_after = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req2).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_after.status(), StatusCode::OK);
     }
 
     #[tokio::test]
