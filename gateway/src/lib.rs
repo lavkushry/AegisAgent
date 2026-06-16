@@ -19,6 +19,7 @@ pub mod correlate;
 pub mod db;
 pub mod detect;
 pub mod events;
+pub mod gh_comment;
 pub mod graph;
 pub mod ingest;
 pub mod jobs;
