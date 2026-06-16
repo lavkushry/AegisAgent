@@ -4,6 +4,20 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::RwLock;
+use unicode_normalization::UnicodeNormalization;
+
+/// Normalize a tool or action identifier before building the Cedar entity UID.
+/// Applies the same algorithm as `routes::normalize_tool_identifier`:
+/// percent-decode → Unicode NFC → trim whitespace → lowercase.
+/// This prevents case/encoding/Unicode-form variations from bypassing Cedar
+/// deny rules (e.g. `GitHub` and `github` must match the same policy).
+fn normalize_policy_identifier(value: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| value.to_string());
+    decoded.nfc().collect::<String>().trim().to_lowercase()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
@@ -166,10 +180,13 @@ impl PolicyEngine {
         let action_uid = EntityUid::from_str("Action::\"tool_call\"")
             .map_err(|e| PolicyError::EntityUid(e.to_string()))?;
 
-        // Resource: ToolAction::"tool_action"
+        // Resource: ToolAction::"tool_action" — normalize before Cedar evaluation
+        // (#1384) so percent-encoding, letter-case, or Unicode-form variation cannot
+        // bypass deny policies (e.g., `GitHub` and `github` resolve identically).
         let resource_uid = EntityUid::from_str(&format!(
             "ToolAction::\"{}_{}\"",
-            auth_req.tool_call.tool, auth_req.tool_call.action
+            normalize_policy_identifier(&auth_req.tool_call.tool),
+            normalize_policy_identifier(&auth_req.tool_call.action)
         ))
         .map_err(|e| PolicyError::EntityUid(e.to_string()))?;
 
@@ -673,5 +690,93 @@ mod tests {
 
         let result = engine.authorize(tenant_id, &request).unwrap();
         assert_eq!(result.decision, "quarantine");
+    }
+
+    // --- #1384: normalize_policy_identifier unit tests ---
+
+    #[test]
+    fn normalize_policy_identifier_lowercases() {
+        assert_eq!(normalize_policy_identifier("GitHub"), "github");
+        assert_eq!(normalize_policy_identifier("FILESYSTEM"), "filesystem");
+        assert_eq!(normalize_policy_identifier("MixedCase"), "mixedcase");
+    }
+
+    #[test]
+    fn normalize_policy_identifier_percent_decodes() {
+        assert_eq!(normalize_policy_identifier("git%20hub"), "git hub");
+        assert_eq!(
+            normalize_policy_identifier("merge%5Fpull%5Frequest"),
+            "merge_pull_request"
+        );
+    }
+
+    #[test]
+    fn normalize_policy_identifier_trims_whitespace() {
+        assert_eq!(normalize_policy_identifier("  github  "), "github");
+        assert_eq!(normalize_policy_identifier("\tread_file\n"), "read_file");
+    }
+
+    #[test]
+    fn normalize_policy_identifier_already_normalized_is_idempotent() {
+        let inputs = ["github", "merge_pull_request", "filesystem_read"];
+        for s in &inputs {
+            assert_eq!(&normalize_policy_identifier(s), s);
+        }
+    }
+
+    /// #1384: A mixed-case tool name `GitHub`/`Merge_Pull_Request` must hit
+    /// the same Cedar policy as the canonical lowercase form `github`/
+    /// `merge_pull_request`. Without normalization the Cedar entity UID would
+    /// be `ToolAction::"GitHub_Merge_Pull_Request"` which doesn't match the
+    /// policy rule targeting `ToolAction::"github_merge_pull_request"`, making
+    /// the approval gate bypassable via case variations.
+    #[tokio::test]
+    async fn mixed_case_tool_names_hit_same_cedar_policy_as_lowercase() {
+        let engine = setup_engine().await;
+
+        // Lowercase canonical form — must require approval (github_merge_pull_request
+        // with base_branch == "main").
+        let canonical = AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            nonce: None,
+            timestamp: None,
+            agent: AuthorizeAgentContext {
+                id: "test-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "github".to_string(),
+                action: "merge_pull_request".to_string(),
+                resource: Some("repo/pr/42".to_string()),
+                mutates_state: true,
+                parameters: serde_json::json!({ "base_branch": "main" }),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        // Mixed-case variant — must produce the same decision.
+        let mixed_case = AuthorizeRequest {
+            tool_call: AuthorizeToolCall {
+                tool: "GitHub".to_string(),
+                action: "Merge_Pull_Request".to_string(),
+                ..canonical.tool_call.clone()
+            },
+            ..canonical.clone()
+        };
+
+        let canonical_result = engine.authorize("test_tenant", &canonical).unwrap();
+        let mixed_result = engine.authorize("test_tenant", &mixed_case).unwrap();
+
+        assert_eq!(canonical_result.decision, "require_approval");
+        assert_eq!(
+            mixed_result.decision, canonical_result.decision,
+            "mixed-case tool names must produce the same Cedar decision as lowercase"
+        );
     }
 }

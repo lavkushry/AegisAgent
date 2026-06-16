@@ -645,7 +645,9 @@ fn normalize_tool_identifier(value: &str) -> String {
         .decode_utf8()
         .map(|s| s.into_owned())
         .unwrap_or_else(|_| value.to_string());
-    decoded.nfc().collect::<String>().to_lowercase()
+    // Trim surrounding whitespace BEFORE lowercasing so any Unicode
+    // whitespace-lookalike at boundaries is removed regardless of case.
+    decoded.nfc().collect::<String>().trim().to_lowercase()
 }
 
 /// Recursively sort JSON object keys by Unicode code point (`aegis-jcs-1`).
@@ -13659,6 +13661,116 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp_after.status(), StatusCode::OK);
+    }
+
+    // --- #1384: normalize_tool_identifier unit tests ---
+
+    #[test]
+    fn normalize_tool_identifier_lowercases() {
+        assert_eq!(normalize_tool_identifier("GitHub"), "github");
+        assert_eq!(normalize_tool_identifier("FILESYSTEM"), "filesystem");
+        assert_eq!(normalize_tool_identifier("MixedCase"), "mixedcase");
+    }
+
+    #[test]
+    fn normalize_tool_identifier_percent_decodes() {
+        assert_eq!(normalize_tool_identifier("git%20hub"), "git hub");
+        assert_eq!(
+            normalize_tool_identifier("merge%5Fpull%5Frequest"),
+            "merge_pull_request"
+        );
+    }
+
+    #[test]
+    fn normalize_tool_identifier_trims_whitespace() {
+        assert_eq!(normalize_tool_identifier("  github  "), "github");
+        assert_eq!(normalize_tool_identifier("\tread_file\n"), "read_file");
+    }
+
+    #[test]
+    fn normalize_tool_identifier_already_normalized_is_idempotent() {
+        let inputs = ["github", "merge_pull_request", "filesystem_read"];
+        for s in &inputs {
+            assert_eq!(&normalize_tool_identifier(s), s);
+        }
+    }
+
+    /// #1384: Sending a mixed-case tool name via the authorize endpoint must
+    /// produce the same Cedar decision as the lowercase canonical form.
+    /// Without normalization `GitHub`/`Merge_Pull_Request` builds a Cedar UID
+    /// `ToolAction::"GitHub_Merge_Pull_Request"` that fails to match the policy
+    /// targeting `ToolAction::"github_merge_pull_request"`, silently bypassing
+    /// the approval gate.
+    #[tokio::test]
+    async fn authorize_mixed_case_tool_resolves_to_same_cedar_decision() {
+        let (state, tenant_id, agent_token) = setup_state("normalize_cedar_bypass").await;
+
+        // Lowercase — Cedar policy requires approval for github/merge_pull_request
+        // with base_branch == "main".
+        let canonical_payload = serde_json::json!({
+            "agent": { "id": "test-agent", "environment": "production" },
+            "tool_call": {
+                "tool": "github",
+                "action": "merge_pull_request",
+                "mutates_state": true,
+                "parameters": { "base_branch": "main" }
+            },
+            "context": {
+                "source_trust": "trusted_internal_signed",
+                "contains_sensitive_data": false
+            }
+        });
+
+        // Mixed-case variant — should resolve to the same decision.
+        let mixed_case_payload = serde_json::json!({
+            "agent": { "id": "test-agent", "environment": "production" },
+            "tool_call": {
+                "tool": "GitHub",
+                "action": "Merge_Pull_Request",
+                "mutates_state": true,
+                "parameters": { "base_branch": "main" }
+            },
+            "context": {
+                "source_trust": "trusted_internal_signed",
+                "contains_sensitive_data": false
+            }
+        });
+
+        let resp_canonical = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&canonical_payload).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_canonical.status(), StatusCode::OK);
+        let body_canonical: serde_json::Value = serde_json::from_slice(
+            &to_bytes(resp_canonical.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let decision_canonical = body_canonical["decision"].as_str().unwrap().to_string();
+
+        let resp_mixed = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&mixed_case_payload).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_mixed.status(), StatusCode::OK);
+        let body_mixed: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp_mixed.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let decision_mixed = body_mixed["decision"].as_str().unwrap().to_string();
+
+        assert_eq!(
+            decision_mixed, decision_canonical,
+            "mixed-case tool/action must resolve to the same Cedar decision as lowercase"
+        );
+        // Both should require approval per the github_merge_pull_request policy.
+        assert_eq!(decision_canonical, "require_approval");
     }
 
     #[tokio::test]
