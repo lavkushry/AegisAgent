@@ -21,6 +21,7 @@ use uuid::Uuid;
 use gateway::audit_batch;
 use gateway::db;
 use gateway::events;
+use gateway::gh_comment;
 use gateway::jobs;
 use gateway::metrics;
 use gateway::policy;
@@ -786,6 +787,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Optional GitHub App installation token for posting deny comments on PRs
+    // (#1382). When set, a background task posts a comment on GitHub PRs when
+    // an agent's PR-related action is denied. When unset, PR comments are
+    // silently skipped.
+    let github_pr_commenter = std::env::var("AEGIS_GITHUB_APP_TOKEN").ok().map(|token| {
+        info!("AEGIS_GITHUB_APP_TOKEN set: GitHub PR deny comments are enabled.");
+        std::sync::Arc::new(gh_comment::GhPrCommenter::new(token))
+    });
+    if github_pr_commenter.is_none() {
+        info!("AEGIS_GITHUB_APP_TOKEN is not set. GitHub PR deny comments are disabled.");
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -804,6 +817,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_batch,
         github_webhook_secret,
         slack_signing_secret,
+        github_pr_commenter,
     });
 
     // Read request body size limit (default 1MB)
@@ -1264,6 +1278,7 @@ mod tests {
 
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         let app = Router::new()
@@ -1339,6 +1354,7 @@ mod tests {
 
             github_webhook_secret: None,
             slack_signing_secret: None,
+            github_pr_commenter: None,
         });
 
         let app = Router::new()
