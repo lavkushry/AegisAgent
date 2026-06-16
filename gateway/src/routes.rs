@@ -620,6 +620,7 @@ async fn idempotent_replay_response(
             reason: record.reason.unwrap_or_default(),
             matched_policies,
             approval,
+            redacted_fields: vec![],
         }),
     )
         .into_response()
@@ -1058,6 +1059,7 @@ async fn emit_tamper_attempt_receipt(
         run_id: None,
         trace_id: None,
         matched_policies: Vec::new(),
+        redacted_fields: vec![],
         schema_version: 1,
     });
 }
@@ -1385,6 +1387,7 @@ async fn write_decision_and_audit(
         run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
         trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
         matched_policies: matched_policies.to_vec(),
+        redacted_fields: vec![],
         schema_version: 1,
     });
 
@@ -1960,6 +1963,7 @@ pub async fn discover_mcp_tools(
                     run_id: None,
                     trace_id: None,
                     matched_policies: Vec::new(),
+                    redacted_fields: vec![],
                     schema_version: 1,
                 });
 
@@ -2501,6 +2505,7 @@ pub async fn authorize_action(
                 reason,
                 matched_policies,
                 approval: None,
+                redacted_fields: vec![],
             }),
         )
             .into_response();
@@ -2612,6 +2617,7 @@ pub async fn authorize_action(
                         reason,
                         matched_policies,
                         approval: None,
+                        redacted_fields: vec![],
                     }),
                 )
                     .into_response();
@@ -2682,6 +2688,7 @@ pub async fn authorize_action(
                             reason,
                             matched_policies,
                             approval: None,
+                            redacted_fields: vec![],
                         }),
                     )
                         .into_response();
@@ -2737,6 +2744,7 @@ pub async fn authorize_action(
                         reason,
                         matched_policies,
                         approval: None,
+                        redacted_fields: vec![],
                     }),
                 )
                     .into_response();
@@ -2777,6 +2785,11 @@ pub async fn authorize_action(
     let mut decision_str = policy_decision.decision.clone();
     let mut reason = policy_decision.reason.clone();
     let mut matched_policies = policy_decision.matched_policies.clone();
+    // #1385: redacted_fields is non-empty only when Cedar decision == "redact".
+    // Routes-layer escalations (critical risk, force_approval, etc.) that override
+    // the Cedar decision to require_approval/deny also clear this list so callers
+    // never receive stale redact metadata when the decision changed.
+    let mut redacted_fields = policy_decision.redacted_fields.clone();
 
     // Security metric: provenance_denials_total — count Cedar-level denials driven by
     // untrusted/malicious/unknown provenance on a mutating action (anti-confused-deputy).
@@ -2842,6 +2855,7 @@ pub async fn authorize_action(
                 reason: "Audit writer unavailable (SOC event stream full): action denied (audit_writer_unavailable, fail-closed).".to_string(),
                 matched_policies: vec!["audit_writer_unavailable".to_string()],
                 approval: None,
+                redacted_fields: vec![],
             }),
         )
             .into_response();
@@ -2892,6 +2906,7 @@ pub async fn authorize_action(
                         reason: "Audit writer unavailable (database write failed): action denied (audit_writer_unavailable, fail-closed).".to_string(),
                         matched_policies: vec!["audit_writer_unavailable".to_string()],
                         approval: None,
+                        redacted_fields: vec![],
                     }),
                 )
                     .into_response();
@@ -2915,6 +2930,7 @@ pub async fn authorize_action(
                     reason,
                     matched_policies,
                     approval: None,
+                    redacted_fields: vec![],
                 }),
             )
                 .into_response();
@@ -2961,6 +2977,7 @@ pub async fn authorize_action(
                     run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
                     trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
                     matched_policies: matched_policies.clone(),
+                    redacted_fields: vec![],
                     schema_version: 1,
                 });
             }
@@ -3079,6 +3096,12 @@ pub async fn authorize_action(
         }
     }
 
+    // #1385: if the decision changed away from "redact" via any route-layer override,
+    // clear the field list so callers never receive stale redact metadata.
+    if decision_str != "redact" {
+        redacted_fields.clear();
+    }
+
     (
         StatusCode::OK,
         Json(AuthorizeResponse {
@@ -3090,6 +3113,7 @@ pub async fn authorize_action(
             reason,
             matched_policies,
             approval: approval_info,
+            redacted_fields,
         }),
     )
         .into_response()
@@ -13773,6 +13797,96 @@ mod tests {
         assert_eq!(decision_canonical, "require_approval");
     }
 
+    // --- #1385: redact decision type integration tests ---
+
+    /// Calling the `secrets/rotate_credential` canary returns `decision: "redact"`
+    /// with a non-empty `redacted_fields` list populated from `@redact_fields`.
+    #[tokio::test]
+    async fn authorize_redact_decision_returns_fields() {
+        let (state, tenant_id, agent_token) = setup_state("redact_decision_fields").await;
+
+        let payload = serde_json::json!({
+            "agent": { "id": "test-agent", "environment": "production" },
+            "tool_call": {
+                "tool": "secrets",
+                "action": "rotate_credential",
+                "mutates_state": false,
+                "parameters": { "api_key": "sk-secret", "name": "my-cred" }
+            },
+            "context": {
+                "source_trust": "trusted_internal_signed",
+                "contains_sensitive_data": false
+            }
+        });
+
+        let resp = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+
+        assert_eq!(body["decision"], "redact");
+        let fields = body["redacted_fields"]
+            .as_array()
+            .expect("redacted_fields must be an array");
+        assert!(!fields.is_empty(), "redacted_fields must not be empty");
+        // The policy declares @redact_fields("api_key,password,secret,token")
+        assert!(
+            fields.iter().any(|f| f == "api_key"),
+            "api_key must be in redacted_fields"
+        );
+    }
+
+    /// Non-redact decisions must never include `redacted_fields` in the response
+    /// (the field should be absent or empty — `skip_serializing_if = "Vec::is_empty"`).
+    #[tokio::test]
+    async fn authorize_non_redact_decision_has_no_redacted_fields() {
+        let (state, tenant_id, agent_token) = setup_state("redact_field_absent").await;
+
+        let payload = serde_json::json!({
+            "agent": { "id": "test-agent", "environment": "production" },
+            "tool_call": {
+                "tool": "filesystem",
+                "action": "read_file",
+                "mutates_state": false,
+                "parameters": {}
+            },
+            "context": {
+                "source_trust": "trusted_internal_signed",
+                "contains_sensitive_data": false
+            }
+        });
+
+        let resp = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+
+        assert_eq!(body["decision"], "allow");
+        // Field should be absent (skip_serializing_if = "Vec::is_empty") or empty array.
+        match body.get("redacted_fields") {
+            None => {}
+            Some(v) => assert_eq!(
+                v.as_array().map(|a| a.is_empty()),
+                Some(true),
+                "redacted_fields must be absent or empty for non-redact decisions"
+            ),
+        }
+    }
+
     #[tokio::test]
     async fn authorize_action_denies_frozen_and_revoked_agent() {
         let (state, tenant_id, agent_token) = setup_state("agent_frozen_revoked").await;
@@ -16463,6 +16577,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec![],
+            redacted_fields: vec![],
             schema_version: 1,
         };
 
@@ -17608,6 +17723,7 @@ mod tests {
                 run_id: None,
                 trace_id: None,
                 matched_policies: vec![],
+                redacted_fields: vec![],
                 schema_version: 1,
             }
         }
@@ -17689,6 +17805,7 @@ mod tests {
                 run_id: None,
                 trace_id: None,
                 matched_policies: vec![],
+                redacted_fields: vec![],
                 schema_version: 1,
             }
         }
@@ -17951,6 +18068,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec![],
+            redacted_fields: vec![],
             schema_version: 1,
         });
         assert!(!state.events.has_capacity());

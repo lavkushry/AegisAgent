@@ -163,6 +163,7 @@ mod tests {
             run_id: None,
             trace_id: None,
             matched_policies: vec![],
+            redacted_fields: vec![],
             schema_version: 1,
         }
     }

@@ -13,7 +13,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 
 ## Current status
 
-**Python SDK — 179 tests, fully verified on `main`:**
+**Python SDK — 182 tests, fully verified on `main`:**
 - `action_hash` canonicalization unified as scheme **`aegis-jcs-1`** in `sdk-python/aegisagent/canon.py`; SDK fails closed on hash mismatch, on approval expiry, **and if it cannot atomically consume a single-use approval** (replay defense).
 - Verifiable receipts: format + reference verifier (`aegisagent/receipts.py`), CLI (`aegis-verify-receipts`), shared corpus (`tests/receipt_chain_vectors.json`).
 - Async client (`AegisAsyncClient`) + `async_protect_tool` decorator.
@@ -29,7 +29,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - `aegis-jcs-1` canonicalizer (`src/canon.ts`), `AegisClient`, `protect()`.
 - `tsc --noEmit` build + `node --test` suite + cross-language corpus CI gate.
 
-**Rust gateway — 495 tests, verified on `main`:**
+**Rust gateway — 499 tests, verified on `main`:**
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
 - Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409).
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
@@ -53,6 +53,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - **Agent-to-tool permission bindings** (#1390): optional explicit tool allow-list per agent — if any bindings exist, tools not in the list are denied 403 FORBIDDEN before Cedar evaluation (fail-closed). No bindings = unrestricted (backwards-compatible). `GET|POST /v1/agents/:id/permissions`, `DELETE /v1/agents/:id/permissions/:tool_key`. Migration `0013_agent_tool_permissions.sql`. 5 new gateway tests.
 - **Cedar `@decision("quarantine")` annotation** (#1386): Cedar policies can emit `@decision("quarantine")` on any permit rule to immediately quarantine the agent after the call is recorded. `authorize_action` runs `set_agent_status → quarantined` and fires an `agent_quarantined` SOC event (Law 3, out-of-band). Subsequent calls auto-denied via `get_agent_by_token` filter. Canary-endpoint example policy in both `policies.cedar` and `gateway/policies.cedar`. `POST /v1/agents/:id/restore` reactivates quarantined agents. 5 new gateway tests (2 policy, 3 routes).
 - **Action normalization layer** (#1384): `normalize_policy_identifier` added to `policy.rs` applies percent-decode → NFC → trim → lowercase before building Cedar entity UIDs, closing a bypass where `GitHub`/`Merge_Pull_Request` built a UID that didn't match Cedar policies targeting the canonical lowercase form. `normalize_tool_identifier` in `routes.rs` updated to also trim surrounding whitespace. 10 new tests (4 policy unit + 1 policy Cedar integration, 4 routes unit + 1 routes Cedar integration).
+- **`redact` decision type** (#1385): Cedar policies can emit `@decision("redact") @redact_fields("field1,field2")` to allow a tool call but return a `redacted_fields` list; `authorize_action` passes the list through `AuthorizeResponse`; `AseEvent` records it for audit. `protect_tool` decorator (sync + async) strips listed kwargs before executing the tool (sets value to `"[REDACTED]"`). Severity: `quarantine > require_approval > redact > allow`. Example canary policy in both `policies.cedar` files. 4 new gateway tests (2 policy, 2 routes) + 3 Python SDK tests.
 - Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
 
 **Next:** real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend, Kubernetes/Helm packaging.
@@ -64,7 +65,7 @@ Baseline: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`po
 ```bash
 # Gateway (Rust)
 cargo check  --manifest-path gateway/Cargo.toml
-cargo test   --manifest-path gateway/Cargo.toml        # 495 tests
+cargo test   --manifest-path gateway/Cargo.toml        # 499 tests
 cargo fmt    --manifest-path gateway/Cargo.toml -- --check
 cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080
