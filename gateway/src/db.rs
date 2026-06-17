@@ -2592,6 +2592,46 @@ pub async fn list_decisions(
     .await
 }
 
+/// #1283: cap on decisions scanned per backtest run. Higher than
+/// [`SOC_MAX_LIMIT`] (200, tuned for paginated UI listings) because an
+/// under-counted backtest would silently understate `estimated_daily_alert_volume`
+/// for an active tenant — 50k decisions covers a very high-volume tenant's
+/// full default 7-day window without an unbounded query.
+pub const BACKTEST_MAX_DECISIONS: i64 = 50_000;
+
+/// #1283: every `deny`/`require_approval`/etc. decision for `tenant_id`
+/// within `[from, to]` (inclusive), oldest first — the historical corpus a
+/// detection rule is backtested against. Tenant-scoped, parameterized,
+/// capped at [`BACKTEST_MAX_DECISIONS`].
+///
+/// `decisions.created_at` relies on SQLite's own `DEFAULT CURRENT_TIMESTAMP`
+/// (space-separated, no fractional seconds) — formats `from`/`to` to match,
+/// the same fix established in `count_recent_denials` (#1296). A plain
+/// `DateTime<Utc>` bind serializes RFC3339-style with a `T` separator, which
+/// sorts incorrectly against the column's format in a string comparison.
+pub async fn list_decisions_in_range(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<DecisionRecord>, sqlx::Error> {
+    let from_str = from.format("%F %T%.6f").to_string();
+    let to_str = to.format("%F %T%.6f").to_string();
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND created_at >= ? AND created_at <= ?
+         ORDER BY created_at ASC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(from_str)
+    .bind(to_str)
+    .bind(BACKTEST_MAX_DECISIONS)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_decision_by_id(
     pool: &SqlitePool,
     tenant_id: &str,

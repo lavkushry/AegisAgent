@@ -5422,16 +5422,15 @@ pub struct EffectiveDetectionRule {
     pub source: &'static str,
 }
 
-/// #1282: list the *effective* detection rules for this tenant — the
-/// embedded defaults (`rule_dsl::default_rules()`) plus this tenant's enabled
-/// custom rules from `detection_rules`. Mirrors exactly what
-/// `events::drain` evaluates for this tenant's events. Rows whose `condition`
-/// fails to parse/validate are skipped (same as `drain`) — SOC rule listing
-/// is advisory, never gates `/v1/authorize` (Law 1).
-pub async fn get_soc_rules(
-    State(state): State<Arc<AppState>>,
-    TenantId(tenant_id): TenantId,
-) -> impl IntoResponse {
+/// #1282: the embedded defaults (`rule_dsl::default_rules()`) plus this
+/// tenant's enabled custom rules from `detection_rules`. Mirrors exactly
+/// what `events::drain` evaluates for this tenant's events. Rows whose
+/// `condition` fails to parse/validate are skipped (same as `drain`).
+/// Shared by `get_soc_rules` (#1282) and `backtest_soc_rule` (#1283).
+async fn effective_detection_rules(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<EffectiveDetectionRule>, sqlx::Error> {
     let mut rules: Vec<EffectiveDetectionRule> = crate::rule_dsl::default_rules()
         .into_iter()
         .map(|rule| EffectiveDetectionRule {
@@ -5440,23 +5439,71 @@ pub async fn get_soc_rules(
         })
         .collect();
 
-    match db::list_detection_rules(&state.pool, &tenant_id).await {
-        Ok(records) => {
-            for record in records.into_iter().filter(|r| r.enabled) {
-                if let Ok(rule) = crate::rule_dsl::yaml_rule_from_condition(
-                    &record.rule_key,
-                    &record.name,
-                    &record.severity,
-                    &record.condition,
-                    &record.summary_template,
-                ) {
-                    rules.push(EffectiveDetectionRule {
-                        rule,
-                        source: "custom",
-                    });
-                }
-            }
+    let records = db::list_detection_rules(pool, tenant_id).await?;
+    for record in records.into_iter().filter(|r| r.enabled) {
+        if let Ok(rule) = crate::rule_dsl::yaml_rule_from_condition(
+            &record.rule_key,
+            &record.name,
+            &record.severity,
+            &record.condition,
+            &record.summary_template,
+        ) {
+            rules.push(EffectiveDetectionRule {
+                rule,
+                source: "custom",
+            });
         }
+    }
+
+    Ok(rules)
+}
+
+/// #1282: list the *effective* detection rules for this tenant. SOC rule
+/// listing is advisory, never gates `/v1/authorize` (Law 1).
+pub async fn get_soc_rules(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match effective_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("Failed to list detection rules: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1283: optional `[from, to]` window for `backtest_soc_rule`. Both
+/// default to the trailing 7 days when omitted.
+#[derive(Debug, serde::Deserialize)]
+pub struct BacktestRuleRequest {
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+}
+
+/// #1283: backtest one detection rule (default or tenant-custom, looked up
+/// by `rule_key`) against this tenant's historical `decisions` over
+/// `[from, to]` (default: trailing 7 days). Read-only and pure in-memory
+/// evaluation — never writes a `soc_alerts`/`soc_incidents` row, so a
+/// backtest can never affect the live SOC pipeline (Law 1: advisory only).
+pub async fn backtest_soc_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(rule_key): Path<String>,
+    body: Option<Json<BacktestRuleRequest>>,
+) -> impl IntoResponse {
+    let to = body.as_ref().and_then(|b| b.to).unwrap_or_else(Utc::now);
+    let from = body
+        .as_ref()
+        .and_then(|b| b.from)
+        .unwrap_or_else(|| to - Duration::days(7));
+
+    let rules = match effective_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => rules,
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
             return (
@@ -5465,9 +5512,38 @@ pub async fn get_soc_rules(
             )
                 .into_response();
         }
-    }
+    };
 
-    (StatusCode::OK, Json(rules)).into_response()
+    let Some(effective_rule) = rules.into_iter().find(|r| r.rule.rule_key == rule_key) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("No effective rule with rule_key '{rule_key}'")})),
+        )
+            .into_response();
+    };
+
+    let decisions = match db::list_decisions_in_range(&state.pool, &tenant_id, from, to).await {
+        Ok(decisions) => decisions,
+        Err(e) => {
+            error!("Failed to list decisions for backtest: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let result = crate::backtest::run_backtest(
+        &effective_rule.rule,
+        effective_rule.source,
+        &tenant_id,
+        &decisions,
+        from,
+        to,
+    );
+
+    (StatusCode::OK, Json(result)).into_response()
 }
 
 /// #1282: create or update a tenant-managed custom detection rule, validating
@@ -19893,6 +19969,107 @@ mod tests {
             .unwrap();
         let weights_other: crate::risk::RiskWeights = serde_json::from_slice(&body_other).unwrap();
         assert_eq!(weights_other, crate::risk::RiskWeights::from_env());
+    }
+
+    /// #1283: backtesting a default rule against historical decisions finds
+    /// the matching decision and reports it, without creating a real alert.
+    #[tokio::test]
+    async fn backtest_soc_rule_counts_matching_decision_and_creates_no_real_alert() {
+        let (state, tenant_id, agent_token) = setup_state("backtest_default_rule").await;
+
+        let mut approval_request = mcp_authorize_request("github", "create_branch");
+        approval_request.tool_call.mutates_state = true;
+        approval_request.context.source_trust = "semi_trusted_customer".to_string();
+        let response =
+            call_authorize(state.clone(), &tenant_id, &agent_token, approval_request).await;
+        assert_eq!(response.decision, "require_approval");
+
+        // Let the live SOC drain loop finish processing this decision (it
+        // independently fires `approval_required_surface` and creates a
+        // real alert from the live event — separate from the backtest call
+        // below, which must not add to that count).
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let alerts_before = db::list_soc_alerts(&state.pool, &tenant_id, 100, 0, None, None)
+            .await
+            .unwrap();
+
+        let result = backtest_soc_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("approval_required_surface".to_string()),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(result.status(), StatusCode::OK);
+
+        let body = to_bytes(result.into_body(), usize::MAX).await.unwrap();
+        let backtest: crate::backtest::BacktestResult = serde_json::from_slice(&body).unwrap();
+        assert_eq!(backtest.rule_key, "approval_required_surface");
+        assert_eq!(backtest.source, "default");
+        assert_eq!(backtest.match_count, 1);
+        assert_eq!(
+            backtest.matched_decision_ids,
+            vec![response.decision_id.to_string()]
+        );
+
+        // The backtest call itself must never create a real alert (Law 1:
+        // advisory only) — the alert count is unchanged from before the call.
+        let alerts_after = db::list_soc_alerts(&state.pool, &tenant_id, 100, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(alerts_after.len(), alerts_before.len());
+    }
+
+    /// #1283: backtesting an unknown `rule_key` (neither a default nor an
+    /// enabled tenant-custom rule) returns 404, not a misleading empty result.
+    #[tokio::test]
+    async fn backtest_soc_rule_returns_404_for_unknown_rule_key() {
+        let (state, tenant_id, _) = setup_state("backtest_unknown_rule").await;
+
+        let result = backtest_soc_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("does_not_exist".to_string()),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(result.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #1283: an explicit `[from, to]` window scopes which decisions are
+    /// scanned — a decision outside the window is excluded.
+    #[tokio::test]
+    async fn backtest_soc_rule_respects_explicit_time_window() {
+        let (state, tenant_id, agent_token) = setup_state("backtest_time_window").await;
+
+        let mut approval_request = mcp_authorize_request("github", "create_branch");
+        approval_request.tool_call.mutates_state = true;
+        approval_request.context.source_trust = "semi_trusted_customer".to_string();
+        let response =
+            call_authorize(state.clone(), &tenant_id, &agent_token, approval_request).await;
+        assert_eq!(response.decision, "require_approval");
+
+        // A window entirely before the decision was recorded excludes it.
+        let now = Utc::now();
+        let body = BacktestRuleRequest {
+            from: Some(now - Duration::days(10)),
+            to: Some(now - Duration::days(9)),
+        };
+        let result = backtest_soc_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("approval_required_surface".to_string()),
+            Some(Json(body)),
+        )
+        .await
+        .into_response();
+        let body_bytes = to_bytes(result.into_body(), usize::MAX).await.unwrap();
+        let backtest: crate::backtest::BacktestResult =
+            serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(backtest.match_count, 0);
+        assert_eq!(backtest.decisions_scanned, 0);
     }
 
     // ── #1272: Evidence Graph Query API ──
