@@ -193,6 +193,13 @@ pub struct AuthorizeRequest {
     /// 409 `replay_timestamp_expired`. Ignored if `nonce` is `None`.
     #[serde(default)]
     pub timestamp: Option<DateTime<Utc>>,
+    /// Dry-run / simulation mode (#1281): evaluate the decision (Cedar +
+    /// risk scoring) but skip every persistence and side-effecting path —
+    /// no `decisions`/`audit_events`/`approvals`/`action_receipts` rows, no
+    /// SOC event, no agent quarantine, no GitHub PR comment/check update.
+    /// `None`/`Some(false)` is the normal persisted path.
+    #[serde(default)]
+    pub dry_run: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +233,10 @@ pub struct AuthorizeResponse {
     /// this value as `trace.root_trust_level` if it triggers a downstream
     /// agent, so trust propagates correctly through multi-hop chains.
     pub root_trust_level: String,
+    /// #1281: true if this response was produced by a dry-run request
+    /// (`AuthorizeRequest.dry_run == Some(true)`) — nothing was persisted.
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

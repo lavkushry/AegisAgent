@@ -346,6 +346,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -422,6 +423,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -453,6 +455,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -487,6 +490,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -518,6 +522,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -580,6 +585,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -642,6 +648,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -714,6 +721,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -786,6 +794,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -837,6 +846,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),
@@ -914,6 +924,7 @@ mod tests {
             callback: None,
             nonce: None,
             timestamp: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "test-agent".to_string(),
                 environment: "production".to_string(),

@@ -96,6 +96,7 @@ fn allow_request() -> AuthorizeRequest {
         }),
         nonce: None,
         timestamp: None,
+        dry_run: None,
     }
 }
 
