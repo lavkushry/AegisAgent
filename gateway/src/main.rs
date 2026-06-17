@@ -21,6 +21,7 @@ use uuid::Uuid;
 use gateway::audit_batch;
 use gateway::db;
 use gateway::events;
+use gateway::gh_checks;
 use gateway::gh_comment;
 use gateway::jobs;
 use gateway::metrics;
@@ -799,6 +800,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("AEGIS_GITHUB_APP_TOKEN is not set. GitHub PR deny comments are disabled.");
     }
 
+    // Optional GitHub Checks API client (#1383). Reuses the same installation
+    // token as `github_pr_commenter` — every authorize decision on a
+    // PR-related GitHub action updates an "Aegis Security Gate" check run.
+    let github_checks_client = std::env::var("AEGIS_GITHUB_APP_TOKEN").ok().map(|token| {
+        info!("AEGIS_GITHUB_APP_TOKEN set: GitHub check runs are enabled.");
+        std::sync::Arc::new(gh_checks::GhChecksClient::new(token))
+    });
+    if github_checks_client.is_none() {
+        info!("AEGIS_GITHUB_APP_TOKEN is not set. GitHub check runs are disabled.");
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -818,6 +830,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         github_webhook_secret,
         slack_signing_secret,
         github_pr_commenter,
+        github_checks_client,
     });
 
     // Read request body size limit (default 1MB)
@@ -1289,6 +1302,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         let app = Router::new()
@@ -1365,6 +1379,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         let app = Router::new()
