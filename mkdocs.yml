@@ -81,6 +81,7 @@ nav:
   - Integration & connectivity:
       - Overview: AegisAgent_Integration_Connectivity.md
       - GitHub App integration: github-integration.md
+      - Slack integration: slack-integration.md
   - User manual:
       - The Agent SOC: AegisAgent_Agent_SOC_Design.md
       - SOC Console UI: AegisAgent_SOC_UI_Design.md
