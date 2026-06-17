@@ -42,6 +42,7 @@ The evidence graph is AegisAgent's compliance-facing view that ties one tenant's
 {
   "nodes": [
     { "id": "agent:agent_42", "group": "agent", "label": "Coding Agent", "timestamp": "2026-06-17T12:00:00Z", "metadata": null },
+    { "id": "tool_call:d1", "group": "tool_call", "label": "github.merge_pull_request", "timestamp": "2026-06-17T12:00:01Z", "metadata": null },
     { "id": "decision:d1", "group": "decision", "label": "require_approval", "timestamp": "2026-06-17T12:00:01Z", "metadata": { "risk_score": 72, "reason": "..." } }
   ],
   "edges": [
@@ -134,6 +135,8 @@ There is no built-in graph dashboard in the SOC Console UI today (see [`AegisAge
 <body>
   <div id="graph" style="height: 600px;"></div>
   <script>
+    const AGENT_TOKEN = "<your agent's bearer token>"; // never hardcode this in a real deployment
+
     fetch("http://127.0.0.1:8080/v1/graph/run/run_42", {
       headers: { "Authorization": "Bearer " + AGENT_TOKEN }
     })
