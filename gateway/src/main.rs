@@ -975,6 +975,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))
         .route("/v1/agents/:id/revoke", post(routes::revoke_agent))
         .route("/v1/agents/:id/restore", post(routes::restore_agent))
+        // #1295: agent token rotation (manual + leak-report auto-rotation)
+        .route(
+            "/v1/agents/:id/rotate-token",
+            post(routes::rotate_agent_token),
+        )
+        .route(
+            "/v1/agents/:id/report-leaked-token",
+            post(routes::report_leaked_agent_token),
+        )
         .route(
             "/v1/agents/:id/permissions",
             get(routes::list_agent_tool_permissions).post(routes::grant_agent_tool_permission),

@@ -265,6 +265,12 @@ pub struct TenantRecord {
     /// tenant's incidents. Defaults to `true` (additive migration).
     #[serde(default = "default_true")]
     pub auto_respond_enabled: bool,
+    /// #1295: whether `POST /v1/agents/:id/report-leaked-token` may actually
+    /// rotate the agent's token when a leak is reported. `false` still
+    /// records the leak detection (audit + SOC event) but leaves the
+    /// existing token valid. Defaults to `true` (additive migration).
+    #[serde(default = "default_true")]
+    pub auto_rotate_token_on_leak_enabled: bool,
 }
 
 fn default_true() -> bool {
