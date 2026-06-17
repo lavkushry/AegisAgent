@@ -25,6 +25,7 @@ pub mod gh_comment;
 pub mod graph;
 pub mod ingest;
 pub mod jobs;
+pub mod mcp_inspect;
 pub mod metrics;
 pub mod models;
 pub mod narrate;

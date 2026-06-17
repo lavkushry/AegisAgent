@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::events::{AseEvent, EventSink};
+use crate::mcp_inspect;
 use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
@@ -7662,6 +7663,20 @@ pub async fn update_mcp_server(
         _ => {}
     }
 
+    if let Some(enabled) = payload.inspection_enabled {
+        if let Err(e) =
+            db::set_mcp_server_inspection_enabled(&state.pool, &tenant_id, &server_key, enabled)
+                .await
+        {
+            error!("Failed to update MCP server inspection_enabled: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    }
+
     match db::update_mcp_server(
         &state.pool,
         &tenant_id,
@@ -7701,6 +7716,112 @@ pub async fn update_mcp_server(
                 .into_response()
         }
     }
+}
+
+/// `POST /v1/mcp/servers/:server_key/inspect` (#1333) — scans an MCP tool
+/// response for sensitive-data patterns and prompt-injection attempts.
+///
+/// This endpoint exists because the gateway's `/v1/authorize` path only ever
+/// sees the *request* side of a tool call — the SDK executes the tool
+/// itself and the gateway never observes the return value. The SDK is
+/// expected to call this **after** it has already returned the tool's
+/// result to the agent (fire-and-forget, never blocking the MCP call return
+/// path — the AC's async requirement is satisfied by the caller, not by
+/// anything synchronous in this handler).
+///
+/// Behavior, all tenant-scoped:
+/// - `404` if the MCP server doesn't exist for this tenant.
+/// - If [`McpServerRecord::inspection_enabled`] is `false` (the default —
+///   opt-in per server via `PATCH /v1/mcp/servers/:server_key`), returns
+///   `200 {"inspected": false, "reason": "inspection_disabled"}` without
+///   scanning anything.
+/// - Otherwise runs [`mcp_inspect::scan`] against `response_text`. The raw
+///   text is **never persisted or logged** — only finding categories and
+///   counts (the redaction invariant). If any category matched, inserts a
+///   `soc_alerts` row (`rule: "mcp_response_sensitive_data"` or
+///   `"mcp_response_injection_attempt"`, one alert per matched category) so
+///   it's visible via `GET /v1/alerts`/`GET /v1/soc/summary`.
+///
+/// Scope note (v1): unlike alerts produced by the `events::drain` pipeline,
+/// alerts from this endpoint are written directly and do **not** flow
+/// through the live notify sink, webhook export, or `GET /v1/ws/events` —
+/// this endpoint is a dedicated, synchronous request/response API, not a
+/// background event source. An operator polling `GET /v1/alerts` will see
+/// them; a live Slack push or WebSocket subscriber will not, today.
+pub async fn inspect_mcp_response(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(server_key): Path<String>,
+    Json(payload): Json<InspectMcpResponseRequest>,
+) -> impl IntoResponse {
+    let server = match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+        Ok(Some(server)) => server,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "MCP server not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Database error getting MCP server: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !server.inspection_enabled {
+        return (
+            StatusCode::OK,
+            Json(json!({"inspected": false, "reason": "inspection_disabled"})),
+        )
+            .into_response();
+    }
+
+    let result = mcp_inspect::scan(&payload.response_text);
+
+    if result.flagged {
+        let now = Utc::now().to_rfc3339();
+        let source_event_id = payload
+            .decision_id
+            .clone()
+            .unwrap_or_else(|| format!("mcp_inspect:{}", Uuid::new_v4()));
+        for finding in &result.findings {
+            let rule = match finding.category {
+                mcp_inspect::FindingCategory::InjectionAttempt => "mcp_response_injection_attempt",
+                _ => "mcp_response_sensitive_data",
+            };
+            let alert = SocAlertRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: rule.to_string(),
+                severity: "high".to_string(),
+                agent_id: payload.agent_id.clone(),
+                source_event_id: source_event_id.clone(),
+                summary: format!(
+                    "MCP server '{}' tool '{}' response flagged: {:?} (count={})",
+                    server_key, payload.tool_key, finding.category, finding.count
+                ),
+                created_at: now.clone(),
+            };
+            if let Err(e) = db::insert_soc_alert(&state.pool, &alert).await {
+                error!("Failed to persist MCP response inspection alert: {:?}", e);
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "inspected": true,
+            "flagged": result.flagged,
+            "findings": result.findings,
+        })),
+    )
+        .into_response()
 }
 
 pub async fn ws_events(
@@ -17201,6 +17322,7 @@ mod tests {
             trust_level: Some("trusted_internal".to_string()),
             endpoint: Some("http://internal-gateway:8081".to_string()),
             status: Some("active".to_string()),
+            inspection_enabled: None,
         };
         let update_resp = update_mcp_server(
             State(state.clone()),
@@ -17231,11 +17353,251 @@ mod tests {
                 trust_level: None,
                 endpoint: None,
                 status: None,
+                inspection_enabled: None,
             }),
         )
         .await
         .into_response();
         assert_eq!(update_404_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Registers an MCP server for the given tenant and returns its `server_key`.
+    async fn register_test_mcp_server(state: &Arc<AppState>, tenant_id: &str, server_key: &str) {
+        let _ = register_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.to_string()),
+            Json(RegisterMcpServerRequest {
+                server_key: server_key.to_string(),
+                name: "Test MCP Server".to_string(),
+                owner_team: None,
+                transport: "http".to_string(),
+                source: None,
+                trust_level: "semi_trusted".to_string(),
+                endpoint: "http://localhost:5099".to_string(),
+            }),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_mcp_server_can_toggle_inspection_enabled() {
+        let (state, tenant_id, _agent_token) = setup_state("mcp_inspect_toggle").await;
+        let server_key = "toggle-server";
+        register_test_mcp_server(&state, &tenant_id, server_key).await;
+
+        // Newly registered servers default to inspection disabled.
+        let server = db::get_mcp_server_by_key(&state.pool, &tenant_id, server_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!server.inspection_enabled);
+
+        // Enable it via PATCH.
+        let resp = update_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(server_key.to_string()),
+            Json(UpdateMcpServerRequest {
+                name: None,
+                owner_team: None,
+                transport: None,
+                source: None,
+                trust_level: None,
+                endpoint: None,
+                status: None,
+                inspection_enabled: Some(true),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let updated: McpServerRecord = serde_json::from_slice(&body).unwrap();
+        assert!(updated.inspection_enabled);
+
+        // Disable it again.
+        let resp = update_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(server_key.to_string()),
+            Json(UpdateMcpServerRequest {
+                name: None,
+                owner_team: None,
+                transport: None,
+                source: None,
+                trust_level: None,
+                endpoint: None,
+                status: None,
+                inspection_enabled: Some(false),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let updated: McpServerRecord = serde_json::from_slice(&body).unwrap();
+        assert!(!updated.inspection_enabled);
+    }
+
+    #[tokio::test]
+    async fn inspect_mcp_response_returns_404_for_unknown_server() {
+        let (state, tenant_id, _agent_token) = setup_state("mcp_inspect_404").await;
+
+        let resp = inspect_mcp_response(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("nonexistent".to_string()),
+            Json(InspectMcpResponseRequest {
+                agent_id: "agent_1".to_string(),
+                tool_key: "read_file".to_string(),
+                response_text: "irrelevant".to_string(),
+                decision_id: None,
+                run_id: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn inspect_mcp_response_skips_scanning_when_disabled() {
+        let (state, tenant_id, _agent_token) = setup_state("mcp_inspect_disabled").await;
+        register_test_mcp_server(&state, &tenant_id, "test-mcp").await;
+
+        let resp = inspect_mcp_response(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("test-mcp".to_string()),
+            Json(InspectMcpResponseRequest {
+                agent_id: "agent_1".to_string(),
+                tool_key: "read_file".to_string(),
+                response_text: "SSN: 123-45-6789".to_string(),
+                decision_id: None,
+                run_id: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["inspected"], json!(false));
+        assert_eq!(json["reason"], json!("inspection_disabled"));
+
+        // No alert should have been created since inspection never ran.
+        let alerts = db::list_soc_alerts(&state.pool, &tenant_id, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert!(alerts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn inspect_mcp_response_flags_sensitive_data_and_creates_alert() {
+        let (state, tenant_id, _agent_token) = setup_state("mcp_inspect_flagged").await;
+        register_test_mcp_server(&state, &tenant_id, "test-mcp").await;
+        db::set_mcp_server_inspection_enabled(&state.pool, &tenant_id, "test-mcp", true)
+            .await
+            .unwrap();
+
+        let resp = inspect_mcp_response(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("test-mcp".to_string()),
+            Json(InspectMcpResponseRequest {
+                agent_id: "agent_1".to_string(),
+                tool_key: "read_file".to_string(),
+                response_text: "Customer SSN: 123-45-6789".to_string(),
+                decision_id: Some("decision_xyz".to_string()),
+                run_id: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["inspected"], json!(true));
+        assert_eq!(json["flagged"], json!(true));
+
+        // The raw matched text must never appear in the response.
+        let body_str = serde_json::to_string(&json).unwrap();
+        assert!(!body_str.contains("123-45-6789"));
+
+        let alerts = db::list_soc_alerts(&state.pool, &tenant_id, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule, "mcp_response_sensitive_data");
+        assert_eq!(alerts[0].agent_id, "agent_1");
+        assert_eq!(alerts[0].source_event_id, "decision_xyz");
+        // The alert summary must never carry the raw matched SSN.
+        assert!(!alerts[0].summary.contains("123-45-6789"));
+    }
+
+    #[tokio::test]
+    async fn inspect_mcp_response_benign_text_is_not_flagged_and_creates_no_alert() {
+        let (state, tenant_id, _agent_token) = setup_state("mcp_inspect_benign").await;
+        register_test_mcp_server(&state, &tenant_id, "test-mcp").await;
+        db::set_mcp_server_inspection_enabled(&state.pool, &tenant_id, "test-mcp", true)
+            .await
+            .unwrap();
+
+        let resp = inspect_mcp_response(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("test-mcp".to_string()),
+            Json(InspectMcpResponseRequest {
+                agent_id: "agent_1".to_string(),
+                tool_key: "read_file".to_string(),
+                response_text: "The build passed with 42 tests green.".to_string(),
+                decision_id: None,
+                run_id: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["flagged"], json!(false));
+
+        let alerts = db::list_soc_alerts(&state.pool, &tenant_id, 50, 0, None, None)
+            .await
+            .unwrap();
+        assert!(alerts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn inspect_mcp_response_is_tenant_scoped() {
+        let (state, tenant_id_a, _agent_token_a) = setup_state("mcp_inspect_tenant_a").await;
+        let tenant_id_b = "mcp_inspect_iso_tenant_b".to_string();
+        db::register_tenant(&state.pool, &tenant_id_b, "Iso Tenant B", "developer")
+            .await
+            .unwrap();
+        register_test_mcp_server(&state, &tenant_id_a, "test-mcp").await;
+
+        // Tenant B must not be able to inspect-against tenant A's server key.
+        let resp = inspect_mcp_response(
+            State(state.clone()),
+            TenantId(tenant_id_b.clone()),
+            Path("test-mcp".to_string()),
+            Json(InspectMcpResponseRequest {
+                agent_id: "agent_1".to_string(),
+                tool_key: "read_file".to_string(),
+                response_text: "irrelevant".to_string(),
+                decision_id: None,
+                run_id: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

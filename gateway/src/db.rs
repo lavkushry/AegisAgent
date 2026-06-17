@@ -260,6 +260,7 @@ async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     ensure_mcp_server_endpoint_column(pool).await?;
     ensure_mcp_server_manifest_hash_column(pool).await?;
+    ensure_mcp_server_inspection_enabled_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_tools (
@@ -1068,6 +1069,29 @@ async fn ensure_mcp_server_manifest_hash_column(pool: &SqlitePool) -> Result<(),
     }
 
     sqlx::query("ALTER TABLE mcp_servers ADD COLUMN manifest_hash TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Additive migration: per-server opt-in toggle for MCP response inspection
+/// (#1333). Defaults to disabled (`0`) — inspection only runs once an
+/// operator explicitly enables it for a server via `PATCH
+/// /v1/mcp/servers/:server_key`.
+async fn ensure_mcp_server_inspection_enabled_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(mcp_servers)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "inspection_enabled")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE mcp_servers ADD COLUMN inspection_enabled BOOLEAN NOT NULL DEFAULT 0")
         .execute(pool)
         .await?;
     Ok(())
@@ -4060,6 +4084,25 @@ pub async fn update_mcp_server(
     q = q.bind(tenant_id).bind(server_key);
 
     let result = q.execute(pool).await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Set the per-server MCP response-inspection toggle (#1333). Tenant-scoped;
+/// no-op (returns `Ok(false)`) if the server doesn't belong to this tenant.
+pub async fn set_mcp_server_inspection_enabled(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+    enabled: bool,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE mcp_servers SET inspection_enabled = ? WHERE tenant_id = ? AND server_key = ?",
+    )
+    .bind(enabled)
+    .bind(tenant_id)
+    .bind(server_key)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 

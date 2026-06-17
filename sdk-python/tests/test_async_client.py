@@ -324,6 +324,24 @@ class TestAegisAsyncClientMethods(unittest.IsolatedAsyncioTestCase):
         res = await self.client.discover_tools("server-1", [])
         self.assertEqual(res["tools_count"], 2)
 
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_report_mcp_response(self, mock_request):
+        mock_request.return_value = _make_mock_response(
+            status_code=200,
+            json_data={"inspected": True, "flagged": False, "findings": []},
+        )
+        res = await self.client.report_mcp_response("server-1", "search", "benign text")
+        self.assertEqual(res["flagged"], False)
+        mock_request.assert_called_once()
+        _, kwargs = mock_request.call_args
+        self.assertEqual(kwargs["json"]["response_text"], "benign text")
+
+    @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
+    async def test_report_mcp_response_swallows_network_error(self, mock_request):
+        mock_request.side_effect = ConnectionError("boom")
+        res = await self.client.report_mcp_response("server-1", "search", "text")
+        self.assertIsNone(res)
+
 
 class TestAsyncProtectToolWithAsyncClient(unittest.IsolatedAsyncioTestCase):
     @patch("asyncio.sleep", new_callable=AsyncMock)

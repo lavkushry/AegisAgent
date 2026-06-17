@@ -391,6 +391,10 @@ pub struct McpServerRecord {
     /// discovery call. `None` if the server has never had a discovery run.
     #[serde(default)]
     pub last_discovery_at: Option<DateTime<Utc>>,
+    /// #1333: per-server opt-in toggle for MCP response inspection. Defaults
+    /// to `false` — inspection only runs once explicitly enabled.
+    #[serde(default)]
+    pub inspection_enabled: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -796,6 +800,23 @@ pub struct UpdateMcpServerRequest {
     pub trust_level: Option<String>,
     pub endpoint: Option<String>,
     pub status: Option<String>,
+    /// #1333: opt-in toggle for MCP response inspection.
+    pub inspection_enabled: Option<bool>,
+}
+
+/// `POST /v1/mcp/servers/:server_key/inspect` (#1333) request body. The SDK
+/// submits this *after* executing an MCP-routed tool call — the gateway
+/// itself never observes tool responses on the `/v1/authorize` path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InspectMcpResponseRequest {
+    pub agent_id: String,
+    pub tool_key: String,
+    /// The raw tool response to scan. Never persisted — only the resulting
+    /// finding categories/counts are stored (redaction invariant).
+    pub response_text: String,
+    /// Optional correlation ids, if the caller has them.
+    pub decision_id: Option<String>,
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
