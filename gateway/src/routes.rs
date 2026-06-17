@@ -5207,12 +5207,20 @@ pub async fn list_policy_audit_log(
 pub struct CreateWebhookSubscriptionRequest {
     pub url: String,
     /// Optional shared secret. Only `sha256(secret)` is persisted (#938) —
-    /// mirrors `ApprovalCallback::secret`.
+    /// mirrors `ApprovalCallback::secret`. Unrelated to the server-generated
+    /// `delivery_secret` (#1285) that actually signs outbound deliveries.
     #[serde(default)]
     pub secret: Option<String>,
     /// Comma-separated SOC event types to receive, or `"*"` for all.
     #[serde(default = "default_webhook_event_types")]
     pub event_types: String,
+    /// #1285: `"info"` or `"high"`. Defaults to `"info"` (receive everything
+    /// the high-signal trigger policy surfaces).
+    #[serde(default)]
+    pub min_severity: Option<String>,
+    /// #1285: `"json"` or `"cef"`. Defaults to `"json"`.
+    #[serde(default)]
+    pub format: Option<String>,
 }
 
 fn default_webhook_event_types() -> String {
@@ -5220,23 +5228,66 @@ fn default_webhook_event_types() -> String {
 }
 
 /// TASK-0092 (#938): register a tenant-managed webhook subscription for SOC
-/// notifications (alerts/incidents). Only `sha256(secret)` is stored.
+/// notifications (alerts/incidents). Only `sha256(secret)` of the optional
+/// operator-supplied `secret` is stored. #1285 additionally generates a
+/// `delivery_secret` returned once in this response — the gateway keeps it
+/// to HMAC-sign every future delivery to this subscription's `url`.
 pub async fn create_webhook_subscription(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Json(payload): Json<CreateWebhookSubscriptionRequest>,
 ) -> impl IntoResponse {
+    let min_severity = payload.min_severity.unwrap_or_else(|| "info".to_string());
+    if min_severity != "info" && min_severity != "high" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "min_severity must be 'info' or 'high'"})),
+        )
+            .into_response();
+    }
+    let format = payload.format.unwrap_or_else(|| "json".to_string());
+    if format != "json" && format != "cef" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "format must be 'json' or 'cef'"})),
+        )
+            .into_response();
+    }
+
     let secret_hash = payload.secret.as_ref().map(|s| sha256_hex(s.as_bytes()));
+    let delivery_secret = format!("whsec_{}", Uuid::new_v4().simple());
     match db::insert_webhook_subscription(
         &state.pool,
         &tenant_id,
         &payload.url,
         secret_hash.as_deref(),
         &payload.event_types,
+        &delivery_secret,
+        &min_severity,
+        &format,
     )
     .await
     {
-        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Ok(record) => (
+            StatusCode::CREATED,
+            Json(json!({
+                "id": record.id,
+                "tenant_id": record.tenant_id,
+                "url": record.url,
+                "secret_hash": record.secret_hash,
+                "event_types": record.event_types,
+                "status": record.status,
+                "min_severity": record.min_severity,
+                "format": record.format,
+                "delivery_status": record.delivery_status,
+                "consecutive_failures": record.consecutive_failures,
+                "last_delivery_at": record.last_delivery_at,
+                "last_success_at": record.last_success_at,
+                "delivery_secret": delivery_secret,
+                "created_at": record.created_at,
+            })),
+        )
+            .into_response(),
         Err(e) => {
             error!("Failed to create webhook subscription: {:?}", e);
             (
@@ -15506,6 +15557,8 @@ mod tests {
             url: "https://example.com/hook".to_string(),
             secret: Some("super-secret".to_string()),
             event_types: "alert,incident".to_string(),
+            min_severity: None,
+            format: None,
         };
         let response_create = create_webhook_subscription(
             State(state.clone()),

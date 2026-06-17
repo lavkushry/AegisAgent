@@ -551,6 +551,11 @@ pub struct ApprovalRecord {
 /// `/v1/webhook_subscriptions` to receive SOC notifications (alerts/incidents)
 /// at an operator-supplied endpoint. `secret_hash` is `sha256(secret)` — the
 /// plaintext secret is never persisted, mirroring `ApprovalRecord::callback_secret_hash`.
+///
+/// #1285 adds real delivery on top of this CRUD scaffold. `delivery_secret`
+/// is a separate, server-generated plaintext secret (returned once at
+/// creation, like `agent_token`) used to HMAC-sign outbound deliveries —
+/// `secret_hash` above is a one-way hash and cannot be used for that.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct WebhookSubscriptionRecord {
     pub id: String,
@@ -560,6 +565,24 @@ pub struct WebhookSubscriptionRecord {
     pub event_types: String,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    /// #1285: never serialized — the one-time creation response carries it
+    /// explicitly instead of relying on this struct's `Serialize` impl, so a
+    /// future `SELECT *`-backed listing/get endpoint can never leak it.
+    #[serde(skip_serializing, default)]
+    pub delivery_secret: Option<String>,
+    /// #1285: `"info"` or `"high"` — events below this severity are not
+    /// delivered to this subscription.
+    pub min_severity: String,
+    /// #1285: `"json"` or `"cef"`.
+    pub format: String,
+    /// #1285: `"healthy"` | `"degraded"` | `"dead"`, derived from
+    /// `consecutive_failures` after each delivery attempt. Distinct from the
+    /// legacy `status` column above, which TASK-0092 always set to `"active"`
+    /// and nothing else ever read or wrote.
+    pub delivery_status: String,
+    pub consecutive_failures: i64,
+    pub last_delivery_at: Option<DateTime<Utc>>,
+    pub last_success_at: Option<DateTime<Utc>>,
 }
 
 /// TASK-0088 (#934): a tenant-managed detection rule. First step toward

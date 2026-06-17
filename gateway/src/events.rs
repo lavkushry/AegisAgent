@@ -166,6 +166,7 @@ async fn handle_alert(
     alert: &crate::detect::Alert,
     sink: &dyn NotifySink,
     pool: &SqlitePool,
+    webhook_export_client: &reqwest::Client,
     notify_enabled: bool,
     metrics: &SecurityMetrics,
 ) {
@@ -196,6 +197,22 @@ async fn handle_alert(
                     alert_or_incident_id: Some(alert.alert_id.clone()),
                     occurred_at: alert.occurred_at.clone(),
                 });
+                // #1285: per-tenant, DB-configured webhook export subscriptions.
+                crate::webhook_export::dispatch(
+                    pool,
+                    webhook_export_client,
+                    &crate::webhook_export::WebhookExportPayload {
+                        event_id: alert.alert_id.clone(),
+                        kind: "alert".to_string(),
+                        event_type: "alert".to_string(),
+                        severity: alert.severity.clone(),
+                        tenant_id: alert.tenant_id.clone(),
+                        agent_id: alert.agent_id.clone(),
+                        summary: alert.summary.clone(),
+                        occurred_at: alert.occurred_at.clone(),
+                    },
+                )
+                .await;
             }
         }
         _ => info!(
@@ -238,6 +255,10 @@ pub async fn drain(
     // Phase 2: construct the notify sink once from env; NullSink when
     // AEGIS_WEBHOOK_URL is absent (safe default — no network calls in tests).
     let sink: Box<dyn NotifySink> = notify::from_env();
+    // #1285: shared reqwest client for the (per-tenant, DB-configured)
+    // webhook export dispatcher — keep-alive/TLS reuse across deliveries,
+    // same rationale as `notify::WebhookSink`'s client.
+    let webhook_export_client = reqwest::Client::new();
     // Phase 3: one Correlator per drain task — mutable, bounded-memory sliding
     // windows keyed by (tenant_id, agent_id). Never touches the inline path.
     let mut correlator = Correlator::default();
@@ -264,18 +285,35 @@ pub async fn drain(
         // Phase 2 — decision notify: deny and require_approval are high-signal.
         // allow is intentionally excluded to avoid alert fatigue.
         if notify_enabled && (ev.decision == "deny" || ev.decision == "require_approval") {
+            let summary = format!(
+                "decision={} tool={} action={} reason={}",
+                ev.decision, ev.tool, ev.action, ev.reason
+            );
             sink.notify(NotifyMessage {
                 kind: ev.kind.clone(),
                 severity: "high".to_string(),
                 tenant_id: ev.tenant_id.clone(),
                 agent_id: ev.agent_id.clone(),
-                summary: format!(
-                    "decision={} tool={} action={} reason={}",
-                    ev.decision, ev.tool, ev.action, ev.reason
-                ),
+                summary: summary.clone(),
                 alert_or_incident_id: None,
                 occurred_at: ev.occurred_at.clone(),
             });
+            // #1285: per-tenant, DB-configured webhook export subscriptions.
+            crate::webhook_export::dispatch(
+                &pool,
+                &webhook_export_client,
+                &crate::webhook_export::WebhookExportPayload {
+                    event_id: ev.event_id.clone(),
+                    kind: ev.kind.clone(),
+                    event_type: ev.decision.clone(),
+                    severity: "high".to_string(),
+                    tenant_id: ev.tenant_id.clone(),
+                    agent_id: ev.agent_id.clone(),
+                    summary,
+                    occurred_at: ev.occurred_at.clone(),
+                },
+            )
+            .await;
         }
 
         // Phase 1: deterministic, atomic detection over the single event.
@@ -313,7 +351,15 @@ pub async fn drain(
                 }
             };
         for alert in detector.evaluate(&ev, &tenant_rules) {
-            handle_alert(&alert, sink.as_ref(), &pool, notify_enabled, &metrics).await;
+            handle_alert(
+                &alert,
+                sink.as_ref(),
+                &pool,
+                &webhook_export_client,
+                notify_enabled,
+                &metrics,
+            )
+            .await;
         }
 
         // SOC-007 (#1190): per-agent behavioral baselining (rate anomaly +
@@ -321,7 +367,15 @@ pub async fn drain(
         match baseline::evaluate(&pool, &ev).await {
             Ok(baseline_alerts) => {
                 for alert in baseline_alerts {
-                    handle_alert(&alert, sink.as_ref(), &pool, notify_enabled, &metrics).await;
+                    handle_alert(
+                        &alert,
+                        sink.as_ref(),
+                        &pool,
+                        &webhook_export_client,
+                        notify_enabled,
+                        &metrics,
+                    )
+                    .await;
                 }
             }
             Err(e) => {
@@ -405,6 +459,22 @@ pub async fn drain(
                             alert_or_incident_id: Some(incident.incident_id.clone()),
                             occurred_at: incident.opened_at.clone(),
                         });
+                        // #1285: per-tenant, DB-configured webhook export subscriptions.
+                        crate::webhook_export::dispatch(
+                            &pool,
+                            &webhook_export_client,
+                            &crate::webhook_export::WebhookExportPayload {
+                                event_id: incident.incident_id.clone(),
+                                kind: "incident".to_string(),
+                                event_type: "incident".to_string(),
+                                severity: incident.severity.clone(),
+                                tenant_id: incident.tenant_id.clone(),
+                                agent_id: incident.agent_id.clone(),
+                                summary: incident.summary.clone(),
+                                occurred_at: incident.opened_at.clone(),
+                            },
+                        )
+                        .await;
                     }
                 }
                 _ => info!(
