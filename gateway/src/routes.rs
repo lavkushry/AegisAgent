@@ -5557,16 +5557,15 @@ pub struct EffectiveDetectionRule {
     pub source: &'static str,
 }
 
-/// #1282: list the *effective* detection rules for this tenant — the
-/// embedded defaults (`rule_dsl::default_rules()`) plus this tenant's enabled
-/// custom rules from `detection_rules`. Mirrors exactly what
-/// `events::drain` evaluates for this tenant's events. Rows whose `condition`
-/// fails to parse/validate are skipped (same as `drain`) — SOC rule listing
-/// is advisory, never gates `/v1/authorize` (Law 1).
-pub async fn get_soc_rules(
-    State(state): State<Arc<AppState>>,
-    TenantId(tenant_id): TenantId,
-) -> impl IntoResponse {
+/// #1282: the embedded defaults (`rule_dsl::default_rules()`) plus this
+/// tenant's enabled custom rules from `detection_rules`. Mirrors exactly
+/// what `events::drain` evaluates for this tenant's events. Rows whose
+/// `condition` fails to parse/validate are skipped (same as `drain`).
+/// Shared by `get_soc_rules` (#1282) and `backtest_soc_rule` (#1283).
+async fn effective_detection_rules(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<EffectiveDetectionRule>, sqlx::Error> {
     let mut rules: Vec<EffectiveDetectionRule> = crate::rule_dsl::default_rules()
         .into_iter()
         .map(|rule| EffectiveDetectionRule {
@@ -5575,23 +5574,71 @@ pub async fn get_soc_rules(
         })
         .collect();
 
-    match db::list_detection_rules(&state.pool, &tenant_id).await {
-        Ok(records) => {
-            for record in records.into_iter().filter(|r| r.enabled) {
-                if let Ok(rule) = crate::rule_dsl::yaml_rule_from_condition(
-                    &record.rule_key,
-                    &record.name,
-                    &record.severity,
-                    &record.condition,
-                    &record.summary_template,
-                ) {
-                    rules.push(EffectiveDetectionRule {
-                        rule,
-                        source: "custom",
-                    });
-                }
-            }
+    let records = db::list_detection_rules(pool, tenant_id).await?;
+    for record in records.into_iter().filter(|r| r.enabled) {
+        if let Ok(rule) = crate::rule_dsl::yaml_rule_from_condition(
+            &record.rule_key,
+            &record.name,
+            &record.severity,
+            &record.condition,
+            &record.summary_template,
+        ) {
+            rules.push(EffectiveDetectionRule {
+                rule,
+                source: "custom",
+            });
         }
+    }
+
+    Ok(rules)
+}
+
+/// #1282: list the *effective* detection rules for this tenant. SOC rule
+/// listing is advisory, never gates `/v1/authorize` (Law 1).
+pub async fn get_soc_rules(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match effective_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("Failed to list detection rules: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1283: optional `[from, to]` window for `backtest_soc_rule`. Both
+/// default to the trailing 7 days when omitted.
+#[derive(Debug, serde::Deserialize)]
+pub struct BacktestRuleRequest {
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+}
+
+/// #1283: backtest one detection rule (default or tenant-custom, looked up
+/// by `rule_key`) against this tenant's historical `decisions` over
+/// `[from, to]` (default: trailing 7 days). Read-only and pure in-memory
+/// evaluation — never writes a `soc_alerts`/`soc_incidents` row, so a
+/// backtest can never affect the live SOC pipeline (Law 1: advisory only).
+pub async fn backtest_soc_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(rule_key): Path<String>,
+    body: Option<Json<BacktestRuleRequest>>,
+) -> impl IntoResponse {
+    let to = body.as_ref().and_then(|b| b.to).unwrap_or_else(Utc::now);
+    let from = body
+        .as_ref()
+        .and_then(|b| b.from)
+        .unwrap_or_else(|| to - Duration::days(7));
+
+    let rules = match effective_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => rules,
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
             return (
@@ -5600,9 +5647,38 @@ pub async fn get_soc_rules(
             )
                 .into_response();
         }
-    }
+    };
 
-    (StatusCode::OK, Json(rules)).into_response()
+    let Some(effective_rule) = rules.into_iter().find(|r| r.rule.rule_key == rule_key) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("No effective rule with rule_key '{rule_key}'")})),
+        )
+            .into_response();
+    };
+
+    let decisions = match db::list_decisions_in_range(&state.pool, &tenant_id, from, to).await {
+        Ok(decisions) => decisions,
+        Err(e) => {
+            error!("Failed to list decisions for backtest: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let result = crate::backtest::run_backtest(
+        &effective_rule.rule,
+        effective_rule.source,
+        &tenant_id,
+        &decisions,
+        from,
+        to,
+    );
+
+    (StatusCode::OK, Json(result)).into_response()
 }
 
 /// #1282: create or update a tenant-managed custom detection rule, validating

@@ -14,6 +14,7 @@
 //! helpers used to seed a test database.
 
 pub mod audit_batch;
+pub mod backtest;
 pub mod baseline;
 pub mod correlate;
 pub mod db;
