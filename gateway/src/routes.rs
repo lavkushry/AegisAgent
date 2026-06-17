@@ -6482,6 +6482,228 @@ pub async fn restore_agent(
     set_agent_operational_status(state, tenant_id, agent_id, "active").await
 }
 
+/// Optional request body for `POST /v1/agents/:id/rotate-token` (#1295).
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct RotateTokenRequest {
+    pub reason: Option<String>,
+}
+
+/// Generate a fresh plaintext token, hash and store it, and write the
+/// `agent_token_rotated` audit event. Shared by the operator-triggered
+/// manual rotation endpoint and the leak-report auto-rotation path (#1295).
+/// Returns the new plaintext token — the only time it is ever returned in
+/// cleartext (matching `register_agent`'s re-registration rotation, #1366).
+async fn rotate_and_audit_agent_token(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+    agent_id: &str,
+    reason: &str,
+) -> Result<String, sqlx::Error> {
+    let new_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+    db::rotate_agent_token(&state.pool, tenant_id, agent_id, &new_token).await?;
+
+    let audit = AuditEventRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.to_string(),
+        event_type: "agent_token_rotated".to_string(),
+        agent_id: Some(agent_id.to_string()),
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        span_id: None,
+        skill: None,
+        action: None,
+        resource: None,
+        event_json: serde_json::to_string(&json!({ "reason": reason })).unwrap_or_default(),
+        input_hash: None,
+        output_hash: None,
+        decision_id: None,
+        approval_id: None,
+        created_at: Utc::now(),
+    };
+    let _ = db::insert_audit_event(&state.pool, &audit).await;
+
+    Ok(new_token)
+}
+
+/// Operator-triggered token rotation: the old token's hash is immediately
+/// unusable (the next `/v1/authorize` call with it fails `get_agent_by_token`),
+/// and the new plaintext token is returned exactly once. Always allowed,
+/// regardless of the tenant's `auto_rotate_token_on_leak_enabled` setting —
+/// that flag only gates the *automatic* path below (#1295).
+pub async fn rotate_agent_token(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(agent_id): Path<String>,
+    body: Option<Json<RotateTokenRequest>>,
+) -> impl IntoResponse {
+    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Agent not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to look up agent {}: {:?}", agent_id, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    }
+
+    let reason = body
+        .and_then(|Json(b)| b.reason)
+        .unwrap_or_else(|| "manual_rotation".to_string());
+
+    match rotate_and_audit_agent_token(&state, &tenant_id, &agent_id, &reason).await {
+        Ok(new_token) => (
+            StatusCode::OK,
+            Json(json!({ "agent_id": agent_id, "agent_token": new_token })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to rotate token for agent {}: {:?}", agent_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Request body for `POST /v1/agents/:id/report-leaked-token` (#1295).
+#[derive(Debug, serde::Deserialize)]
+pub struct ReportLeakedTokenRequest {
+    /// Free-text description of how the leak was detected (e.g. "found in
+    /// public GitHub repo via secret-scanning partner alert").
+    pub reason: String,
+}
+
+/// Report that an agent's token may have leaked. If the tenant has
+/// `auto_rotate_token_on_leak_enabled` (the default), the token is rotated
+/// immediately and the new plaintext token is returned in the response —
+/// the caller (a leak-detection integration or operator) is responsible for
+/// delivering it to the agent owner over its own secure channel; AegisAgent
+/// never persists the plaintext or pushes it over a webhook itself, which
+/// would just relocate the secret-handling risk (#1295). If disabled, no
+/// rotation happens — the report is still recorded (audit + SOC event) so
+/// operators have visibility, but the existing token remains valid.
+pub async fn report_leaked_agent_token(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<ReportLeakedTokenRequest>,
+) -> impl IntoResponse {
+    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Agent not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to look up agent {}: {:?}", agent_id, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    }
+
+    let auto_rotate_enabled = match db::get_tenant_by_id(&state.pool, &tenant_id).await {
+        Ok(Some(tenant)) => tenant.auto_rotate_token_on_leak_enabled,
+        Ok(None) => true,
+        Err(e) => {
+            error!("Failed to look up tenant {}: {:?}", tenant_id, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let new_token = if auto_rotate_enabled {
+        let reason = format!("leak_detected: {}", payload.reason);
+        match rotate_and_audit_agent_token(&state, &tenant_id, &agent_id, &reason).await {
+            Ok(token) => Some(token),
+            Err(e) => {
+                error!(
+                    "Failed to auto-rotate token for agent {}: {:?}",
+                    agent_id, e
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        let audit = AuditEventRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.clone(),
+            event_type: "agent_token_leak_detected_no_rotation".to_string(),
+            agent_id: Some(agent_id.clone()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: None,
+            action: None,
+            resource: None,
+            event_json: serde_json::to_string(&json!({ "reason": payload.reason }))
+                .unwrap_or_default(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: None,
+            approval_id: None,
+            created_at: Utc::now(),
+        };
+        let _ = db::insert_audit_event(&state.pool, &audit).await;
+        None
+    };
+
+    // SOC visibility either way (Law 3, out-of-band — never blocks this response).
+    state.events.emit(AseEvent {
+        event_id: Uuid::new_v4().to_string(),
+        occurred_at: Utc::now().to_rfc3339(),
+        tenant_id: tenant_id.clone(),
+        kind: "agent_token_leak_detected".to_string(),
+        agent_id: agent_id.clone(),
+        decision: "allow".to_string(),
+        tool: String::new(),
+        action: String::new(),
+        resource: None,
+        risk_score: 0,
+        reason: payload.reason.clone(),
+        run_id: None,
+        trace_id: None,
+        matched_policies: vec![],
+        redacted_fields: vec![],
+        schema_version: 1,
+    });
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "agent_id": agent_id,
+            "rotated": new_token.is_some(),
+            "agent_token": new_token,
+        })),
+    )
+        .into_response()
+}
+
 async fn set_agent_operational_status(
     state: Arc<AppState>,
     tenant_id: String,
@@ -7095,6 +7317,7 @@ pub async fn create_tenant(
                 plan: payload.plan.clone(),
                 created_at: Utc::now(),
                 auto_respond_enabled: true,
+                auto_rotate_token_on_leak_enabled: true,
             };
             (StatusCode::CREATED, Json(record)).into_response()
         }
@@ -13955,6 +14178,192 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp_after.status(), StatusCode::OK);
+    }
+
+    // ── #1295: Auto-Rotate Leaked Agent Token ───────────────────────────────
+
+    /// `POST /v1/agents/:id/rotate-token` issues a new token that immediately
+    /// works while the old token immediately stops working — no grace period.
+    #[tokio::test]
+    async fn rotate_agent_token_invalidates_old_token_and_issues_new_one() {
+        let (state, tenant_id, old_token) = setup_state("rotate_token_manual").await;
+        let agent_id: String =
+            sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
+                .bind(&tenant_id)
+                .bind(db::hash_token(&old_token))
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+
+        let resp = rotate_agent_token(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent_id.clone()),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let new_token = json["agent_token"].as_str().unwrap().to_string();
+        assert_ne!(new_token, old_token);
+
+        // Old token is rejected.
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp_old = authorize_action(
+            State(state.clone()),
+            agent_headers(&old_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_old.status(), StatusCode::UNAUTHORIZED);
+
+        // New token works.
+        let req2 = mcp_authorize_request("filesystem", "read_file");
+        let resp_new = authorize_action(
+            State(state.clone()),
+            agent_headers(&new_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req2).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_new.status(), StatusCode::OK);
+
+        // Audit event recorded.
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        assert!(events.iter().any(|e| e.event_type == "agent_token_rotated"));
+    }
+
+    #[tokio::test]
+    async fn rotate_agent_token_unknown_agent_returns_404() {
+        let (state, tenant_id, _) = setup_state("rotate_token_404").await;
+
+        let resp = rotate_agent_token(
+            State(state.clone()),
+            TenantId(tenant_id),
+            Path("nonexistent-agent".to_string()),
+            None,
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// `POST /v1/agents/:id/report-leaked-token` rotates by default (tenant's
+    /// `auto_rotate_token_on_leak_enabled` defaults to `true`).
+    #[tokio::test]
+    async fn report_leaked_token_auto_rotates_by_default() {
+        let (state, tenant_id, old_token) = setup_state("leak_report_default").await;
+        let agent_id: String =
+            sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
+                .bind(&tenant_id)
+                .bind(db::hash_token(&old_token))
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+
+        let resp = report_leaked_agent_token(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent_id.clone()),
+            Json(ReportLeakedTokenRequest {
+                reason: "found in public GitHub repo".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["rotated"], true);
+        let new_token = json["agent_token"].as_str().unwrap().to_string();
+        assert_ne!(new_token, old_token);
+
+        // Old token now rejected.
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp_old = authorize_action(
+            State(state.clone()),
+            agent_headers(&old_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_old.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// When a tenant has disabled `auto_rotate_token_on_leak_enabled`, the
+    /// leak report is recorded but the existing token remains valid.
+    #[tokio::test]
+    async fn report_leaked_token_skips_rotation_when_tenant_disabled() {
+        let (state, tenant_id, token) = setup_state("leak_report_disabled").await;
+        let agent_id: String =
+            sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
+                .bind(&tenant_id)
+                .bind(db::hash_token(&token))
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+
+        sqlx::query("UPDATE tenants SET auto_rotate_token_on_leak_enabled = 0 WHERE id = ?")
+            .bind(&tenant_id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let resp = report_leaked_agent_token(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(agent_id.clone()),
+            Json(ReportLeakedTokenRequest {
+                reason: "found in public GitHub repo".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["rotated"], false);
+        assert!(json["agent_token"].is_null());
+
+        // Original token still works.
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp_after = authorize_action(
+            State(state.clone()),
+            agent_headers(&token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp_after.status(), StatusCode::OK);
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|e| e.event_type == "agent_token_leak_detected_no_rotation"));
+    }
+
+    #[tokio::test]
+    async fn report_leaked_token_unknown_agent_returns_404() {
+        let (state, tenant_id, _) = setup_state("leak_report_404").await;
+
+        let resp = report_leaked_agent_token(
+            State(state.clone()),
+            TenantId(tenant_id),
+            Path("nonexistent-agent".to_string()),
+            Json(ReportLeakedTokenRequest {
+                reason: "test".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     // --- #1384: normalize_tool_identifier unit tests ---
