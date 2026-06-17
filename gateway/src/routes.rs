@@ -432,6 +432,12 @@ pub struct AppState {
     /// action is denied. Configured via `AEGIS_GITHUB_APP_TOKEN`. When
     /// `None`, PR comments are silently skipped.
     pub github_pr_commenter: Option<std::sync::Arc<crate::gh_comment::GhPrCommenter>>,
+    /// Optional GitHub Checks API client (#1383). When `Some`, every decision
+    /// on a PR-related GitHub action updates an "Aegis Security Gate" check
+    /// run on the PR's head commit. Configured via `AEGIS_GITHUB_APP_TOKEN`
+    /// (same token as [`Self::github_pr_commenter`]). When `None`, check runs
+    /// are silently skipped.
+    pub github_checks_client: Option<std::sync::Arc<crate::gh_checks::GhChecksClient>>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -3091,6 +3097,31 @@ pub async fn authorize_action(
                             comment_body,
                         );
                     }
+                }
+            }
+        }
+    }
+
+    // #1383: every decision on a PR-related GitHub action updates the Aegis
+    // check run for that PR (create on first call, update thereafter). Like
+    // the #1382 deny-comment block, this is fire-and-forget — it never
+    // blocks the authorize path or changes the decision (Law 3).
+    if let Some(checks_client) = state.github_checks_client.as_ref() {
+        if payload.tool_call.tool == "github" {
+            if let Some(resource) = payload.tool_call.resource.as_deref() {
+                if let Some((repo, pr_number)) = crate::gh_comment::extract_pr_ref(resource) {
+                    crate::gh_checks::spawn_record_decision(
+                        std::sync::Arc::clone(checks_client),
+                        repo,
+                        pr_number,
+                        crate::gh_checks::DecisionInfo {
+                            tool: payload.tool_call.tool.clone(),
+                            action: payload.tool_call.action.clone(),
+                            decision: decision_str.clone(),
+                            reason: reason.clone(),
+                            risk_score,
+                        },
+                    );
                 }
             }
         }
@@ -7967,6 +7998,7 @@ pub mod benchutil {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         Ok((state, tenant_id, agent_token))
@@ -8354,6 +8386,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -8402,6 +8435,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         // First request is allowed through quota
@@ -8459,6 +8493,7 @@ mod tests {
             github_webhook_secret: Some(secret.to_string()),
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         (state, tenant_id, agent_token)
@@ -8498,6 +8533,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: Some(secret.to_string()),
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         (state, tenant_id, agent_token)
@@ -8591,6 +8627,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -8641,6 +8678,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         (state, tenant_id, agent_token)
@@ -18048,6 +18086,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         register_high_risk_action(state.clone()).await;
@@ -18237,6 +18276,7 @@ mod tests {
             github_webhook_secret: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
+            github_checks_client: None,
         });
 
         register_high_risk_action(state.clone()).await;

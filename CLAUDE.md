@@ -29,7 +29,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - `aegis-jcs-1` canonicalizer (`src/canon.ts`), `AegisClient`, `protect()`.
 - `tsc --noEmit` build + `node --test` suite + cross-language corpus CI gate.
 
-**Rust gateway — 499 tests, verified on `main`:**
+**Rust gateway — 516 tests, verified on `main`:**
 - Cross-language `action_hash` corpus test (`canonical_action_matches_shared_corpus`).
 - Gateway-side approval expiry (`get_approval` → `EXPIRED`; `approve_approval` → 409).
 - Receipt-hash parity lock (`receipt_chain_matches_shared_corpus`).
@@ -54,6 +54,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - **Cedar `@decision("quarantine")` annotation** (#1386): Cedar policies can emit `@decision("quarantine")` on any permit rule to immediately quarantine the agent after the call is recorded. `authorize_action` runs `set_agent_status → quarantined` and fires an `agent_quarantined` SOC event (Law 3, out-of-band). Subsequent calls auto-denied via `get_agent_by_token` filter. Canary-endpoint example policy in both `policies.cedar` and `gateway/policies.cedar`. `POST /v1/agents/:id/restore` reactivates quarantined agents. 5 new gateway tests (2 policy, 3 routes).
 - **Action normalization layer** (#1384): `normalize_policy_identifier` added to `policy.rs` applies percent-decode → NFC → trim → lowercase before building Cedar entity UIDs, closing a bypass where `GitHub`/`Merge_Pull_Request` built a UID that didn't match Cedar policies targeting the canonical lowercase form. `normalize_tool_identifier` in `routes.rs` updated to also trim surrounding whitespace. 10 new tests (4 policy unit + 1 policy Cedar integration, 4 routes unit + 1 routes Cedar integration).
 - **`redact` decision type** (#1385): Cedar policies can emit `@decision("redact") @redact_fields("field1,field2")` to allow a tool call but return a `redacted_fields` list; `authorize_action` passes the list through `AuthorizeResponse`; `AseEvent` records it for audit. `protect_tool` decorator (sync + async) strips listed kwargs before executing the tool (sets value to `"[REDACTED]"`). Severity: `quarantine > require_approval > redact > allow`. Example canary policy in both `policies.cedar` files. 4 new gateway tests (2 policy, 2 routes) + 3 Python SDK tests.
+- **GitHub Checks API integration** (`gh_checks.rs`, #1383): every `/v1/authorize` decision on a `github`-tool call whose `resource` parses as a PR ref (`org/repo#42`, via the shared `gh_comment::extract_pr_ref`) updates an "Aegis Security Gate" check run on the PR's head commit — created on first decision, updated thereafter (fire-and-forget, Law 3 out-of-band, never blocks `/v1/authorize`). Tally buckets: `allow`/`redact` → allowed, `require_approval` → pending, `deny`/`quarantine`/unknown → denied (fail-closed). Conclusion: `failure` if any denied, else `action_required` if any pending, else `success`. Summary includes the N-allowed/N-denied/N-pending breakdown; risky actions (non-allowed) surface as check-run annotations (capped at 20) against a synthetic `.aegisagent/decisions` path, since Aegis tool calls aren't tied to a real diff line. Reuses the `AEGIS_GITHUB_APP_TOKEN` installation token from `gh_comment.rs` (#1382); in-memory per-PR tally, resets on gateway restart. 17 new gateway tests (pure tally/conclusion/formatting helpers).
 - Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
 
 **Next:** real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend, Kubernetes/Helm packaging.
@@ -65,7 +66,7 @@ Baseline: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`po
 ```bash
 # Gateway (Rust)
 cargo check  --manifest-path gateway/Cargo.toml
-cargo test   --manifest-path gateway/Cargo.toml        # 499 tests
+cargo test   --manifest-path gateway/Cargo.toml        # 516 tests
 cargo fmt    --manifest-path gateway/Cargo.toml -- --check
 cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
 CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080
