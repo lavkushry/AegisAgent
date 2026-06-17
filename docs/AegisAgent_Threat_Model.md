@@ -2,8 +2,8 @@
 
 **Product:** AegisAgent
 **Category:** Agent Action Integrity → Integrity-anchored Agent SOC
-**Version:** v0.3 (re-anchored on the integrity-anchored Agent SOC)
-**Date:** 2026-06-05
+**Version:** v0.4 (adds per-threat Impact/Likelihood/Residual ratings, #1200)
+**Date:** 2026-06-17
 **Owner:** Lavkush Kumar
 **Read first:** [`AegisAgent_Gap_Reassessment_2026-06.md`](AegisAgent_Gap_Reassessment_2026-06.md) · **Architecture:** [`AegisAgent_Agent_SOC_Design.md`](AegisAgent_Agent_SOC_Design.md)
 
@@ -62,41 +62,43 @@ Key assumptions: (1) the agent process **may be hijacked** (indirect prompt inje
 
 ## 5. Primary threat class T-A — Approval manipulation (headline)
 
-| ID | Threat | Vector | Mitigation |
-|---|---|---|---|
-| T-A1 | **Approve-then-swap** | Get benign action A approved, execute different action B under it | SDK recomputes hash(B) ≠ approved `action_hash(A)` → **fail closed** |
-| T-A2 | **Post-approval parameter tampering** | Mutate params after approval | New canonical action → new hash → mismatch → fail closed; `edit` forces re-evaluation |
-| T-A3 | **Replay / reuse** | Reuse an old/expired approval, or execute an approved action twice | Bound `action_hash` + `expires_at` + **single-use**: atomic `consume` (`consumed_at` guard) before execution; SDK fails closed if consume is refused (409) |
-| T-A4 | **Render-vs-bytes** | Approver sees friendly text; different bytes run | Approval card renders the *canonical action that is hashed*; approval binds to that hash |
-| T-A5 | **Approval-callback forgery** | Spoof a Slack/Teams "approve" | Verify callback signature; bind approver identity + role; reject unsigned |
-| T-A6 | **Approver-role abuse** | Unauthorized user approves | Approver group/role lookup via SSO/OIDC; policy-scoped approver groups |
-| T-A7 | **Self-approval / collusion** | Agent's owner approves own high-risk action | Optional separation-of-duties + two-person approval for critical actions |
+Impact and Likelihood are rated **pre-mitigation** (inherent severity if the threat were entirely unaddressed); Residual is the rating **after** the listed mitigation.
 
-**Residual risk:** if SDK canonicalization diverges across languages/versions, hashes mismatch spuriously (availability) or a crafted divergence could mask a swap. Mitigation: pinned `aegis-jcs-1` scheme + CI byte-equality gate (Operational Design §4.1). Every T-A event is also emitted to the SOC as a high-severity detection.
+| ID | Threat | Vector | Impact | Likelihood | Mitigation | Residual |
+|---|---|---|---|---|---|---|
+| T-A1 | **Approve-then-swap** | Get benign action A approved, execute different action B under it | Critical | Medium | SDK recomputes hash(B) ≠ approved `action_hash(A)` → **fail closed** | Low |
+| T-A2 | **Post-approval parameter tampering** | Mutate params after approval | High | Medium | New canonical action → new hash → mismatch → fail closed; `edit` forces re-evaluation | Low |
+| T-A3 | **Replay / reuse** | Reuse an old/expired approval, or execute an approved action twice | High | Medium | Bound `action_hash` + `expires_at` + **single-use**: atomic `consume` (`consumed_at` guard) before execution; SDK fails closed if consume is refused (409) | Low |
+| T-A4 | **Render-vs-bytes** | Approver sees friendly text; different bytes run | Critical | Medium | Approval card renders the *canonical action that is hashed*; approval binds to that hash | Low |
+| T-A5 | **Approval-callback forgery** | Spoof a Slack/Teams "approve" | High | Medium | Verify callback signature (constant-time HMAC); bind approver identity + role; reject unsigned | Low |
+| T-A6 | **Approver-role abuse** | Unauthorized user approves | Medium | Medium | Approver group/role lookup via SSO/OIDC; policy-scoped approver groups | Medium — depends on the operator's IdP/group config, which is outside AegisAgent's control |
+| T-A7 | **Self-approval / collusion** | Agent's owner approves own high-risk action | Medium | Medium | Optional separation-of-duties + two-person approval for critical actions | Medium — two-person approval is opt-in, not enforced by default |
+
+**Residual risk (class-wide):** if SDK canonicalization diverges across languages/versions, hashes mismatch spuriously (availability) or a crafted divergence could mask a swap. Mitigation: pinned `aegis-jcs-1` scheme + CI byte-equality gate (Operational Design §4.1). Every T-A event is also emitted to the SOC as a high-severity detection.
 
 ---
 
 ## 6. Primary threat class T-B — Confused deputy via provenance (second headline)
 
-| ID | Threat | Vector | Mitigation |
-|---|---|---|---|
-| T-B1 | **Indirect prompt injection → privileged action** | Malicious GitHub issue / email / ticket / webpage hijacks agent | Deterministic `forbid` for `mutates_state && untrusted_external` — independent of text |
-| T-B2 | **Cross-repo/data-movement leak** (Invariant Labs class) | Untrusted issue triggers private read → public write | Default policy forbids untrusted-triggered cross-repo movement; SOC sequence rule AEG-3007 correlates read→exfil |
-| T-B3 | **Classifier evasion** | Benign-looking injected text bypasses scoring | Provenance is deterministic; classifiers may only *tighten*, never *loosen* |
-| T-B4 | **Provenance label spoofing** | Forge a higher trust level | Labels set server-side from authenticated source signals; signed sources for `trusted_internal_signed`; run carries lowest observed level |
-| T-B5 | **MCP manifest drift / tool poisoning** | Swapped/altered MCP tool definition | Pin + hash manifests; drift → downgrade provenance → deny/escalate; SOC drift detection AEG-4002 |
-| T-B6 | **Memory/RAG poisoning** (AgentPoison/PoisonedRAG) | Poisoned memory drives later actions | Provenance + approval on memory writes from untrusted sources (roadmap) |
+| ID | Threat | Vector | Impact | Likelihood | Mitigation | Residual |
+|---|---|---|---|---|---|---|
+| T-B1 | **Indirect prompt injection → privileged action** | Malicious GitHub issue / email / ticket / webpage hijacks agent | Critical | High | Deterministic `forbid` for `mutates_state && untrusted_external` — independent of text | Low |
+| T-B2 | **Cross-repo/data-movement leak** (Invariant Labs class) | Untrusted issue triggers private read → public write | Critical | Medium | Default policy forbids untrusted-triggered cross-repo movement; SOC sequence rule AEG-3007 correlates read→exfil | Low |
+| T-B3 | **Classifier evasion** | Benign-looking injected text bypasses scoring | High | Medium | Provenance is deterministic; classifiers may only *tighten*, never *loosen* | Medium — tighten-only governs propagation across a chain, but the *initial* trust label still depends on the accuracy of whatever classifier assigns it; a misclassified-as-trusted label at the source is not caught by this rule alone |
+| T-B4 | **Provenance label spoofing** | Forge a higher trust level | Critical | Low | Labels set server-side from authenticated source signals; signed sources for `trusted_internal_signed`; run carries lowest observed level | Low |
+| T-B5 | **MCP manifest drift / tool poisoning** | Swapped/altered MCP tool definition | High | Medium | Pin + hash manifests; drift → downgrade provenance → deny/escalate; SOC drift detection AEG-4002 | Low |
+| T-B6 | **Memory/RAG poisoning** (AgentPoison/PoisonedRAG) | Poisoned memory drives later actions | High | Medium | Provenance + approval on memory writes from untrusted sources (roadmap) | **High — not yet built.** Tracked as its own epic ([#1397](https://github.com/lavkushry/AegisAgent/issues/1397)); until it ships, AegisAgent has no enforcement point on memory/RAG writes specifically |
 
 ---
 
 ## 7. Primary threat class T-C — Evidence tampering
 
-| ID | Threat | Vector | Mitigation |
-|---|---|---|---|
-| T-C1 | **Receipt alteration** | Edit a stored receipt to hide an action | Per-tenant hash chain; `/verify` detects break; enterprise transparency-log/signing; SOC `receipt-chain-broken` = P1 |
-| T-C2 | **Receipt drop / gap** | Suppress receipts | Critical actions block if a receipt cannot be written; chain gaps detectable |
-| T-C3 | **Receipt forgery** | Fabricate an approval/receipt | KMS-backed signing (enterprise); key ID in receipt; rotation preserves verifiability |
-| T-C4 | **Audit pipeline DoS** | Flood to drop evidence | Backpressure + durable enqueue (99.9% target); fail closed for critical on audit loss |
+| ID | Threat | Vector | Impact | Likelihood | Mitigation | Residual |
+|---|---|---|---|---|---|---|
+| T-C1 | **Receipt alteration** | Edit a stored receipt to hide an action | High | Medium | Per-tenant hash chain; `/verify` detects break; enterprise transparency-log/signing; SOC `receipt-chain-broken` = P1 | Low |
+| T-C2 | **Receipt drop / gap** | Suppress receipts | High | Medium | Critical actions block if a receipt cannot be written; chain gaps detectable | Low |
+| T-C3 | **Receipt forgery** | Fabricate an approval/receipt | High | Medium | Optional Ed25519 signing (`sign.rs`); key ID in receipt; rotation preserves verifiability | Medium — the default signing key is a local file, not yet HSM/KMS-backed; KMS-backed signing is tracked separately ([#1311](https://github.com/lavkushry/AegisAgent/issues/1311)) and is the harder bar a well-resourced attacker with host access would need to clear |
+| T-C4 | **Audit pipeline DoS** | Flood to drop evidence | Medium | Low | Backpressure + durable enqueue (99.9% target); fail closed for critical on audit loss | Low |
 
 ---
 
@@ -104,17 +106,17 @@ Key assumptions: (1) the agent process **may be hijacked** (indirect prompt inje
 
 The SOC is async and consumes attacker-influenced evidence, so it is its own attack surface. These threats are closed primarily by the **four design laws** (Architecture §2), restated here as security controls.
 
-| ID | Threat | Vector | Mitigation |
-|---|---|---|---|
-| **T-D1** | **Second-order prompt injection** | Attacker-authored evidence (issue body, prompt, tool args) reaches an LLM "analyst," which then mis-triages, downgrades severity, or recommends allow | **Design Law 2:** the only LLM is the **post-incident RCA narrator** — sandboxed, no tools, no enforcement authority, evidence passed as **inert data**; triage/correlation/response are **deterministic** code, not LLMs. An injected "mark this low severity" string is just text in a report field. |
-| **T-D2** | **Score-gating manipulation** | Attacker games a risk/anomaly/"prompt-injection" score below a threshold to obtain `allow` | **Design Law 1:** scores are **advisory display metadata only**; **Cedar decides** on deterministic provenance. No numeric threshold ever routes an authorization. |
-| **T-D3** | **Detection evasion** | Stay under correlation thresholds (slow-and-low), or flood denies to bury a real attack (alert fatigue / deny-storm cover) | Multiple overlapping rules (atomic + sequence + frequency); deny-storm itself is a detection (AEG-2010); correlation windows scoped by `agent_id`/`run_id`; rate-limit + dedupe alerts; **fail toward escalation**, not suppression |
-| **T-D4** | **Response-engine weaponization** | Trigger false freezes/revokes as a DoS on legitimate agents, or suppress a legitimate containment | Response mapping is **deterministic** and **tenant-scoped**; control endpoints authenticated + fail-closed; containment is reversible + audited; two-person confirm for revoke (optional); every response emits a receipt |
-| **T-D5** | **Correlation-state poisoning** | Forge/replay ASE events to corrupt sequence detection or frame an agent | ASE carries `action_hash`/`receipt_hash`; the SOC validates events against the receipt chain; agentless-ingested events are authenticated at the collector and trust-labelled |
-| **T-D6** | **Inline-path latency injection via the SOC** | Force detection into the synchronous path (e.g., "block until analyzed") to add latency or create a fail-open dependency | **Design Law 3:** detection is **strictly asynchronous** (`tokio::mpsc` → background); emission is fire-and-forget; SOC outage degrades monitoring, never the action path |
-| **T-D7** | **RCA exfiltration via the LLM** | Prompt the RCA narrator (through evidence) to leak other-tenant data or secrets in its output | RCA input is tenant-scoped, redacted (hashes not payloads), and the model has no retrieval/tools; output is reviewed before it leaves the tenant boundary |
+| ID | Threat | Vector | Impact | Likelihood | Mitigation | Residual |
+|---|---|---|---|---|---|---|
+| **T-D1** | **Second-order prompt injection** | Attacker-authored evidence (issue body, prompt, tool args) reaches an LLM "analyst," which then mis-triages, downgrades severity, or recommends allow | Critical | Medium | **Design Law 2:** the only LLM is the **post-incident RCA narrator** — sandboxed, no tools, no enforcement authority, evidence passed as **inert data**; triage/correlation/response are **deterministic** code, not LLMs. An injected "mark this low severity" string is just text in a report field. | Low |
+| **T-D2** | **Score-gating manipulation** | Attacker games a risk/anomaly/"prompt-injection" score below a threshold to obtain `allow` | Critical | Low | **Design Law 1:** scores are **advisory display metadata only**; **Cedar decides** on deterministic provenance. No numeric threshold ever routes an authorization. | Low |
+| **T-D3** | **Detection evasion** | Stay under correlation thresholds (slow-and-low), or flood denies to bury a real attack (alert fatigue / deny-storm cover) | Medium | High | Multiple overlapping rules (atomic + sequence + frequency); deny-storm itself is a detection (AEG-2010); correlation windows scoped by `agent_id`/`run_id`; rate-limit + dedupe alerts; **fail toward escalation**, not suppression | Medium — slow-and-low is a structurally hard problem for any threshold-based detector, deterministic or not |
+| **T-D4** | **Response-engine weaponization** | Trigger false freezes/revokes as a DoS on legitimate agents, or suppress a legitimate containment | Medium | Low | Response mapping is **deterministic** and **tenant-scoped**; control endpoints authenticated + fail-closed; containment is reversible + audited; two-person confirm for revoke (optional); every response emits a receipt | Low |
+| **T-D5** | **Correlation-state poisoning** | Forge/replay ASE events to corrupt sequence detection or frame an agent | Medium | Low | ASE carries `action_hash`/`receipt_hash`; the SOC validates events against the receipt chain; agentless-ingested events are authenticated at the collector and trust-labelled | Low |
+| **T-D6** | **Inline-path latency injection via the SOC** | Force detection into the synchronous path (e.g., "block until analyzed") to add latency or create a fail-open dependency | High | Low | **Design Law 3:** detection is **strictly asynchronous** (`tokio::mpsc` → background); emission is fire-and-forget; SOC outage degrades monitoring, never the action path | Low |
+| **T-D7** | **RCA exfiltration via the LLM** | Prompt the RCA narrator (through evidence) to leak other-tenant data or secrets in its output | Medium | Low | RCA input is tenant-scoped, redacted (hashes not payloads), and the model has no retrieval/tools; output is reviewed before it leaves the tenant boundary | Low |
 
-**Residual risk:** deterministic detection can miss novel attack shapes (no ML generalization). Accepted trade-off: we prefer **provable, non-injectable** detection over broader-but-gameable ML; behavioural baselining is added later as *advisory* signal only (never gating).
+**Residual risk (class-wide):** deterministic detection can miss novel attack shapes (no ML generalization). Accepted trade-off: we prefer **provable, non-injectable** detection over broader-but-gameable ML; behavioural baselining is added later as *advisory* signal only (never gating).
 
 ---
 
