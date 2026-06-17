@@ -630,6 +630,9 @@ async fn idempotent_replay_response(
             root_trust_level: record
                 .root_trust_level
                 .unwrap_or_else(|| "unknown".to_string()),
+            // Idempotency replays only ever read a previously-persisted real
+            // decision — dry-run requests bypass idempotency entirely (#1281).
+            dry_run: false,
         }),
     )
         .into_response()
@@ -1278,15 +1281,8 @@ async fn write_decision_and_audit(
     matched_policies: &[String],
     audit_event_type: &str,
     started_at: std::time::Instant,
+    dry_run: bool,
 ) -> Result<i32, sqlx::Error> {
-    // OBS-001 (#1154): record the inline /v1/authorize latency on the
-    // Prometheus histogram. Recorded here (once per decision write) rather
-    // than as middleware, so it shares the exact `started_at` already used
-    // for `decision_record.latency_ms`.
-    metrics.authorize_duration.observe(started_at.elapsed());
-    // OBS-002 (#1155): per-outcome decision counter.
-    metrics.inc_decision(decision);
-
     // #1289: advisory composite risk score (Law 1 — never gates `decision`,
     // computed only for display/audit metadata). Per-tenant weight overrides
     // fall back to env-configured defaults inside `db::get_risk_weights`.
@@ -1308,6 +1304,21 @@ async fn write_decision_and_audit(
             &weights,
         )
     };
+
+    // #1281: dry-run evaluates the decision (above) but persists nothing —
+    // no decision/audit row, no risk-score sample, no metrics. Mirrors the
+    // "what would happen" contract without touching the audit trail.
+    if dry_run {
+        return Ok(composite_risk_score);
+    }
+
+    // OBS-001 (#1154): record the inline /v1/authorize latency on the
+    // Prometheus histogram. Recorded here (once per decision write) rather
+    // than as middleware, so it shares the exact `started_at` already used
+    // for `decision_record.latency_ms`.
+    metrics.authorize_duration.observe(started_at.elapsed());
+    // OBS-002 (#1155): per-outcome decision counter.
+    metrics.inc_decision(decision);
 
     let decision_record = DecisionRecord {
         id: decision_id.to_string(),
@@ -2220,6 +2231,10 @@ pub async fn authorize_action(
         }
     };
 
+    // #1281: dry-run / simulation mode — evaluate but persist nothing. Read
+    // once up front so every branch below can gate its side effects on it.
+    let dry_run = payload.dry_run.unwrap_or(false);
+
     // #1293: trust propagation across agent chains — the effective (tighten-only)
     // trust level for this hop, combining any inherited `trace.root_trust_level`
     // with this hop's own declared `context.source_trust`. Computed once up front
@@ -2442,27 +2457,32 @@ pub async fn authorize_action(
 
     // Idempotency (#0072): a repeat call with the same request_id returns the
     // original decision unchanged instead of re-evaluating Cedar and writing
-    // duplicate audit events / approvals / receipts.
-    if let Some(request_id) = payload.request_id.as_deref().filter(|r| !r.is_empty()) {
-        match db::get_decision_by_request_id(&state.pool, &tenant_id, &agent_id, request_id).await {
-            Ok(Some(record)) => {
-                return idempotent_replay_response(&state, &tenant_id, record).await;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                error!("Idempotency lookup failed: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+    // duplicate audit events / approvals / receipts. Dry-run requests never
+    // touch idempotency state (#1281) — skip both the lookup and any replay.
+    if !dry_run {
+        if let Some(request_id) = payload.request_id.as_deref().filter(|r| !r.is_empty()) {
+            match db::get_decision_by_request_id(&state.pool, &tenant_id, &agent_id, request_id)
+                .await
+            {
+                Ok(Some(record)) => {
+                    return idempotent_replay_response(&state, &tenant_id, record).await;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!("Idempotency lookup failed: {:?}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "Database error"})),
+                    )
+                        .into_response();
+                }
             }
         }
-    }
 
-    // Heartbeat (#0080): record this contact as the agent's most recent activity.
-    // Best-effort — never fails the request.
-    let _ = db::touch_agent_last_seen(&state.pool, &tenant_id, &agent_id).await;
+        // Heartbeat (#0080): record this contact as the agent's most recent activity.
+        // Best-effort — never fails the request. Skipped for dry-run (#1281).
+        let _ = db::touch_agent_last_seen(&state.pool, &tenant_id, &agent_id).await;
+    } // !dry_run (idempotency + heartbeat)
 
     // Check Rate Limiting (TASK-0012)
     if !state.rate_limiter.check_rate_limit(&tenant_id) {
@@ -2514,6 +2534,7 @@ pub async fn authorize_action(
             &matched_policies,
             audit_event_type,
             started_at,
+            dry_run,
         )
         .await
         {
@@ -2541,6 +2562,7 @@ pub async fn authorize_action(
                 approval: None,
                 redacted_fields: vec![],
                 root_trust_level: root_trust_level.clone(),
+                dry_run,
             }),
         )
             .into_response();
@@ -2627,6 +2649,7 @@ pub async fn authorize_action(
                     &matched_policies,
                     "mcp_tool_called",
                     started_at,
+                    dry_run,
                 )
                 .await
                 {
@@ -2654,6 +2677,7 @@ pub async fn authorize_action(
                         approval: None,
                         redacted_fields: vec![],
                         root_trust_level: root_trust_level.clone(),
+                        dry_run,
                     }),
                 )
                     .into_response();
@@ -2699,6 +2723,7 @@ pub async fn authorize_action(
                         &matched_policies,
                         "mcp_tool_called",
                         started_at,
+                        dry_run,
                     )
                     .await
                     {
@@ -2726,6 +2751,7 @@ pub async fn authorize_action(
                             approval: None,
                             redacted_fields: vec![],
                             root_trust_level: root_trust_level.clone(),
+                            dry_run,
                         }),
                     )
                         .into_response();
@@ -2756,6 +2782,7 @@ pub async fn authorize_action(
                     &matched_policies,
                     "mcp_tool_called",
                     started_at,
+                    dry_run,
                 )
                 .await
                 {
@@ -2783,6 +2810,7 @@ pub async fn authorize_action(
                         approval: None,
                         redacted_fields: vec![],
                         root_trust_level: root_trust_level.clone(),
+                        dry_run,
                     }),
                 )
                     .into_response();
@@ -2878,8 +2906,9 @@ pub async fn authorize_action(
     // already full, audit observability for this decision is about to be
     // dropped. For high-risk/mutating actions that is itself the
     // "audit unavailable" condition — fail closed before attempting the DB
-    // write at all.
-    if is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state)
+    // write at all. Dry-run never writes, so this gate doesn't apply (#1281).
+    if !dry_run
+        && is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state)
         && !state.events.has_capacity()
     {
         return (
@@ -2895,6 +2924,7 @@ pub async fn authorize_action(
                 approval: None,
                 redacted_fields: vec![],
                 root_trust_level: root_trust_level.clone(),
+                dry_run,
             }),
         )
             .into_response();
@@ -2915,6 +2945,7 @@ pub async fn authorize_action(
         &matched_policies,
         audit_event_type,
         started_at,
+        dry_run,
     )
     .await
     {
@@ -2947,6 +2978,7 @@ pub async fn authorize_action(
                         approval: None,
                         redacted_fields: vec![],
                         root_trust_level: root_trust_level.clone(),
+                        dry_run,
                     }),
                 )
                     .into_response();
@@ -2972,6 +3004,7 @@ pub async fn authorize_action(
                     approval: None,
                     redacted_fields: vec![],
                     root_trust_level: root_trust_level.clone(),
+                    dry_run,
                 }),
             )
                 .into_response();
@@ -2979,22 +3012,26 @@ pub async fn authorize_action(
     };
 
     // Emit a verifiable, hash-chained receipt for this decision (non-fatal).
-    emit_action_receipt(
-        &state.pool,
-        &tenant_id,
-        &agent_id,
-        &payload,
-        decision_id,
-        &decision_str,
-    )
-    .await;
+    // Skipped for dry-run (#1281) — no decision was persisted to chain from.
+    if !dry_run {
+        emit_action_receipt(
+            &state.pool,
+            &tenant_id,
+            &agent_id,
+            &payload,
+            decision_id,
+            &decision_str,
+        )
+        .await;
+    }
 
     // Cedar @decision("quarantine"): quarantine the agent after the decision has
     // been recorded so the triggering action is auditable. Subsequent authorize
     // calls from this agent are auto-denied because `get_agent_by_token` filters
     // `status != 'quarantined'` (fail-closed). Best-effort: a DB error is logged
-    // but never changes the returned decision.
-    if decision_str == "quarantine" {
+    // but never changes the returned decision. Dry-run must never actually
+    // quarantine the agent for a hypothetical decision (#1281).
+    if !dry_run && decision_str == "quarantine" {
         match db::set_agent_status(&state.pool, &tenant_id, &agent_id, "quarantined").await {
             Ok(_) => {
                 info!(
@@ -3033,7 +3070,10 @@ pub async fn authorize_action(
 
     let mut approval_info = None;
 
-    if decision_str == "require_approval" {
+    // No real approval is created for a dry-run (#1281) — `decision ==
+    // "require_approval"` already tells the caller what would happen, and a
+    // fabricated approval_id would be unusable (nothing to approve).
+    if !dry_run && decision_str == "require_approval" {
         let approval_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(state.approval_ttl_secs);
         let original_call_hash = hash_tool_call(&payload.tool_call);
@@ -3111,8 +3151,9 @@ pub async fn authorize_action(
     // #1382: when a PR-related GitHub action is denied and the PR commenter is
     // configured, spawn a background task to post an explanatory comment. This
     // is fire-and-forget — it never blocks the authorize path or changes the
-    // decision (Law 3: SOC/notification work is always out-of-band).
-    if decision_str == "deny" {
+    // decision (Law 3: SOC/notification work is always out-of-band). Never
+    // post a real PR comment for a hypothetical dry-run decision (#1281).
+    if !dry_run && decision_str == "deny" {
         if let Some(commenter) = state.github_pr_commenter.as_ref() {
             if payload.tool_call.tool == "github" {
                 if let Some(resource) = payload.tool_call.resource.as_deref() {
@@ -3140,27 +3181,30 @@ pub async fn authorize_action(
     // #1383: every decision on a PR-related GitHub action updates the Aegis
     // check run for that PR (create on first call, update thereafter). Like
     // the #1382 deny-comment block, this is fire-and-forget — it never
-    // blocks the authorize path or changes the decision (Law 3).
-    if let Some(checks_client) = state.github_checks_client.as_ref() {
-        if payload.tool_call.tool == "github" {
-            if let Some(resource) = payload.tool_call.resource.as_deref() {
-                if let Some((repo, pr_number)) = crate::gh_comment::extract_pr_ref(resource) {
-                    crate::gh_checks::spawn_record_decision(
-                        std::sync::Arc::clone(checks_client),
-                        repo,
-                        pr_number,
-                        crate::gh_checks::DecisionInfo {
-                            tool: payload.tool_call.tool.clone(),
-                            action: payload.tool_call.action.clone(),
-                            decision: decision_str.clone(),
-                            reason: reason.clone(),
-                            risk_score,
-                        },
-                    );
+    // blocks the authorize path or changes the decision (Law 3). Never touch
+    // a real PR check run for a hypothetical dry-run decision (#1281).
+    if !dry_run {
+        if let Some(checks_client) = state.github_checks_client.as_ref() {
+            if payload.tool_call.tool == "github" {
+                if let Some(resource) = payload.tool_call.resource.as_deref() {
+                    if let Some((repo, pr_number)) = crate::gh_comment::extract_pr_ref(resource) {
+                        crate::gh_checks::spawn_record_decision(
+                            std::sync::Arc::clone(checks_client),
+                            repo,
+                            pr_number,
+                            crate::gh_checks::DecisionInfo {
+                                tool: payload.tool_call.tool.clone(),
+                                action: payload.tool_call.action.clone(),
+                                decision: decision_str.clone(),
+                                reason: reason.clone(),
+                                risk_score,
+                            },
+                        );
+                    }
                 }
             }
         }
-    }
+    } // !dry_run (GitHub checks update)
 
     // #1385: if the decision changed away from "redact" via any route-layer override,
     // clear the field list so callers never receive stale redact metadata.
@@ -3181,6 +3225,7 @@ pub async fn authorize_action(
             approval: approval_info,
             redacted_fields,
             root_trust_level,
+            dry_run,
         }),
     )
         .into_response()
@@ -8147,6 +8192,7 @@ pub mod benchutil {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            dry_run: None,
             agent: AuthorizeAgentContext {
                 id: "bench-agent".to_string(),
                 environment: "production".to_string(),
@@ -8738,6 +8784,7 @@ mod tests {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            dry_run: None,
             nonce: None,
             timestamp: None,
             agent: AuthorizeAgentContext {
@@ -16472,6 +16519,7 @@ mod tests {
         let auth_payload = AuthorizeRequest {
             request_id: None,
             callback: None,
+            dry_run: None,
             nonce: None,
             timestamp: None,
             agent: AuthorizeAgentContext {
@@ -16532,6 +16580,7 @@ mod tests {
         let auth_payload = AuthorizeRequest {
             request_id: None,
             callback: None,
+            dry_run: None,
             nonce: None,
             timestamp: None,
             agent: AuthorizeAgentContext {
@@ -18043,6 +18092,7 @@ mod tests {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            dry_run: None,
             nonce: None,
             timestamp: None,
             agent: AuthorizeAgentContext {
@@ -18096,6 +18146,7 @@ mod tests {
         AuthorizeRequest {
             request_id: None,
             callback: None,
+            dry_run: None,
             nonce: None,
             timestamp: None,
             agent: AuthorizeAgentContext {
@@ -19147,6 +19198,121 @@ mod tests {
 
         assert_eq!(first.decision, second.decision);
         assert_eq!(first.composite_risk_score, second.composite_risk_score);
+    }
+
+    // ── #1281: Policy Dry-Run / Simulation Mode ─────────────────────────────
+
+    /// `AuthorizeRequest.dry_run = Some(true)` evaluates the decision exactly
+    /// like a normal call but persists nothing: no `decisions` row, no
+    /// `audit_events` row. The response still reports the would-be decision
+    /// and is flagged `dry_run: true`.
+    #[tokio::test]
+    async fn authorize_dry_run_allow_persists_nothing() {
+        let (state, tenant_id, agent_token) = setup_state("dry_run_allow").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.context.source_trust = "trusted_internal_signed".to_string();
+        request.dry_run = Some(true);
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "allow");
+        assert!(response.dry_run);
+
+        let decisions = db::list_decisions(&state.pool, &tenant_id, 100, 0, None, None)
+            .await
+            .unwrap();
+        assert!(
+            decisions.is_empty(),
+            "dry-run must not write a decisions row"
+        );
+        let audit_events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        assert!(
+            audit_events.is_empty(),
+            "dry-run must not write an audit_events row"
+        );
+    }
+
+    /// A dry-run that would require approval reports `decision ==
+    /// "require_approval"` but creates no real `approvals` row — there is
+    /// nothing for an approver to act on, since nothing happened.
+    #[tokio::test]
+    async fn authorize_dry_run_require_approval_creates_no_approval() {
+        let (state, tenant_id, agent_token) = setup_state("dry_run_approval").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "semi_trusted_customer".to_string();
+        request.dry_run = Some(true);
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "require_approval");
+        assert!(response.dry_run);
+        assert!(
+            response.approval.is_none(),
+            "dry-run must not fabricate a real approval"
+        );
+
+        let pending = db::list_pending_approvals(&state.pool, &tenant_id, 100, 0)
+            .await
+            .unwrap();
+        assert!(
+            pending.is_empty(),
+            "dry-run must not create an approvals row"
+        );
+    }
+
+    /// A dry-run that would trigger a Cedar `@decision("quarantine")` rule
+    /// must NOT actually quarantine the agent — only a persisted decision
+    /// should be able to change agent state.
+    #[tokio::test]
+    async fn authorize_dry_run_quarantine_does_not_quarantine_agent() {
+        let (state, tenant_id, agent_token) = setup_state("dry_run_quarantine").await;
+
+        let mut request = mcp_authorize_request("quarantine_canary", "trigger");
+        request.dry_run = Some(true);
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "quarantine");
+        assert!(response.dry_run);
+
+        let agent_id: String =
+            sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
+                .bind(&tenant_id)
+                .bind(db::hash_token(&agent_token))
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        let agent_record = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            agent_record.status, "active",
+            "dry-run must not actually quarantine the agent"
+        );
+    }
+
+    /// Omitting `dry_run` (the default) persists exactly as before #1281 —
+    /// a regression guard against the new field changing default behavior.
+    #[tokio::test]
+    async fn authorize_dry_run_unset_persists_normally() {
+        let (state, tenant_id, agent_token) = setup_state("dry_run_unset").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.context.source_trust = "trusted_internal_signed".to_string();
+        assert!(request.dry_run.is_none());
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "allow");
+        assert!(!response.dry_run);
+
+        let decisions = db::list_decisions(&state.pool, &tenant_id, 100, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(decisions.len(), 1);
     }
 
     /// #1289: `GET /v1/tenants/risk-weights` returns the built-in defaults

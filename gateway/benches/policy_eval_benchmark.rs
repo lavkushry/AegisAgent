@@ -91,9 +91,12 @@ fn allow_request() -> AuthorizeRequest {
         trace: Some(AuthorizeTraceContext {
             run_id: "run_bench".to_string(),
             trace_id: "trace_bench".to_string(),
+            parent_run_id: None,
+            root_trust_level: None,
         }),
         nonce: None,
         timestamp: None,
+        dry_run: None,
     }
 }
 
