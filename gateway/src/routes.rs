@@ -627,6 +627,9 @@ async fn idempotent_replay_response(
             matched_policies,
             approval,
             redacted_fields: vec![],
+            root_trust_level: record
+                .root_trust_level
+                .unwrap_or_else(|| "unknown".to_string()),
         }),
     )
         .into_response()
@@ -1324,6 +1327,16 @@ async fn write_decision_and_audit(
         request_id: payload.request_id.clone(),
         latency_ms: Some(started_at.elapsed().as_millis() as i64),
         composite_risk_score: Some(composite_risk_score),
+        // #1293: effective (tighten-only) trust level + upstream run_id, for
+        // multi-agent chain reconstruction and audit visibility.
+        root_trust_level: Some(crate::trust_chain::propagate(
+            payload
+                .trace
+                .as_ref()
+                .and_then(|t| t.root_trust_level.as_deref()),
+            &payload.context.source_trust,
+        )),
+        parent_run_id: payload.trace.as_ref().and_then(|t| t.parent_run_id.clone()),
         created_at: Utc::now(),
     };
 
@@ -2207,6 +2220,21 @@ pub async fn authorize_action(
         }
     };
 
+    // #1293: trust propagation across agent chains — the effective (tighten-only)
+    // trust level for this hop, combining any inherited `trace.root_trust_level`
+    // with this hop's own declared `context.source_trust`. Computed once up front
+    // so every response path (including early-return denies before Cedar
+    // evaluation) reports the same value. `policy::PolicyEngine::authorize`
+    // independently derives the identical value (pure function of the same
+    // inputs) for Cedar's `context.trust_level`/`context.root_trust_level`.
+    let root_trust_level = crate::trust_chain::propagate(
+        payload
+            .trace
+            .as_ref()
+            .and_then(|t| t.root_trust_level.as_deref()),
+        &payload.context.source_trust,
+    );
+
     // Resolve agent from Bearer agent_token
     let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
         Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
@@ -2512,6 +2540,7 @@ pub async fn authorize_action(
                 matched_policies,
                 approval: None,
                 redacted_fields: vec![],
+                root_trust_level: root_trust_level.clone(),
             }),
         )
             .into_response();
@@ -2624,6 +2653,7 @@ pub async fn authorize_action(
                         matched_policies,
                         approval: None,
                         redacted_fields: vec![],
+                        root_trust_level: root_trust_level.clone(),
                     }),
                 )
                     .into_response();
@@ -2695,6 +2725,7 @@ pub async fn authorize_action(
                             matched_policies,
                             approval: None,
                             redacted_fields: vec![],
+                            root_trust_level: root_trust_level.clone(),
                         }),
                     )
                         .into_response();
@@ -2751,6 +2782,7 @@ pub async fn authorize_action(
                         matched_policies,
                         approval: None,
                         redacted_fields: vec![],
+                        root_trust_level: root_trust_level.clone(),
                     }),
                 )
                     .into_response();
@@ -2862,6 +2894,7 @@ pub async fn authorize_action(
                 matched_policies: vec!["audit_writer_unavailable".to_string()],
                 approval: None,
                 redacted_fields: vec![],
+                root_trust_level: root_trust_level.clone(),
             }),
         )
             .into_response();
@@ -2913,6 +2946,7 @@ pub async fn authorize_action(
                         matched_policies: vec!["audit_writer_unavailable".to_string()],
                         approval: None,
                         redacted_fields: vec![],
+                        root_trust_level: root_trust_level.clone(),
                     }),
                 )
                     .into_response();
@@ -2937,6 +2971,7 @@ pub async fn authorize_action(
                     matched_policies,
                     approval: None,
                     redacted_fields: vec![],
+                    root_trust_level: root_trust_level.clone(),
                 }),
             )
                 .into_response();
@@ -3145,6 +3180,7 @@ pub async fn authorize_action(
             matched_policies,
             approval: approval_info,
             redacted_fields,
+            root_trust_level,
         }),
     )
         .into_response()
@@ -8077,6 +8113,8 @@ pub mod benchutil {
                 request_id: None,
                 latency_ms: Some(1),
                 composite_risk_score: Some(1),
+                root_trust_level: None,
+                parent_run_id: None,
                 created_at: Utc::now(),
             };
             db::insert_decision(pool, &record).await?;
@@ -8128,6 +8166,8 @@ pub mod benchutil {
             trace: Some(AuthorizeTraceContext {
                 run_id: "run_bench".to_string(),
                 trace_id: "trace_bench".to_string(),
+                parent_run_id: None,
+                root_trust_level: None,
             }),
             nonce: None,
             timestamp: None,
@@ -8719,6 +8759,8 @@ mod tests {
             trace: Some(AuthorizeTraceContext {
                 run_id: "run_routes".to_string(),
                 trace_id: "trace_routes".to_string(),
+                parent_run_id: None,
+                root_trust_level: None,
             }),
         }
     }
@@ -10351,6 +10393,96 @@ mod tests {
         assert_eq!(scores.len(), 1);
         assert_eq!(scores[0].decision_id, decision.id);
         assert_eq!(scores[0].score, 10);
+    }
+
+    /// #1293: end-to-end 3-hop trust propagation through `/v1/authorize`.
+    /// A (untrusted_external, no root) -> B (declares trusted_internal_signed
+    /// but inherits A's effective trust as root_trust_level) -> C (declares
+    /// semi_trusted_customer but inherits B's effective trust). Every hop's
+    /// `root_trust_level` in the response must reflect the most restrictive
+    /// trust seen anywhere in the chain so far, and a mutating action at any
+    /// hop must be denied because untrusted_external never loosens.
+    #[tokio::test]
+    async fn authorize_three_hop_chain_propagates_most_restrictive_trust() {
+        let (state, tenant_id, agent_token) = setup_state("trust_chain_three_hop").await;
+
+        // Hop A: chain's first call, no inherited root.
+        let mut request_a = mcp_authorize_request("filesystem", "read_file");
+        request_a.tool_call.mutates_state = true;
+        request_a.context.source_trust = "untrusted_external".to_string();
+        request_a.trace = Some(AuthorizeTraceContext {
+            run_id: "run_a".to_string(),
+            trace_id: "trace_a".to_string(),
+            parent_run_id: None,
+            root_trust_level: None,
+        });
+        let response_a = call_authorize(state.clone(), &tenant_id, &agent_token, request_a).await;
+        assert_eq!(response_a.decision, "deny");
+        assert_eq!(response_a.root_trust_level, "untrusted_external");
+
+        // Hop B: inherits A's effective root_trust_level, declares its own
+        // trigger as trusted_internal_signed — must still be tightened to
+        // untrusted_external and denied.
+        let mut request_b = mcp_authorize_request("filesystem", "read_file");
+        request_b.tool_call.mutates_state = true;
+        request_b.context.source_trust = "trusted_internal_signed".to_string();
+        request_b.trace = Some(AuthorizeTraceContext {
+            run_id: "run_b".to_string(),
+            trace_id: "trace_b".to_string(),
+            parent_run_id: Some("run_a".to_string()),
+            root_trust_level: Some(response_a.root_trust_level.clone()),
+        });
+        let response_b = call_authorize(state.clone(), &tenant_id, &agent_token, request_b).await;
+        assert_eq!(response_b.decision, "deny");
+        assert_eq!(response_b.root_trust_level, "untrusted_external");
+
+        // Hop C: inherits B's effective root_trust_level, declares
+        // semi_trusted_customer — untrusted_external is still more
+        // restrictive, so C inherits it too.
+        let mut request_c = mcp_authorize_request("filesystem", "read_file");
+        request_c.tool_call.mutates_state = true;
+        request_c.context.source_trust = "semi_trusted_customer".to_string();
+        request_c.trace = Some(AuthorizeTraceContext {
+            run_id: "run_c".to_string(),
+            trace_id: "trace_c".to_string(),
+            parent_run_id: Some("run_b".to_string()),
+            root_trust_level: Some(response_b.root_trust_level.clone()),
+        });
+        let response_c = call_authorize(state.clone(), &tenant_id, &agent_token, request_c).await;
+        assert_eq!(response_c.decision, "deny");
+        assert_eq!(response_c.root_trust_level, "untrusted_external");
+    }
+
+    /// #1293: the decision record persisted to the `decisions` table captures
+    /// `root_trust_level` and `parent_run_id` for audit/evidence-graph
+    /// reconstruction of multi-agent chains.
+    #[tokio::test]
+    async fn authorize_persists_root_trust_level_and_parent_run_id_on_decision() {
+        let (state, tenant_id, agent_token) = setup_state("trust_chain_persisted").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+        request.trace = Some(AuthorizeTraceContext {
+            run_id: "run_child".to_string(),
+            trace_id: "trace_child".to_string(),
+            parent_run_id: Some("run_parent".to_string()),
+            root_trust_level: Some("semi_trusted_customer".to_string()),
+        });
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.root_trust_level, "semi_trusted_customer");
+
+        let record =
+            db::get_decision_by_id(&state.pool, &tenant_id, &response.decision_id.to_string())
+                .await
+                .unwrap()
+                .expect("decision row must exist");
+        assert_eq!(
+            record.root_trust_level,
+            Some("semi_trusted_customer".to_string())
+        );
+        assert_eq!(record.parent_run_id, Some("run_parent".to_string()));
     }
 
     /// #0118: a mutating action whose triggering content has untrusted
@@ -14289,6 +14421,8 @@ mod tests {
             request_id: None,
             latency_ms: None,
             composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record1).await.unwrap();
@@ -14312,6 +14446,8 @@ mod tests {
             request_id: None,
             latency_ms: None,
             composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
             created_at: Utc::now() - Duration::seconds(10),
         };
         db::insert_decision(&state.pool, &record2).await.unwrap();
@@ -14408,6 +14544,8 @@ mod tests {
             request_id: None,
             latency_ms: None,
             composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
             created_at: Utc::now(),
         };
         db::insert_decision(&state.pool, &record_dec).await.unwrap();
@@ -17926,6 +18064,8 @@ mod tests {
             trace: Some(AuthorizeTraceContext {
                 run_id: "run_routes".to_string(),
                 trace_id: "trace_routes".to_string(),
+                parent_run_id: None,
+                root_trust_level: None,
             }),
         }
     }
@@ -17977,6 +18117,8 @@ mod tests {
             trace: Some(AuthorizeTraceContext {
                 run_id: "run_routes".to_string(),
                 trace_id: "trace_routes".to_string(),
+                parent_run_id: None,
+                root_trust_level: None,
             }),
         }
     }
@@ -19127,6 +19269,8 @@ mod tests {
             request_id: None,
             latency_ms: Some(5),
             composite_risk_score: Some(50),
+            root_trust_level: None,
+            parent_run_id: None,
             created_at: Utc::now(),
         }
     }

@@ -190,9 +190,23 @@ impl PolicyEngine {
         ))
         .map_err(|e| PolicyError::EntityUid(e.to_string()))?;
 
+        // #1293: trust propagation across agent chains — gate on the effective
+        // (tighten-only) trust level, not the raw self-declared `source_trust`.
+        // This closes a confused-deputy gap where a downstream hop could claim
+        // its own immediate trigger looks internal even though it was invoked
+        // by an upstream agent acting on untrusted content.
+        let effective_trust_level = crate::trust_chain::propagate(
+            auth_req
+                .trace
+                .as_ref()
+                .and_then(|t| t.root_trust_level.as_deref()),
+            &auth_req.context.source_trust,
+        );
+
         // Context: Construct from AuthorizeRequest's dynamic context and tool call details
         let context_json = serde_json::json!({
-            "trust_level": auth_req.context.source_trust,
+            "trust_level": effective_trust_level,
+            "root_trust_level": effective_trust_level,
             "contains_sensitive_data": auth_req.context.contains_sensitive_data,
             "mutates_state": auth_req.tool_call.mutates_state,
             "resource_base_branch": auth_req.tool_call.parameters.get("base_branch").and_then(|v| v.as_str()).unwrap_or(""),
@@ -317,7 +331,9 @@ pub struct AuthorizeDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AuthorizeAgentContext, AuthorizeDynamicContext, AuthorizeToolCall};
+    use crate::models::{
+        AuthorizeAgentContext, AuthorizeDynamicContext, AuthorizeToolCall, AuthorizeTraceContext,
+    };
 
     async fn setup_engine() -> PolicyEngine {
         // Look for policies.cedar in the package root
@@ -923,5 +939,60 @@ mod tests {
             result.redacted_fields.is_empty(),
             "redacted_fields must be cleared when decision escalates to require_approval"
         );
+    }
+
+    // --- #1293: trust propagation across agent chains ---
+
+    /// A downstream hop that declares its own trigger as
+    /// `trusted_internal_signed` must NOT auto-allow a mutating action if it
+    /// inherited a more restrictive `root_trust_level` from an upstream
+    /// agent's chain — the gateway must gate on the tightened effective
+    /// trust, not the hop's own self-report (confused-deputy defense).
+    #[tokio::test]
+    async fn inherited_root_trust_level_overrides_own_trusted_self_report() {
+        let engine = setup_engine().await;
+        let mut request = mutating_request_at_trust("trusted_internal_signed");
+        request.trace = Some(AuthorizeTraceContext {
+            run_id: "run_b".to_string(),
+            trace_id: "trace_b".to_string(),
+            parent_run_id: Some("run_a".to_string()),
+            root_trust_level: Some("untrusted_external".to_string()),
+        });
+
+        let result = engine.authorize("test_tenant", &request).unwrap();
+        // Without propagation this would be "allow" (trusted_internal_signed
+        // auto-allows mutations); with propagation the inherited
+        // untrusted_external root must win and deny the mutation.
+        assert_eq!(result.decision, "deny");
+    }
+
+    /// When the inherited `root_trust_level` is MORE trusted than this hop's
+    /// own declared trust, the hop's own (more restrictive) trust wins —
+    /// tighten-only never loosens.
+    #[tokio::test]
+    async fn own_trust_more_restrictive_than_inherited_root_wins() {
+        let engine = setup_engine().await;
+        let mut request = mutating_request_at_trust("untrusted_external");
+        request.trace = Some(AuthorizeTraceContext {
+            run_id: "run_b".to_string(),
+            trace_id: "trace_b".to_string(),
+            parent_run_id: Some("run_a".to_string()),
+            root_trust_level: Some("trusted_internal_signed".to_string()),
+        });
+
+        let result = engine.authorize("test_tenant", &request).unwrap();
+        assert_eq!(result.decision, "deny");
+    }
+
+    /// No inherited `root_trust_level` (chain's first hop) behaves exactly
+    /// like pre-#1293: gate on the hop's own declared trust only.
+    #[tokio::test]
+    async fn no_inherited_root_trust_level_uses_own_trust_unchanged() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("trusted_internal_signed");
+        assert!(request.trace.is_none());
+
+        let result = engine.authorize("test_tenant", &request).unwrap();
+        assert_eq!(result.decision, "allow");
     }
 }

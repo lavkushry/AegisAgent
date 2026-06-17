@@ -140,6 +140,19 @@ pub struct AuthorizeDynamicContext {
 pub struct AuthorizeTraceContext {
     pub run_id: String,
     pub trace_id: String,
+    /// #1293: the run_id of the upstream agent that triggered this call, if
+    /// this is a hop in a multi-agent chain (A -> B -> C). `None` for a
+    /// chain's first hop. Recorded on the decision for audit/evidence-graph
+    /// reconstruction; not itself used in trust computation.
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
+    /// #1293: the most-restrictive (tighten-only) trust level accumulated by
+    /// the upstream caller's chain so far, e.g. returned to Agent A in its
+    /// own `/v1/authorize` response and forwarded here by Agent A when it
+    /// triggers Agent B. `None` for a chain's first hop, in which case this
+    /// hop's effective trust is simply its own `context.source_trust`.
+    #[serde(default)]
+    pub root_trust_level: Option<String>,
 }
 
 /// Optional webhook callback (#1187/TASK-0082-0083) requested by the caller
@@ -207,6 +220,12 @@ pub struct AuthorizeResponse {
     /// Non-empty only when `decision == "redact"`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redacted_fields: Vec<String>,
+    /// #1293: the effective (tighten-only) trust level used to gate this
+    /// decision — the most restrictive of this hop's own `context.source_trust`
+    /// and any inherited `trace.root_trust_level`. The caller should forward
+    /// this value as `trace.root_trust_level` if it triggers a downstream
+    /// agent, so trust propagates correctly through multi-hop chains.
+    pub root_trust_level: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -473,6 +492,15 @@ pub struct DecisionRecord {
     /// existed and on idempotent replays that predate it.
     #[serde(default)]
     pub composite_risk_score: Option<i32>,
+    /// #1293: the effective (tighten-only) trust level this decision was
+    /// gated on. NULL on rows written before this column existed.
+    #[serde(default)]
+    pub root_trust_level: Option<String>,
+    /// #1293: the upstream run_id that triggered this hop, if part of a
+    /// multi-agent chain. NULL for a chain's first hop or rows written
+    /// before this column existed.
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
