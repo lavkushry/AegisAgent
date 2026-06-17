@@ -21,6 +21,9 @@ See [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassess
 ## Development setup
 
 ```bash
+# One-shot: installs pre-commit (cargo fmt/clippy, black, gitleaks) and the Python SDK
+make setup
+
 # Python SDK
 python3 -m pip install -e "sdk-python[dev]"
 python3 -m unittest discover -s sdk-python/tests
@@ -39,7 +42,8 @@ python3 examples/github-attack-demo.py
 
 ## Before you open a PR
 
-Everything CI checks, run locally first (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+Run `make check` (or everything CI checks individually, see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
 - `cargo fmt … --check`, `cargo clippy … -D warnings`, `cargo test …`
 - `python3 -m black --check sdk-python/ examples/`
@@ -48,6 +52,30 @@ Everything CI checks, run locally first (see [`.github/workflows/ci.yml`](.githu
 The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has the full
 checklist. Use [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
+
+## The Four Design Laws
+
+Every contribution to the gateway or SOC plane must obey these (full detail in
+[`docs/AegisAgent_Agent_SOC_Design.md`](docs/AegisAgent_Agent_SOC_Design.md) §2)
+— a PR that violates one will not be merged:
+
+1. **Deterministic policy decides; scores never gate.** Cedar evaluates source
+   trust level and `mutates_state`. `risk_score`, anomaly scores, and any
+   prompt-injection score are advisory display metadata only — never the
+   thing that allows or denies. A score is attacker-gameable; a deterministic
+   provenance gate is not.
+2. **The LLM investigates; it never decides, enforces, or reads instructions
+   as instructions.** The only LLM in the system is the post-incident RCA
+   narrator: sandboxed, no tool access, no path to an enforcement decision,
+   and all evidence passed to it is treated as inert data, never as commands.
+3. **The inline path is sacred; detection is asynchronous.** `POST
+   /v1/authorize` has a <75ms budget. Collection, detection, correlation, and
+   response must never sit in that path — the gateway emits an event
+   (non-blocking) and the SOC consumes it out-of-band.
+4. **Every moat primitive is preserved end-to-end.** Canonicalization stays
+   byte-identical (`aegis-jcs-1`); approvals stay hash-bound and single-use;
+   receipts stay hash-chained. New SOC features consume and surface these —
+   they never weaken them.
 
 ## Critical invariants (do not weaken)
 

@@ -30,12 +30,18 @@ repos:
       - id: black
         files: ^(sdk-python|examples)/
 
-  # Rust formatting (requires cargo fmt on PATH)
+  # Rust formatting and linting (requires cargo/clippy on PATH)
   - repo: local
     hooks:
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --manifest-path gateway/Cargo.toml --
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false

@@ -221,6 +221,16 @@ AegisAgent ships three first-class SDKs — all canonicalize with `aegis-jcs-1` 
 ## Development Validation
 
 ```bash
+# One-shot setup: installs pre-commit (cargo fmt/clippy, black, gitleaks) and the Python SDK
+make setup
+
+# Everything CI runs, in one command
+make check
+```
+
+Or invoke each suite directly:
+
+```bash
 # Rust gateway
 cargo test --manifest-path gateway/Cargo.toml
 cargo fmt  --manifest-path gateway/Cargo.toml -- --check
