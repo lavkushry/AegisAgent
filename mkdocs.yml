@@ -86,6 +86,13 @@ nav:
       - The Agent SOC: AegisAgent_Agent_SOC_Design.md
       - SOC Console UI: AegisAgent_SOC_UI_Design.md
       - Agent workforce governance: AegisAgent_Agent_Workforce_Governance.md
+      - Runbooks:
+          - Overview: runbooks/index.md
+          - Deny storm: runbooks/deny-storm.md
+          - Data exfiltration pattern: runbooks/data-exfiltration.md
+          - Agent token rotation: runbooks/agent-token-rotation.md
+          - Backup and restore: runbooks/backup-and-restore.md
+          - Receipt chain verification: runbooks/receipt-chain-verification.md
   - Architecture:
       - Technical design: AegisAgent_Technical_Design.md
       - Agent workflow: AegisAgent_Agent_Workflow.md
