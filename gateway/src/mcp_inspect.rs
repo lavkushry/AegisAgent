@@ -293,7 +293,10 @@ mod tests {
 
     #[test]
     fn detects_multiple_api_keys() {
-        let result = scan("sk-abc123 and AKIA1234567890ABCDEF in the same response");
+        // Note: deliberately not a syntactically valid AWS key shape (which
+        // would trip the repo's own gitleaks/semgrep secret scanners on this
+        // test fixture) — the detector only needs the "AKIA" prefix to match.
+        let result = scan("sk-abc123 and AKIA-not-a-real-key in the same response");
         assert_eq!(
             result.findings,
             vec![Finding {
