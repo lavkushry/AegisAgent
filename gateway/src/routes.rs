@@ -5897,11 +5897,16 @@ pub async fn narrate_incident(
 /// - depth >= 2: `Approval` (if `require_approval`) and `Receipt` (if
 ///   produced) nodes.
 /// - depth >= 3: `Policy` nodes for each entry in `matched_policy_ids`.
-async fn add_decision_subgraph(
+///
+/// #1316: builds the tool_call/decision/run/approval/receipt/policy nodes and
+/// edges for one decision. `approvals_by_decision`/`receipts_by_decision` are
+/// prefetched in a single batched query per caller (not queried per-decision
+/// here) to avoid the N+1 pattern when expanding a multi-decision subgraph.
+fn add_decision_subgraph(
     graph: &mut crate::graph::EvidenceGraph,
     seen: &mut std::collections::HashSet<String>,
-    pool: &sqlx::SqlitePool,
-    tenant_id: &str,
+    approvals_by_decision: &std::collections::HashMap<String, ApprovalRecord>,
+    receipts_by_decision: &std::collections::HashMap<String, ActionReceiptRecord>,
     decision: &DecisionRecord,
     agent_node_id: &str,
     depth: u32,
@@ -5979,8 +5984,7 @@ async fn add_decision_subgraph(
         return;
     }
 
-    if let Ok(Some(approval)) = db::get_approval_by_decision_id(pool, tenant_id, &decision.id).await
-    {
+    if let Some(approval) = approvals_by_decision.get(&decision.id) {
         let approval_node_id = format!("approval:{}", approval.id);
         if seen.insert(approval_node_id.clone()) {
             graph.add_node(GraphNode::new(
@@ -5998,9 +6002,7 @@ async fn add_decision_subgraph(
         ));
     }
 
-    if let Ok(Some(receipt)) =
-        db::get_action_receipt_by_decision_id(pool, tenant_id, &decision.id).await
-    {
+    if let Some(receipt) = receipts_by_decision.get(&decision.id) {
         let receipt_node_id = format!("receipt:{}", receipt.id);
         if seen.insert(receipt_node_id.clone()) {
             graph.add_node(GraphNode::new(
@@ -6093,17 +6095,28 @@ pub async fn get_graph_for_run(
         ));
     }
 
+    // #1316: batch-fetch approvals/receipts for every decision in this run in
+    // 2 indexed queries total, instead of up to 2 per decision (N+1).
+    let decision_ids: Vec<String> = decisions.iter().map(|d| d.id.clone()).collect();
+    let approvals_by_decision =
+        db::list_approvals_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
+            .await
+            .unwrap_or_default();
+    let receipts_by_decision =
+        db::list_action_receipts_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
+            .await
+            .unwrap_or_default();
+
     for decision in &decisions {
         add_decision_subgraph(
             &mut graph,
             &mut seen,
-            &state.pool,
-            &tenant_id,
+            &approvals_by_decision,
+            &receipts_by_decision,
             decision,
             &agent_node_id,
             3,
-        )
-        .await;
+        );
     }
 
     (StatusCode::OK, Json(graph)).into_response()
@@ -6172,30 +6185,57 @@ pub async fn get_graph_for_incident(
 
     let event_ids: Vec<String> =
         serde_json::from_str(&incident.source_event_ids).unwrap_or_default();
+
+    // #1316: resolve event -> decision first, then batch-fetch approvals/
+    // receipts for all distinct decisions in 2 indexed queries (instead of
+    // up to 2 per-decision queries inside add_decision_subgraph).
+    let mut decisions_for_incident: Vec<DecisionRecord> = Vec::new();
+    let mut linked_decision_ids: Vec<String> = Vec::new();
     for event_id in &event_ids {
         let decision_id =
             match db::get_audit_event_decision_id(&state.pool, &tenant_id, event_id).await {
                 Ok(Some(id)) => id,
                 _ => continue,
             };
+        linked_decision_ids.push(decision_id.clone());
 
         let decision_node_id = format!("decision:{decision_id}");
         if !seen.contains(&decision_node_id) {
             if let Ok(Some(decision)) =
                 db::get_decision_by_id(&state.pool, &tenant_id, &decision_id).await
             {
-                add_decision_subgraph(
-                    &mut graph,
-                    &mut seen,
-                    &state.pool,
-                    &tenant_id,
-                    &decision,
-                    &agent_node_id,
-                    2,
-                )
-                .await;
+                decisions_for_incident.push(decision);
             }
         }
+    }
+
+    let decision_ids_to_fetch: Vec<String> = decisions_for_incident
+        .iter()
+        .map(|d| d.id.clone())
+        .collect();
+    let approvals_by_decision =
+        db::list_approvals_by_decision_ids(&state.pool, &tenant_id, &decision_ids_to_fetch)
+            .await
+            .unwrap_or_default();
+    let receipts_by_decision =
+        db::list_action_receipts_by_decision_ids(&state.pool, &tenant_id, &decision_ids_to_fetch)
+            .await
+            .unwrap_or_default();
+
+    for decision in &decisions_for_incident {
+        add_decision_subgraph(
+            &mut graph,
+            &mut seen,
+            &approvals_by_decision,
+            &receipts_by_decision,
+            decision,
+            &agent_node_id,
+            2,
+        );
+    }
+
+    for decision_id in &linked_decision_ids {
+        let decision_node_id = format!("decision:{decision_id}");
         if seen.contains(&decision_node_id) {
             graph.add_edge(GraphEdge::new(
                 incident_node_id.clone(),
@@ -6278,17 +6318,30 @@ pub async fn get_graph_for_agent(
     .await
     .unwrap_or_default();
 
+    // #1316: batch-fetch approvals/receipts for every decision in this
+    // agent's graph in 2 indexed queries total, instead of up to 2 per
+    // decision (N+1) — up to 100 unindexed queries for a 50-decision agent
+    // graph before this change.
+    let decision_ids: Vec<String> = decisions.iter().map(|d| d.id.clone()).collect();
+    let approvals_by_decision =
+        db::list_approvals_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
+            .await
+            .unwrap_or_default();
+    let receipts_by_decision =
+        db::list_action_receipts_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
+            .await
+            .unwrap_or_default();
+
     for decision in &decisions {
         add_decision_subgraph(
             &mut graph,
             &mut seen,
-            &state.pool,
-            &tenant_id,
+            &approvals_by_decision,
+            &receipts_by_decision,
             decision,
             &agent_node_id,
             depth,
-        )
-        .await;
+        );
     }
 
     if depth >= 3 {

@@ -2447,6 +2447,37 @@ pub async fn get_approval_by_decision_id(
     .await
 }
 
+/// #1316: batch-fetch the approval (if any) for each of `decision_ids` in a
+/// single indexed query (`idx_approvals_tenant_decision`), instead of one
+/// `get_approval_by_decision_id` call per decision — avoids the N+1 pattern
+/// when building an evidence-graph subgraph for N decisions. Tenant-scoped.
+/// Empty input returns an empty map without querying.
+pub async fn list_approvals_by_decision_ids(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_ids: &[String],
+) -> Result<std::collections::HashMap<String, ApprovalRecord>, sqlx::Error> {
+    if decision_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = decision_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query =
+        format!("SELECT * FROM approvals WHERE tenant_id = ? AND decision_id IN ({placeholders})");
+    let mut q = sqlx::query_as::<_, ApprovalRecord>(&query).bind(tenant_id);
+    for id in decision_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.decision_id.clone(), r))
+        .collect())
+}
+
 pub async fn list_decisions(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -2529,6 +2560,40 @@ pub async fn get_action_receipt_by_decision_id(
     .bind(decision_id)
     .fetch_optional(pool)
     .await
+}
+
+/// #1316: batch-fetch the receipt (if any) for each of `decision_ids` in a
+/// single indexed query (`idx_action_receipts_tenant_decision`), instead of
+/// one `get_action_receipt_by_decision_id` call per decision — avoids the
+/// N+1 pattern when building an evidence-graph subgraph for N decisions.
+/// Tenant-scoped. Empty input returns an empty map without querying.
+pub async fn list_action_receipts_by_decision_ids(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_ids: &[String],
+) -> Result<std::collections::HashMap<String, ActionReceiptRecord>, sqlx::Error> {
+    if decision_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = decision_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
+         FROM action_receipts
+         WHERE tenant_id = ? AND decision_id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as::<_, ActionReceiptRecord>(&query).bind(tenant_id);
+    for id in decision_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| r.decision_id.clone().map(|id| (id, r)))
+        .collect())
 }
 
 /// #1272: the `decision_id` an audit event was linked to (#1301), tenant-scoped.
@@ -5653,5 +5718,234 @@ mod tests {
                 record.id
             );
         }
+    }
+
+    // --- #1316: batch-fetch evidence-graph helpers ---
+
+    fn graph_perf_decision(id: &str, tenant_id: &str) -> DecisionRecord {
+        DecisionRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            agent_id: "agent_graph_perf".to_string(),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "github".to_string(),
+            action: "merge_pull_request".to_string(),
+            resource: None,
+            input_json: "{}".to_string(),
+            decision: "require_approval".to_string(),
+            risk_score: Some(75),
+            reason: None,
+            matched_policy_ids: None,
+            request_id: None,
+            latency_ms: None,
+            composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn graph_perf_approval(id: &str, tenant_id: &str, decision_id: &str) -> ApprovalRecord {
+        ApprovalRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: decision_id.to_string(),
+            status: "pending".to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: "{}".to_string(),
+            original_call_hash: "sha256:deadbeef".to_string(),
+            edited_skill_call: None,
+            expires_at: None,
+            decided_at: None,
+            callback_url: None,
+            callback_secret_hash: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn graph_perf_receipt(id: &str, tenant_id: &str, decision_id: &str) -> ActionReceiptRecord {
+        ActionReceiptRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: Some(decision_id.to_string()),
+            ts: Utc::now().to_rfc3339(),
+            agent_id: Some("agent_graph_perf".to_string()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            tool: Some("github".to_string()),
+            action: Some("merge_pull_request".to_string()),
+            resource: None,
+            source_trust: "trusted_internal_signed".to_string(),
+            decision: "require_approval".to_string(),
+            approver: None,
+            action_hash: Some("sha256:deadbeef".to_string()),
+            prev_receipt_hash: String::new(),
+            receipt_hash: format!("sha256:{id}"),
+            canon_version: "aegis-jcs-1".to_string(),
+            signature: None,
+            signer_public_key: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    async fn insert_test_receipt(pool: &SqlitePool, r: &ActionReceiptRecord) {
+        sqlx::query(
+            "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&r.id)
+        .bind(&r.tenant_id)
+        .bind(&r.decision_id)
+        .bind(&r.ts)
+        .bind(&r.agent_id)
+        .bind(&r.user_id)
+        .bind(&r.run_id)
+        .bind(&r.trace_id)
+        .bind(&r.tool)
+        .bind(&r.action)
+        .bind(&r.resource)
+        .bind(&r.source_trust)
+        .bind(&r.decision)
+        .bind(&r.approver)
+        .bind(&r.action_hash)
+        .bind(&r.prev_receipt_hash)
+        .bind(&r.receipt_hash)
+        .bind(&r.canon_version)
+        .bind(&r.signature)
+        .bind(&r.signer_public_key)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_approvals_by_decision_ids_returns_only_matching_tenant_scoped_rows() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        register_tenant(&pool, "tenant_graph_perf", "Graph Perf Tenant", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_other", "Other Tenant", "developer")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_graph_perf', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_graph_perf"))
+            .await
+            .unwrap();
+        insert_decision(&pool, &graph_perf_decision("dec_2", "tenant_graph_perf"))
+            .await
+            .unwrap();
+        insert_decision(&pool, &graph_perf_decision("dec_3", "tenant_graph_perf"))
+            .await
+            .unwrap();
+
+        insert_approval(
+            &pool,
+            &graph_perf_approval("appr_1", "tenant_graph_perf", "dec_1"),
+        )
+        .await
+        .unwrap();
+        insert_approval(
+            &pool,
+            &graph_perf_approval("appr_2", "tenant_graph_perf", "dec_2"),
+        )
+        .await
+        .unwrap();
+        // Cross-tenant approval on the same decision_id string must never leak in.
+        insert_approval(
+            &pool,
+            &graph_perf_approval("appr_x", "tenant_other", "dec_1"),
+        )
+        .await
+        .unwrap();
+
+        let ids = vec![
+            "dec_1".to_string(),
+            "dec_2".to_string(),
+            "dec_3".to_string(),
+        ];
+        let map = list_approvals_by_decision_ids(&pool, "tenant_graph_perf", &ids)
+            .await
+            .unwrap();
+
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("dec_1").unwrap().id, "appr_1");
+        assert_eq!(map.get("dec_2").unwrap().id, "appr_2");
+        assert!(!map.contains_key("dec_3"));
+    }
+
+    #[tokio::test]
+    async fn list_approvals_by_decision_ids_empty_input_returns_empty_map_without_querying() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let map = list_approvals_by_decision_ids(&pool, "tenant_graph_perf", &[])
+            .await
+            .unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_action_receipts_by_decision_ids_returns_only_matching_tenant_scoped_rows() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        register_tenant(&pool, "tenant_graph_perf", "Graph Perf Tenant", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_other", "Other Tenant", "developer")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_graph_perf', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_graph_perf"))
+            .await
+            .unwrap();
+        insert_decision(&pool, &graph_perf_decision("dec_2", "tenant_graph_perf"))
+            .await
+            .unwrap();
+
+        insert_test_receipt(
+            &pool,
+            &graph_perf_receipt("recv_1", "tenant_graph_perf", "dec_1"),
+        )
+        .await;
+        // Cross-tenant receipt on the same decision_id string must never leak in.
+        insert_test_receipt(
+            &pool,
+            &graph_perf_receipt("recv_x", "tenant_other", "dec_1"),
+        )
+        .await;
+
+        let ids = vec!["dec_1".to_string(), "dec_2".to_string()];
+        let map = list_action_receipts_by_decision_ids(&pool, "tenant_graph_perf", &ids)
+            .await
+            .unwrap();
+
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("dec_1").unwrap().id, "recv_1");
+        assert!(!map.contains_key("dec_2"));
+    }
+
+    #[tokio::test]
+    async fn list_action_receipts_by_decision_ids_empty_input_returns_empty_map_without_querying() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let map = list_action_receipts_by_decision_ids(&pool, "tenant_graph_perf", &[])
+            .await
+            .unwrap();
+        assert!(map.is_empty());
     }
 }
