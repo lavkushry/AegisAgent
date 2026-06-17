@@ -88,6 +88,7 @@ nav:
       - Agent workflow: AegisAgent_Agent_Workflow.md
       - Threat model: AegisAgent_Threat_Model.md
       - Operational design: AegisAgent_Operational_Design.md
+      - MCP defense architecture: mcp-defense-architecture.md
   - Reference:
       - Runtime authorization API: runtime-authorization-api.md
       - Fail-closed behavior guide: fail-closed-behavior.md
