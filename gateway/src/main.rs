@@ -903,6 +903,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(routes::get_tenant_risk_weights).put(routes::put_tenant_risk_weights),
         )
         .route(
+            "/v1/tenants/risk-escalation",
+            get(routes::get_tenant_risk_escalation_config)
+                .put(routes::put_tenant_risk_escalation_config),
+        )
+        .route(
             "/v1/webhook_subscriptions",
             get(routes::list_webhook_subscriptions).post(routes::create_webhook_subscription),
         )

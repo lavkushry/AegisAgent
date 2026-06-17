@@ -625,6 +625,21 @@ async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // #1296: per-tenant thresholds for auto-escalating an agent's risk_tier
+    // after repeated denials. A missing row means "use the built-in default"
+    // (5 denials / 60-minute window) — this table only needs a row when a
+    // tenant wants to deviate from that default.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tenant_risk_escalation_config (
+            tenant_id TEXT PRIMARY KEY,
+            denial_threshold INTEGER NOT NULL,
+            window_minutes INTEGER NOT NULL,
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        );",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -730,6 +745,93 @@ pub async fn upsert_risk_weights(
     .bind(weights.approval_credit)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// #1296: read per-tenant risk-escalation thresholds, falling back to
+/// [`crate::risk_escalation::RiskEscalationConfig::default`] when no override
+/// row exists. Tenant-scoped, parameterized.
+pub async fn get_risk_escalation_config(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<crate::risk_escalation::RiskEscalationConfig, sqlx::Error> {
+    let row: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT denial_threshold, window_minutes FROM tenant_risk_escalation_config WHERE tenant_id = ?",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(match row {
+        Some((denial_threshold, window_minutes)) => crate::risk_escalation::RiskEscalationConfig {
+            denial_threshold,
+            window_minutes,
+        },
+        None => crate::risk_escalation::RiskEscalationConfig::default(),
+    })
+}
+
+/// #1296: upsert per-tenant risk-escalation thresholds. Tenant-scoped, parameterized.
+pub async fn upsert_risk_escalation_config(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    config: &crate::risk_escalation::RiskEscalationConfig,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO tenant_risk_escalation_config (tenant_id, denial_threshold, window_minutes)
+         VALUES (?, ?, ?)
+         ON CONFLICT(tenant_id) DO UPDATE SET
+            denial_threshold = excluded.denial_threshold,
+            window_minutes = excluded.window_minutes",
+    )
+    .bind(tenant_id)
+    .bind(config.denial_threshold)
+    .bind(config.window_minutes)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// #1296: count `deny` decisions for `agent_id` since `since` (inclusive).
+/// Tenant-scoped, parameterized.
+pub async fn count_recent_denials(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Result<i64, sqlx::Error> {
+    // `decisions.created_at` relies on SQLite's own `DEFAULT CURRENT_TIMESTAMP`
+    // (space-separated, no fractional seconds, no `Z`/offset suffix) — sqlx's
+    // default `DateTime<Utc>` bind instead serializes RFC3339-style with a
+    // `T` separator, which sorts incorrectly against the column's format in
+    // a plain string comparison. Format explicitly to match (same scheme as
+    // `format_audit_created_at`).
+    let since_str = since.format("%F %T%.6f").to_string();
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM decisions
+         WHERE tenant_id = ? AND agent_id = ? AND decision = 'deny' AND created_at >= ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(since_str)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+/// #1296: persist an auto-escalated `risk_tier` for an agent. Tenant-scoped, parameterized.
+pub async fn update_agent_risk_tier(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    new_tier: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE agents SET risk_tier = ? WHERE id = ? AND tenant_id = ?")
+        .bind(new_tier)
+        .bind(agent_id)
+        .bind(tenant_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

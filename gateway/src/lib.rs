@@ -32,6 +32,7 @@ pub mod notify;
 pub mod policy;
 pub mod respond;
 pub mod risk;
+pub mod risk_escalation;
 pub mod routes;
 pub mod rule_dsl;
 pub mod sign;

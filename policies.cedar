@@ -97,6 +97,25 @@ when {
     context.trust_level == "semi_trusted_customer"
 };
 
+// #1296: an agent auto-escalated to risk_tier "high" (after repeatedly
+// triggering denials — see gateway/src/risk_escalation.rs) must clear human
+// review for ANY mutating action, even one a trusted-internal context would
+// otherwise auto-allow. context.agent_risk_tier always reflects the
+// server-trusted AgentRecord, never a client-supplied value, so an agent
+// cannot self-report its way out of this gate.
+@decision("require_approval")
+@approver_group("security-reviewers")
+@reason("Agent risk tier escalated to high after repeated denials")
+permit (
+    principal,
+    action == Action::"tool_call",
+    resource
+)
+when {
+    context.mutates_state == true &&
+    context.agent_risk_tier == "high"
+};
+
 // Redact sensitive parameters for credential-adjacent tool calls.
 // When a tool call involves known sensitive fields (e.g. api_key, password),
 // the gateway returns decision="redact" with the list of fields to strip before
