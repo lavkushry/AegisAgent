@@ -34,3 +34,4 @@ pub mod risk;
 pub mod routes;
 pub mod rule_dsl;
 pub mod sign;
+pub mod trust_chain;

@@ -2337,8 +2337,8 @@ pub async fn insert_decision(
     record: &DecisionRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -2357,6 +2357,8 @@ pub async fn insert_decision(
     .bind(&record.request_id)
     .bind(record.latency_ms)
     .bind(record.composite_risk_score)
+    .bind(&record.root_trust_level)
+    .bind(&record.parent_run_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -2417,7 +2419,7 @@ pub async fn get_decision_by_request_id(
     request_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
          WHERE tenant_id = ? AND agent_id = ? AND request_id = ?",
     )
@@ -2455,7 +2457,7 @@ pub async fn list_decisions(
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
@@ -2480,7 +2482,7 @@ pub async fn get_decision_by_id(
     decision_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
          WHERE tenant_id = ? AND id = ?",
     )
@@ -2498,7 +2500,7 @@ pub async fn list_decisions_by_run_id(
     run_id: &str,
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
     sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, created_at
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
          WHERE tenant_id = ? AND run_id = ?
          ORDER BY created_at ASC
@@ -4304,6 +4306,8 @@ mod tests {
             request_id: None,
             latency_ms: None,
             composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
             created_at: Utc::now(),
         };
 
