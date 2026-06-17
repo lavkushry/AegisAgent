@@ -140,7 +140,8 @@ class AegisBaseClient:
             return {
                 k: (
                     "[REDACTED]"
-                    if k.lower() in ("api_key", "agent_token", "agent_key", "token")
+                    if k.lower()
+                    in ("api_key", "agent_token", "agent_key", "token", "response_text")
                     else self._redact_json(v)
                 )
                 for k, v in data.items()
@@ -705,6 +706,50 @@ class AegisClient(AegisBaseClient):
             )
             return None
 
+    def report_mcp_response(
+        self,
+        server_key: str,
+        tool_key: str,
+        response_text: str,
+        decision_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reports an MCP tool's response to the gateway for server-side
+        inspection (#1333) — sensitive-data and prompt-injection scanning.
+
+        Fire-and-forget by design: the tool call has already completed and
+        returned its result to the agent by the time this is called, so a
+        gateway/network failure here is logged and swallowed rather than
+        raised, and never blocks or alters the already-returned tool result.
+        """
+        payload = {
+            "agent_id": self.agent_id,
+            "tool_key": tool_key,
+            "response_text": response_text,
+            "decision_id": decision_id,
+            "run_id": run_id,
+        }
+        try:
+            response = self._request(
+                "POST",
+                f"/v1/mcp/servers/{server_key}/inspect",
+                json=payload,
+                headers=self._headers(),
+                timeout=5,
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"POST /v1/mcp/servers/{server_key}/inspect failed: "
+                f"{response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                f"Connection error on POST /v1/mcp/servers/{server_key}/inspect: {e}"
+            )
+            return None
+
 
 class AegisAsyncClient(AegisBaseClient):
     def __init__(
@@ -1240,5 +1285,49 @@ class AegisAsyncClient(AegisBaseClient):
         except Exception as e:
             logger.error(
                 f"Connection error on POST /v1/mcp/servers/{server_key}/tools: {e}"
+            )
+            return None
+
+    async def report_mcp_response(
+        self,
+        server_key: str,
+        tool_key: str,
+        response_text: str,
+        decision_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reports an MCP tool's response to the gateway for server-side
+        inspection (#1333) — sensitive-data and prompt-injection scanning.
+
+        Fire-and-forget by design: the tool call has already completed and
+        returned its result to the agent by the time this is called, so a
+        gateway/network failure here is logged and swallowed rather than
+        raised, and never blocks or alters the already-returned tool result.
+        """
+        payload = {
+            "agent_id": self.agent_id,
+            "tool_key": tool_key,
+            "response_text": response_text,
+            "decision_id": decision_id,
+            "run_id": run_id,
+        }
+        try:
+            response = await self._request(
+                "POST",
+                f"/v1/mcp/servers/{server_key}/inspect",
+                json=payload,
+                headers=self._headers(),
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"POST /v1/mcp/servers/{server_key}/inspect failed: "
+                f"{response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                f"Connection error on POST /v1/mcp/servers/{server_key}/inspect: {e}"
             )
             return None

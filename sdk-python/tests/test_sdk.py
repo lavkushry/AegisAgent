@@ -675,6 +675,59 @@ class TestAegisSDK(unittest.TestCase):
             timeout=5,
         )
 
+    @patch("requests.Session.post")
+    def test_report_mcp_response(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "inspected": True,
+            "flagged": False,
+            "findings": [],
+        }
+        mock_post.return_value = mock_response
+
+        res = self.client.report_mcp_response(
+            "server1", "search", "benign response text", decision_id="d1", run_id="r1"
+        )
+        self.assertEqual(res, {"inspected": True, "flagged": False, "findings": []})
+        mock_post.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/mcp/servers/server1/inspect",
+            json={
+                "agent_id": "test_agent",
+                "tool_key": "search",
+                "response_text": "benign response text",
+                "decision_id": "d1",
+                "run_id": "r1",
+            },
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            timeout=5,
+        )
+
+    @patch("requests.Session.post")
+    def test_report_mcp_response_swallows_network_error(self, mock_post):
+        mock_post.side_effect = ConnectionError("boom")
+        res = self.client.report_mcp_response("server1", "search", "some text")
+        self.assertIsNone(res)
+
+    @patch("requests.Session.post")
+    def test_report_mcp_response_does_not_log_raw_response_text(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.text = '{"inspected": true, "flagged": false, "findings": []}'
+        mock_post.return_value = mock_response
+
+        with self.assertLogs("aegisagent", level="DEBUG") as log_capture:
+            self.client.report_mcp_response(
+                "server1", "search", "SSN is 123-45-6789, secret_payload_marker"
+            )
+
+        log_msgs = "\n".join(log_capture.output)
+        self.assertNotIn("secret_payload_marker", log_msgs)
+
     def test_client_close(self):
         # Verify close method closes the session
         with patch.object(self.client.session, "close") as mock_close:
