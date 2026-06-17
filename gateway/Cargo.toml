@@ -72,3 +72,7 @@ harness = false
 [[bench]]
 name = "audit_batch_benchmark"
 harness = false
+
+[[bench]]
+name = "evidence_graph_benchmark"
+harness = false
