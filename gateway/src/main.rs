@@ -923,6 +923,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(routes::get_soc_rules).post(routes::create_soc_rule),
         )
         .route("/v1/soc/rules/reload", post(routes::reload_soc_rules))
+        .route(
+            "/v1/soc/rules/:rule_key/backtest",
+            post(routes::backtest_soc_rule),
+        )
         // #1272: Evidence Graph Query API
         .route("/v1/graph/run/:run_id", get(routes::get_graph_for_run))
         .route(
