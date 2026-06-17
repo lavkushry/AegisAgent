@@ -164,10 +164,15 @@ impl PolicyEngine {
         Ok(())
     }
 
+    /// `agent_risk_tier` must come from the trusted server-side `AgentRecord`
+    /// (#1296), never from `auth_req` — the request body is client-supplied
+    /// and a self-reported tier would let an agent claim a lower tier than
+    /// its actual escalated state to dodge the stricter policies below.
     pub fn authorize(
         &self,
         tenant_id: &str,
         auth_req: &AuthorizeRequest,
+        agent_risk_tier: &str,
     ) -> Result<AuthorizeDecision, PolicyError> {
         let authorizer = Authorizer::new();
 
@@ -210,6 +215,7 @@ impl PolicyEngine {
             "contains_sensitive_data": auth_req.context.contains_sensitive_data,
             "mutates_state": auth_req.tool_call.mutates_state,
             "resource_base_branch": auth_req.tool_call.parameters.get("base_branch").and_then(|v| v.as_str()).unwrap_or(""),
+            "agent_risk_tier": agent_risk_tier,
         });
 
         let context = Context::from_json_value(context_json, None)
@@ -371,7 +377,7 @@ mod tests {
     async fn test_trusted_internal_signed_mutation_allowed() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("trusted_internal_signed");
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "allow");
     }
 
@@ -379,7 +385,41 @@ mod tests {
     async fn test_trusted_internal_unsigned_mutation_allowed() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("trusted_internal_unsigned");
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
+        assert_eq!(result.decision, "allow");
+    }
+
+    /// #1296: an agent auto-escalated to risk_tier "high" must clear human
+    /// review for a mutating action even when the trust level alone would
+    /// auto-allow it (trusted_internal_signed).
+    #[tokio::test]
+    async fn high_risk_tier_forces_approval_even_for_trusted_internal_mutation() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("trusted_internal_signed");
+        let result = engine.authorize("test_tenant", &request, "high").unwrap();
+        assert_eq!(result.decision, "require_approval");
+    }
+
+    /// #1296: "low" and "medium" tiers are unaffected by the high-tier gate —
+    /// a trusted-internal mutation still auto-allows.
+    #[tokio::test]
+    async fn low_and_medium_risk_tier_do_not_trigger_the_high_tier_gate() {
+        let engine = setup_engine().await;
+        for tier in ["low", "medium"] {
+            let request = mutating_request_at_trust("trusted_internal_signed");
+            let result = engine.authorize("test_tenant", &request, tier).unwrap();
+            assert_eq!(result.decision, "allow", "tier {tier} should not escalate");
+        }
+    }
+
+    /// #1296: the high-tier gate only applies to mutating actions — a
+    /// read-only call from a high-tier agent is unaffected.
+    #[tokio::test]
+    async fn high_risk_tier_does_not_affect_non_mutating_actions() {
+        let engine = setup_engine().await;
+        let mut request = mutating_request_at_trust("trusted_internal_signed");
+        request.tool_call.mutates_state = false;
+        let result = engine.authorize("test_tenant", &request, "high").unwrap();
         assert_eq!(result.decision, "allow");
     }
 
@@ -387,7 +427,7 @@ mod tests {
     async fn test_semi_trusted_customer_mutation_requires_approval() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("semi_trusted_customer");
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "require_approval");
     }
 
@@ -395,7 +435,7 @@ mod tests {
     async fn test_untrusted_external_mutation_denied() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("untrusted_external");
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -403,7 +443,7 @@ mod tests {
     async fn test_malicious_suspected_mutation_denied() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("malicious_suspected");
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -411,7 +451,7 @@ mod tests {
     async fn test_unknown_mutation_denied() {
         let engine = setup_engine().await;
         let request = mutating_request_at_trust("unknown");
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -443,7 +483,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "allow");
     }
 
@@ -477,7 +517,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "require_approval");
         assert_eq!(result.approver_group, Some("platform-leads".to_string()));
     }
@@ -510,7 +550,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -542,7 +582,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "require_approval");
         assert_eq!(
             result.approver_group,
@@ -604,7 +644,9 @@ mod tests {
             },
             trace: None,
         };
-        let before = engine.authorize(tenant_id, &readonly_request).unwrap();
+        let before = engine
+            .authorize(tenant_id, &readonly_request, "low")
+            .unwrap();
         assert_eq!(before.decision, "allow");
 
         // Active custom policy: forbid the filesystem_read_file tool
@@ -632,7 +674,9 @@ mod tests {
         assert!(engine.has_tenant(tenant_id));
 
         // The custom forbid must now take effect for this tenant.
-        let after = engine.authorize(tenant_id, &readonly_request).unwrap();
+        let after = engine
+            .authorize(tenant_id, &readonly_request, "low")
+            .unwrap();
         assert_eq!(after.decision, "deny");
     }
 
@@ -668,7 +712,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "quarantine");
     }
 
@@ -741,7 +785,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize(tenant_id, &request).unwrap();
+        let result = engine.authorize(tenant_id, &request, "low").unwrap();
         assert_eq!(result.decision, "quarantine");
     }
 
@@ -824,8 +868,8 @@ mod tests {
             ..canonical.clone()
         };
 
-        let canonical_result = engine.authorize("test_tenant", &canonical).unwrap();
-        let mixed_result = engine.authorize("test_tenant", &mixed_case).unwrap();
+        let canonical_result = engine.authorize("test_tenant", &canonical, "low").unwrap();
+        let mixed_result = engine.authorize("test_tenant", &mixed_case, "low").unwrap();
 
         assert_eq!(canonical_result.decision, "require_approval");
         assert_eq!(
@@ -866,7 +910,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "redact");
         assert!(
             !result.redacted_fields.is_empty(),
@@ -944,7 +988,7 @@ mod tests {
             trace: None,
         };
 
-        let result = engine.authorize(tenant_id, &request).unwrap();
+        let result = engine.authorize(tenant_id, &request, "low").unwrap();
         assert_eq!(result.decision, "require_approval");
         assert!(
             result.redacted_fields.is_empty(),
@@ -970,7 +1014,7 @@ mod tests {
             root_trust_level: Some("untrusted_external".to_string()),
         });
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         // Without propagation this would be "allow" (trusted_internal_signed
         // auto-allows mutations); with propagation the inherited
         // untrusted_external root must win and deny the mutation.
@@ -991,7 +1035,7 @@ mod tests {
             root_trust_level: Some("trusted_internal_signed".to_string()),
         });
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "deny");
     }
 
@@ -1003,7 +1047,7 @@ mod tests {
         let request = mutating_request_at_trust("trusted_internal_signed");
         assert!(request.trace.is_none());
 
-        let result = engine.authorize("test_tenant", &request).unwrap();
+        let result = engine.authorize("test_tenant", &request, "low").unwrap();
         assert_eq!(result.decision, "allow");
     }
 }

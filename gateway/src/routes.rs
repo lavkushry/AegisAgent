@@ -2834,18 +2834,25 @@ pub async fn authorize_action(
             .await;
     }
 
-    // Call policy engine to evaluate Cedar rules
-    let policy_decision = match state.policy_engine.authorize(&tenant_id, &payload) {
-        Ok(d) => d,
-        Err(e) => {
-            error!("Policy engine error: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Policy engine failure: {}", e)})),
-            )
-                .into_response();
-        }
-    };
+    // Call policy engine to evaluate Cedar rules. `agent.risk_tier` is the
+    // trusted server-side value (#1296) — never the client-supplied request
+    // body — so a self-reported tier can't dodge the stricter policies an
+    // auto-escalated agent should be subject to.
+    let policy_decision =
+        match state
+            .policy_engine
+            .authorize(&tenant_id, &payload, &agent.risk_tier)
+        {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Policy engine error: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("Policy engine failure: {}", e)})),
+                )
+                    .into_response();
+            }
+        };
 
     let decision_id = Uuid::new_v4();
     let mut decision_str = policy_decision.decision.clone();
@@ -3146,6 +3153,86 @@ pub async fn authorize_action(
             expires_at,
             action_hash: original_call_hash,
         });
+    }
+
+    // #1296: repeated denials within a rolling window auto-escalate the
+    // agent's risk_tier (low -> medium -> high). Unlike the advisory
+    // composite_risk_score (Law 1), risk_tier is real authorization state
+    // that future Cedar evaluations branch on — so this runs inline (fast,
+    // local SQLite only) immediately after the deny decision is recorded,
+    // guaranteeing the very next call from this agent sees the tightened
+    // tier. Never escalate for a hypothetical dry-run decision (#1281).
+    if !dry_run && decision_str == "deny" {
+        match crate::risk_escalation::maybe_escalate_agent_risk_tier(
+            &state.pool,
+            &tenant_id,
+            &agent_id,
+            &agent.risk_tier,
+        )
+        .await
+        {
+            Ok(Some((old_tier, new_tier))) => {
+                info!(
+                    agent_id = %agent_id,
+                    tenant_id = %tenant_id,
+                    old_tier = %old_tier,
+                    new_tier = %new_tier,
+                    "Agent risk tier auto-escalated after repeated denials"
+                );
+                let audit = AuditEventRecord {
+                    id: Uuid::new_v4().to_string(),
+                    tenant_id: tenant_id.clone(),
+                    event_type: "agent_risk_escalated".to_string(),
+                    agent_id: Some(agent_id.clone()),
+                    user_id: None,
+                    run_id: None,
+                    trace_id: None,
+                    span_id: None,
+                    skill: None,
+                    action: None,
+                    resource: None,
+                    event_json: serde_json::to_string(
+                        &json!({ "old_risk_tier": old_tier, "new_risk_tier": new_tier }),
+                    )
+                    .unwrap_or_default(),
+                    input_hash: None,
+                    output_hash: None,
+                    decision_id: Some(decision_id.to_string()),
+                    approval_id: None,
+                    created_at: Utc::now(),
+                };
+                let _ = db::insert_audit_event(&state.pool, &audit).await;
+
+                // Emit SOC event out-of-band (Law 3 — never blocks authorize path).
+                state.events.emit(AseEvent {
+                    event_id: Uuid::new_v4().to_string(),
+                    occurred_at: Utc::now().to_rfc3339(),
+                    tenant_id: tenant_id.clone(),
+                    kind: "agent_risk_escalated".to_string(),
+                    agent_id: agent_id.clone(),
+                    decision: decision_str.clone(),
+                    tool: payload.tool_call.tool.clone(),
+                    action: payload.tool_call.action.clone(),
+                    resource: payload.tool_call.resource.clone(),
+                    risk_score,
+                    reason: format!(
+                        "risk_tier escalated {old_tier} -> {new_tier} after repeated denials"
+                    ),
+                    run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
+                    trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
+                    matched_policies: matched_policies.clone(),
+                    redacted_fields: vec![],
+                    schema_version: 1,
+                });
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!(
+                    "Failed to evaluate risk tier escalation for agent {}: {:?}",
+                    agent_id, e
+                );
+            }
+        }
     }
 
     // #1382: when a PR-related GitHub action is denied and the PR commenter is
@@ -4760,6 +4847,54 @@ pub async fn put_tenant_risk_weights(
         Ok(_) => (StatusCode::OK, Json(weights)).into_response(),
         Err(e) => {
             error!("Failed to upsert tenant risk weights: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1296: returns this tenant's risk-escalation thresholds (DB override if
+/// present, otherwise the built-in default of 5 denials / 60-minute window).
+pub async fn get_tenant_risk_escalation_config(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::get_risk_escalation_config(&state.pool, &tenant_id).await {
+        Ok(config) => (StatusCode::OK, Json(config)).into_response(),
+        Err(e) => {
+            error!("Failed to get tenant risk escalation config: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1296: upserts this tenant's risk-escalation thresholds. Both fields must
+/// be positive — a zero or negative threshold/window would either escalate
+/// on every single denial or never match any window at all, neither of
+/// which is a meaningful configuration.
+pub async fn put_tenant_risk_escalation_config(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(config): Json<crate::risk_escalation::RiskEscalationConfig>,
+) -> impl IntoResponse {
+    if config.denial_threshold < 1 || config.window_minutes < 1 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "denial_threshold and window_minutes must each be >= 1"})),
+        )
+            .into_response();
+    }
+    match db::upsert_risk_escalation_config(&state.pool, &tenant_id, &config).await {
+        Ok(_) => (StatusCode::OK, Json(config)).into_response(),
+        Err(e) => {
+            error!("Failed to upsert tenant risk escalation config: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
@@ -19893,6 +20028,127 @@ mod tests {
             .unwrap();
         let weights_other: crate::risk::RiskWeights = serde_json::from_slice(&body_other).unwrap();
         assert_eq!(weights_other, crate::risk::RiskWeights::from_env());
+    }
+
+    /// #1296: `GET /v1/tenants/risk-escalation` returns the built-in default
+    /// (5 denials / 60-minute window) when no per-tenant override exists.
+    #[tokio::test]
+    async fn get_tenant_risk_escalation_config_returns_defaults_when_unset() {
+        let (state, tenant_id, _) = setup_state("risk_escalation_get_default").await;
+
+        let response =
+            get_tenant_risk_escalation_config(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let config: crate::risk_escalation::RiskEscalationConfig =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            config,
+            crate::risk_escalation::RiskEscalationConfig::default()
+        );
+    }
+
+    /// #1296: `PUT /v1/tenants/risk-escalation` persists an override,
+    /// tenant-scoped, and rejects non-positive values.
+    #[tokio::test]
+    async fn put_tenant_risk_escalation_config_round_trips_and_validates() {
+        let (state, tenant_id, _) = setup_state("risk_escalation_put_roundtrip").await;
+
+        let custom = crate::risk_escalation::RiskEscalationConfig {
+            denial_threshold: 2,
+            window_minutes: 15,
+        };
+        let response_put = put_tenant_risk_escalation_config(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(custom),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_put.status(), StatusCode::OK);
+
+        let response_get =
+            get_tenant_risk_escalation_config(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
+        let body_get = to_bytes(response_get.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let config_get: crate::risk_escalation::RiskEscalationConfig =
+            serde_json::from_slice(&body_get).unwrap();
+        assert_eq!(config_get, custom);
+
+        let invalid = crate::risk_escalation::RiskEscalationConfig {
+            denial_threshold: 0,
+            window_minutes: 15,
+        };
+        let response_invalid = put_tenant_risk_escalation_config(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(invalid),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_invalid.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// #1296: repeated denials past the tenant's threshold auto-escalate the
+    /// agent's `risk_tier` and write an `agent_risk_escalated` audit event —
+    /// end to end through the real `/v1/authorize` path.
+    #[tokio::test]
+    async fn authorize_auto_escalates_risk_tier_after_repeated_denials() {
+        let (state, tenant_id, agent_token) = setup_state("risk_escalation_e2e").await;
+        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        // The test fixture agent defaults to risk_tier "high" (already maxed
+        // out); reset to "low" so this test can observe an escalation.
+        db::update_agent_risk_tier(&state.pool, &tenant_id, &agent_id, "low")
+            .await
+            .unwrap();
+        db::upsert_risk_escalation_config(
+            &state.pool,
+            &tenant_id,
+            &crate::risk_escalation::RiskEscalationConfig {
+                denial_threshold: 1,
+                window_minutes: 60,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut deny_request = mcp_authorize_request("github", "merge_pull_request");
+        deny_request.tool_call.mutates_state = true;
+        deny_request.context.source_trust = "untrusted_external".to_string();
+
+        for _ in 0..2 {
+            let response = call_authorize(
+                state.clone(),
+                &tenant_id,
+                &agent_token,
+                deny_request.clone(),
+            )
+            .await;
+            assert_eq!(response.decision, "deny");
+        }
+
+        let agent_record = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent_record.risk_tier, "medium");
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|e| e.event_type == "agent_risk_escalated"));
     }
 
     // ── #1272: Evidence Graph Query API ──
