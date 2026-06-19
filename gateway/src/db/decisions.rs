@@ -1,0 +1,548 @@
+use super::SOC_MAX_LIMIT;
+use crate::models::*;
+use chrono::{DateTime, Utc};
+use sqlx::SqlitePool;
+
+/// #1298 (Compliance Evidence Pack): tenant-scoped `audit_events`, optionally
+/// bounded by a `[from, to]` `created_at` window. Distinct from
+/// [`get_all_audit_events`] (which filters by `decision_id` and caps at 100
+/// rows) — evidence packs need the full date-bounded set, uncapped.
+pub async fn get_audit_events_in_range(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AuditEventRecord>(
+        "SELECT * FROM audit_events
+         WHERE tenant_id = ?
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
+         ORDER BY created_at ASC",
+    )
+    .bind(tenant_id)
+    .bind(from)
+    .bind(from)
+    .bind(to)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn insert_decision(
+    pool: &SqlitePool,
+    record: &DecisionRecord,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.agent_id)
+    .bind(&record.user_id)
+    .bind(&record.run_id)
+    .bind(&record.trace_id)
+    .bind(&record.skill)
+    .bind(&record.action)
+    .bind(&record.resource)
+    .bind(&record.input_json)
+    .bind(&record.decision)
+    .bind(record.risk_score)
+    .bind(&record.reason)
+    .bind(&record.matched_policy_ids)
+    .bind(&record.request_id)
+    .bind(record.latency_ms)
+    .bind(record.composite_risk_score)
+    .bind(&record.root_trust_level)
+    .bind(&record.parent_run_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// TASK-0089 (#935): record a historical risk-score sample for `agent_id`,
+/// linked to the decision that produced it. Called from
+/// `routes::write_decision_and_audit` for every `/v1/authorize` decision.
+/// Tenant-scoped, parameterized.
+pub async fn insert_agent_risk_score(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    decision_id: &str,
+    score: i32,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO agent_risk_scores (id, tenant_id, agent_id, decision_id, score, reason) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(decision_id)
+    .bind(score)
+    .bind(reason)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// TASK-0089 (#935): list historical risk-score samples for `agent_id`, most
+/// recent first. Tenant-scoped, parameterized.
+#[cfg(test)]
+pub async fn list_agent_risk_scores(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<Vec<AgentRiskScoreRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRiskScoreRecord>(
+        "SELECT * FROM agent_risk_scores WHERE tenant_id = ? AND agent_id = ? ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Idempotency lookup (#0072): find a previously-recorded decision for the same
+/// `(tenant_id, agent_id, request_id)`. Used by `/v1/authorize` to short-circuit
+/// repeat requests instead of re-evaluating Cedar / writing duplicate side
+/// effects (audit events, approvals, receipts).
+pub async fn get_decision_by_request_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    agent_id: &str,
+    request_id: &str,
+) -> Result<Option<DecisionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND agent_id = ? AND request_id = ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(request_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn list_decisions(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    agent_id: Option<&str>,
+    decision: Option<&str>,
+) -> Result<Vec<DecisionRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+         FROM decisions
+         WHERE tenant_id = ?
+           AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR decision = ?)
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(decision)
+    .bind(decision)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+/// #1283: cap on decisions scanned per backtest run. Higher than
+/// [`SOC_MAX_LIMIT`] (200, tuned for paginated UI listings) because an
+/// under-counted backtest would silently understate `estimated_daily_alert_volume`
+/// for an active tenant — 50k decisions covers a very high-volume tenant's
+/// full default 7-day window without an unbounded query.
+pub const BACKTEST_MAX_DECISIONS: i64 = 50_000;
+
+/// #1283: every `deny`/`require_approval`/etc. decision for `tenant_id`
+/// within `[from, to]` (inclusive), oldest first — the historical corpus a
+/// detection rule is backtested against. Tenant-scoped, parameterized,
+/// capped at [`BACKTEST_MAX_DECISIONS`].
+///
+/// `decisions.created_at` relies on SQLite's own `DEFAULT CURRENT_TIMESTAMP`
+/// (space-separated, no fractional seconds) — formats `from`/`to` to match,
+/// the same fix established in `count_recent_denials` (#1296). A plain
+/// `DateTime<Utc>` bind serializes RFC3339-style with a `T` separator, which
+/// sorts incorrectly against the column's format in a string comparison.
+pub async fn list_decisions_in_range(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<DecisionRecord>, sqlx::Error> {
+    let from_str = from.format("%F %T%.6f").to_string();
+    let to_str = to.format("%F %T%.6f").to_string();
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND created_at >= ? AND created_at <= ?
+         ORDER BY created_at ASC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(from_str)
+    .bind(to_str)
+    .bind(BACKTEST_MAX_DECISIONS)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_decision_by_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_id: &str,
+) -> Result<Option<DecisionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(decision_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// #1272: all decisions for a single agent run, tenant-scoped. Used to build
+/// the `GET /v1/graph/run/:run_id` evidence subgraph.
+pub async fn list_decisions_by_run_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    run_id: &str,
+) -> Result<Vec<DecisionRecord>, sqlx::Error> {
+    sqlx::query_as::<_, DecisionRecord>(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+         FROM decisions
+         WHERE tenant_id = ? AND run_id = ?
+         ORDER BY created_at ASC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(SOC_MAX_LIMIT)
+    .fetch_all(pool)
+    .await
+}
+
+/// #1272: the `decision_id` an audit event was linked to (#1301), tenant-scoped.
+/// Used to walk `soc_incidents.source_event_ids` -> `decisions` for the
+/// `GET /v1/graph/incident/:incident_id` evidence subgraph.
+pub async fn get_audit_event_decision_id(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    event_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT decision_id FROM audit_events WHERE tenant_id = ? AND id = ?",
+    )
+    .bind(tenant_id)
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await
+    .map(|opt| opt.flatten())
+}
+
+/// Format an [`AuditEventRecord::created_at`] at microsecond precision
+/// (#1303) rather than relying on the column's `DEFAULT CURRENT_TIMESTAMP`
+/// (second precision, assigned at insert time). Without this, events emitted
+/// within the same wall-clock second sort by insertion order rather than
+/// their logical timestamps, putting timeline views out of chronological
+/// order. "%F %T%.6f" is SQLite's native datetime format with a
+/// fractional-second suffix, so it stays lexicographically sortable and is
+/// decoded by sqlx's chrono support. Shared by [`insert_audit_event`] and
+/// [`insert_audit_events_batch`] so both paths order identically (#1315).
+fn format_audit_created_at(created_at: chrono::DateTime<Utc>) -> String {
+    created_at.format("%F %T%.6f").to_string()
+}
+
+pub async fn insert_audit_event(
+    pool: &SqlitePool,
+    record: &AuditEventRecord,
+) -> Result<(), sqlx::Error> {
+    let created_at = format_audit_created_at(record.created_at);
+    sqlx::query(
+        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&record.id)
+    .bind(&record.tenant_id)
+    .bind(&record.event_type)
+    .bind(&record.agent_id)
+    .bind(&record.user_id)
+    .bind(&record.run_id)
+    .bind(&record.trace_id)
+    .bind(&record.span_id)
+    .bind(&record.skill)
+    .bind(&record.action)
+    .bind(&record.resource)
+    .bind(&record.event_json)
+    .bind(&record.input_hash)
+    .bind(&record.output_hash)
+    .bind(&record.decision_id)
+    .bind(&record.approval_id)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Insert a batch of audit events in a single transaction (#1315). A no-op
+/// for an empty slice. Used by the audit-event batch writer to amortize
+/// per-INSERT overhead for high-volume `/v1/authorize` traffic; produces
+/// identical rows (including the microsecond-precision `created_at`) to
+/// calling [`insert_audit_event`] once per record.
+pub async fn insert_audit_events_batch(
+    pool: &SqlitePool,
+    records: &[AuditEventRecord],
+) -> Result<(), sqlx::Error> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+    let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at) "
+    );
+    qb.push_values(records, |mut b, record| {
+        let created_at = format_audit_created_at(record.created_at);
+        b.push_bind(record.id.clone())
+            .push_bind(record.tenant_id.clone())
+            .push_bind(record.event_type.clone())
+            .push_bind(record.agent_id.clone())
+            .push_bind(record.user_id.clone())
+            .push_bind(record.run_id.clone())
+            .push_bind(record.trace_id.clone())
+            .push_bind(record.span_id.clone())
+            .push_bind(record.skill.clone())
+            .push_bind(record.action.clone())
+            .push_bind(record.resource.clone())
+            .push_bind(record.event_json.clone())
+            .push_bind(record.input_hash.clone())
+            .push_bind(record.output_hash.clone())
+            .push_bind(record.decision_id.clone())
+            .push_bind(record.approval_id.clone())
+            .push_bind(created_at);
+    });
+    qb.build().execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Move `audit_events` rows older than `cutoff` into `audit_events_archive`
+/// (#0106), then delete them from the live table. Runs as a single
+/// transaction so a row is never lost or duplicated across the two tables.
+/// Returns the number of rows archived.
+pub async fn archive_audit_events_older_than(
+    pool: &SqlitePool,
+    cutoff: DateTime<Utc>,
+) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO audit_events_archive
+            (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+         SELECT id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at
+         FROM audit_events
+         WHERE created_at < ?",
+    )
+    .bind(cutoff)
+    .execute(&mut *tx)
+    .await?;
+
+    let result = sqlx::query("DELETE FROM audit_events WHERE created_at < ?")
+        .bind(cutoff)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn get_audit_events_by_run(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    run_id: &str,
+) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AuditEventRecord>(
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC, rowid ASC",
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// List audit events for a tenant, optionally filtered by `decision_id`
+/// (#1301), so operators/compliance can correlate every audit event with a
+/// specific authorization decision. Always tenant-scoped; the optional
+/// filter uses the `(? IS NULL OR col = ?)` static-SQL pattern (CWE-89 safe).
+pub async fn get_all_audit_events(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_id: Option<&str>,
+) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AuditEventRecord>(
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 100",
+    )
+    .bind(tenant_id)
+    .bind(decision_id)
+    .bind(decision_id)
+    .fetch_all(pool)
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_utils::*;
+    use crate::db::*;
+
+    /// #0106: rows older than the cutoff are moved to audit_events_archive
+    /// and removed from audit_events; recent rows are untouched.
+    #[tokio::test]
+    async fn archive_audit_events_older_than_moves_old_rows() {
+        let pool = setup_pool("audit_archival").await;
+        register_tenant(&pool, "tenant_archive", "Archive Tenant", "developer")
+            .await
+            .unwrap();
+
+        let old_event = AuditEventRecord {
+            id: "evt_old".to_string(),
+            tenant_id: "tenant_archive".to_string(),
+            event_type: "decision".to_string(),
+            agent_id: None,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: None,
+            action: None,
+            resource: None,
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: None,
+            approval_id: None,
+            created_at: Utc::now(),
+        };
+        let new_event = AuditEventRecord {
+            id: "evt_new".to_string(),
+            ..old_event.clone()
+        };
+        insert_audit_event(&pool, &old_event).await.unwrap();
+        insert_audit_event(&pool, &new_event).await.unwrap();
+
+        // Backdate evt_old so it falls before the cutoff.
+        sqlx::query(
+            "UPDATE audit_events SET created_at = '2000-01-01T00:00:00Z' WHERE id = 'evt_old'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let cutoff = Utc::now() - chrono::Duration::days(1);
+        let archived = archive_audit_events_older_than(&pool, cutoff)
+            .await
+            .unwrap();
+        assert_eq!(archived, 1);
+
+        let remaining: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = 'evt_old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining.0, 0);
+
+        let archived_row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_events_archive WHERE id = 'evt_old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(archived_row.0, 1);
+
+        let still_present: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = 'evt_new'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(still_present.0, 1);
+    }
+
+    /// #1315: an empty batch is a no-op (no transaction error).
+    #[tokio::test]
+    async fn insert_audit_events_batch_empty_is_noop() {
+        let pool = setup_pool("audit_batch_empty").await;
+        insert_audit_events_batch(&pool, &[]).await.unwrap();
+    }
+
+    /// #1315: a batch insert of N records produces the same rows (same
+    /// columns, same microsecond-precision `created_at` ordering) as N
+    /// sequential `insert_audit_event` calls.
+    #[tokio::test]
+    async fn insert_audit_events_batch_matches_sequential_inserts() {
+        let pool = setup_pool("audit_batch_parity").await;
+        register_tenant(&pool, "tenant_batch", "Batch Tenant", "developer")
+            .await
+            .unwrap();
+
+        let sequential = vec![
+            make_audit_event("evt_seq_0", "tenant_batch"),
+            make_audit_event("evt_seq_1", "tenant_batch"),
+        ];
+        for record in &sequential {
+            insert_audit_event(&pool, record).await.unwrap();
+        }
+
+        let batched = vec![
+            make_audit_event("evt_batch_0", "tenant_batch"),
+            make_audit_event("evt_batch_1", "tenant_batch"),
+            make_audit_event("evt_batch_2", "tenant_batch"),
+        ];
+        insert_audit_events_batch(&pool, &batched).await.unwrap();
+
+        let all = get_all_audit_events(&pool, "tenant_batch", None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), sequential.len() + batched.len());
+        for record in batched.iter().chain(sequential.iter()) {
+            assert!(
+                all.iter().any(|row| row.id == record.id
+                    && row.tenant_id == record.tenant_id
+                    && row.event_type == record.event_type
+                    && row.agent_id == record.agent_id
+                    && row.action == record.action
+                    && row.resource == record.resource
+                    && row.event_json == record.event_json),
+                "missing or mismatched row for {}",
+                record.id
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_approvals_by_decision_ids_empty_input_returns_empty_map_without_querying() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let map = list_approvals_by_decision_ids(&pool, "tenant_graph_perf", &[])
+            .await
+            .unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_action_receipts_by_decision_ids_empty_input_returns_empty_map_without_querying() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let map = list_action_receipts_by_decision_ids(&pool, "tenant_graph_perf", &[])
+            .await
+            .unwrap();
+        assert!(map.is_empty());
+    }
+}
