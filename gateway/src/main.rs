@@ -1103,6 +1103,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/stats", get(routes::get_tenant_stats))
         .route("/v1/admin/db-stats", get(routes::get_db_stats))
         .route("/v1/admin/backup", post(routes::create_db_backup))
+        // SOC Console Dashboard static serving
+        .route(
+            "/dashboard",
+            get(|| async { axum::response::Redirect::permanent("/dashboard/") }),
+        )
+        .route("/dashboard/", get(routes::serve_dashboard_index))
+        .route("/dashboard/app.js", get(routes::serve_dashboard_js))
+        .route("/dashboard/aegis.css", get(routes::serve_dashboard_css))
         // OpenAPI Specification
         .route("/v1/openapi.json", get(routes::get_openapi_spec))
         // Health and version

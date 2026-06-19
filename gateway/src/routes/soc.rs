@@ -1,0 +1,1793 @@
+#![allow(unused_imports)]
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::{
+    body::Bytes,
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
+};
+use chrono::{DateTime, Duration, Utc};
+use hmac::{Hmac, Mac};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::Arc;
+use tracing::{error, info, warn};
+use unicode_normalization::UnicodeNormalization;
+use uuid::Uuid;
+
+use crate::db;
+use crate::events::{AseEvent, EventSink};
+use crate::mcp_inspect;
+use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
+use crate::models::*;
+use crate::policy::PolicyEngine;
+use crate::sign;
+
+use super::*;
+
+// Get Investigation Run Timeline
+pub async fn get_timeline(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    match db::get_audit_events_by_run(&state.pool, &tenant_id, &run_id).await {
+        Ok(events) => (StatusCode::OK, Json(events)).into_response(),
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/audit/events — list audit events for the authenticated tenant.
+///
+/// Query params:
+///   `decision_id` — optional equality filter (#1301).
+pub async fn get_audit_events(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let decision_id = parse_filter(raw_query.as_deref(), "decision_id");
+    match db::get_all_audit_events(&state.pool, &tenant_id, decision_id.as_deref()).await {
+        Ok(events) => (StatusCode::OK, Json(events)).into_response(),
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/decisions — list decisions for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `agent_id` — optional equality filter.
+///   `decision` — optional equality filter.
+pub async fn list_decisions(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
+    let decision = parse_filter(raw_query.as_deref(), "decision");
+
+    match db::list_decisions(
+        &state.pool,
+        &tenant_id,
+        limit,
+        offset,
+        agent_id.as_deref(),
+        decision.as_deref(),
+    )
+    .await
+    {
+        Ok(decisions) => (StatusCode::OK, Json(decisions)).into_response(),
+        Err(e) => {
+            error!("Failed to list decisions: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/decisions/:id — get a single decision detail for the authenticated tenant.
+pub async fn get_decision(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::get_decision_by_id(&state.pool, &tenant_id, &id).await {
+        Ok(Some(decision)) => (StatusCode::OK, Json(decision)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Decision not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to get decision: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub(crate) fn default_detection_rule_enabled() -> bool {
+    true
+}
+
+/// TASK-0088 (#934): create or update (upsert by `rule_key`) a tenant-managed
+/// detection rule. First step toward SOC-003 (#1186) — `condition` and
+/// `summary_template` hold a YAML rule body that will eventually be loaded
+/// by `detect.rs` to replace the hardcoded Rust detection functions.
+pub async fn upsert_detection_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<UpsertDetectionRuleRequest>,
+) -> impl IntoResponse {
+    match db::upsert_detection_rule(
+        &state.pool,
+        &tenant_id,
+        &payload.rule_key,
+        &payload.name,
+        &payload.severity,
+        &payload.condition,
+        &payload.summary_template,
+        payload.enabled,
+    )
+    .await
+    {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => {
+            error!("Failed to upsert detection rule: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// TASK-0088 (#934): list this tenant's detection rules.
+pub async fn list_detection_rules(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::list_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("Failed to list detection rules: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// One entry in the `GET /v1/soc/rules` effective-rule list: a [`rule_dsl::YamlRule`]
+/// annotated with whether it's a built-in default or a tenant-managed custom rule.
+#[derive(Debug, serde::Serialize)]
+pub struct EffectiveDetectionRule {
+    #[serde(flatten)]
+    pub rule: crate::rule_dsl::YamlRule,
+    /// `"default"` (embedded, applies to every tenant) or `"custom"`
+    /// (tenant-managed, from the `detection_rules` table).
+    pub source: &'static str,
+}
+
+/// #1282: the embedded defaults (`rule_dsl::default_rules()`) plus this
+/// tenant's enabled custom rules from `detection_rules`. Mirrors exactly
+/// what `events::drain` evaluates for this tenant's events. Rows whose
+/// `condition` fails to parse/validate are skipped (same as `drain`).
+/// Shared by `get_soc_rules` (#1282) and `backtest_soc_rule` (#1283).
+pub(crate) async fn effective_detection_rules(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<EffectiveDetectionRule>, sqlx::Error> {
+    let mut rules: Vec<EffectiveDetectionRule> = crate::rule_dsl::default_rules()
+        .into_iter()
+        .map(|rule| EffectiveDetectionRule {
+            rule,
+            source: "default",
+        })
+        .collect();
+
+    let records = db::list_detection_rules(pool, tenant_id).await?;
+    for record in records.into_iter().filter(|r| r.enabled) {
+        if let Ok(rule) = crate::rule_dsl::yaml_rule_from_condition(
+            &record.rule_key,
+            &record.name,
+            &record.severity,
+            &record.condition,
+            &record.summary_template,
+        ) {
+            rules.push(EffectiveDetectionRule {
+                rule,
+                source: "custom",
+            });
+        }
+    }
+
+    Ok(rules)
+}
+
+/// #1282: list the *effective* detection rules for this tenant. SOC rule
+/// listing is advisory, never gates `/v1/authorize` (Law 1).
+pub async fn get_soc_rules(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match effective_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("Failed to list detection rules: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1283: optional `[from, to]` window for `backtest_soc_rule`. Both
+/// default to the trailing 7 days when omitted.
+#[derive(Debug, serde::Deserialize)]
+pub struct BacktestRuleRequest {
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+}
+
+/// #1283: backtest one detection rule (default or tenant-custom, looked up
+/// by `rule_key`) against this tenant's historical `decisions` over
+/// `[from, to]` (default: trailing 7 days). Read-only and pure in-memory
+/// evaluation — never writes a `soc_alerts`/`soc_incidents` row, so a
+/// backtest can never affect the live SOC pipeline (Law 1: advisory only).
+pub async fn backtest_soc_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(rule_key): Path<String>,
+    body: Option<Json<BacktestRuleRequest>>,
+) -> impl IntoResponse {
+    let to = body.as_ref().and_then(|b| b.to).unwrap_or_else(Utc::now);
+    let from = body
+        .as_ref()
+        .and_then(|b| b.from)
+        .unwrap_or_else(|| to - Duration::days(7));
+
+    let rules = match effective_detection_rules(&state.pool, &tenant_id).await {
+        Ok(rules) => rules,
+        Err(e) => {
+            error!("Failed to list detection rules: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(effective_rule) = rules.into_iter().find(|r| r.rule.rule_key == rule_key) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("No effective rule with rule_key '{rule_key}'")})),
+        )
+            .into_response();
+    };
+
+    let decisions = match db::list_decisions_in_range(&state.pool, &tenant_id, from, to).await {
+        Ok(decisions) => decisions,
+        Err(e) => {
+            error!("Failed to list decisions for backtest: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let result = crate::backtest::run_backtest(
+        &effective_rule.rule,
+        effective_rule.source,
+        &tenant_id,
+        &decisions,
+        from,
+        to,
+    );
+
+    (StatusCode::OK, Json(result)).into_response()
+}
+
+/// #1282: create or update a tenant-managed custom detection rule, validating
+/// the YAML `condition`/`severity` via [`crate::rule_dsl`] before persisting.
+/// Returns `400` with a descriptive message for an invalid rule (never `500`)
+/// — mirrors the [`UpsertDetectionRuleRequest`]/[`upsert_detection_rule`]
+/// shape but rejects rules that `events::drain` would have to skip.
+pub async fn create_soc_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<UpsertDetectionRuleRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = crate::rule_dsl::yaml_rule_from_condition(
+        &payload.rule_key,
+        &payload.name,
+        &payload.severity,
+        &payload.condition,
+        &payload.summary_template,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("Invalid detection rule: {e}")})),
+        )
+            .into_response();
+    }
+
+    match db::upsert_detection_rule(
+        &state.pool,
+        &tenant_id,
+        &payload.rule_key,
+        &payload.name,
+        &payload.severity,
+        &payload.condition,
+        &payload.summary_template,
+        payload.enabled,
+    )
+    .await
+    {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => {
+            error!("Failed to upsert detection rule: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// #1282: `POST /v1/soc/rules/reload`. Documented no-op: `events::drain`
+/// already loads each tenant's enabled custom rules fresh from
+/// `detection_rules` on every event (Law 3 — out-of-band, never cached), so
+/// there is no cache to invalidate. Kept as a `200` confirmation endpoint for
+/// API compatibility with rule-management tooling.
+pub async fn reload_soc_rules(TenantId(_tenant_id): TenantId) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "message": "Detection rules are loaded fresh on every event; no reload needed"
+        })),
+    )
+}
+
+/// TASK-0088 (#934): delete a tenant's detection rule.
+pub async fn delete_detection_rule(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::delete_detection_rule(&state.pool, &tenant_id, &id).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(json!({"message": "Detection rule successfully deleted"})),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Detection rule not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to delete detection rule: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/alerts — list SOC detection alerts for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `severity` — optional equality filter (e.g. `?severity=high`).
+///   `agent_id`  — optional equality filter (e.g. `?agent_id=abc`).
+/// Returns a JSON array of [`SocAlertRecord`]s ordered newest-first.
+/// Every result row is tenant-scoped via parameterized SQL — never leaks
+/// another tenant's data.
+pub async fn list_alerts(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let severity = parse_filter(raw_query.as_deref(), "severity");
+    let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
+
+    match db::list_soc_alerts(
+        &state.pool,
+        &tenant_id,
+        limit,
+        offset,
+        severity.as_deref(),
+        agent_id.as_deref(),
+    )
+    .await
+    {
+        Ok(alerts) => (StatusCode::OK, Json(alerts)).into_response(),
+        Err(e) => {
+            error!("Failed to list SOC alerts: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /v1/incidents — list SOC correlation incidents for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `status`   — optional filter: `"open"` or `"closed"` (omit for all).
+///   `severity` — optional equality filter (e.g. `?severity=high`).
+///   `agent_id` — optional equality filter (e.g. `?agent_id=abc`).
+/// Returns a JSON array of [`SocIncidentRecord`]s ordered newest-first.
+/// Every result row is tenant-scoped via parameterized SQL — never leaks
+/// another tenant's data.
+pub async fn list_incidents(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let status_filter = parse_filter(raw_query.as_deref(), "status");
+    let severity = parse_filter(raw_query.as_deref(), "severity");
+    let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
+
+    match db::list_soc_incidents(
+        &state.pool,
+        &tenant_id,
+        limit,
+        offset,
+        status_filter.as_deref(),
+        severity.as_deref(),
+        agent_id.as_deref(),
+    )
+    .await
+    {
+        Ok(incidents) => (StatusCode::OK, Json(incidents)).into_response(),
+        Err(e) => {
+            error!("Failed to list SOC incidents: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── SOC query layer: incident detail + aggregate summary ─────────────────────
+
+/// `GET /v1/incidents/:id` — single-incident detail, tenant-scoped.
+///
+/// Returns the full [`SocIncidentRecord`] for the given `id` when it belongs to
+/// the authenticated tenant, or HTTP 404 when the `id` is unknown **or** belongs
+/// to a different tenant (CWE-284: no information leakage across tenants).
+/// Both DB binds (`tenant_id`, `incident_id`) are parameterized — no SQL
+/// concatenation (CWE-89).
+pub async fn get_incident(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(incident)) => (StatusCode::OK, Json(incident)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Incident not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to fetch SOC incident {}: {:?}", incident_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /v1/soc/summary` — tenant-scoped SOC aggregate counts.
+///
+/// Returns `{ alerts_total, alerts_high, incidents_total, incidents_open,
+/// incidents_closed }` derived from five parameterized COUNT queries, all
+/// binding `tenant_id` (CWE-284).  `alerts_high` counts alerts with
+/// `severity = 'high'`; open/closed split on the incident `status` column.
+/// No SQL concatenation occurs (CWE-89).
+pub async fn soc_summary(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match db::soc_summary(&state.pool, &tenant_id).await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(e) => {
+            error!("Failed to compute SOC summary: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── SOC Phase 6: Incident lifecycle ──────────────────────────────────────────
+
+/// `POST /v1/incidents/:id/close` — close an open SOC incident.
+///
+/// Transitions the incident from `"open"` to `"closed"`, stamps `closed_at`,
+/// and writes an `"incident_closed"` audit event. Tenant-scoped: 404 if the
+/// incident does not exist for this tenant. Idempotent on a second call: a
+/// 200 response is returned with `"already_closed": true` so callers can
+/// distinguish the first close from a repeat without erroring.
+///
+/// # Security invariants
+/// * Two parameterized binds on every DB call (`tenant_id` + `id`).
+/// * No payload fields in the audit event — only the incident id and new status.
+/// * `close_soc_incident` uses `AND status != 'closed'` to make the UPDATE
+///   idempotent at the DB level; concurrent closes are safe.
+pub async fn close_incident(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    // First verify the incident exists for this tenant (provides a meaningful 404
+    // rather than a silent no-op when the id is simply wrong or belongs to another
+    // tenant — CWE-284 isolation).
+    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Incident not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch incident for close: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    // If already closed, return a clear idempotent response (200 with a flag).
+    if incident.status == "closed" {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "incident_id": incident.id,
+                "status": "closed",
+                "closed_at": incident.closed_at,
+                "already_closed": true,
+            })),
+        )
+            .into_response();
+    }
+
+    // Atomically flip status → 'closed' and stamp closed_at.
+    let did_close = match db::close_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(b) => b,
+        Err(e) => {
+            error!("Failed to close incident {}: {:?}", incident_id, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    if !did_close {
+        // Race: incident was closed between the get and the update. Treat as
+        // idempotent — re-fetch to return the correct closed_at.
+        return match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+            Ok(Some(inc)) => (
+                StatusCode::OK,
+                Json(json!({
+                    "incident_id": inc.id,
+                    "status": "closed",
+                    "closed_at": inc.closed_at,
+                    "already_closed": true,
+                })),
+            )
+                .into_response(),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response(),
+        };
+    }
+
+    // Re-fetch to pick up the DB-stamped `closed_at` timestamp.
+    let closed_at = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc.closed_at,
+        Ok(None) => None,
+        Err(e) => {
+            error!("Failed to re-fetch incident after close: {:?}", e);
+            None
+        }
+    };
+
+    // SOC-005 (#1158): mean-time-to-resolve — the real gap between this
+    // incident's open and close timestamps. Unparseable timestamps or a
+    // negative duration (clock skew) are skipped silently.
+    if let Some(closed_at_str) = closed_at.as_deref() {
+        if let (Ok(opened), Ok(closed)) = (
+            DateTime::parse_from_rfc3339(&incident.opened_at),
+            DateTime::parse_from_rfc3339(closed_at_str),
+        ) {
+            let resolution_time = closed
+                .with_timezone(&Utc)
+                .signed_duration_since(opened.with_timezone(&Utc));
+            if let Ok(resolution_time) = resolution_time.to_std() {
+                state.metrics.observe_mttr(resolution_time);
+            }
+        }
+    }
+
+    // Write audit event (hashes / ids only — no payloads, no raw evidence).
+    let audit = AuditEventRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.clone(),
+        event_type: "incident_closed".to_string(),
+        agent_id: None,
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        span_id: None,
+        skill: None,
+        action: None,
+        resource: Some(incident_id.clone()),
+        event_json: serde_json::to_string(&json!({
+            "incident_id": incident_id,
+            "new_status": "closed",
+        }))
+        .unwrap_or_default(),
+        input_hash: None,
+        output_hash: None,
+        decision_id: None,
+        approval_id: None,
+        created_at: Utc::now(),
+    };
+    let _ = db::insert_audit_event(&state.pool, &audit).await;
+
+    info!(incident_id = %incident_id, "SOC incident closed");
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "incident_id": incident_id,
+            "status": "closed",
+            "closed_at": closed_at,
+            "already_closed": false,
+        })),
+    )
+        .into_response()
+}
+
+// ── SOC Phase 6: RCA Narrator ────────────────────────────────────────────────
+
+/// GET /v1/incidents/:id/narrate — on-demand RCA narrative for a closed incident.
+///
+/// # LAW-2 compliance
+/// * On-demand only — never called from the authorize / drain hot paths.
+/// * Tenant-scoped db fetch (two parameterized binds: tenant_id + id).
+/// * 404 if the incident does not exist **or** belongs to a different tenant.
+/// * The [`crate::narrate`] module builds the narrative from structured,
+///   already-redacted fields only — never raw evidence or live telemetry.
+/// * The narrator is constructed inside the handler (no AppState mutation).
+pub async fn narrate_incident(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Incident not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch incident for narration: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Construct narrator from env — hermetic template by default, optional Claude.
+    // Never touches AppState; no network call in the default path.
+    let narrator = crate::narrate::from_env();
+    let narrative = narrator.narrate(&incident);
+
+    info!(incident_id = %incident_id, "RCA narrative generated");
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "incident_id": incident.id,
+            "narrative": narrative,
+        })),
+    )
+        .into_response()
+}
+
+pub async fn ws_events(
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let tenant_id = if let Some(token) = params.get("token").or_else(|| params.get("jwt")) {
+        if let Some(tid) = validate_jwt(token) {
+            tid
+        } else if std::env::var("AEGIS_JWT_REQUIRED")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid or expired JWT token"})),
+            )
+                .into_response();
+        } else if token.starts_with("tenant_") {
+            token.to_string()
+        } else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
+            )
+                .into_response();
+        }
+    } else {
+        let auth_header = headers.get("Authorization").and_then(|h| h.to_str().ok());
+        if let Some(auth) = auth_header {
+            if let Some(token) = auth.strip_prefix("Bearer ") {
+                if let Some(tid) = validate_jwt(token) {
+                    tid
+                } else if std::env::var("AEGIS_JWT_REQUIRED")
+                    .map(|v| v == "true")
+                    .unwrap_or(false)
+                {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "Invalid or expired JWT token"})),
+                    )
+                        .into_response();
+                } else if token.starts_with("tenant_") {
+                    token.to_string()
+                } else {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
+                    )
+                        .into_response();
+                }
+            } else {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "Invalid Authorization format"})),
+                )
+                    .into_response();
+            }
+        } else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Missing authentication. A valid token or JWT must be provided."})),
+            )
+                .into_response();
+        }
+    };
+
+    ws.on_upgrade(move |socket| handle_socket(socket, state, tenant_id))
+}
+
+pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, tenant_id: String) {
+    let mut rx = state.events.subscribe();
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(ev) => {
+                        if ev.tenant_id == tenant_id {
+                            if let Ok(msg) = serde_json::to_string(&ev) {
+                                if socket.send(Message::Text(msg)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        // #1305: a slow consumer fell behind the SOC broadcast
+                        // channel and the oldest buffered events were dropped
+                        // (tokio's broadcast channel evicts the oldest entries
+                        // on overflow and advances this receiver's cursor to
+                        // the new oldest message — no further action needed
+                        // for recovery). Tell the client how many events it
+                        // missed so it can resync/alert rather than silently
+                        // missing security events.
+                        let notice = json!({"type": "events_dropped", "count": n});
+                        if let Ok(msg) = serde_json::to_string(&notice) {
+                            if socket.send(Message::Text(msg)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(unused_imports)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use crate::events;
+    use crate::metrics::SecurityMetrics;
+    use crate::models::*;
+    use crate::policy::PolicyEngine;
+    use crate::routes::test_helpers::*;
+    use axum::body::{to_bytes, Bytes};
+    use axum::extract::{FromRequestParts, Path, Query, State};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::Json;
+    use chrono::{DateTime, Duration, Utc};
+    use serde_json::{json, Value};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use uuid::Uuid;
+    /// list_alerts returns an empty array when no alerts exist, not an error.
+    #[tokio::test]
+    async fn list_alerts_empty_when_no_alerts() {
+        let (state, tenant_id, _agent_token) = setup_state("alerts_empty").await;
+
+        let response = list_alerts(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    /// list_incidents returns an empty array when no incidents exist.
+    #[tokio::test]
+    async fn list_incidents_empty_when_no_incidents() {
+        let (state, tenant_id, _agent_token) = setup_state("incidents_empty").await;
+
+        let response = list_incidents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    /// Inserting a SOC alert directly into the DB then calling list_alerts via the
+    /// route returns that alert scoped to the correct tenant.
+    #[tokio::test]
+    async fn list_alerts_returns_tenant_scoped_alerts() {
+        let (state, tenant_id, _agent_token) = setup_state("alerts_tenant_route").await;
+
+        // Directly seed an alert for the tenant.
+        let alert = crate::models::SocAlertRecord {
+            id: "route_alert_1".to_string(),
+            tenant_id: tenant_id.clone(),
+            rule: "confused_deputy_block".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_route".to_string(),
+            source_event_id: "evt_route_1".to_string(),
+            summary: "Route test alert".to_string(),
+            created_at: "2026-06-06T10:00:00Z".to_string(),
+        };
+        db::insert_soc_alert(&state.pool, &alert).await.unwrap();
+
+        let response = list_alerts(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "route_alert_1");
+        assert_eq!(arr[0]["rule"], "confused_deputy_block");
+        assert_eq!(arr[0]["severity"], "high");
+        assert_eq!(arr[0]["tenant_id"], tenant_id.as_str());
+    }
+
+    /// Inserting a SOC incident directly then calling list_incidents via the route
+    /// returns it tenant-scoped.
+    #[tokio::test]
+    async fn list_incidents_returns_tenant_scoped_incidents() {
+        let (state, tenant_id, _agent_token) = setup_state("incidents_tenant_route").await;
+
+        let source_ids = serde_json::to_string(&vec!["evt_1", "evt_2"]).unwrap();
+        let incident = crate::models::SocIncidentRecord {
+            id: "route_inc_1".to_string(),
+            tenant_id: tenant_id.clone(),
+            kind: "deny_storm".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_route".to_string(),
+            summary: "Route test incident".to_string(),
+            source_event_ids: source_ids.clone(),
+            opened_at: "2026-06-06T10:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
+        };
+        db::insert_soc_incident(&state.pool, &incident)
+            .await
+            .unwrap();
+
+        let response = list_incidents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "route_inc_1");
+        assert_eq!(arr[0]["kind"], "deny_storm");
+        assert_eq!(arr[0]["tenant_id"], tenant_id.as_str());
+    }
+
+    /// Helper: insert a bare-minimum incident row for a tenant (no agent required).
+    async fn insert_test_incident(
+        pool: &sqlx::SqlitePool,
+        tenant_id: &str,
+        incident_id: &str,
+        kind: &str,
+    ) {
+        let record = SocIncidentRecord {
+            id: incident_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: kind.to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent-test".to_string(),
+            summary: "Test incident for narration".to_string(),
+            source_event_ids: serde_json::json!(["evt_a", "evt_b"]).to_string(),
+            opened_at: "2026-06-06T12:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
+        };
+        db::insert_soc_incident(pool, &record).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn narrate_incident_returns_narrative_for_own_incident() {
+        let (state, tenant_id, _agent_token) = setup_state("narrate_own").await;
+
+        insert_test_incident(&state.pool, &tenant_id, "inc_narrate_1", "deny_storm").await;
+
+        // Call the handler directly — same pattern used by all other route tests.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", tenant_id).parse().unwrap(),
+        );
+
+        let response = narrate_incident(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("inc_narrate_1".to_string()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["incident_id"], "inc_narrate_1");
+        let narrative = json["narrative"].as_str().unwrap();
+        // Default template must include the incident kind.
+        assert!(
+            narrative.contains("deny_storm"),
+            "narrative must contain kind"
+        );
+    }
+
+    #[tokio::test]
+    async fn narrate_incident_returns_404_for_other_tenants_incident() {
+        let (state, tenant_id, _agent_token) = setup_state("narrate_isolation").await;
+
+        // Register a second tenant and insert the incident under it.
+        let other_tenant = "tenant_other_narrator";
+        db::register_tenant(&state.pool, other_tenant, "Other", "developer")
+            .await
+            .unwrap();
+        insert_test_incident(&state.pool, other_tenant, "inc_other", "deny_storm").await;
+
+        // Authenticate as our tenant and try to fetch the other tenant's incident.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", tenant_id).parse().unwrap(),
+        );
+
+        let response = narrate_incident(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("inc_other".to_string()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "must not expose another tenant's incident"
+        );
+    }
+
+    // ── close_incident route tests ────────────────────────────────────────────
+
+    /// `POST /v1/incidents/:id/close` returns 200 with `status: "closed"` and a
+    /// non-null `closed_at` for a persisted open incident owned by the tenant.
+    #[tokio::test]
+    async fn close_incident_returns_closed_for_own_incident() {
+        let (state, tenant_id, _) = setup_state("close_own").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_close_route_1", "deny_storm").await;
+
+        let (status, json) = do_close(state, &tenant_id, "inc_close_route_1").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "closed");
+        assert_eq!(json["incident_id"], "inc_close_route_1");
+        assert!(
+            !json["closed_at"].is_null(),
+            "closed_at must be set after close"
+        );
+        assert_eq!(json["already_closed"], false);
+    }
+
+    /// `POST /v1/incidents/:id/close` returns 404 when the incident id belongs
+    /// to a different tenant — tenant-isolation (CWE-284).
+    #[tokio::test]
+    async fn close_incident_returns_404_for_other_tenants_incident() {
+        let (state, tenant_id, _) = setup_state("close_iso").await;
+
+        let other_tenant = "tenant_other_close_iso";
+        db::register_tenant(&state.pool, other_tenant, "Other", "developer")
+            .await
+            .unwrap();
+        insert_test_incident(&state.pool, other_tenant, "inc_other_close", "deny_storm").await;
+
+        let (status, json) = do_close(state, &tenant_id, "inc_other_close").await;
+
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "must not expose another tenant's incident"
+        );
+        assert!(json["error"].as_str().is_some());
+    }
+
+    /// A second `POST /v1/incidents/:id/close` is idempotent — returns 200 with
+    /// `already_closed: true` and the original `closed_at` unchanged.
+    #[tokio::test]
+    async fn close_incident_is_idempotent() {
+        let (state, tenant_id, _) = setup_state("close_idempotent_route").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_idem_route", "replay_attempt").await;
+
+        let (s1, j1) = do_close(state.clone(), &tenant_id, "inc_idem_route").await;
+        assert_eq!(s1, StatusCode::OK);
+        assert_eq!(j1["already_closed"], false);
+        let first_closed_at = j1["closed_at"].as_str().unwrap().to_string();
+
+        let (s2, j2) = do_close(state, &tenant_id, "inc_idem_route").await;
+        assert_eq!(s2, StatusCode::OK, "second close must still be 200");
+        assert_eq!(j2["already_closed"], true);
+        assert_eq!(
+            j2["closed_at"].as_str().unwrap(),
+            first_closed_at,
+            "closed_at must not change on second close"
+        );
+    }
+
+    /// #1158 (SOC-005): closing an incident records a mean-time-to-resolve
+    /// sample (the real gap between `opened_at` and `closed_at`), not a
+    /// derived/zero value.
+    #[tokio::test]
+    async fn close_incident_records_mttr_sample() {
+        let (state, tenant_id, _) = setup_state("close_mttr").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_mttr_1", "deny_storm").await;
+
+        assert_eq!(state.metrics.soc_mttr.average_seconds(), 0.0);
+
+        let (status, _) = do_close(state.clone(), &tenant_id, "inc_mttr_1").await;
+        assert_eq!(status, StatusCode::OK);
+
+        // insert_test_incident hardcodes opened_at far in the past, so the
+        // resolution time (now - opened_at) must be a large positive value.
+        assert!(state.metrics.soc_mttr.average_seconds() > 0.0);
+    }
+
+    // ── SOC query layer: get_incident + soc_summary route tests ──────────────
+
+    /// GET /v1/incidents/:id returns 200 with the incident body for the owning tenant.
+    #[tokio::test]
+    async fn get_incident_returns_200_for_own_incident() {
+        let (state, tenant_id, _) = setup_state("get_inc_own").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_get_own", "deny_storm").await;
+
+        let (status, json) = do_get_incident(state, &tenant_id, "inc_get_own").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["id"], "inc_get_own");
+        assert_eq!(json["kind"], "deny_storm");
+        assert_eq!(json["tenant_id"], tenant_id.as_str());
+    }
+
+    /// GET /v1/incidents/:id returns 404 for an unknown id.
+    #[tokio::test]
+    async fn get_incident_returns_404_for_unknown_id() {
+        let (state, tenant_id, _) = setup_state("get_inc_missing").await;
+
+        let (status, json) = do_get_incident(state, &tenant_id, "does_not_exist").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(json["error"].as_str().is_some());
+    }
+
+    /// GET /v1/incidents/:id returns 404 when the incident belongs to a different
+    /// tenant — cross-tenant isolation (CWE-284).
+    #[tokio::test]
+    async fn get_incident_returns_404_cross_tenant() {
+        let (state, tenant_id_a, _) = setup_state("get_inc_cross_tenant").await;
+        // Register a second tenant and insert an incident under it.
+        let tenant_id_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
+        db::register_tenant(&state.pool, &tenant_id_b, "Tenant B", "developer")
+            .await
+            .unwrap();
+        db::insert_soc_incident(
+            &state.pool,
+            &SocIncidentRecord {
+                id: "inc_other_tenant".to_string(),
+                tenant_id: tenant_id_b.clone(),
+                kind: "deny_storm".to_string(),
+                severity: "high".to_string(),
+                agent_id: "agent-b".to_string(),
+                summary: "B's incident".to_string(),
+                source_event_ids: serde_json::json!(["e1"]).to_string(),
+                opened_at: "2026-06-06T12:00:00Z".to_string(),
+                status: "open".to_string(),
+                closed_at: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // tenant_a must get 404, not tenant_b's data.
+        let (status, _) = do_get_incident(state, &tenant_id_a, "inc_other_tenant").await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant incident must return 404"
+        );
+    }
+
+    /// GET /v1/alerts?severity=high only returns high-severity alerts (route-level).
+    #[tokio::test]
+    async fn list_alerts_severity_filter_via_route() {
+        let (state, tenant_id, _) = setup_state("alerts_sev_route").await;
+
+        // Insert 1 high + 1 low alert.
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ra_high".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r1".to_string(),
+                severity: "high".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt1".to_string(),
+                summary: "High alert".to_string(),
+                created_at: "2026-06-06T10:00:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ra_low".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r2".to_string(),
+                severity: "low".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt2".to_string(),
+                summary: "Low alert".to_string(),
+                created_at: "2026-06-06T10:01:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = list_alerts(
+            State(state),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("severity=high".to_string())),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let arr: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = arr.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "only 1 high-severity alert");
+        assert_eq!(arr[0]["id"], "ra_high");
+        assert_eq!(arr[0]["severity"], "high");
+    }
+
+    /// GET /v1/soc/summary returns correct aggregate counts for the tenant.
+    #[tokio::test]
+    async fn soc_summary_returns_correct_counts() {
+        let (state, tenant_id, _) = setup_state("soc_summary_route").await;
+
+        // Seed: 2 alerts (1 high, 1 medium), 2 incidents (1 open, 1 closed).
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ss_a1".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r1".to_string(),
+                severity: "high".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt1".to_string(),
+                summary: "High".to_string(),
+                created_at: "2026-06-06T10:00:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        db::insert_soc_alert(
+            &state.pool,
+            &SocAlertRecord {
+                id: "ss_a2".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "r2".to_string(),
+                severity: "medium".to_string(),
+                agent_id: "ag1".to_string(),
+                source_event_id: "evt2".to_string(),
+                summary: "Medium".to_string(),
+                created_at: "2026-06-06T10:01:00Z".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        insert_test_incident(&state.pool, &tenant_id, "ss_i1", "deny_storm").await;
+        insert_test_incident(&state.pool, &tenant_id, "ss_i2", "exfil").await;
+        db::close_soc_incident(&state.pool, &tenant_id, "ss_i2")
+            .await
+            .unwrap();
+
+        let response = soc_summary(State(state), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["alerts_total"], 2);
+        assert_eq!(json["alerts_high"], 1);
+        assert_eq!(json["incidents_total"], 2);
+        assert_eq!(json["incidents_open"], 1);
+        assert_eq!(json["incidents_closed"], 1);
+    }
+
+    /// GET /v1/soc/summary for a tenant with no data returns all-zero counts.
+    #[tokio::test]
+    async fn soc_summary_returns_zeros_when_empty() {
+        let (state, tenant_id, _) = setup_state("soc_summary_empty").await;
+
+        let response = soc_summary(State(state), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["alerts_total"], 0);
+        assert_eq!(json["alerts_high"], 0);
+        assert_eq!(json["incidents_total"], 0);
+        assert_eq!(json["incidents_open"], 0);
+        assert_eq!(json["incidents_closed"], 0);
+    }
+
+    // --- MCP tool-manifest drift (SOC `mcp_manifest_drift`) ---
+
+    /// TASK-0088 (#934): CRUD lifecycle for tenant-managed detection rules.
+    /// First step toward SOC-003 (#1186)'s YAML-driven detection DSL.
+    #[tokio::test]
+    async fn test_detection_rule_crud_route() {
+        let (state, tenant_id, _) = setup_state("detection_rule_crud").await;
+
+        // 1. List (initially empty)
+        let response = list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+
+        // 2. Upsert (create)
+        let payload = UpsertDetectionRuleRequest {
+            rule_key: "confused_deputy_block".to_string(),
+            name: "Confused deputy block".to_string(),
+            severity: "high".to_string(),
+            condition: "decision == 'deny' && reason contains 'confused_deputy'".to_string(),
+            summary_template: "Confused-deputy action blocked for {{agent_id}}".to_string(),
+            enabled: true,
+        };
+        let response_create = upsert_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_create.status(), StatusCode::CREATED);
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let record: DetectionRuleRecord = serde_json::from_slice(&body_create).unwrap();
+        assert_eq!(record.rule_key, "confused_deputy_block");
+        assert_eq!(record.severity, "high");
+        assert!(record.enabled);
+
+        // 3. List (should contain 1 rule)
+        let response_list = list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response_list.status(), StatusCode::OK);
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].id, record.id);
+
+        // 4. Upsert again with same rule_key (update severity + disable)
+        let payload_update = UpsertDetectionRuleRequest {
+            rule_key: "confused_deputy_block".to_string(),
+            name: "Confused deputy block".to_string(),
+            severity: "critical".to_string(),
+            condition: "decision == 'deny' && reason contains 'confused_deputy'".to_string(),
+            summary_template: "Confused-deputy action blocked for {{agent_id}}".to_string(),
+            enabled: false,
+        };
+        let response_update = upsert_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload_update),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_update.status(), StatusCode::CREATED);
+        let body_update = to_bytes(response_update.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let record_update: DetectionRuleRecord = serde_json::from_slice(&body_update).unwrap();
+        assert_eq!(record_update.id, record.id);
+        assert_eq!(record_update.severity, "critical");
+        assert!(!record_update.enabled);
+
+        // List should still contain exactly 1 rule (upsert, not duplicate)
+        let response_list2 =
+            list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
+        let body_list2 = to_bytes(response_list2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules2: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list2).unwrap();
+        assert_eq!(rules2.len(), 1);
+
+        // 5. Delete
+        let response_delete = delete_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(record.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_delete.status(), StatusCode::OK);
+
+        // 6. Delete again (should return 404)
+        let response_delete_404 = delete_detection_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(record.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+
+        // 7. List (empty again)
+        let response_list3 = list_detection_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        let body_list3 = to_bytes(response_list3.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules3: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list3).unwrap();
+        assert!(rules3.is_empty());
+    }
+
+    /// #1282: `GET /v1/soc/rules` returns the embedded default rule set when a
+    /// tenant has no custom rules, each tagged `source: "default"`.
+    #[tokio::test]
+    async fn test_soc_rules_lists_defaults_with_no_custom_rules() {
+        let (state, tenant_id, _) = setup_state("soc_rules_defaults").await;
+
+        let response = get_soc_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let rules: Vec<Value> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(rules.len(), crate::rule_dsl::default_rules().len());
+        assert!(rules.iter().all(|r| r["source"] == "default"));
+        assert!(rules
+            .iter()
+            .any(|r| r["rule_key"] == "confused_deputy_block"));
+    }
+
+    /// #1282: `POST /v1/soc/rules` validates the YAML condition DSL — a rule
+    /// with an unknown condition key is rejected with `400`, never `500`, and
+    /// is never persisted.
+    #[tokio::test]
+    async fn test_create_soc_rule_rejects_invalid_condition() {
+        let (state, tenant_id, _) = setup_state("soc_rules_invalid").await;
+
+        let payload = UpsertDetectionRuleRequest {
+            rule_key: "bad_rule".to_string(),
+            name: "bad_rule".to_string(),
+            severity: "high".to_string(),
+            condition: "not_a_real_field: true\n".to_string(),
+            summary_template: "should not be created".to_string(),
+            enabled: true,
+        };
+        let response = create_soc_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response_list = list_detection_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert!(rules.is_empty());
+    }
+
+    /// #1282: `POST /v1/soc/rules` accepts a valid custom rule, and
+    /// `GET /v1/soc/rules` then returns it alongside the defaults, tagged
+    /// `source: "custom"`. Tenant isolation: a second tenant's effective
+    /// rules contain only the defaults.
+    #[tokio::test]
+    async fn test_create_soc_rule_then_appears_in_effective_rules() {
+        let (state, tenant_id, _) = setup_state("soc_rules_custom").await;
+
+        let payload = UpsertDetectionRuleRequest {
+            rule_key: "custom_github_force_push".to_string(),
+            name: "custom_github_force_push".to_string(),
+            severity: "medium".to_string(),
+            condition: "tool: github\naction: force_push\n".to_string(),
+            summary_template: "Custom rule: {tool}.{action} ({decision})".to_string(),
+            enabled: true,
+        };
+        let response = create_soc_rule(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response_rules = get_soc_rules(State(state), TenantId(tenant_id))
+            .await
+            .into_response();
+        assert_eq!(response_rules.status(), StatusCode::OK);
+        let body = to_bytes(response_rules.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules: Vec<Value> = serde_json::from_slice(&body).unwrap();
+
+        let custom = rules
+            .iter()
+            .find(|r| r["rule_key"] == "custom_github_force_push")
+            .expect("custom rule should be present");
+        assert_eq!(custom["source"], "custom");
+        assert_eq!(rules.len(), crate::rule_dsl::default_rules().len() + 1);
+    }
+
+    /// #1282: `POST /v1/soc/rules/reload` is a documented no-op `200` (rules
+    /// are always loaded fresh per event — there is no cache to invalidate).
+    #[tokio::test]
+    async fn test_reload_soc_rules_is_a_noop_confirmation() {
+        let (_state, tenant_id, _) = setup_state("soc_rules_reload").await;
+
+        let response = reload_soc_rules(TenantId(tenant_id)).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// #1169: a real WebSocket client connects to `/v1/ws/events`, receives
+    /// `authorize_decision` events emitted for its own tenant within 100ms,
+    /// and never receives events emitted for a different tenant.
+    #[tokio::test]
+    async fn ws_events_stream_is_tenant_scoped() {
+        use axum::routing::get;
+        use axum::Router;
+        use futures_util::StreamExt;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        let (state, _tenant_id, _agent_token) = setup_state("ws_events_stream").await;
+
+        let app = Router::new()
+            .route("/v1/ws/events", get(ws_events))
+            .with_state(state.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("ws://{addr}/v1/ws/events?token=tenant_a");
+        let (mut ws_stream, _resp) = connect_async(url).await.unwrap();
+
+        // Give the server a moment to register the subscription before emitting.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        fn make_event(tenant_id: &str, event_id: &str) -> AseEvent {
+            AseEvent {
+                event_id: event_id.to_string(),
+                occurred_at: Utc::now().to_rfc3339(),
+                tenant_id: tenant_id.to_string(),
+                kind: "authorize_decision".to_string(),
+                agent_id: "agent_ws_test".to_string(),
+                decision: "allow".to_string(),
+                tool: "github".to_string(),
+                action: "read_file".to_string(),
+                resource: None,
+                risk_score: 10,
+                reason: "policy_allow".to_string(),
+                run_id: None,
+                trace_id: None,
+                matched_policies: vec![],
+                redacted_fields: vec![],
+                schema_version: 1,
+            }
+        }
+
+        // Event for a different tenant must NOT be delivered to tenant_a's socket.
+        state
+            .events
+            .emit(make_event("tenant_b", "evt_other_tenant"));
+        // Event for tenant_a must be delivered within 100ms.
+        state.events.emit(make_event("tenant_a", "evt_own_tenant"));
+
+        let msg = tokio::time::timeout(std::time::Duration::from_millis(100), ws_stream.next())
+            .await
+            .expect("event must arrive within 100ms")
+            .expect("stream must not close")
+            .expect("message must not be an error");
+
+        let text = match msg {
+            WsMessage::Text(t) => t,
+            other => panic!("expected text message, got {other:?}"),
+        };
+        let received: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(received["event_id"], "evt_own_tenant");
+        assert_eq!(received["tenant_id"], "tenant_a");
+
+        let _ = ws_stream.close(None).await;
+    }
+
+    /// #1305: a slow WebSocket consumer that falls behind the SOC broadcast
+    /// channel receives an `events_dropped` notification (with a `count` of
+    /// how many events it missed) instead of silently losing events, and the
+    /// connection remains healthy afterward (subsequent events still arrive).
+    #[tokio::test]
+    async fn ws_events_lagged_consumer_gets_drop_notice() {
+        use axum::routing::get;
+        use axum::Router;
+        use futures_util::StreamExt;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        // Tiny capacity so a handful of events emitted back-to-back overflow
+        // the broadcast channel before the WS handler's `rx.recv()` drains
+        // them, making the lag deterministic without 1000+ events.
+        const CAPACITY: usize = 2;
+        let (state, _tenant_id, _agent_token, events_rx) =
+            setup_state_with_events_capacity("ws_events_lagged", CAPACITY).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state.pool.clone(),
+            state.metrics.clone(),
+        ));
+
+        let app = Router::new()
+            .route("/v1/ws/events", get(ws_events))
+            .with_state(state.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("ws://{addr}/v1/ws/events?token=tenant_a");
+        let (mut ws_stream, _resp) = connect_async(url).await.unwrap();
+
+        fn make_event(tenant_id: &str, event_id: &str) -> AseEvent {
+            AseEvent {
+                event_id: event_id.to_string(),
+                occurred_at: Utc::now().to_rfc3339(),
+                tenant_id: tenant_id.to_string(),
+                kind: "authorize_decision".to_string(),
+                agent_id: "agent_ws_test".to_string(),
+                decision: "allow".to_string(),
+                tool: "github".to_string(),
+                action: "read_file".to_string(),
+                resource: None,
+                risk_score: 10,
+                reason: "policy_allow".to_string(),
+                run_id: None,
+                trace_id: None,
+                matched_policies: vec![],
+                redacted_fields: vec![],
+                schema_version: 1,
+            }
+        }
+
+        // Give the server a moment to register the subscription before
+        // emitting, then flood the broadcast channel with more events than
+        // its capacity *before* the handler's select loop gets a chance to
+        // drain them, forcing a `RecvError::Lagged`.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        for i in 0..(CAPACITY * 5) {
+            state
+                .events
+                .emit(make_event("tenant_a", &format!("evt_{i}")));
+        }
+
+        // Drain messages until we see the `events_dropped` notice (or time
+        // out). Subsequent events for tenant_a should still arrive normally
+        // afterward, proving the connection survived the lag.
+        let mut saw_drop_notice = false;
+        let mut saw_event_after_drop = false;
+        for _ in 0..(CAPACITY * 5 + 2) {
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_millis(200), ws_stream.next()).await;
+            let msg = match msg {
+                Ok(Some(Ok(m))) => m,
+                _ => break,
+            };
+            let text = match msg {
+                WsMessage::Text(t) => t,
+                other => panic!("expected text message, got {other:?}"),
+            };
+            let received: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if received["type"] == "events_dropped" {
+                saw_drop_notice = true;
+                assert!(
+                    received["count"].as_u64().unwrap() > 0,
+                    "events_dropped count must be > 0"
+                );
+            } else if saw_drop_notice && received["tenant_id"] == "tenant_a" {
+                saw_event_after_drop = true;
+            }
+        }
+
+        assert!(
+            saw_drop_notice,
+            "slow consumer must receive an events_dropped notification"
+        );
+        assert!(
+            saw_event_after_drop,
+            "connection must remain healthy and deliver events after the drop notice"
+        );
+
+        let _ = ws_stream.close(None).await;
+    }
+}

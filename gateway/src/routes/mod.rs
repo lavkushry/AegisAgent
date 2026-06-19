@@ -1,0 +1,2162 @@
+#![allow(unused_imports)]
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::{
+    body::Bytes,
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
+};
+use chrono::{DateTime, Duration, Utc};
+use hmac::{Hmac, Mac};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::Arc;
+use tracing::{error, info, warn};
+use unicode_normalization::UnicodeNormalization;
+use uuid::Uuid;
+
+use crate::db;
+use crate::events::{AseEvent, EventSink};
+use crate::mcp_inspect;
+use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
+use crate::models::*;
+use crate::policy::PolicyEngine;
+use crate::sign;
+
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::Mutex;
+use std::time::Instant;
+
+// Domain Sub-modules
+pub mod agents;
+pub mod approval;
+pub mod authorize;
+pub mod dashboard;
+pub mod graph;
+pub mod mcp;
+pub mod policy;
+pub mod receipts;
+pub mod soc;
+pub mod tenant;
+pub mod webhooks;
+
+// Re-export all handlers & types to maintain flat namespace
+pub use agents::*;
+pub use approval::*;
+pub use authorize::*;
+pub use dashboard::*;
+pub use graph::*;
+pub use mcp::*;
+pub use policy::*;
+pub use receipts::*;
+pub use soc::*;
+pub use tenant::*;
+pub use webhooks::*;
+#[derive(Debug, Clone)]
+struct TokenBucket {
+    tokens: f64,
+    last_refreshed: Instant,
+}
+
+#[derive(Debug)]
+pub struct RateLimiter {
+    buckets: Mutex<HashMap<String, TokenBucket>>,
+    pub capacity: f64,
+    pub refill_rate: f64,
+}
+
+impl RateLimiter {
+    pub fn new(capacity: f64, refill_rate: f64) -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            capacity,
+            refill_rate,
+        }
+    }
+
+    pub fn check_rate_limit(&self, tenant_id: &str) -> bool {
+        if self.capacity <= 0.0 || self.refill_rate <= 0.0 {
+            return true;
+        }
+
+        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        let bucket = buckets
+            .entry(tenant_id.to_string())
+            .or_insert_with(|| TokenBucket {
+                tokens: self.capacity,
+                last_refreshed: now,
+            });
+
+        let elapsed = now.duration_since(bucket.last_refreshed).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.refill_rate).min(self.capacity);
+        bucket.last_refreshed = now;
+
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct QuotaManager {
+    quotas: Mutex<HashMap<String, (u64, Instant)>>,
+    pub limit: u64,
+    pub window_secs: u64,
+}
+
+impl QuotaManager {
+    pub fn new(limit: u64, window_secs: u64) -> Self {
+        Self {
+            quotas: Mutex::new(HashMap::new()),
+            limit,
+            window_secs,
+        }
+    }
+
+    pub fn check_quota(&self, tenant_id: &str) -> bool {
+        if self.limit == 0 {
+            return true;
+        }
+
+        let mut quotas = self.quotas.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        let (count, window_start) = quotas
+            .entry(tenant_id.to_string())
+            .or_insert_with(|| (0, now));
+
+        if now.duration_since(*window_start).as_secs() >= self.window_secs {
+            *count = 0;
+            *window_start = now;
+        }
+
+        if *count < self.limit {
+            *count += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Per-`approval_id` failed-attempt tracker (#1307, AC#2): brute-forcing
+/// approval IDs against `POST /v1/approvals/:id/{approve,reject,edit}`
+/// produces a stream of 404 (unknown id) or 409 (already-decided/expired)
+/// responses for the *same* `approval_id`. This counts only those failure
+/// outcomes (never successful 200s) in a fixed window and fails closed with
+/// 429 once the limit is reached, independent of the per-IP limiter (an
+/// attacker rotating source IPs cannot bypass this).
+#[derive(Debug)]
+pub struct ApprovalAttemptTracker {
+    attempts: Mutex<HashMap<String, (u64, Instant)>>,
+    pub limit: u64,
+    pub window_secs: u64,
+}
+
+impl ApprovalAttemptTracker {
+    pub fn new(limit: u64, window_secs: u64) -> Self {
+        Self {
+            attempts: Mutex::new(HashMap::new()),
+            limit,
+            window_secs,
+        }
+    }
+
+    /// Returns `true` if `approval_id` has already accumulated `limit` or
+    /// more failed attempts within the current window (i.e. the caller
+    /// should respond 429 without performing any DB work). Does not mutate
+    /// state — call [`record_failure`](Self::record_failure) separately
+    /// once an attempt is determined to have failed.
+    pub fn is_blocked(&self, approval_id: &str) -> bool {
+        if self.limit == 0 {
+            return false;
+        }
+
+        let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        match attempts.get_mut(approval_id) {
+            Some((count, window_start)) => {
+                if now.duration_since(*window_start).as_secs() >= self.window_secs {
+                    *count = 0;
+                    *window_start = now;
+                    false
+                } else {
+                    *count >= self.limit
+                }
+            }
+            None => false,
+        }
+    }
+
+    /// Records a failed (4xx) approval-decision attempt for `approval_id`.
+    pub fn record_failure(&self, approval_id: &str) {
+        if self.limit == 0 {
+            return;
+        }
+
+        let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        let entry = attempts
+            .entry(approval_id.to_string())
+            .or_insert_with(|| (0, now));
+
+        if now.duration_since(entry.1).as_secs() >= self.window_secs {
+            entry.0 = 0;
+            entry.1 = now;
+        }
+
+        entry.0 += 1;
+    }
+}
+
+/// The static registration metadata a `skill_actions` row contributes to a
+/// decision: `(risk, mutates_state, approval_required, default_decision)`.
+pub type SkillActionMeta = (String, bool, bool, String);
+
+/// Bounded, tenant-keyed LRU cache for `db::get_skill_action` lookups on the
+/// authorize hot path (#899). This caches **only static registration metadata**
+/// that changes solely when a tool/MCP action is (re-)registered — and every such
+/// write invalidates the key (see `register_tool` / `discover_mcp_tools`). The
+/// Cedar decision itself is **never** cached: this only avoids a DB JOIN per
+/// authorize, so it cannot change a decision. Fail-closed by construction —
+/// only *positive* hits are stored; an unknown action keeps missing to the DB,
+/// and a stale entry can never outlive the registration that would loosen it.
+pub struct SkillActionCache {
+    inner: Mutex<SkillActionCacheInner>,
+    capacity: usize,
+}
+
+#[derive(Default)]
+struct SkillActionCacheInner {
+    map: HashMap<String, SkillActionMeta>,
+    /// Recency order, least-recent at the front.
+    order: VecDeque<String>,
+}
+
+impl SkillActionCache {
+    /// `capacity == 0` disables the cache (every lookup misses, nothing stored).
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(SkillActionCacheInner::default()),
+            capacity,
+        }
+    }
+
+    pub fn cache_key(tenant_id: &str, skill_key: &str, action_key: &str) -> String {
+        // \x1f (unit separator) cannot appear in these identifiers, so the join
+        // is unambiguous across the three tenant-scoped components.
+        format!("{tenant_id}\x1f{skill_key}\x1f{action_key}")
+    }
+
+    fn touch(order: &mut VecDeque<String>, key: &str) {
+        if let Some(pos) = order.iter().position(|k| k == key) {
+            order.remove(pos);
+        }
+        order.push_back(key.to_string());
+    }
+
+    /// Return a cached positive hit, marking it most-recently-used.
+    pub fn get(&self, key: &str) -> Option<SkillActionMeta> {
+        if self.capacity == 0 {
+            return None;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let val = inner.map.get(key).cloned();
+        if val.is_some() {
+            Self::touch(&mut inner.order, key);
+        }
+        val
+    }
+
+    /// Store a positive lookup result, evicting the least-recent entry if full.
+    pub fn insert(&self, key: String, value: SkillActionMeta) {
+        if self.capacity == 0 {
+            return;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.insert(key.clone(), value);
+        Self::touch(&mut inner.order, &key);
+        while inner.map.len() > self.capacity {
+            if let Some(evict) = inner.order.pop_front() {
+                inner.map.remove(&evict);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Drop a key so the next lookup re-reads the DB (called on every
+    /// registration write that could change the action's settings).
+    pub fn invalidate(&self, key: &str) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.remove(key);
+        if let Some(pos) = inner.order.iter().position(|k| k == key) {
+            inner.order.remove(pos);
+        }
+    }
+}
+
+/// In-memory, bounded LRU dedup cache for `/v1/authorize` replay-protection
+/// nonces (#1306, opt-in). Keyed on `(tenant_id, agent_id, nonce)` so two
+/// different agents (or tenants) can independently use the same nonce
+/// string without colliding — replay protection is a per-agent guarantee,
+/// not a global one.
+///
+/// This is intentionally **not** a strict 5-minute time-bounded cache: it is
+/// a capacity-bounded LRU, so an entry can in principle be evicted before 5
+/// minutes elapse under very high request volume for that tenant/agent, or
+/// persist in memory slightly longer than 5 minutes under low volume. The
+/// AC's "5-minute window" is *approximated* by the combination of:
+///   1. This LRU (catches the common case: duplicate nonce arriving while
+///      still "hot" in memory), and
+///   2. The `timestamp` staleness check in `authorize_action`, which
+///      independently rejects any request whose `timestamp` is more than 5
+///      minutes old — bounding how long a captured request remains
+///      "replayable" even if its nonce has aged out of this cache.
+///
+/// This mirrors the documented approximation style of #1305/#1313. A
+/// strict, durable replay window would require a DB-backed or
+/// timestamp-bucketed store, which is explicitly out of scope per the issue
+/// ("nonce deduplication via in-memory LRU cache, not DB — hot path").
+pub struct ReplayNonceCache {
+    inner: Mutex<ReplayNonceCacheInner>,
+    capacity: usize,
+}
+
+#[derive(Default)]
+struct ReplayNonceCacheInner {
+    seen: HashMap<String, DateTime<Utc>>,
+    /// Recency order, least-recent at the front.
+    order: VecDeque<String>,
+}
+
+impl ReplayNonceCache {
+    /// `capacity == 0` disables the cache (every nonce is treated as unseen).
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(ReplayNonceCacheInner::default()),
+            capacity,
+        }
+    }
+
+    /// Build the composite cache key for a `(tenant, agent, nonce)` triple.
+    /// `\x1f` (unit separator) cannot appear in tenant/agent identifiers, so
+    /// the join is unambiguous.
+    pub fn cache_key(tenant_id: &str, agent_id: &str, nonce: &str) -> String {
+        format!("{tenant_id}\x1f{agent_id}\x1f{nonce}")
+    }
+
+    /// Atomically check-and-insert: returns `true` if `key` was already
+    /// present (replay), or `false` if this is the first time it has been
+    /// seen (and records it as seen now), evicting the least-recently-used
+    /// entry if the cache is at capacity.
+    pub fn check_and_insert(&self, key: &str, now: DateTime<Utc>) -> bool {
+        if self.capacity == 0 {
+            return false;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if inner.seen.contains_key(key) {
+            if let Some(pos) = inner.order.iter().position(|k| k == key) {
+                inner.order.remove(pos);
+            }
+            inner.order.push_back(key.to_string());
+            return true;
+        }
+        inner.seen.insert(key.to_string(), now);
+        inner.order.push_back(key.to_string());
+        while inner.seen.len() > self.capacity {
+            if let Some(evict) = inner.order.pop_front() {
+                inner.seen.remove(&evict);
+            } else {
+                break;
+            }
+        }
+        false
+    }
+}
+
+// Shared app state containing DB pool, Cedar policy engine, and the async SOC
+// event sink (Phase 0): the authorize hot path emits decisions onto it.
+pub struct AppState {
+    pub pool: sqlx::SqlitePool,
+    pub policy_engine: PolicyEngine,
+    pub events: EventSink,
+    /// Process-wide security counters exposed on GET /metrics. Shared
+    /// (`Arc`) with the [`EventSink`] and the out-of-band `drain` task so
+    /// alert/incident/event counters can be incremented out-of-band.
+    pub metrics: Arc<SecurityMetrics>,
+    /// Approval time-to-live in seconds. Configurable via AEGIS_APPROVAL_TTL_SECS
+    /// environment variable (default: 1800 = 30 minutes).
+    pub approval_ttl_secs: i64,
+    pub rate_limiter: RateLimiter,
+    pub quota_manager: QuotaManager,
+    /// Per-source-IP rate limiter for approval-decision callbacks (#1307,
+    /// AC#1): `POST /v1/approvals/:id/{approve,reject,edit}`. Capacity 10,
+    /// refilling at 10/min — independent of the per-tenant `rate_limiter`
+    /// above (which guards `/v1/authorize`).
+    pub approval_callback_ip_limiter: RateLimiter,
+    /// Per-`approval_id` failed-attempt tracker for approval-decision
+    /// callbacks (#1307, AC#2). See [`ApprovalAttemptTracker`].
+    pub approval_attempt_tracker: ApprovalAttemptTracker,
+    /// Read-through cache for registered-action metadata (#899).
+    pub skill_cache: SkillActionCache,
+    /// Opt-in replay-protection nonce dedup cache (#1306). See
+    /// [`ReplayNonceCache`] for the LRU + timestamp-window approximation.
+    pub replay_nonce_cache: ReplayNonceCache,
+    /// Set to `true` once startup initialization (DB pool, migrations, policy
+    /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
+    /// so orchestrators can distinguish "still starting" from "ready".
+    pub startup_complete: std::sync::atomic::AtomicBool,
+    /// Set to `true` when the most recent attempt to persist a decision/audit
+    /// record to SQLite failed. Cleared back to `false` on the next successful
+    /// write. Backs the `audit_writer` field on `GET /readyz` (#1299). Shared
+    /// (`Arc`) with the audit-batch writer task (#1315) so a failed batch
+    /// flush surfaces the same readiness signal as a failed synchronous write.
+    pub audit_writer_unhealthy: Arc<std::sync::atomic::AtomicBool>,
+    /// Non-blocking sink for batched `audit_events` writes (#1315). The
+    /// `/v1/authorize` hot path hands non-critical audit rows to this sink
+    /// instead of inserting them one at a time; a background task
+    /// ([`crate::audit_batch::run_audit_batch_writer`]) flushes them in
+    /// bulk. Critical events (deny on critical risk) bypass this sink and
+    /// are written synchronously.
+    pub audit_batch: crate::audit_batch::AuditBatchSink,
+    /// Opt-in HMAC-SHA256 secret for verifying `X-Hub-Signature-256` on
+    /// `POST /v1/ingest` requests with `source: "github_webhook"` (#1339).
+    /// Configured via `AEGIS_GITHUB_WEBHOOK_SECRET`. When `None` (the
+    /// default), signature verification is skipped entirely, preserving
+    /// pre-#1339 behavior.
+    pub github_webhook_secret: Option<String>,
+    /// HMAC-SHA256 signing secret for verifying `X-Slack-Signature` on
+    /// `POST /v1/callbacks/slack` (#1276). Configured via
+    /// `AEGIS_SLACK_SIGNING_SECRET`. When `None`, the endpoint refuses every
+    /// request with `404` — fail closed, since an unconfigured secret means
+    /// no valid signature can ever be verified.
+    pub slack_signing_secret: Option<String>,
+    /// Optional GitHub App PR commenter (#1382). When `Some`, a background
+    /// task posts a deny comment on GitHub PRs when an agent's PR-related
+    /// action is denied. Configured via `AEGIS_GITHUB_APP_TOKEN`. When
+    /// `None`, PR comments are silently skipped.
+    pub github_pr_commenter: Option<std::sync::Arc<crate::gh_comment::GhPrCommenter>>,
+    /// Optional GitHub Checks API client (#1383). When `Some`, every decision
+    /// on a PR-related GitHub action updates an "Aegis Security Gate" check
+    /// run on the PR's head commit. Configured via `AEGIS_GITHUB_APP_TOKEN`
+    /// (same token as [`Self::github_pr_commenter`]). When `None`, check runs
+    /// are silently skipped.
+    pub github_checks_client: Option<std::sync::Arc<crate::gh_checks::GhChecksClient>>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct Claims {
+    sub: String,
+    tenant_id: Option<String>,
+    exp: usize,
+}
+
+pub(crate) fn validate_jwt(token: &str) -> Option<String> {
+    let secret = std::env::var("AEGIS_JWT_SECRET").ok()?;
+    if secret.trim().is_empty() || secret == "default_secret" {
+        return None;
+    }
+    let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+    let validation = jsonwebtoken::Validation::default();
+    jsonwebtoken::decode::<Claims>(token, &key, &validation)
+        .map(|data| data.claims.tenant_id.unwrap_or(data.claims.sub))
+        .ok()
+}
+
+// Extractor helper to get tenant_id from Bearer token
+#[derive(Debug, Clone)]
+pub struct TenantId(pub String);
+
+#[axum::async_trait]
+impl<S> axum::extract::FromRequestParts<S> for TenantId
+where
+    S: Send + Sync,
+    Arc<AppState>: axum::extract::FromRef<S>,
+{
+    type Rejection = (StatusCode, Json<serde_json::Value>);
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let auth_header = parts
+            .headers
+            .get("Authorization")
+            .and_then(|h| h.to_str().ok())
+            .ok_or((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Missing Authorization header"})),
+            ))?;
+
+        if !auth_header.starts_with("Bearer ") {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid Authorization format"})),
+            ));
+        }
+
+        let token = &auth_header["Bearer ".len()..];
+
+        // Try proper JWT validation first
+        let tenant_id = if let Some(t_id) = validate_jwt(token) {
+            t_id
+        } else {
+            // Check if JWT validation is strictly required
+            if std::env::var("AEGIS_JWT_REQUIRED")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+            {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "Invalid or expired JWT token"})),
+                ));
+            }
+
+            // Fallback to old heuristic
+            if token.starts_with("tenant_") {
+                token.to_string()
+            } else {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(
+                        json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"}),
+                    ),
+                ));
+            }
+        };
+
+        // Extract AppState to verify tenant existence in DB
+        let app_state = <Arc<AppState> as axum::extract::FromRef<S>>::from_ref(state);
+
+        match db::get_tenant_by_id(&app_state.pool, &tenant_id).await {
+            Ok(Some(_)) => Ok(TenantId(tenant_id)),
+            Ok(None) => Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("Tenant '{}' not found", tenant_id)})),
+            )),
+            Err(e) => {
+                error!("Database error checking tenant: {:?}", e);
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error checking tenant"})),
+                ))
+            }
+        }
+    }
+}
+
+pub(crate) fn get_runtime_tenant_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("X-Aegis-Tenant-ID")
+        .or_else(|| headers.get("X-Tenant-ID"))
+        .and_then(|h| h.to_str().ok())
+        .filter(|tenant_id| !tenant_id.trim().is_empty())
+        .map(str::to_string)
+}
+
+pub(crate) fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
+    tool.strip_prefix("mcp:")
+        .filter(|server_key| !server_key.is_empty())
+}
+
+/// TASK-XXXX (#1335): normalize a tool/action identifier before authorization
+/// lookups (`mcp_server_key_from_tool`, `db::get_skill_action`,
+/// `db::get_mcp_tool_by_key`) so that percent-encoding, Unicode normalization
+/// form, or letter-case variation cannot be used to dodge the deny-by-default
+/// "unknown tool" / "unknown MCP server" checks — e.g. `my_tool`, `My_Tool`,
+/// and `my%5Ftool` must all resolve to the same registered identifier (or all
+/// be denied as unknown). Percent-decodes, applies Unicode NFC, then
+/// lowercases. The action_hash / canonicalized payload always uses the
+/// original, un-normalized strings from `payload.tool_call` — only
+/// authorization lookups use the normalized form.
+pub(crate) fn normalize_tool_identifier(value: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| value.to_string());
+    // Trim surrounding whitespace BEFORE lowercasing so any Unicode
+    // whitespace-lookalike at boundaries is removed regardless of case.
+    decoded.nfc().collect::<String>().trim().to_lowercase()
+}
+
+/// Deterministic, order-independent hash of an MCP server's advertised tool
+/// manifest. Re-discovery recomputes this and compares it to the value pinned on
+/// the server row; a mismatch is tool-manifest drift (supply-chain / tool-hijack
+/// signal — the threat the `mcp_manifest_drift` SOC rule surfaces).
+///
+/// This is a server-integrity hash, NOT the byte-parity-locked `aegis-jcs-1`
+/// action/receipt hash, so it carries its own `mcp-manifest-1` scheme tag and is
+/// not covered by the cross-language corpus. It hashes only the security-relevant
+/// shape of each tool (key, name, description, risk, mutation, approval, input
+/// schema) — never any call payload. Tools are sorted by `tool_key` so discovery
+/// order never changes the hash.
+pub(crate) fn compute_mcp_manifest_hash(tools: &[McpToolManifestItem]) -> String {
+    let mut entries: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            json!({
+                "tool_key": t.tool_key,
+                "name": t.name,
+                "description": t.description,
+                "risk": t.risk,
+                "mutates_state": t.mutates_state,
+                "approval_required": t.approval_required,
+                "input_schema": t.input_schema,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        a.get("tool_key")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(
+                b.get("tool_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+    });
+    let canonical = canonical_value_string(&Value::Array(entries));
+    format!("sha256:{}", sha256_hex(canonical.as_bytes()))
+}
+
+/// #1336: classify MCP manifest drift and describe what changed between the
+/// previously discovered manifest (`old_tools`) and the newly discovered one
+/// (`new_tools`), so a binary hash mismatch becomes an actionable, severity-aware
+/// alert instead of a single generic "drift" signal.
+///
+/// Returns the highest-severity classification that applies, in precedence order:
+///   - `tool_added` / `tool_removed` — a tool was added or removed (high)
+///   - `tool_modified` — an existing tool's risk/mutation/approval/input_schema
+///     changed, e.g. a new parameter was added (medium)
+///   - `metadata_changed` — only a tool's name/description changed (low)
+///
+/// along with a human-readable, secret-free diff summary (tool keys only).
+pub(crate) fn classify_manifest_drift(
+    old_tools: &[McpToolManifestItem],
+    new_tools: &[McpToolManifestItem],
+) -> (&'static str, String) {
+    let old_by_key: BTreeMap<&str, &McpToolManifestItem> =
+        old_tools.iter().map(|t| (t.tool_key.as_str(), t)).collect();
+    let new_by_key: BTreeMap<&str, &McpToolManifestItem> =
+        new_tools.iter().map(|t| (t.tool_key.as_str(), t)).collect();
+
+    let added: Vec<&str> = new_by_key
+        .keys()
+        .filter(|k| !old_by_key.contains_key(*k))
+        .copied()
+        .collect();
+    let removed: Vec<&str> = old_by_key
+        .keys()
+        .filter(|k| !new_by_key.contains_key(*k))
+        .copied()
+        .collect();
+
+    let mut modified: Vec<&str> = Vec::new();
+    let mut metadata_changed: Vec<&str> = Vec::new();
+    for (key, new_tool) in &new_by_key {
+        if let Some(old_tool) = old_by_key.get(key) {
+            if old_tool.risk != new_tool.risk
+                || old_tool.mutates_state != new_tool.mutates_state
+                || old_tool.approval_required != new_tool.approval_required
+                || old_tool.input_schema != new_tool.input_schema
+            {
+                modified.push(key);
+            } else if old_tool.name != new_tool.name || old_tool.description != new_tool.description
+            {
+                metadata_changed.push(key);
+            }
+        }
+    }
+
+    let mut diff_parts: Vec<String> = Vec::new();
+    if !added.is_empty() {
+        diff_parts.push(format!("tools added: {}", added.join(", ")));
+    }
+    if !removed.is_empty() {
+        diff_parts.push(format!("tools removed: {}", removed.join(", ")));
+    }
+    if !modified.is_empty() {
+        diff_parts.push(format!("tools modified: {}", modified.join(", ")));
+    }
+    if !metadata_changed.is_empty() {
+        diff_parts.push(format!("metadata changed: {}", metadata_changed.join(", ")));
+    }
+
+    let classification = if !added.is_empty() {
+        "tool_added"
+    } else if !removed.is_empty() {
+        "tool_removed"
+    } else if !modified.is_empty() {
+        "tool_modified"
+    } else if !metadata_changed.is_empty() {
+        "metadata_changed"
+    } else {
+        // The manifest hash differs but no per-field diff was found (e.g. no prior
+        // snapshot was available to diff against) — fail closed to the
+        // medium-severity bucket rather than silently dropping the signal.
+        "tool_modified"
+    };
+
+    let diff = if diff_parts.is_empty() {
+        "manifest changed (no prior snapshot available to diff against)".to_string()
+    } else {
+        diff_parts.join("; ")
+    };
+
+    (classification, diff)
+}
+
+/// #1336: map a [`classify_manifest_drift`] classification to a SOC severity —
+/// `tool_added`/`tool_removed` (a tool's presence changed) are `"high"`,
+/// `tool_modified` (an existing tool's security-relevant shape changed, e.g. a
+/// new parameter) is `"medium"`, and `metadata_changed` (cosmetic-only) is
+/// `"low"`.
+pub(crate) fn severity_for_manifest_drift(classification: &str) -> &'static str {
+    match classification {
+        "tool_added" | "tool_removed" => "high",
+        "tool_modified" => "medium",
+        _ => "low",
+    }
+}
+
+/// Canonical (scheme `aegis-jcs-1`) string for an arbitrary JSON value. Used for
+/// action-receipt hashing; MUST match the SDK's `canonicalize()` byte-for-byte
+/// (see `docs/action-receipt-spec.md` and `tests/receipt_chain_vectors.json`).
+pub(crate) fn canonical_value_string(value: &Value) -> String {
+    serde_json::to_string(&canonicalize_json(value.clone())).unwrap_or_default()
+}
+
+/// The hashed body of an action receipt: every semantic field plus the chain
+/// link, excluding `receipt_hash` and the volatile DB `created_at`. Built
+/// identically at emit time and verify time so the hash is reproducible. All
+/// fields are strings/null (no round-trip drift). Scheme aegis-jcs-1.
+pub(crate) fn receipt_body_value(rec: &ActionReceiptRecord) -> Value {
+    json!({
+        "event_id": rec.id,
+        "ts": rec.ts,
+        "agent_id": rec.agent_id,
+        "user_id": rec.user_id,
+        "run_id": rec.run_id,
+        "trace_id": rec.trace_id,
+        "tool": rec.tool,
+        "action": rec.action,
+        "resource": rec.resource,
+        "source_trust": rec.source_trust,
+        "decision": rec.decision,
+        "approver": rec.approver,
+        "action_hash": rec.action_hash,
+        "prev_receipt_hash": rec.prev_receipt_hash,
+    })
+}
+
+pub(crate) fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
+    sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
+}
+
+/// #1312: the hashed body of a `policy_audit_log` entry — every semantic field
+/// plus the chain link, excluding `entry_hash` and the volatile DB
+/// `created_at`. Mirrors [`receipt_body_value`]'s shape for the policy
+/// transparency log. Scheme aegis-jcs-1.
+pub(crate) fn policy_audit_log_entry_value(rec: &PolicyAuditLogRecord) -> Value {
+    json!({
+        "id": rec.id,
+        "tenant_id": rec.tenant_id,
+        "policy_id": rec.policy_id,
+        "policy_key": rec.policy_key,
+        "action": rec.action,
+        "changed_by": rec.changed_by,
+        "body_hash": rec.body_hash,
+        "diff_summary": rec.diff_summary,
+        "prev_hash": rec.prev_hash,
+    })
+}
+
+pub(crate) fn compute_policy_audit_log_entry_hash(rec: &PolicyAuditLogRecord) -> String {
+    sha256_hex(canonical_value_string(&policy_audit_log_entry_value(rec)).as_bytes())
+}
+
+// ── SOC Phase 5: Indexer Query API ───────────────────────────────────────────
+
+/// Parse a `?limit=` / `?offset=` query string with sane defaults and hard caps.
+/// Avoids extracting `axum::extract::Query<HashMap<…>>` to keep the code simple;
+/// falls back to the default on any parse error.
+pub(crate) fn parse_pagination(query: Option<&str>) -> (i64, i64) {
+    let mut limit = db::SOC_DEFAULT_LIMIT;
+    let mut offset = 0i64;
+
+    if let Some(q) = query {
+        for pair in q.split('&') {
+            let mut kv = pair.splitn(2, '=');
+            match (kv.next(), kv.next()) {
+                (Some("limit"), Some(v)) => {
+                    if let Ok(n) = v.parse::<i64>() {
+                        limit = n;
+                    }
+                }
+                (Some("offset"), Some(v)) => {
+                    if let Ok(n) = v.parse::<i64>() {
+                        offset = n.max(0);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (limit.clamp(1, db::SOC_MAX_LIMIT), offset)
+}
+
+/// Parse an optional equality filter value from a raw query string.
+/// Returns `Some(value)` only when the key is present and non-empty; combined
+/// with the `(? IS NULL OR col = ?)` SQL pattern this keeps all SQL strings
+/// STATIC and avoids any concatenation (CWE-89 safe).
+pub(crate) fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
+    query?.split('&').find_map(|pair| {
+        let mut kv = pair.splitn(2, '=');
+        match (kv.next(), kv.next()) {
+            (Some(k), Some(v)) if k == key && !v.is_empty() => Some(v.to_string()),
+            _ => None,
+        }
+    })
+}
+
+pub async fn get_openapi_spec() -> impl IntoResponse {
+    let spec = json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "AegisAgent Control Plane API",
+            "version": env!("CARGO_PKG_VERSION"),
+            "description": "API specification for AegisAgent Gateway - fail-closed approval integrity, deterministic trust-provenance gating, and verifiable action receipts."
+        },
+        "paths": {
+            "/health": {
+                "get": {
+                    "summary": "Health status",
+                    "responses": {
+                        "200": { "description": "System is healthy" }
+                    }
+                }
+            },
+            "/v1/version": {
+                "get": {
+                    "summary": "Version information",
+                    "responses": {
+                        "200": { "description": "Version details" }
+                    }
+                }
+            },
+            "/v1/agents/register": {
+                "post": {
+                    "summary": "Register a new agent",
+                    "responses": {
+                        "201": { "description": "Agent registered successfully" }
+                    }
+                }
+            },
+            "/v1/agents": {
+                "get": {
+                    "summary": "List agents",
+                    "responses": {
+                        "200": { "description": "List of agents" }
+                    }
+                }
+            },
+            "/v1/agents/{id}": {
+                "get": {
+                    "summary": "Get agent details",
+                    "responses": {
+                        "200": { "description": "Agent details" }
+                    }
+                },
+                "patch": {
+                    "summary": "Update agent metadata",
+                    "responses": {
+                        "200": { "description": "Agent updated" }
+                    }
+                },
+                "delete": {
+                    "summary": "Delete an agent",
+                    "responses": {
+                        "200": { "description": "Agent deleted" }
+                    }
+                }
+            },
+            "/v1/agents/{id}/freeze": {
+                "post": {
+                    "summary": "Freeze an agent",
+                    "responses": {
+                        "200": { "description": "Agent frozen" }
+                    }
+                }
+            },
+            "/v1/agents/{id}/unfreeze": {
+                "post": {
+                    "summary": "Unfreeze an agent",
+                    "responses": {
+                        "200": { "description": "Agent unfrozen" }
+                    }
+                }
+            },
+            "/v1/agents/{id}/revoke": {
+                "post": {
+                    "summary": "Revoke an agent",
+                    "responses": {
+                        "200": { "description": "Agent revoked" }
+                    }
+                }
+            },
+            "/v1/tools": {
+                "post": {
+                    "summary": "Register a tool",
+                    "responses": {
+                        "200": { "description": "Tool registered" }
+                    }
+                }
+            },
+            "/v1/mcp/servers": {
+                "get": {
+                    "summary": "List MCP servers",
+                    "responses": {
+                        "200": { "description": "List of MCP servers" }
+                    }
+                },
+                "post": {
+                    "summary": "Register an MCP server",
+                    "responses": {
+                        "201": { "description": "MCP server registered" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}": {
+                "get": {
+                    "summary": "Get MCP server details",
+                    "responses": {
+                        "200": { "description": "MCP server details" }
+                    }
+                },
+                "put": {
+                    "summary": "Update MCP server metadata",
+                    "responses": {
+                        "200": { "description": "MCP server updated" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/tools": {
+                "get": {
+                    "summary": "Get MCP tool manifest",
+                    "responses": {
+                        "200": { "description": "Tool manifest" }
+                    }
+                },
+                "post": {
+                    "summary": "Discover MCP tools",
+                    "responses": {
+                        "200": { "description": "Tools discovered" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/tools/{tool_key}/approve": {
+                "post": {
+                    "summary": "Approve an MCP tool",
+                    "responses": {
+                        "200": { "description": "Tool approved" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/tools/{tool_key}/disable": {
+                "post": {
+                    "summary": "Disable an MCP tool",
+                    "responses": {
+                        "200": { "description": "Tool disabled" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/quarantine": {
+                "post": {
+                    "summary": "Quarantine MCP server",
+                    "responses": {
+                        "200": { "description": "Server quarantined" }
+                    }
+                }
+            },
+            "/v1/mcp/servers/{server_key}/restore": {
+                "post": {
+                    "summary": "Restore MCP server",
+                    "responses": {
+                        "200": { "description": "Server restored" }
+                    }
+                }
+            },
+            "/v1/authorize": {
+                "post": {
+                    "summary": "Authorize tool action",
+                    "responses": {
+                        "200": { "description": "Authorization decision" }
+                    }
+                }
+            },
+            "/v1/decisions": {
+                "get": {
+                    "summary": "List decisions",
+                    "responses": {
+                        "200": { "description": "List of decisions" }
+                    }
+                }
+            },
+            "/v1/decisions/{id}": {
+                "get": {
+                    "summary": "Get decision details",
+                    "responses": {
+                        "200": { "description": "Decision details" }
+                    }
+                }
+            },
+            "/v1/policies": {
+                "get": {
+                    "summary": "List custom policies",
+                    "responses": {
+                        "200": { "description": "List of custom policies" }
+                    }
+                },
+                "post": {
+                    "summary": "Create custom Cedar policy",
+                    "responses": {
+                        "201": { "description": "Policy created" }
+                    }
+                }
+            },
+            "/v1/policies/{id}": {
+                "put": {
+                    "summary": "Update Cedar policy",
+                    "responses": {
+                        "200": { "description": "Policy updated" }
+                    }
+                },
+                "delete": {
+                    "summary": "Delete custom policy",
+                    "responses": {
+                        "200": { "description": "Policy deleted" }
+                    }
+                }
+            },
+            "/v1/policies/{id}/rollback": {
+                "post": {
+                    "summary": "Roll back a policy to its most recently archived version",
+                    "responses": {
+                        "200": { "description": "Policy rolled back to the previous version" },
+                        "404": { "description": "Policy not found, or no previous version to roll back to" }
+                    }
+                }
+            },
+            "/v1/policies/reload": {
+                "post": {
+                    "summary": "Reload global policies",
+                    "responses": {
+                        "200": { "description": "Policies reloaded" }
+                    }
+                }
+            },
+            "/v1/tenants/risk-weights": {
+                "get": {
+                    "summary": "Get the tenant's composite risk score weights (#1289, advisory)",
+                    "responses": {
+                        "200": { "description": "Effective risk weights (per-tenant override or env-configured defaults)" }
+                    }
+                },
+                "put": {
+                    "summary": "Set the tenant's composite risk score weight overrides (#1289, advisory)",
+                    "responses": {
+                        "200": { "description": "Risk weights updated" }
+                    }
+                }
+            },
+            "/v1/webhook_subscriptions": {
+                "get": {
+                    "summary": "List tenant webhook subscriptions",
+                    "responses": {
+                        "200": { "description": "List of webhook subscriptions" }
+                    }
+                },
+                "post": {
+                    "summary": "Register a webhook subscription for SOC notifications",
+                    "responses": {
+                        "201": { "description": "Webhook subscription created" }
+                    }
+                }
+            },
+            "/v1/webhook_subscriptions/{id}": {
+                "delete": {
+                    "summary": "Delete a webhook subscription",
+                    "responses": {
+                        "200": { "description": "Webhook subscription deleted" }
+                    }
+                }
+            },
+            "/v1/detection_rules": {
+                "get": {
+                    "summary": "List tenant detection rules",
+                    "responses": {
+                        "200": { "description": "List of detection rules" }
+                    }
+                },
+                "post": {
+                    "summary": "Create or update a detection rule",
+                    "responses": {
+                        "201": { "description": "Detection rule created or updated" }
+                    }
+                }
+            },
+            "/v1/detection_rules/{id}": {
+                "delete": {
+                    "summary": "Delete a detection rule",
+                    "responses": {
+                        "200": { "description": "Detection rule deleted" }
+                    }
+                }
+            },
+            "/v1/soc/rules": {
+                "get": {
+                    "summary": "List effective SOC detection rules (#1282, embedded defaults + tenant custom rules)",
+                    "responses": {
+                        "200": { "description": "List of effective detection rules, each tagged source: default|custom" }
+                    }
+                },
+                "post": {
+                    "summary": "Create or update a tenant custom detection rule (#1282, validated YAML condition DSL)",
+                    "responses": {
+                        "201": { "description": "Detection rule created or updated" },
+                        "400": { "description": "Invalid rule condition, severity, or decision/trust-level value" }
+                    }
+                }
+            },
+            "/v1/soc/rules/reload": {
+                "post": {
+                    "summary": "Reload SOC detection rules (#1282, no-op: rules are always loaded fresh per event)",
+                    "responses": {
+                        "200": { "description": "Confirmation that rules are already loaded fresh" }
+                    }
+                }
+            },
+            "/v1/graph/run/{run_id}": {
+                "get": {
+                    "summary": "Evidence graph for one agent run (#1272, vis.js-compatible {nodes, edges})",
+                    "responses": {
+                        "200": { "description": "EvidenceGraph for the run: agent, tool calls, decisions, approvals, receipts, matched policies" },
+                        "404": { "description": "No decisions found for this run_id in this tenant" }
+                    }
+                }
+            },
+            "/v1/graph/incident/{incident_id}": {
+                "get": {
+                    "summary": "Evidence graph for one SOC incident (#1272, vis.js-compatible {nodes, edges})",
+                    "responses": {
+                        "200": { "description": "EvidenceGraph for the incident: incident, agent, and linked decisions" },
+                        "404": { "description": "Incident not found for this tenant" }
+                    }
+                }
+            },
+            "/v1/graph/agent/{agent_id}": {
+                "get": {
+                    "summary": "Agent-centric evidence graph (#1272, vis.js-compatible {nodes, edges}); optional ?depth=N (1-5, default 3)",
+                    "responses": {
+                        "200": { "description": "EvidenceGraph for the agent: recent decisions, and (depth>=2) approvals/receipts/policies, and (depth>=3) linked incidents" },
+                        "404": { "description": "Agent not found for this tenant" }
+                    }
+                }
+            },
+            "/v1/api_keys": {
+                "get": {
+                    "summary": "List tenant API keys",
+                    "responses": {
+                        "200": { "description": "List of API keys" }
+                    }
+                },
+                "post": {
+                    "summary": "Create a new tenant API key (plaintext key returned once)",
+                    "responses": {
+                        "201": { "description": "API key created" }
+                    }
+                }
+            },
+            "/v1/api_keys/{id}/revoke": {
+                "post": {
+                    "summary": "Revoke a tenant API key",
+                    "responses": {
+                        "200": { "description": "API key revoked" }
+                    }
+                }
+            },
+            "/v1/approvals": {
+                "get": {
+                    "summary": "List approvals",
+                    "responses": {
+                        "200": { "description": "List of approvals" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}": {
+                "get": {
+                    "summary": "Get approval details",
+                    "responses": {
+                        "200": { "description": "Approval details" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/approve": {
+                "post": {
+                    "summary": "Approve approval request",
+                    "responses": {
+                        "200": { "description": "Approved successfully" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/reject": {
+                "post": {
+                    "summary": "Reject approval request",
+                    "responses": {
+                        "200": { "description": "Rejected successfully" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/edit": {
+                "post": {
+                    "summary": "Edit parameters bound to approval",
+                    "responses": {
+                        "200": { "description": "Approval edited" }
+                    }
+                }
+            },
+            "/v1/approvals/{id}/consume": {
+                "post": {
+                    "summary": "Consume single-use approval",
+                    "responses": {
+                        "200": { "description": "Approval consumed" }
+                    }
+                }
+            },
+            "/v1/runs/{id}/timeline": {
+                "get": {
+                    "summary": "Get timeline events",
+                    "responses": {
+                        "200": { "description": "List of timeline events" }
+                    }
+                }
+            },
+            "/v1/audit/events": {
+                "get": {
+                    "summary": "Get audit events log",
+                    "responses": {
+                        "200": { "description": "List of audit events" }
+                    }
+                }
+            },
+            "/v1/compliance/evidence-pack": {
+                "get": {
+                    "summary": "Download a compliance evidence pack (SOC 2 Type II / EU AI Act Art. 14)",
+                    "description": "Returns a tenant-scoped ZIP archive containing manifest.json, receipts.jsonl, audit_events.jsonl, policies.json, incidents.json, and approvals.json. Receipts may include Ed25519 signatures (non-repudiation); approvals include approver_user_id (human oversight evidence).",
+                    "parameters": [
+                        {
+                            "name": "from",
+                            "in": "query",
+                            "required": false,
+                            "schema": { "type": "string", "format": "date-time" },
+                            "description": "RFC-3339 lower bound for date-filtered entries (receipts, audit events, approvals, incidents). Omit for an open lower bound."
+                        },
+                        {
+                            "name": "to",
+                            "in": "query",
+                            "required": false,
+                            "schema": { "type": "string", "format": "date-time" },
+                            "description": "RFC-3339 upper bound for date-filtered entries. Omit for an open upper bound."
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "ZIP archive",
+                            "content": {
+                                "application/zip": { "schema": { "type": "string", "format": "binary" } }
+                            }
+                        },
+                        "400": { "description": "Invalid from/to RFC-3339 timestamp" }
+                    }
+                }
+            },
+            "/v1/receipts": {
+                "get": {
+                    "summary": "List action receipts",
+                    "responses": {
+                        "200": { "description": "List of receipts" }
+                    }
+                }
+            },
+            "/v1/receipts/{id}": {
+                "get": {
+                    "summary": "Get receipt details",
+                    "responses": {
+                        "200": { "description": "Receipt details" }
+                    }
+                }
+            },
+            "/v1/receipts/{id}/verify": {
+                "get": {
+                    "summary": "Verify single receipt hash integrity",
+                    "responses": {
+                        "200": { "description": "Verification status" }
+                    }
+                }
+            },
+            "/v1/receipts/verify-chain": {
+                "post": {
+                    "summary": "Verify sequential receipt chain linkage",
+                    "responses": {
+                        "200": { "description": "Chain verification result" }
+                    }
+                }
+            },
+            "/v1/alerts": {
+                "get": {
+                    "summary": "List SOC alerts",
+                    "responses": {
+                        "200": { "description": "List of SOC alerts" }
+                    }
+                }
+            },
+            "/v1/incidents": {
+                "get": {
+                    "summary": "List SOC incidents",
+                    "responses": {
+                        "200": { "description": "List of SOC incidents" }
+                    }
+                }
+            },
+            "/v1/incidents/{id}": {
+                "get": {
+                    "summary": "Get SOC incident details",
+                    "responses": {
+                        "200": { "description": "Incident details" }
+                    }
+                }
+            },
+            "/v1/incidents/{id}/close": {
+                "post": {
+                    "summary": "Close SOC incident",
+                    "responses": {
+                        "200": { "description": "Incident closed" }
+                    }
+                }
+            },
+            "/v1/incidents/{id}/narrate": {
+                "get": {
+                    "summary": "Narrate closed SOC incident RCA",
+                    "responses": {
+                        "200": { "description": "RCANarrator output" }
+                    }
+                }
+            },
+            "/v1/soc/summary": {
+                "get": {
+                    "summary": "Get aggregated SOC counts summary",
+                    "responses": {
+                        "200": { "description": "Aggregate SOC summary" }
+                    }
+                }
+            },
+            "/v1/tenants": {
+                "post": {
+                    "summary": "Create new tenant",
+                    "responses": {
+                        "201": { "description": "Tenant created" }
+                    }
+                }
+            },
+            "/v1/tenants/{id}": {
+                "get": {
+                    "summary": "Get tenant info details",
+                    "responses": {
+                        "200": { "description": "Tenant info details" }
+                    }
+                },
+                "delete": {
+                    "summary": "Permanently delete a tenant and all owned data (GDPR right to erasure)",
+                    "responses": {
+                        "204": { "description": "Tenant and all owned data deleted" },
+                        "404": { "description": "Tenant not found" }
+                    }
+                }
+            },
+            "/v1/ws/events": {
+                "get": {
+                    "summary": "WebSocket live events stream",
+                    "responses": {
+                        "101": { "description": "Protocol upgraded to WebSocket" }
+                    }
+                }
+            },
+            "/v1/stats": {
+                "get": {
+                    "summary": "Get tenant statistics summary",
+                    "responses": {
+                        "200": { "description": "Tenant stats" }
+                    }
+                }
+            },
+            "/v1/admin/db-stats": {
+                "get": {
+                    "summary": "Get whole-database operational stats (size, per-table row counts)",
+                    "responses": {
+                        "200": { "description": "DB stats" }
+                    }
+                }
+            },
+            "/v1/admin/backup": {
+                "post": {
+                    "summary": "Create a point-in-time database backup copy",
+                    "responses": {
+                        "200": { "description": "Backup created" },
+                        "400": { "description": "Invalid filename" },
+                        "409": { "description": "Backup file already exists" }
+                    }
+                }
+            }
+        }
+    });
+
+    (StatusCode::OK, Json(spec))
+}
+
+/// Test/benchmark-only helpers for constructing a real [`AppState`] backed by
+/// a real SQLite pool with migrations applied (TASK-1313).
+///
+/// This mirrors the `setup_state_with_events_capacity` helper in
+/// `mod tests` below, but is `pub` so the criterion benchmark in
+/// `benches/authorize_benchmark.rs` can build an end-to-end harness for
+/// `authorize_action` without duplicating the seeding logic. Kept out of
+/// `#[cfg(test)]` so it is compiled for `cargo bench` (which builds with
+/// `--release` and without `cfg(test)`), but it is not part of the gateway's
+/// public HTTP API or invariants — it exists purely to exercise the real
+/// handler in benchmarks.
+pub mod benchutil {
+    use super::*;
+    use crate::events::EventSink;
+    use crate::policy::PolicyEngine;
+
+    /// Build a fresh [`AppState`] against a tempfile SQLite DB with
+    /// migrations applied, a registered tenant, and a registered agent whose
+    /// plaintext token is returned alongside the tenant id.
+    ///
+    /// `db_path` should be a unique filesystem path (e.g. under a tempdir)
+    /// so repeated benchmark setups don't collide.
+    pub async fn setup_bench_state(
+        db_path: &str,
+    ) -> Result<(Arc<AppState>, String, String), sqlx::Error> {
+        let db_url = format!("sqlite://{}", db_path);
+        let pool = db::init_db(&db_url).await?;
+
+        let tenant_id = "tenant_bench".to_string();
+        db::register_tenant(&pool, &tenant_id, "Bench Tenant", "developer").await?;
+
+        let agent_id = Uuid::new_v4().to_string();
+        let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+        let agent = AgentRecord {
+            id: agent_id,
+            tenant_id: tenant_id.clone(),
+            agent_key: "bench-agent".to_string(),
+            agent_token: db::hash_token(&agent_token),
+            name: "Bench Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&pool, &agent).await?;
+
+        let policy_engine = PolicyEngine::init("policies.cedar")
+            .await
+            .map_err(|e| sqlx::Error::Configuration(format!("{:?}", e).into()))?;
+        // Use a generously-sized channel and never drain it in the benchmark —
+        // SOC event emission is fire-and-forget (`try_send`, non-blocking) per
+        // the gateway's design, so an undrained channel does not slow down
+        // `authorize_action` until it fills. 100k is far larger than any
+        // single benchmark run's iteration count needs to be accurate.
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, _events_rx) = EventSink::channel(100_000, metrics.clone());
+
+        let state = Arc::new(AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics,
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1_000_000.0, 1_000_000.0),
+            quota_manager: QuotaManager::new(0, 86400), // 0 == quota disabled
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+        });
+
+        Ok((state, tenant_id, agent_token))
+    }
+
+    /// Register `n` additional agents in `tenant_id` (TASK-1313 seed data:
+    /// 100 agents). These agents are not used directly by the hot-path
+    /// benchmark request (which always authenticates as the primary bench
+    /// agent from [`setup_bench_state`]), but their presence in the `agents`
+    /// table makes the agent lookup query representative of a populated
+    /// tenant rather than a near-empty table.
+    pub async fn seed_extra_agents(
+        pool: &sqlx::SqlitePool,
+        tenant_id: &str,
+        n: usize,
+    ) -> Result<(), sqlx::Error> {
+        for i in 0..n {
+            let agent = AgentRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                agent_key: format!("bench-seed-agent-{}", i),
+                agent_token: db::hash_token(&format!("seed_tok_{}", Uuid::new_v4().simple())),
+                name: format!("Bench Seed Agent {}", i),
+                owner_team: Some("platform".to_string()),
+                owner_email: None,
+                environment: "production".to_string(),
+                framework: None,
+                model_provider: None,
+                model_name: None,
+                purpose: None,
+                risk_tier: "low".to_string(),
+                status: "active".to_string(),
+                last_seen_at: None,
+                frozen_reason: None,
+                force_approval: false,
+                quarantined_at: None,
+                signing_key: None,
+                allowed_environments: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            db::insert_agent(pool, &agent).await?;
+        }
+        Ok(())
+    }
+
+    /// Insert `n` historical decision rows for `agent_id` in `tenant_id`
+    /// (TASK-1313 seed data: 1000 prior decisions), so the `decisions` table
+    /// is representative of a tenant with real history. The hot-path
+    /// `/v1/authorize` query doesn't read this table directly, but a
+    /// populated table is more representative for any future benchmarks that
+    /// touch `GET /v1/decisions` or audit endpoints, and exercises realistic
+    /// SQLite file sizes/indexes.
+    pub async fn seed_decisions(
+        pool: &sqlx::SqlitePool,
+        tenant_id: &str,
+        agent_id: &str,
+        n: usize,
+    ) -> Result<(), sqlx::Error> {
+        for i in 0..n {
+            let record = DecisionRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                agent_id: agent_id.to_string(),
+                user_id: None,
+                run_id: Some(format!("run_seed_{}", i)),
+                trace_id: Some(format!("trace_seed_{}", i)),
+                skill: "filesystem".to_string(),
+                action: "read_file".to_string(),
+                resource: Some(format!("file_{}.txt", i)),
+                input_json: "{}".to_string(),
+                decision: "allow".to_string(),
+                risk_score: Some(1),
+                reason: Some("seed".to_string()),
+                matched_policy_ids: None,
+                request_id: None,
+                latency_ms: Some(1),
+                composite_risk_score: Some(1),
+                root_trust_level: None,
+                parent_run_id: None,
+                created_at: Utc::now(),
+            };
+            db::insert_decision(pool, &record).await?;
+        }
+        Ok(())
+    }
+
+    /// Build headers for an authenticated `/v1/authorize` call.
+    pub fn agent_headers(agent_token: &str, tenant_id: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", agent_token)
+                .parse()
+                .expect("valid header value"),
+        );
+        headers.insert(
+            "X-Aegis-Tenant-ID",
+            tenant_id.parse().expect("valid header value"),
+        );
+        headers
+    }
+
+    /// Build a steady-state `AuthorizeRequest` for the read-only
+    /// `filesystem.read_file` action — `mutates_state: false` with
+    /// `trust_level: trusted_internal_signed`, which the default policy pack
+    /// permits instantly (`allow`, no approval). This is the common-case hot
+    /// path TASK-1313 targets.
+    pub fn allow_authorize_request() -> AuthorizeRequest {
+        AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            dry_run: None,
+            agent: AuthorizeAgentContext {
+                id: "bench-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "filesystem".to_string(),
+                action: "read_file".to_string(),
+                resource: Some("bench.txt".to_string()),
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: Some(AuthorizeTraceContext {
+                run_id: "run_bench".to_string(),
+                trace_id: "trace_bench".to_string(),
+                parent_run_id: None,
+                root_trust_level: None,
+            }),
+            nonce: None,
+            timestamp: None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) mod test_helpers {
+    use super::*;
+    use crate::events;
+    use crate::models::*;
+    use crate::policy::PolicyEngine;
+    use axum::body::{to_bytes, Bytes};
+    use axum::http::HeaderMap;
+    use chrono::{DateTime, Utc};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use uuid::Uuid;
+    pub(crate) static ENV_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    pub(crate) fn get_env_lock() -> &'static tokio::sync::Mutex<()> {
+        ENV_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    /// Default `ConnectInfo` for tests that don't exercise the per-IP
+    /// approval-callback rate limiter (#1307) and just need a placeholder
+    /// source address.
+    pub(crate) fn test_conn_info() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 0))
+    }
+
+    /// Build a `ConnectInfo` for a distinct synthetic client IP, for tests
+    /// that need to isolate per-IP rate limiting (#1307, AC#1) from one
+    /// another.
+    pub(crate) fn conn_info_for_ip(octet: u8) -> SocketAddr {
+        SocketAddr::from(([10, 0, 0, octet], 0))
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `github_webhook_secret` set to `Some(secret)`, for testing the
+    /// `X-Hub-Signature-256` verification on `POST /v1/ingest` (#1339).
+    pub(crate) async fn setup_state_with_github_secret(
+        test_name: &str,
+        secret: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: Some(secret.to_string()),
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `slack_signing_secret` set to `Some(secret)`, for testing the
+    /// `X-Slack-Signature` verification on `POST /v1/callbacks/slack` (#1276).
+    pub(crate) async fn setup_state_with_slack_secret(
+        test_name: &str,
+        secret: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            slack_signing_secret: Some(secret.to_string()),
+            github_pr_commenter: None,
+            github_checks_client: None,
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    pub(crate) async fn setup_state(test_name: &str) -> (Arc<AppState>, String, String) {
+        let (state, tenant_id, agent_token, events_rx) = setup_state_with_events(test_name).await;
+        // Drain in the background so existing tests are unaffected by the stream.
+        // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
+        tokio::spawn(events::drain(
+            events_rx,
+            state.pool.clone(),
+            state.metrics.clone(),
+        ));
+        (state, tenant_id, agent_token)
+    }
+
+    pub(crate) async fn setup_state_with_events(
+        test_name: &str,
+    ) -> (Arc<AppState>, String, String, mpsc::Receiver<AseEvent>) {
+        setup_state_with_events_capacity(test_name, events::DEFAULT_CAPACITY).await
+    }
+
+    /// Like [`setup_state_with_events`] but allows overriding the SOC event
+    /// channel capacity. Used by #1305 to construct a small-capacity
+    /// broadcast channel so a slow WebSocket consumer can be made to lag
+    /// deterministically without emitting thousands of events.
+    pub(crate) async fn setup_state_with_events_capacity(
+        test_name: &str,
+        capacity: usize,
+    ) -> (Arc<AppState>, String, String, mpsc::Receiver<AseEvent>) {
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/routes_{}_{}.db",
+            test_name,
+            Uuid::new_v4().simple()
+        );
+        let pool = db::init_db(&db_url).await.unwrap();
+        let tenant_id = "tenant_routes".to_string();
+        db::register_tenant(&pool, &tenant_id, "Routes Tenant", "developer")
+            .await
+            .unwrap();
+
+        let agent_id = Uuid::new_v4().to_string();
+        let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
+        let agent = AgentRecord {
+            id: agent_id,
+            tenant_id: tenant_id.clone(),
+            agent_key: "routes-agent".to_string(),
+            agent_token: db::hash_token(&agent_token),
+            name: "Routes Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&pool, &agent).await.unwrap();
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, events_rx) = EventSink::channel(capacity, metrics.clone());
+        let state = Arc::new(AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics,
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+        });
+
+        (state, tenant_id, agent_token, events_rx)
+    }
+
+    /// Like [`setup_state`], but `audit_batch` is backed by a real channel
+    /// drained by a spawned [`crate::audit_batch::run_audit_batch_writer`]
+    /// (#1315), so batching behavior can be observed end-to-end.
+    pub(crate) async fn setup_state_with_audit_batch_writer(
+        test_name: &str,
+        batch_size: usize,
+        flush_interval: std::time::Duration,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+        ));
+
+        let (audit_batch, audit_batch_rx) =
+            crate::audit_batch::AuditBatchSink::channel(crate::audit_batch::DEFAULT_CAPACITY);
+        tokio::spawn(crate::audit_batch::run_audit_batch_writer(
+            state_raw.pool.clone(),
+            audit_batch_rx,
+            batch_size,
+            flush_interval,
+            state_raw.audit_writer_unhealthy.clone(),
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),
+            audit_batch,
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    pub(crate) fn agent_headers(agent_token: &str, tenant_id: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", agent_token).parse().unwrap(),
+        );
+        headers.insert("X-Aegis-Tenant-ID", tenant_id.parse().unwrap());
+        headers
+    }
+
+    pub(crate) fn mcp_authorize_request(tool: &str, action: &str) -> AuthorizeRequest {
+        AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            dry_run: None,
+            nonce: None,
+            timestamp: None,
+            agent: AuthorizeAgentContext {
+                id: "routes-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: tool.to_string(),
+                action: action.to_string(),
+                resource: None,
+                mutates_state: false,
+                parameters: serde_json::json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: Some(AuthorizeTraceContext {
+                run_id: "run_routes".to_string(),
+                trace_id: "trace_routes".to_string(),
+                parent_run_id: None,
+                root_trust_level: None,
+            }),
+        }
+    }
+
+    pub(crate) async fn call_authorize(
+        state: Arc<AppState>,
+        tenant_id: &str,
+        agent_token: &str,
+        request: AuthorizeRequest,
+    ) -> AuthorizeResponse {
+        let response = authorize_action(
+            State(state),
+            agent_headers(agent_token, tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    pub(crate) fn make_test_approval(
+        expires_at: Option<chrono::DateTime<Utc>>,
+        status: &str,
+    ) -> ApprovalRecord {
+        ApprovalRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: "t".to_string(),
+            decision_id: Uuid::new_v4().to_string(),
+            status: status.to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: "{}".to_string(),
+            original_call_hash: "x".to_string(),
+            edited_skill_call: None,
+            expires_at,
+            decided_at: None,
+            callback_url: None,
+            callback_secret_hash: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// Shared helper for the approval-lifecycle tests below: triggers a
+    /// require_approval decision (a production GitHub merge) and returns its
+    /// approval id plus the bound `action_hash`.
+    pub(crate) async fn create_pending_approval(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        agent_token: &str,
+        pr_number: &str,
+    ) -> (Uuid, String) {
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some(format!("repo/example/pull/{pr_number}"));
+        request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
+        let response = call_authorize(state.clone(), tenant_id, agent_token, request).await;
+        let approval = response.approval.expect("approval created");
+        (approval.approval_id, approval.action_hash)
+    }
+
+    pub(crate) fn unsigned_receipt_template(tenant_id: &str) -> ActionReceiptRecord {
+        ActionReceiptRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: Some(Uuid::new_v4().to_string()),
+            ts: Utc::now().to_rfc3339(),
+            agent_id: Some("signing-agent".to_string()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            tool: Some("github".to_string()),
+            action: Some("merge_pull_request".to_string()),
+            resource: Some("payments#1".to_string()),
+            source_trust: "trusted_internal_signed".to_string(),
+            decision: "allow".to_string(),
+            approver: None,
+            action_hash: Some("aaaa".to_string()),
+            prev_receipt_hash: String::new(),
+            receipt_hash: String::new(),
+            canon_version: CANON_VERSION.to_string(),
+            signature: None,
+            signer_public_key: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// Helper: close an incident via the route handler and parse the JSON body.
+    pub(crate) async fn do_close(
+        state: Arc<AppState>,
+        tenant_id: &str,
+        incident_id: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", tenant_id).parse().unwrap(),
+        );
+        let response = close_incident(
+            State(state),
+            TenantId(tenant_id.to_string()),
+            Path(incident_id.to_string()),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        (status, json)
+    }
+
+    /// Helper: call GET /v1/incidents/:id and return (status, json body).
+    pub(crate) async fn do_get_incident(
+        state: Arc<AppState>,
+        tenant_id: &str,
+        incident_id: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = get_incident(
+            State(state),
+            TenantId(tenant_id.to_string()),
+            Path(incident_id.to_string()),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        (status, json)
+    }
+
+    pub(crate) fn register_agent_router(state: Arc<AppState>) -> axum::Router {
+        use axum::routing::post;
+        axum::Router::new()
+            .route("/v1/agents/register", post(register_agent))
+            .with_state(state)
+    }
+
+    pub(crate) fn register_agent_payload(agent_key: &str) -> serde_json::Value {
+        json!({
+            "agent_key": agent_key,
+            "name": "Test Agent",
+            "owner_team": "platform",
+            "environment": "staging",
+            "framework": "langchain",
+            "model_provider": "anthropic",
+            "model_name": "claude",
+            "risk_tier": "medium",
+            "purpose": "testing"
+        })
+    }
+
+    pub(crate) fn register_tool_router(state: Arc<AppState>) -> axum::Router {
+        use axum::routing::post;
+        axum::Router::new()
+            .route("/v1/tools", post(register_tool))
+            .with_state(state)
+    }
+
+    pub(crate) fn register_tool_payload(skill_key: &str, risk: &str) -> serde_json::Value {
+        json!({
+            "skill_key": skill_key,
+            "name": "Deployer",
+            "type": "static",
+            "auth_type": null,
+            "owner_team": "platform",
+            "default_risk": "medium",
+            "actions": [
+                {
+                    "action_key": "ship",
+                    "description": "Ship a release",
+                    "risk": risk,
+                    "mutates_state": true,
+                    "data_access": "write",
+                    "approval_required": false,
+                    "default_decision": "policy"
+                }
+            ]
+        })
+    }
+}
