@@ -269,3 +269,162 @@ test("AegisClient.authorize — no signingKey sends no signature header", async 
     close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// approve() / reject() (#1182)
+// ---------------------------------------------------------------------------
+
+test("AegisClient.approve — 200 returns parsed decision response", async () => {
+  let capturedBody = "";
+  const { url, close } = await startServer((req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.url, "/v1/approvals/appr-1/approve");
+    req.setEncoding("utf-8");
+    const chunks: string[] = [];
+    req.on("data", (c: string) => chunks.push(c));
+    req.on("end", () => {
+      capturedBody = chunks.join("");
+      serveJSON(res, 200, { status: "success", approval_id: "appr-1" });
+    });
+  });
+
+  try {
+    const client = newClient(url);
+    const result = await client.approve("appr-1", "user-42", "looks safe");
+    assert.equal(result.status, "success");
+    assert.equal(result.approvalId, "appr-1");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      approver_user_id: "user-42",
+      reason: "looks safe",
+    });
+  } finally {
+    close();
+  }
+});
+
+test("AegisClient.approve — non-200 throws AegisGatewayError", async () => {
+  const { url, close } = await startServer((_req, res) => {
+    serveJSON(res, 409, { error: "Approval already decided" });
+  });
+
+  try {
+    const client = newClient(url);
+    await assert.rejects(
+      () => client.approve("appr-decided", "user-1"),
+      (err: unknown) => {
+        assert.ok(err instanceof AegisGatewayError);
+        assert.equal((err as AegisGatewayError).statusCode, 409);
+        return true;
+      }
+    );
+  } finally {
+    close();
+  }
+});
+
+test("AegisClient.reject — 200 returns parsed decision response", async () => {
+  const { url, close } = await startServer((req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.url, "/v1/approvals/appr-2/reject");
+    serveJSON(res, 200, { status: "success", approval_id: "appr-2" });
+  });
+
+  try {
+    const client = newClient(url);
+    const result = await client.reject("appr-2", "user-7");
+    assert.equal(result.status, "success");
+    assert.equal(result.approvalId, "appr-2");
+  } finally {
+    close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// listAlerts() / listIncidents() / getSocSummary() (#1182)
+// ---------------------------------------------------------------------------
+
+test("AegisClient.listAlerts — 200 returns parsed alerts with query params", async () => {
+  let capturedUrl = "";
+  const { url, close } = await startServer((req, res) => {
+    capturedUrl = req.url ?? "";
+    serveJSON(res, 200, [
+      {
+        id: "alert-1",
+        tenant_id: "tenant-test",
+        rule: "deny_storm",
+        severity: "high",
+        agent_id: "agent-1",
+        source_event_id: "evt-1",
+        summary: "5 denies in 60s",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+  });
+
+  try {
+    const client = newClient(url);
+    const alerts = await client.listAlerts({ severity: "high", agentId: "agent-1" });
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].id, "alert-1");
+    assert.equal(alerts[0].agentId, "agent-1");
+    assert.equal(alerts[0].sourceEventId, "evt-1");
+    assert.ok(capturedUrl.includes("severity=high"));
+    assert.ok(capturedUrl.includes("agent_id=agent-1"));
+  } finally {
+    close();
+  }
+});
+
+test("AegisClient.listIncidents — 200 returns parsed incidents", async () => {
+  const { url, close } = await startServer((req, res) => {
+    assert.equal(req.url, "/v1/incidents");
+    serveJSON(res, 200, [
+      {
+        id: "inc-1",
+        tenant_id: "tenant-test",
+        kind: "runaway",
+        severity: "high",
+        agent_id: "agent-1",
+        summary: "20 calls in 10s",
+        source_event_ids: "[]",
+        opened_at: "2026-01-01T00:00:00Z",
+        status: "open",
+        closed_at: null,
+      },
+    ]);
+  });
+
+  try {
+    const client = newClient(url);
+    const incidents = await client.listIncidents();
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].kind, "runaway");
+    assert.equal(incidents[0].openedAt, "2026-01-01T00:00:00Z");
+    assert.equal(incidents[0].closedAt, undefined);
+  } finally {
+    close();
+  }
+});
+
+test("AegisClient.getSocSummary — 200 returns parsed summary", async () => {
+  const { url, close } = await startServer((req, res) => {
+    assert.equal(req.url, "/v1/soc/summary");
+    serveJSON(res, 200, {
+      alerts_total: 10,
+      alerts_high: 3,
+      incidents_total: 2,
+      incidents_open: 1,
+      incidents_closed: 1,
+    });
+  });
+
+  try {
+    const client = newClient(url);
+    const summary = await client.getSocSummary();
+    assert.equal(summary.alertsTotal, 10);
+    assert.equal(summary.alertsHigh, 3);
+    assert.equal(summary.incidentsOpen, 1);
+  } finally {
+    close();
+  }
+});
