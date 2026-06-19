@@ -90,6 +90,43 @@ impl DurationHistogram {
     }
 }
 
+/// A minimal cumulative rolling average backed by atomics — no extra crate
+/// dependencies, non-blocking, safe to share via `Arc`. Resets on process
+/// restart, same as every other metric in this module.
+#[derive(Debug, Default)]
+pub struct RollingAverage {
+    sum_micros: AtomicU64,
+    count: AtomicU64,
+}
+
+impl RollingAverage {
+    /// Record one observation.
+    pub fn observe(&self, duration: std::time::Duration) {
+        self.sum_micros
+            .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Mean of all observations recorded so far, in seconds. `0.0` if no
+    /// observations have been recorded yet.
+    pub fn average_seconds(&self) -> f64 {
+        let count = self.count.load(Ordering::Relaxed);
+        if count == 0 {
+            return 0.0;
+        }
+        let sum_seconds = self.sum_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        sum_seconds / count as f64
+    }
+
+    /// Render as a single Prometheus gauge line for metric `name`.
+    fn render(&self, name: &str, help: &str) -> String {
+        format!(
+            "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {}\n",
+            self.average_seconds()
+        )
+    }
+}
+
 /// Process-wide security counters. Held in `AppState` (via `Arc<AppState>`).
 #[derive(Debug, Default)]
 pub struct SecurityMetrics {
@@ -120,6 +157,17 @@ pub struct SecurityMetrics {
     /// Per `kind` correlated incident counts (OBS-002, #1155).
     /// `kind` is an enum-like value defined by `correlate.rs` — no PII.
     incidents_total: Mutex<HashMap<String, u64>>,
+    /// Rolling mean time-to-detect: event occurrence -> alert creation
+    /// (SOC-005, #1158). Sampled in `events::handle_alert` from the real
+    /// gap between the triggering event's `occurred_at` and the moment the
+    /// alert was raised — not derived from the persisted `SocAlertRecord`,
+    /// whose `created_at` column intentionally mirrors `occurred_at` for
+    /// evidence purposes rather than wall-clock alert-creation time.
+    pub soc_mttd: RollingAverage,
+    /// Rolling mean time-to-resolve: incident open -> incident close
+    /// (SOC-005, #1158). Sampled in `routes::close_incident` from the real
+    /// gap between `opened_at` and `closed_at`.
+    pub soc_mttr: RollingAverage,
 }
 
 impl SecurityMetrics {
@@ -192,6 +240,18 @@ impl SecurityMetrics {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         *incidents.entry(kind.to_string()).or_insert(0) += 1;
+    }
+
+    /// Record one mean-time-to-detect sample (SOC-005, #1158).
+    #[inline]
+    pub fn observe_mttd(&self, duration: std::time::Duration) {
+        self.soc_mttd.observe(duration);
+    }
+
+    /// Record one mean-time-to-resolve sample (SOC-005, #1158).
+    #[inline]
+    pub fn observe_mttr(&self, duration: std::time::Duration) {
+        self.soc_mttr.observe(duration);
     }
 
     /// Render the current counter values as a Prometheus text exposition (v0.0.4).
@@ -275,6 +335,15 @@ impl SecurityMetrics {
             ));
         }
         drop(incidents);
+
+        out.push_str(&self.soc_mttd.render(
+            "aegis_soc_mttd_seconds",
+            "Rolling mean time from event occurrence to alert creation",
+        ));
+        out.push_str(&self.soc_mttr.render(
+            "aegis_soc_mttr_seconds",
+            "Rolling mean time from incident open to incident close",
+        ));
 
         out
     }
@@ -402,6 +471,28 @@ mod tests {
         assert!(out.contains("aegis_events_emitted_total 1\n"));
         assert!(out.contains("# TYPE aegis_events_dropped_total counter"));
         assert!(out.contains("aegis_events_dropped_total 1\n"));
+    }
+
+    #[test]
+    fn mttd_and_mttr_default_to_zero_with_no_observations() {
+        let m = SecurityMetrics::new();
+        let out = m.render_prometheus();
+        assert!(out.contains("# TYPE aegis_soc_mttd_seconds gauge"));
+        assert!(out.contains("aegis_soc_mttd_seconds 0\n"));
+        assert!(out.contains("# TYPE aegis_soc_mttr_seconds gauge"));
+        assert!(out.contains("aegis_soc_mttr_seconds 0\n"));
+    }
+
+    #[test]
+    fn observe_mttd_and_mttr_compute_rolling_average() {
+        let m = SecurityMetrics::new();
+        m.observe_mttd(std::time::Duration::from_millis(500));
+        m.observe_mttd(std::time::Duration::from_millis(1500));
+        m.observe_mttr(std::time::Duration::from_secs(60));
+
+        let out = m.render_prometheus();
+        assert!(out.contains("aegis_soc_mttd_seconds 1\n")); // (0.5 + 1.5) / 2
+        assert!(out.contains("aegis_soc_mttr_seconds 60\n"));
     }
 
     #[test]

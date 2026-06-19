@@ -16,6 +16,7 @@ use crate::metrics::SecurityMetrics;
 use crate::models::{AuditEventRecord, SocAlertRecord, SocIncidentRecord};
 use crate::notify::{self, NotifyMessage, NotifySink};
 use crate::respond;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -172,6 +173,19 @@ async fn handle_alert(
 ) {
     // OBS-002 (#1155): per (rule, severity) detection alert counter.
     metrics.inc_alert(&alert.rule, &alert.severity);
+
+    // SOC-005 (#1158): mean-time-to-detect — the real gap between the
+    // triggering event's occurrence and this moment (when the alert is
+    // actually raised), not the persisted SocAlertRecord.created_at below
+    // (which intentionally mirrors occurred_at for evidence purposes).
+    // Unparseable timestamps or clock skew producing a negative duration are
+    // skipped silently — observability must never panic the drain loop.
+    if let Ok(occurred_at) = DateTime::parse_from_rfc3339(&alert.occurred_at) {
+        let lag = Utc::now().signed_duration_since(occurred_at.with_timezone(&Utc));
+        if let Ok(lag) = lag.to_std() {
+            metrics.observe_mttd(lag);
+        }
+    }
 
     match alert.severity.as_str() {
         "high" => {
@@ -768,5 +782,42 @@ mod tests {
         let deserialized: AseEvent = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.schema_version, 1);
         assert_eq!(deserialized.event_id, ev.event_id);
+    }
+
+    /// #1158 (SOC-005): `handle_alert` records a mean-time-to-detect sample
+    /// from the real gap between the triggering event's `occurred_at` and the
+    /// moment the alert is raised — not zero, and not derived from the
+    /// persisted record (whose `created_at` mirrors `occurred_at`).
+    #[tokio::test]
+    async fn handle_alert_records_mttd_sample() {
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!("sqlite://target/test_mttd_{}.db", Uuid::new_v4().simple());
+        let pool = db::init_db(&db_url).await.unwrap();
+        let tenant_id = "tenant_mttd";
+        db::register_tenant(&pool, tenant_id, "MTTD Tenant", "developer")
+            .await
+            .unwrap();
+
+        let alert = crate::detect::Alert {
+            alert_id: Uuid::new_v4().to_string(),
+            // Far enough in the past that "now - occurred_at" is unambiguously
+            // positive regardless of test execution speed.
+            occurred_at: "2026-06-12T12:00:00Z".to_string(),
+            tenant_id: tenant_id.to_string(),
+            rule: "confused_deputy_block".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_mttd".to_string(),
+            summary: "test alert".to_string(),
+            source_event_id: "evt_mttd".to_string(),
+        };
+
+        let metrics = SecurityMetrics::new();
+        assert_eq!(metrics.soc_mttd.average_seconds(), 0.0);
+
+        let sink = crate::notify::NullSink;
+        let webhook_client = reqwest::Client::new();
+        handle_alert(&alert, &sink, &pool, &webhook_client, false, &metrics).await;
+
+        assert!(metrics.soc_mttd.average_seconds() > 0.0);
     }
 }
