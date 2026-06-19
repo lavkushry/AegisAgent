@@ -85,15 +85,22 @@ pub async fn verify_receipt(
 ///
 /// Query params:
 ///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous
+///   page's `X-Next-Cursor` response header; takes priority over `offset`
+///   when both are supplied.
 pub async fn list_receipts(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
 
-    match db::list_action_receipts(&state.pool, &tenant_id, limit, offset).await {
-        Ok(receipts) => (StatusCode::OK, Json(receipts)).into_response(),
+    match db::list_action_receipts_cursor(&state.pool, &tenant_id, limit, offset, cursor).await {
+        Ok((receipts, next_cursor)) => paginated_response(&receipts, next_cursor),
         Err(e) => {
             error!("Failed to list receipts: {:?}", e);
             (

@@ -121,6 +121,36 @@ pub async fn list_action_receipts(
     .await
 }
 
+/// Cursor-paginated sibling of [`list_action_receipts`] (#1142), used only
+/// by the `GET /v1/receipts` HTTP route handler — see
+/// `decisions::list_decisions_cursor`'s doc comment for why this is a
+/// separate function rather than a change to `list_action_receipts` itself.
+pub async fn list_action_receipts_cursor(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+) -> Result<(Vec<ActionReceiptRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at, rowid
+         FROM action_receipts
+         WHERE tenant_id = ?
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(cursor)
+    .bind(cursor)
+    .bind(limit + 1)
+    .bind(if cursor.is_some() { 0 } else { offset })
+    .fetch_all(pool)
+    .await?;
+    super::paginate_rows(rows, limit)
+}
+
 /// Atomically append a receipt to a tenant's hash chain (T-D hardening).
 ///
 /// Reading the chain head and inserting the new (head-referencing) receipt happen
@@ -218,4 +248,69 @@ pub async fn get_action_receipt_by_id(
     .bind(receipt_id)
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_utils::*;
+    use crate::db::*;
+    const CANON_VERSION: &str = "aegis-jcs-1";
+    use uuid::Uuid;
+
+    fn bare_receipt(tenant_id: &str, prev: String) -> ActionReceiptRecord {
+        let mut rec = ActionReceiptRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: None,
+            ts: Utc::now().to_rfc3339(),
+            agent_id: None,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            tool: Some("filesystem".to_string()),
+            action: Some("read_file".to_string()),
+            resource: None,
+            source_trust: "trusted_internal_signed".to_string(),
+            decision: "allow".to_string(),
+            approver: None,
+            action_hash: Some("sha256:dead".to_string()),
+            prev_receipt_hash: prev,
+            receipt_hash: String::new(),
+            canon_version: CANON_VERSION.to_string(),
+            signature: None,
+            signer_public_key: None,
+            created_at: Utc::now(),
+        };
+        rec.receipt_hash = crate::routes::compute_receipt_hash(&rec);
+        rec
+    }
+
+    /// #1142: regression test for an off-by-one in `paginate_rows` — see
+    /// `decisions::list_decisions_cursor_no_false_next_cursor_at_exact_boundary`
+    /// for the full rationale. Two receipts exist; requesting `limit=2` must
+    /// return both with `next_cursor: None`.
+    #[tokio::test]
+    async fn list_action_receipts_cursor_no_false_next_cursor_at_exact_boundary() {
+        let pool = setup_pool("receipts_cursor_boundary").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        append_action_receipt_atomic(&pool, "tenant_a", |prev| bare_receipt("tenant_a", prev))
+            .await
+            .unwrap();
+        append_action_receipt_atomic(&pool, "tenant_a", |prev| bare_receipt("tenant_a", prev))
+            .await
+            .unwrap();
+
+        let (page, next_cursor) = list_action_receipts_cursor(&pool, "tenant_a", 2, 0, None)
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(
+            next_cursor, None,
+            "exact-boundary page must not claim more rows exist"
+        );
+    }
 }

@@ -92,6 +92,39 @@ pub const SOC_DEFAULT_LIMIT: i64 = 50;
 /// Hard cap to prevent accidentally returning enormous result sets.
 pub const SOC_MAX_LIMIT: i64 = 200;
 
+/// #1142: maps a fetched page of `SqliteRow`s (each carrying a trailing
+/// `rowid` column, selected explicitly by every cursor-paginated query) into
+/// `(items, next_cursor)`. Callers must fetch `limit + 1` rows (one more than
+/// the page size) — that extra row is never returned to the client but its
+/// presence is what tells us a next page exists; truncating to `limit` and
+/// checking `rows.len() >= limit` instead would wrongly emit a next-cursor
+/// whenever the result set ends exactly on a page boundary (off-by-one).
+pub(crate) fn paginate_rows<T>(
+    mut rows: Vec<sqlx::sqlite::SqliteRow>,
+    limit: i64,
+) -> Result<(Vec<T>, Option<i64>), sqlx::Error>
+where
+    T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    use sqlx::Row;
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|r| r.try_get::<i64, _>("rowid"))
+            .transpose()?
+    } else {
+        None
+    };
+    let items = rows
+        .iter()
+        .map(T::from_row)
+        .collect::<Result<Vec<T>, _>>()?;
+    Ok((items, next_cursor))
+}
+
 pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }

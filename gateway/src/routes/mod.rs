@@ -842,6 +842,67 @@ pub(crate) fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
     })
 }
 
+/// #1142: encodes a `rowid` into the opaque `?cursor=`/`X-Next-Cursor` token.
+/// Hex rather than a new base64 dependency — opacity here is an API
+/// ergonomics convention (discourage clients from relying on the cursor's
+/// internal structure), not a security boundary, so trivial reversibility
+/// is fine.
+pub(crate) fn encode_cursor(rowid: i64) -> String {
+    hex::encode(rowid.to_string())
+}
+
+/// Inverse of [`encode_cursor`]. Returns `None` for anything that doesn't
+/// decode to a plain non-negative integer — callers treat that as a client
+/// error (400), not a silently-ignored bad cursor, so a typo in a cursor
+/// value doesn't quietly restart pagination from the top.
+pub(crate) fn decode_cursor(cursor: &str) -> Option<i64> {
+    let bytes = hex::decode(cursor).ok()?;
+    let s = String::from_utf8(bytes).ok()?;
+    s.parse::<i64>().ok().filter(|n| *n >= 0)
+}
+
+/// #1142: parses the optional `?cursor=` query param. `Ok(None)` when
+/// absent (existing OFFSET-based behavior, unchanged); `Ok(Some(rowid))`
+/// when present and valid; `Err(response)` — a 400 — when present but
+/// malformed, so a typo'd cursor fails loudly instead of silently
+/// restarting pagination from the top.
+pub(crate) fn parse_cursor(
+    query: Option<&str>,
+) -> Result<Option<i64>, Box<axum::response::Response>> {
+    match parse_filter(query, "cursor") {
+        None => Ok(None),
+        Some(raw) => decode_cursor(&raw).map(Some).ok_or_else(|| {
+            Box::new(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "Invalid cursor"})),
+                )
+                    .into_response(),
+            )
+        }),
+    }
+}
+
+/// Builds the standard `(200, Json(items))` response for a cursor-paginated
+/// list endpoint, adding `X-Next-Cursor` only when `next_cursor` is `Some`
+/// (#1142). The response body shape (a bare JSON array) is unchanged from
+/// before cursor pagination existed — deliberately, since the Python/Go/TS
+/// SDKs already parse these endpoints as bare arrays; the cursor token
+/// rides on a header instead of a body envelope so existing clients are
+/// unaffected.
+pub(crate) fn paginated_response<T: serde::Serialize>(
+    items: &[T],
+    next_cursor: Option<i64>,
+) -> axum::response::Response {
+    let mut response = (StatusCode::OK, Json(items)).into_response();
+    if let Some(rowid) = next_cursor {
+        if let Ok(val) = axum::http::HeaderValue::from_str(&encode_cursor(rowid)) {
+            response.headers_mut().insert("x-next-cursor", val);
+        }
+    }
+    response
+}
+
 pub async fn get_openapi_spec() -> impl IntoResponse {
     let spec = json!({
         "openapi": "3.1.0",
