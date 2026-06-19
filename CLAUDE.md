@@ -128,6 +128,7 @@ docker compose up --build && bash scripts/seed-demo.sh && python3 examples/githu
 - `sdk-go/`: `canon/canon.go` (scheme), `aegis/client.go`, `aegis/protect.go`, `aegis/receipts.go`.
 - `sdk-typescript/src/`: `canon.ts` (scheme), `client.ts`, `protect.ts`.
 - Strategy docs in `docs/` were re-anchored 2026-06-02 on the integrity wedge; `docs/action-receipt-spec.md` is the open receipt format.
+- `docs/adr/` (#1197): architecture decision records — the *why* behind major calls (Cedar, SQLite-first, `aegis-jcs-1`, Ed25519 signing, fail-closed defaults). New architectural changes require a new ADR; use `docs/adr/template.md`.
 
 ## How to continue
 
