@@ -1130,6 +1130,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(middleware::from_fn(request_id_middleware))
         // 3. Content-Type validation — rejects non-JSON bodies on POST/PUT/PATCH
         .layer(middleware::from_fn(content_type_validation_middleware))
+        // 3b. CSRF protection (#1308) — rejects state-changing requests if CSRF cookie is present but token mismatches
+        .layer(middleware::from_fn(routes::csrf_validation_middleware))
         // 4. ETag conditional caching (#1141) — must run before compression
         // so the hash covers the canonical uncompressed body.
         .layer(middleware::from_fn(etag_middleware))

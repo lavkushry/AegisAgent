@@ -137,6 +137,12 @@
       headers["Authorization"] = "Bearer " + state.token;
     }
     
+    // Add CSRF token to headers if present in HTML
+    var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    if (csrfMeta) {
+      headers["X-CSRF-Token"] = csrfMeta.getAttribute("content");
+    }
+    
     var options = { method: method || "GET", headers: headers };
     if (body) {
       options.headers["Content-Type"] = "application/json";

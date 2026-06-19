@@ -5384,6 +5384,7 @@ mod tests {
         use axum::http::Request;
         use tower::ServiceExt;
 
+        let _guard = get_env_lock().lock().await;
         let (state, _tenant_id, _) = setup_state("unregistered_tenant").await;
         let app = register_agent_router(state);
 
