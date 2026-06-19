@@ -1,6 +1,7 @@
 package aegis_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -65,7 +66,7 @@ func TestProtect_Allow_ExecutesTool(t *testing.T) {
 	client := newTestClient(srv.URL)
 	tracker := &toolCallTracker{}
 
-	err := aegis.Protect(client, req, func() error {
+	err := aegis.Protect(context.Background(), client, req, func() error {
 		return tracker.tool()
 	})
 	if err != nil {
@@ -97,7 +98,7 @@ func TestProtect_Deny_RefusesAndDoesNotExecute(t *testing.T) {
 	client := newTestClient(srv.URL)
 	tracker := &toolCallTracker{}
 
-	err := aegis.Protect(client, req, func() error {
+	err := aegis.Protect(context.Background(), client, req, func() error {
 		return tracker.tool()
 	})
 	if err == nil {
@@ -173,7 +174,7 @@ func TestProtect_ApprovalPoll_PendingThenApproved_ExecutesTool(t *testing.T) {
 		PollInterval: 0, // zero → no sleep in tests
 		MaxPolls:     5,
 	}
-	err := aegis.ProtectWithOptions(client, req, func() error {
+	err := aegis.ProtectWithOptions(context.Background(), client, req, func() error {
 		return tracker.tool()
 	}, opts)
 	if err != nil {
@@ -220,7 +221,7 @@ func TestProtect_HashMismatch_RefusesAndDoesNotExecute(t *testing.T) {
 	client := newTestClient(srv.URL)
 	tracker := &toolCallTracker{}
 
-	err := aegis.Protect(client, req, func() error {
+	err := aegis.Protect(context.Background(), client, req, func() error {
 		return tracker.tool()
 	})
 	if err == nil {
@@ -278,7 +279,7 @@ func TestProtect_HashMismatch_OnPollStatus_RefusesAndDoesNotExecute(t *testing.T
 	tracker := &toolCallTracker{}
 
 	opts := aegis.ProtectOptions{PollInterval: 0, MaxPolls: 3}
-	err := aegis.ProtectWithOptions(client, req, func() error {
+	err := aegis.ProtectWithOptions(context.Background(), client, req, func() error {
 		return tracker.tool()
 	}, opts)
 	if err == nil {
@@ -306,7 +307,7 @@ func TestProtect_UnreachableGateway_MutatingAction_Refuses(t *testing.T) {
 	}
 	tracker := &toolCallTracker{}
 
-	err := aegis.Protect(client, req, func() error {
+	err := aegis.Protect(context.Background(), client, req, func() error {
 		return tracker.tool()
 	})
 	if err == nil {
@@ -364,7 +365,7 @@ func TestProtect_ConsumeFails_409_RefusesAndDoesNotExecute(t *testing.T) {
 	tracker := &toolCallTracker{}
 
 	opts := aegis.ProtectOptions{PollInterval: 0, MaxPolls: 3}
-	err := aegis.ProtectWithOptions(client, req, func() error {
+	err := aegis.ProtectWithOptions(context.Background(), client, req, func() error {
 		return tracker.tool()
 	}, opts)
 	if err == nil {
@@ -417,7 +418,7 @@ func TestProtect_Rejected_Refuses(t *testing.T) {
 	tracker := &toolCallTracker{}
 
 	opts := aegis.ProtectOptions{PollInterval: 0, MaxPolls: 3}
-	err := aegis.ProtectWithOptions(client, req, func() error {
+	err := aegis.ProtectWithOptions(context.Background(), client, req, func() error {
 		return tracker.tool()
 	}, opts)
 	if err == nil {
@@ -450,7 +451,7 @@ func TestProtect_RequireApproval_MissingApprovalInfo_FailsClosed(t *testing.T) {
 	client := newTestClient(srv.URL)
 	tracker := &toolCallTracker{}
 
-	err := aegis.Protect(client, req, func() error {
+	err := aegis.Protect(context.Background(), client, req, func() error {
 		return tracker.tool()
 	})
 	if err == nil {
@@ -481,7 +482,7 @@ func TestProtect_UnknownDecision_FailsClosed(t *testing.T) {
 	client := newTestClient(srv.URL)
 	tracker := &toolCallTracker{}
 
-	err := aegis.Protect(client, req, func() error {
+	err := aegis.Protect(context.Background(), client, req, func() error {
 		return tracker.tool()
 	})
 	if err == nil {

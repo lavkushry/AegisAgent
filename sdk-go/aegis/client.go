@@ -9,6 +9,7 @@ package aegis
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +17,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -121,6 +124,67 @@ type ConsumeResponse struct {
 	ActionHash string `json:"action_hash"`
 }
 
+// ApprovalDecisionResponse is the decoded body of a 200 from
+// POST /v1/approvals/:id/approve|reject.
+type ApprovalDecisionResponse struct {
+	Status     string `json:"status"`
+	ApprovalID string `json:"approval_id"`
+}
+
+// SocAlert is a single SOC detection alert (GET /v1/alerts).
+type SocAlert struct {
+	ID            string `json:"id"`
+	TenantID      string `json:"tenant_id"`
+	Rule          string `json:"rule"`
+	Severity      string `json:"severity"`
+	AgentID       string `json:"agent_id"`
+	SourceEventID string `json:"source_event_id"`
+	Summary       string `json:"summary"`
+	CreatedAt     string `json:"created_at"`
+}
+
+// SocIncident is a single SOC correlation incident (GET /v1/incidents).
+type SocIncident struct {
+	ID             string  `json:"id"`
+	TenantID       string  `json:"tenant_id"`
+	Kind           string  `json:"kind"`
+	Severity       string  `json:"severity"`
+	AgentID        string  `json:"agent_id"`
+	Summary        string  `json:"summary"`
+	SourceEventIDs string  `json:"source_event_ids"`
+	OpenedAt       string  `json:"opened_at"`
+	Status         string  `json:"status"`
+	ClosedAt       *string `json:"closed_at"`
+}
+
+// SocSummary is the tenant-scoped aggregate SOC counts from GET /v1/soc/summary.
+type SocSummary struct {
+	AlertsTotal     int64 `json:"alerts_total"`
+	AlertsHigh      int64 `json:"alerts_high"`
+	IncidentsTotal  int64 `json:"incidents_total"`
+	IncidentsOpen   int64 `json:"incidents_open"`
+	IncidentsClosed int64 `json:"incidents_closed"`
+}
+
+// ListAlertsOptions filters GET /v1/alerts. Zero values are omitted from the
+// query string.
+type ListAlertsOptions struct {
+	Limit    int
+	Offset   int
+	Severity string
+	AgentID  string
+}
+
+// ListIncidentsOptions filters GET /v1/incidents. Zero values are omitted
+// from the query string.
+type ListIncidentsOptions struct {
+	Limit    int
+	Offset   int
+	Status   string
+	Severity string
+	AgentID  string
+}
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -182,14 +246,14 @@ func readBody(r io.Reader) string {
 // Authorize sends an authorization request to POST /v1/authorize and returns
 // the parsed response. On any network or non-2xx error it returns a non-nil
 // error; callers (i.e. [Protect]) treat this as fail-closed for mutating
-// actions.
-func (c *Client) Authorize(payload AuthorizeRequest) (AuthorizeResponse, error) {
+// actions. ctx controls cancellation/timeout of the underlying HTTP request.
+func (c *Client) Authorize(ctx context.Context, payload AuthorizeRequest) (AuthorizeResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return AuthorizeResponse{}, fmt.Errorf("aegis: marshal authorize request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/v1/authorize", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/authorize", bytes.NewReader(body))
 	if err != nil {
 		return AuthorizeResponse{}, fmt.Errorf("aegis: build authorize request: %w", err)
 	}
@@ -229,10 +293,10 @@ func (c *Client) Authorize(payload AuthorizeRequest) (AuthorizeResponse, error) 
 
 // GetApproval fetches the current status of an approval from
 // GET /v1/approvals/:id. Returns an error on network failure or non-2xx
-// response.
-func (c *Client) GetApproval(approvalID string) (ApprovalStatus, error) {
-	url := c.baseURL + "/v1/approvals/" + approvalID
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+// response. ctx controls cancellation/timeout of the underlying HTTP request.
+func (c *Client) GetApproval(ctx context.Context, approvalID string) (ApprovalStatus, error) {
+	reqURL := c.baseURL + "/v1/approvals/" + approvalID
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return ApprovalStatus{}, fmt.Errorf("aegis: build get-approval request: %w", err)
 	}
@@ -265,10 +329,11 @@ func (c *Client) GetApproval(approvalID string) (ApprovalStatus, error) {
 // ConsumeApproval atomically consumes an APPROVED approval via
 // POST /v1/approvals/:id/consume so it cannot be reused (replay defence).
 // Returns an error — including [ErrGateway] with status 409 — if the approval
-// is already consumed, expired, or not in the approved state.
-func (c *Client) ConsumeApproval(approvalID string) (ConsumeResponse, error) {
-	url := c.baseURL + "/v1/approvals/" + approvalID + "/consume"
-	req, err := http.NewRequest(http.MethodPost, url, http.NoBody)
+// is already consumed, expired, or not in the approved state. ctx controls
+// cancellation/timeout of the underlying HTTP request.
+func (c *Client) ConsumeApproval(ctx context.Context, approvalID string) (ConsumeResponse, error) {
+	reqURL := c.baseURL + "/v1/approvals/" + approvalID + "/consume"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, http.NoBody)
 	if err != nil {
 		return ConsumeResponse{}, fmt.Errorf("aegis: build consume request: %w", err)
 	}
@@ -290,6 +355,240 @@ func (c *Client) ConsumeApproval(approvalID string) (ConsumeResponse, error) {
 	var out ConsumeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return ConsumeResponse{}, fmt.Errorf("aegis: decode consume response: %w", err)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Approve / Reject
+// ---------------------------------------------------------------------------
+
+// Approve decides a pending approval via POST /v1/approvals/:id/approve.
+// reason may be empty. Returns [ErrGateway] (e.g. 409) if the approval was
+// already decided or has expired.
+func (c *Client) Approve(ctx context.Context, approvalID, approverUserID, reason string) (ApprovalDecisionResponse, error) {
+	return c.decideApproval(ctx, "approve", approvalID, approverUserID, reason)
+}
+
+// Reject decides a pending approval via POST /v1/approvals/:id/reject.
+// reason may be empty. Returns [ErrGateway] (e.g. 409) if the approval was
+// already decided or has expired.
+func (c *Client) Reject(ctx context.Context, approvalID, approverUserID, reason string) (ApprovalDecisionResponse, error) {
+	return c.decideApproval(ctx, "reject", approvalID, approverUserID, reason)
+}
+
+func (c *Client) decideApproval(ctx context.Context, decision, approvalID, approverUserID, reason string) (ApprovalDecisionResponse, error) {
+	body, err := json.Marshal(map[string]any{
+		"approver_user_id": approverUserID,
+		"reason":           nilIfEmpty(reason),
+	})
+	if err != nil {
+		return ApprovalDecisionResponse{}, fmt.Errorf("aegis: marshal %s request: %w", decision, err)
+	}
+
+	reqURL := c.baseURL + "/v1/approvals/" + approvalID + "/" + decision
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return ApprovalDecisionResponse{}, fmt.Errorf("aegis: build %s request: %w", decision, err)
+	}
+	c.addHeaders(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return ApprovalDecisionResponse{}, fmt.Errorf("aegis: %s network error: %w", decision, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ApprovalDecisionResponse{}, &ErrGateway{
+			StatusCode: resp.StatusCode,
+			Body:       readBody(resp.Body),
+		}
+	}
+
+	var out ApprovalDecisionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return ApprovalDecisionResponse{}, fmt.Errorf("aegis: decode %s response: %w", decision, err)
+	}
+	return out, nil
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// ---------------------------------------------------------------------------
+// Agent lifecycle: FreezeAgent / UnfreezeAgent / RevokeAgent
+// ---------------------------------------------------------------------------
+
+// FreezeAgent freezes an agent via POST /v1/agents/:id/freeze. reason may be
+// empty. A frozen agent is denied on its next /v1/authorize call.
+func (c *Client) FreezeAgent(ctx context.Context, agentID, reason string) error {
+	var body io.Reader = http.NoBody
+	if reason != "" {
+		b, err := json.Marshal(map[string]any{"reason": reason})
+		if err != nil {
+			return fmt.Errorf("aegis: marshal freeze request: %w", err)
+		}
+		body = bytes.NewReader(b)
+	}
+	return c.postAgentLifecycle(ctx, agentID, "freeze", body)
+}
+
+// UnfreezeAgent restores a frozen agent to active status via
+// POST /v1/agents/:id/unfreeze.
+func (c *Client) UnfreezeAgent(ctx context.Context, agentID string) error {
+	return c.postAgentLifecycle(ctx, agentID, "unfreeze", http.NoBody)
+}
+
+// RevokeAgent permanently revokes an agent via POST /v1/agents/:id/revoke.
+// Not reversible via the API.
+func (c *Client) RevokeAgent(ctx context.Context, agentID string) error {
+	return c.postAgentLifecycle(ctx, agentID, "revoke", http.NoBody)
+}
+
+func (c *Client) postAgentLifecycle(ctx context.Context, agentID, action string, body io.Reader) error {
+	reqURL := c.baseURL + "/v1/agents/" + agentID + "/" + action
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
+	if err != nil {
+		return fmt.Errorf("aegis: build %s request: %w", action, err)
+	}
+	c.addHeaders(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("aegis: %s network error: %w", action, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return &ErrGateway{StatusCode: resp.StatusCode, Body: readBody(resp.Body)}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// SOC query layer: ListAlerts / ListIncidents / GetSocSummary
+// ---------------------------------------------------------------------------
+
+// ListAlerts fetches SOC detection alerts via GET /v1/alerts, tenant-scoped
+// and optionally filtered by opts.
+func (c *Client) ListAlerts(ctx context.Context, opts ListAlertsOptions) ([]SocAlert, error) {
+	q := url.Values{}
+	if opts.Limit > 0 {
+		q.Set("limit", strconv.Itoa(opts.Limit))
+	}
+	if opts.Offset > 0 {
+		q.Set("offset", strconv.Itoa(opts.Offset))
+	}
+	if opts.Severity != "" {
+		q.Set("severity", opts.Severity)
+	}
+	if opts.AgentID != "" {
+		q.Set("agent_id", opts.AgentID)
+	}
+
+	reqURL := c.baseURL + "/v1/alerts"
+	if encoded := q.Encode(); encoded != "" {
+		reqURL += "?" + encoded
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("aegis: build list-alerts request: %w", err)
+	}
+	c.addHeaders(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("aegis: list-alerts network error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &ErrGateway{StatusCode: resp.StatusCode, Body: readBody(resp.Body)}
+	}
+
+	var out []SocAlert
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("aegis: decode list-alerts response: %w", err)
+	}
+	return out, nil
+}
+
+// ListIncidents fetches SOC correlation incidents via GET /v1/incidents,
+// tenant-scoped and optionally filtered by opts.
+func (c *Client) ListIncidents(ctx context.Context, opts ListIncidentsOptions) ([]SocIncident, error) {
+	q := url.Values{}
+	if opts.Limit > 0 {
+		q.Set("limit", strconv.Itoa(opts.Limit))
+	}
+	if opts.Offset > 0 {
+		q.Set("offset", strconv.Itoa(opts.Offset))
+	}
+	if opts.Status != "" {
+		q.Set("status", opts.Status)
+	}
+	if opts.Severity != "" {
+		q.Set("severity", opts.Severity)
+	}
+	if opts.AgentID != "" {
+		q.Set("agent_id", opts.AgentID)
+	}
+
+	reqURL := c.baseURL + "/v1/incidents"
+	if encoded := q.Encode(); encoded != "" {
+		reqURL += "?" + encoded
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("aegis: build list-incidents request: %w", err)
+	}
+	c.addHeaders(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("aegis: list-incidents network error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &ErrGateway{StatusCode: resp.StatusCode, Body: readBody(resp.Body)}
+	}
+
+	var out []SocIncident
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("aegis: decode list-incidents response: %w", err)
+	}
+	return out, nil
+}
+
+// GetSocSummary fetches tenant-scoped aggregate SOC counts via
+// GET /v1/soc/summary.
+func (c *Client) GetSocSummary(ctx context.Context) (SocSummary, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/soc/summary", nil)
+	if err != nil {
+		return SocSummary{}, fmt.Errorf("aegis: build soc-summary request: %w", err)
+	}
+	c.addHeaders(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return SocSummary{}, fmt.Errorf("aegis: soc-summary network error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return SocSummary{}, &ErrGateway{StatusCode: resp.StatusCode, Body: readBody(resp.Body)}
+	}
+
+	var out SocSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return SocSummary{}, fmt.Errorf("aegis: decode soc-summary response: %w", err)
 	}
 	return out, nil
 }
