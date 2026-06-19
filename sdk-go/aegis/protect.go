@@ -1,6 +1,7 @@
 package aegis
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -35,12 +36,12 @@ var defaultProtectOptions = ProtectOptions{
 //   - decision "allow"                 → fn called, its return value forwarded.
 //   - decision "require_approval"      → poll until approved, verify hash,
 //     atomically consume, then call fn.
-func Protect(client *Client, req AuthorizeRequest, fn func() error) error {
-	return ProtectWithOptions(client, req, fn, defaultProtectOptions)
+func Protect(ctx context.Context, client *Client, req AuthorizeRequest, fn func() error) error {
+	return ProtectWithOptions(ctx, client, req, fn, defaultProtectOptions)
 }
 
 // ProtectWithOptions is like [Protect] but accepts explicit [ProtectOptions].
-func ProtectWithOptions(client *Client, req AuthorizeRequest, fn func() error, opts ProtectOptions) error {
+func ProtectWithOptions(ctx context.Context, client *Client, req AuthorizeRequest, fn func() error, opts ProtectOptions) error {
 	maxPolls := opts.MaxPolls
 	if maxPolls <= 0 {
 		maxPolls = defaultProtectOptions.MaxPolls
@@ -54,7 +55,7 @@ func ProtectWithOptions(client *Client, req AuthorizeRequest, fn func() error, o
 	}
 
 	// 1. Request authorization from the gateway.
-	authResp, err := client.Authorize(req)
+	authResp, err := client.Authorize(ctx, req)
 	if err != nil {
 		// Gateway unreachable or returned non-2xx. Fail closed for mutating
 		// actions; allow read-only to proceed is intentionally NOT implemented
@@ -70,7 +71,7 @@ func ProtectWithOptions(client *Client, req AuthorizeRequest, fn func() error, o
 		return &ErrDenied{Reason: authResp.Reason}
 
 	case "require_approval":
-		return handleApproval(client, req, fn, authResp, expectedHash, opts, maxPolls)
+		return handleApproval(ctx, client, req, fn, authResp, expectedHash, opts, maxPolls)
 
 	default:
 		return fmt.Errorf(
@@ -83,6 +84,7 @@ func ProtectWithOptions(client *Client, req AuthorizeRequest, fn func() error, o
 // handleApproval implements the approval-polling loop and all fail-closed
 // checks for the "require_approval" decision path.
 func handleApproval(
+	ctx context.Context,
 	client *Client,
 	req AuthorizeRequest,
 	fn func() error,
@@ -113,7 +115,7 @@ func handleApproval(
 			time.Sleep(opts.PollInterval)
 		}
 
-		status, err := client.GetApproval(approvalID)
+		status, err := client.GetApproval(ctx, approvalID)
 		if err != nil {
 			// Transient network error — keep polling (mirroring Python SDK).
 			continue
@@ -127,7 +129,7 @@ func handleApproval(
 			}
 
 			// Atomically consume the approval before executing (replay defence).
-			consumed, err := client.ConsumeApproval(approvalID)
+			consumed, err := client.ConsumeApproval(ctx, approvalID)
 			if err != nil {
 				return fmt.Errorf(
 					"aegis: approval consume failed (already used / expired) — failing closed: %w", err,

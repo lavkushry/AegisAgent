@@ -16,6 +16,9 @@ or unreachable gateway for a mutating/high-risk action.
 | Action-hash verification (3 phases) | ✅ | ✅ | ✅ |
 | Single-use atomic consume | ✅ | ✅ | ✅ |
 | Hash-chained receipt verifier | ✅ `receipts.py` | ✅ `aegis/receipts.go` | ↗ (canon parity in place) |
+| Approve/reject a pending approval | ✅ | ✅ (#1183) | ✅ (#1182) |
+| SOC query methods (alerts/incidents/summary) | ✅ | ✅ (#1183) | ✅ (#1182) |
+| Context-based cancellation on every client call | n/a (Python uses per-call `timeout`) | ✅ (#1183, `context.Context` first param) | n/a (JS uses `AbortSignal` internally) |
 
 **Reference oracle:** Python is the reference implementation; Go and TS are verified against
 the same shared corpus. Any divergence fails CI (`Go SDK canon byte-parity`, `TS SDK canon

@@ -24,6 +24,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 
 **Go SDK — full parity, verified on `main`:**
 - `aegis-jcs-1` canonicalizer (`canon/canon.go`), `aegis.Client`, `aegis.Protect`, receipt verifier.
+- **Context-based cancellation + management/SOC methods** (#1183): every `Client` method (`Authorize`, `GetApproval`, `ConsumeApproval`, and all new methods below) now takes `ctx context.Context` as its first parameter (idiomatic Go cancellation/timeout), threaded through `Protect`/`ProtectWithOptions`/`handleApproval` too — a breaking signature change, but there were no callers outside `sdk-go/aegis/` itself. New methods: `Approve`/`Reject` (`POST /v1/approvals/:id/approve|reject`), `FreezeAgent`/`UnfreezeAgent`/`RevokeAgent` (`POST /v1/agents/:id/freeze|unfreeze|revoke`), `ListAlerts`/`ListIncidents`/`GetSocSummary` (`GET /v1/alerts`, `/v1/incidents`, `/v1/soc/summary`, with typed `ListAlertsOptions`/`ListIncidentsOptions` query filters).
 - Cross-language byte-parity CI gate.
 
 **TypeScript SDK — full parity, verified on `main`:**
