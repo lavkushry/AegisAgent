@@ -254,3 +254,19 @@ jobs:
           python -m pip install pip-audit
           python -m pip install -e sdk-python
           pip-audit --progress-spinner off
+
+  # ── CI-005 (#1174): dependency license compliance (blocking) ─────────────────
+  # Blocks GPL/AGPL (or any other newly-introduced copyleft license) from
+  # entering the gateway's dependency tree. gateway/deny.toml is an allow-list
+  # of every license already present in the dependency graph — anything not
+  # on it (including GPL/AGPL) fails the check. Distinct from the cargo-audit
+  # job above, which checks for known vulnerabilities, not licensing.
+  license-check:
+    name: Dependency license check (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: gateway/Cargo.toml
+          command: check licenses

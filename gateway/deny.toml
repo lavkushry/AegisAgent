@@ -1,0 +1,53 @@
+# CI-005 (#1174): dependency license compliance.
+#
+# cargo-deny's licenses check is allow-list based — anything not explicitly
+# allowed below is rejected, which is what blocks GPL/AGPL (or any other new
+# copyleft license) from silently entering the dependency tree via a future
+# `cargo update`/new dependency. The allow list below is the full set of
+# licenses actually present in `cargo deny list` for the gateway's current
+# dependency graph (Rust 1.88, all targets).
+#
+# Run `cargo deny check licenses` after adding a dependency; if it newly
+# fails, inspect the offending license with `cargo deny list` before adding
+# it to this allow list.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    # r-efi (UEFI target bindings, transitive via getrandom/wasi for
+    # non-Linux targets we don't ship) — weak copyleft, not GPL/AGPL.
+    "LGPL-2.1-or-later",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
