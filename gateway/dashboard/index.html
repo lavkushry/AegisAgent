@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AegisAgent SOC Console</title>
+  <link rel="stylesheet" href="aegis.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-mode">
+  <div id="app-container">
+    <!-- Sidebar Navigation -->
+    <aside id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-logo">A</div>
+        <div class="brand-name">
+          <h1>AegisAgent</h1>
+          <span>SOC CONSOLE</span>
+        </div>
+      </div>
+      <nav class="sidebar-menu">
+        <a href="#" class="menu-item active" data-view="overview">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2v-4zM14 16a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2v-4z"/></svg>
+          <span>Overview</span>
+        </a>
+        <a href="#" class="menu-item" data-view="explore">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          <span>Explore</span>
+        </a>
+        <a href="#" class="menu-item" data-view="alerts">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          <span>Alerts</span>
+          <span class="badge badge-error count-bubble" id="menu-alerts-count" style="display:none;">0</span>
+        </a>
+        <a href="#" class="menu-item" data-view="incidents">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01m-.01 4h.01"/></svg>
+          <span>Incidents</span>
+          <span class="badge badge-warning count-bubble" id="menu-incidents-count" style="display:none;">0</span>
+        </a>
+        <a href="#" class="menu-item" data-view="approvals">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span>Approvals</span>
+          <span class="badge badge-approval count-bubble" id="menu-approvals-count" style="display:none;">0</span>
+        </a>
+        <a href="#" class="menu-item" data-view="agents">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+          <span>Agents Fleet</span>
+        </a>
+        <a href="#" class="menu-item" data-view="mcp">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/></svg>
+          <span>MCP Servers</span>
+        </a>
+        <a href="#" class="menu-item" data-view="receipts">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          <span>Integrity Logs</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="footer-title">Status:</div>
+        <div class="status-indicator-container">
+          <span class="status-dot green" id="global-status-dot"></span>
+          <span id="global-status-text">Connected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main id="main-view">
+      <!-- Top Utility Header Bar -->
+      <header id="top-bar">
+        <div class="var-selector">
+          <label for="tenant-select">Tenant:</label>
+          <select id="tenant-select">
+            <option value="tenant_123">tenant_123</option>
+          </select>
+        </div>
+        
+        <div class="top-bar-controls">
+          <div class="config-toggle-btn" id="config-toggle">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <span>Connection Config</span>
+          </div>
+
+          <button class="btn btn-secondary" id="global-refresh-btn">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.253 8H18"/></svg>
+            <span>Refresh</span>
+          </button>
+          
+          <label class="auto-refresh-label">
+            <input type="checkbox" id="global-auto-refresh" checked>
+            <span>Auto (5s)</span>
+          </label>
+        </div>
+      </header>
+
+      <!-- Connection config panel (collapsible) -->
+      <section id="connection-config-panel" style="display:none;">
+        <div class="config-grid">
+          <div class="config-field">
+            <label for="gateway-url-input">Gateway URL:</label>
+            <input id="gateway-url-input" type="text" value="" placeholder="http://127.0.0.1:8080" spellcheck="false">
+          </div>
+          <div class="config-field">
+            <label for="auth-token-input">Bearer Token:</label>
+            <input id="auth-token-input" type="password" value="" placeholder="JWT or tenant_ token">
+          </div>
+          <button class="btn btn-primary" id="save-config-btn">Save & Reconnect</button>
+        </div>
+      </section>
+
+      <!-- Alert Message Banner -->
+      <div id="error-banner" class="alert-banner error" style="display:none;">
+        <span class="banner-text"></span>
+        <button class="banner-close">&times;</button>
+      </div>
+
+      <!-- VIEW PANELS (dynamically shown/hidden) -->
+      
+      <!-- 1. OVERVIEW VIEW -->
+      <div id="view-overview" class="view-panel">
+        <div class="overview-grid">
+          <!-- Stat Cards -->
+          <div class="stats-row">
+            <div class="stat-card">
+              <h3>Protected Actions</h3>
+              <div class="stat-value" id="stat-protected">0</div>
+            </div>
+            <div class="stat-card">
+              <h3>Blocked (Denies)</h3>
+              <div class="stat-value text-error" id="stat-denied">0</div>
+            </div>
+            <div class="stat-card hoverable" data-target-view="approvals">
+              <h3>Pending Approvals</h3>
+              <div class="stat-value text-warning" id="stat-approvals">0</div>
+            </div>
+            <div class="stat-card hoverable" data-target-view="incidents">
+              <h3>Open Incidents</h3>
+              <div class="stat-value text-critical" id="stat-incidents">0</div>
+            </div>
+            <div class="stat-card hoverable" data-target-view="alerts">
+              <h3>Detections / Alerts</h3>
+              <div class="stat-value" id="stat-alerts">0</div>
+            </div>
+            <div class="stat-card hoverable" data-target-view="receipts">
+              <h3>Receipt Chain</h3>
+              <div class="stat-value text-success" id="stat-chain-status">✓ Verified</div>
+            </div>
+          </div>
+
+          <!-- Charts and Feed Layout -->
+          <div class="dashboard-body">
+            <!-- Left side: metrics charts -->
+            <div class="dashboard-charts">
+              <div class="chart-card">
+                <div class="chart-header">
+                  <h2>Decision Rate / Volume (Last 24h)</h2>
+                </div>
+                <div class="chart-container" id="decision-rate-chart">
+                  <!-- Dynamic SVG will be rendered here -->
+                  <svg width="100%" height="100%" viewBox="0 0 600 200" preserveAspectRatio="none" id="svg-decision-chart"></svg>
+                </div>
+              </div>
+
+              <div class="recent-alerts-card">
+                <div class="card-header">
+                  <h2>Top Risk Incident Summary</h2>
+                </div>
+                <div id="top-incident-container">
+                  <!-- Rendered dynamically -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Right side: Live Decision Feed -->
+            <div class="live-feed-card">
+              <div class="card-header">
+                <h2>Live Event Stream</h2>
+                <span class="live-tag">streaming</span>
+              </div>
+              <div class="feed-container" id="live-feed-events">
+                <!-- Live events dynamically inserted -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. EXPLORE VIEW -->
+      <div id="view-explore" class="view-panel" style="display:none;">
+        <div class="explore-layout">
+          <!-- Filter / Query Header -->
+          <div class="search-bar-container">
+            <div class="search-input-wrapper">
+              <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+              <input type="text" id="explore-query-input" placeholder="Query decisions... e.g. decision:deny agent_id:coding-agent">
+            </div>
+            <button class="btn btn-primary" id="execute-search-btn">Search</button>
+          </div>
+
+          <!-- Active Filter Pills -->
+          <div class="filter-pills" id="active-filters-container">
+            <!-- Dynamic filter pills -->
+          </div>
+
+          <div class="explore-body">
+            <!-- Sidebar Facet Filters -->
+            <aside class="explore-sidebar">
+              <h2>Filters / Facets</h2>
+              <div class="facet-group">
+                <h3>Decision</h3>
+                <ul class="facet-list" id="facet-decision">
+                  <!-- Dynamically populated facets -->
+                </ul>
+              </div>
+              <div class="facet-group">
+                <h3>Source Trust</h3>
+                <ul class="facet-list" id="facet-trust">
+                  <!-- Dynamically populated facets -->
+                </ul>
+              </div>
+              <div class="facet-group">
+                <h3>Tools</h3>
+                <ul class="facet-list" id="facet-tool">
+                  <!-- Dynamically populated facets -->
+                </ul>
+              </div>
+            </aside>
+
+            <!-- Main Results Table -->
+            <div class="explore-results">
+              <div class="results-meta">
+                <span id="search-results-count">Showing 0 decisions</span>
+              </div>
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Agent</th>
+                      <th>Tool/Action</th>
+                      <th>Decision</th>
+                      <th>Source Trust</th>
+                      <th>Risk Score</th>
+                      <th>Hash</th>
+                    </tr>
+                  </thead>
+                  <tbody id="explore-tbody">
+                    <tr class="empty-row"><td colspan="7">Execute search to display results.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. ALERTS VIEW -->
+      <div id="view-alerts" class="view-panel" style="display:none;">
+        <div class="view-header">
+          <h2>Security Detections / Alerts</h2>
+          <span class="count-badge" id="alerts-view-count">0</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Alert Rule</th>
+                <th>Agent</th>
+                <th>Summary</th>
+                <th>Occurred</th>
+                <th>ID</th>
+              </tr>
+            </thead>
+            <tbody id="alerts-view-tbody">
+              <tr class="empty-row"><td colspan="6">Loading alerts...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 4. INCIDENTS VIEW -->
+      <div id="view-incidents" class="view-panel" style="display:none;">
+        <!-- List View -->
+        <div id="incidents-list-container">
+          <div class="view-header">
+            <h2>Correlated Incidents</h2>
+            <span class="count-badge" id="incidents-view-count">0</span>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Severity</th>
+                  <th>Incident Type</th>
+                  <th>Agent</th>
+                  <th>Summary Description</th>
+                  <th>Opened At</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="incidents-view-tbody">
+                <tr class="empty-row"><td colspan="7">Loading incidents...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Detail View -->
+        <div id="incident-detail-container" style="display:none;">
+          <div class="detail-header">
+            <button class="btn btn-secondary btn-sm" id="back-to-incidents-btn">&larr; Back to list</button>
+            <div class="incident-title-row">
+              <h2 id="inc-detail-id">Incident Detail</h2>
+              <span class="badge" id="inc-detail-severity">Critical</span>
+              <span class="badge" id="inc-detail-status">Open</span>
+            </div>
+          </div>
+
+          <div class="incident-detail-grid">
+            <!-- Timeline details -->
+            <div class="incident-main">
+              <div class="provable-timeline-card">
+                <div class="timeline-header">
+                  <h3>Provable Incident Timeline</h3>
+                  <button class="btn btn-primary btn-sm" id="verify-incident-chain-btn">
+                    <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                    <span>Verify Receipt Chain</span>
+                  </button>
+                </div>
+                <!-- Verification status alert -->
+                <div id="timeline-verification-status" class="timeline-verify-alert" style="display:none;"></div>
+                
+                <div class="provable-timeline-flow" id="incident-timeline-flow">
+                  <!-- Timeline steps rendered dynamically -->
+                </div>
+              </div>
+
+              <!-- Root Cause analysis -->
+              <div class="rca-card">
+                <div class="rca-header">
+                  <h3>Root Cause Analysis (RCA)</h3>
+                  <button class="btn btn-secondary btn-sm" id="narrate-incident-btn">Re-Generate Narrative (LLM)</button>
+                </div>
+                <div class="rca-content" id="incident-rca-content">
+                  Loading analysis...
+                </div>
+              </div>
+            </div>
+
+            <!-- Incident containment side-panel -->
+            <aside class="incident-sidebar">
+              <div class="containment-card">
+                <h3>Containment Actions</h3>
+                <div class="containment-actions-list">
+                  <div class="agent-status-box">
+                    <span>Target Agent Status:</span>
+                    <strong id="inc-detail-agent-status">Unknown</strong>
+                  </div>
+                  <button class="btn btn-danger btn-block" id="inc-contain-freeze-btn">Freeze Agent</button>
+                  <button class="btn btn-secondary btn-block" id="inc-contain-unfreeze-btn">Unfreeze Agent</button>
+                  <button class="btn btn-danger-outline btn-block" id="inc-contain-revoke-btn">Revoke Agent Token</button>
+                </div>
+              </div>
+
+              <div class="incident-meta-card">
+                <h3>Incident Metadata</h3>
+                <div class="meta-row"><span>Agent ID:</span><code id="inc-meta-agent-id"></code></div>
+                <div class="meta-row"><span>Classification:</span><span id="inc-meta-kind"></span></div>
+                <div class="meta-row"><span>Triggered Rule:</span><span id="inc-meta-rule"></span></div>
+                <div class="meta-row"><span>Opened At:</span><span id="inc-meta-opened"></span></div>
+                <div class="meta-row"><span>Last Seen:</span><span id="inc-meta-closed"></span></div>
+                <div class="close-incident-wrapper">
+                  <button class="btn btn-success btn-block" id="inc-close-incident-btn">Close Incident</button>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. APPROVALS VIEW -->
+      <div id="view-approvals" class="view-panel" style="display:none;">
+        <div class="view-header">
+          <h2>Pending Approvals Queue</h2>
+          <span class="count-badge" id="approvals-view-count">0</span>
+        </div>
+        <div class="approvals-grid" id="approvals-cards-container">
+          <!-- Pending approval cards -->
+        </div>
+      </div>
+
+      <!-- 6. AGENTS FLEET VIEW -->
+      <div id="view-agents" class="view-panel" style="display:none;">
+        <div class="view-header">
+          <h2>Agent Fleet Inventory</h2>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent ID</th>
+                <th>Owner</th>
+                <th>Environment</th>
+                <th>Operational Status</th>
+                <th>Allowed Environments</th>
+                <th>Registered At</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="agents-tbody">
+              <tr class="empty-row"><td colspan="8">Loading agents fleet...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 7. MCP SERVERS VIEW -->
+      <div id="view-mcp" class="view-panel" style="display:none;">
+        <div class="view-header">
+          <h2>MCP Servers Registry</h2>
+        </div>
+        <div class="mcp-servers-layout">
+          <!-- Servers Table -->
+          <div class="mcp-servers-main">
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Server Key</th>
+                    <th>Name</th>
+                    <th>Transport</th>
+                    <th>Trust Level</th>
+                    <th>Inspection</th>
+                    <th>Drift Status</th>
+                    <th>Last Active</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="mcp-servers-tbody">
+                  <tr class="empty-row"><td colspan="8">Loading MCP registry...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 8. INTEGRITY LOGS VIEW -->
+      <div id="view-receipts" class="view-panel" style="display:none;">
+        <div class="view-header">
+          <h2>Receipt Integrity Explorer</h2>
+        </div>
+        <div class="receipts-explorer-layout">
+          <div class="receipts-control-bar">
+            <button class="btn btn-primary" id="verify-whole-chain-btn">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+              <span>Verify Cryptographic Receipt Chain</span>
+            </button>
+            <div class="chain-verification-banner" id="chain-verify-banner" style="display:none;"></div>
+          </div>
+          
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Receipt Hash</th>
+                  <th>Prev Hash</th>
+                  <th>Tool/Action</th>
+                  <th>Decision</th>
+                  <th>Agent</th>
+                  <th>Verify</th>
+                </tr>
+              </thead>
+              <tbody id="receipts-tbody">
+                <tr class="empty-row"><td colspan="7">Loading cryptographic receipts...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- JS Code File -->
+  <script src="app.js"></script>
+</body>
+</html>
