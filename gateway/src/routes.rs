@@ -6133,6 +6133,23 @@ pub async fn close_incident(
         }
     };
 
+    // SOC-005 (#1158): mean-time-to-resolve — the real gap between this
+    // incident's open and close timestamps. Unparseable timestamps or a
+    // negative duration (clock skew) are skipped silently.
+    if let Some(closed_at_str) = closed_at.as_deref() {
+        if let (Ok(opened), Ok(closed)) = (
+            DateTime::parse_from_rfc3339(&incident.opened_at),
+            DateTime::parse_from_rfc3339(closed_at_str),
+        ) {
+            let resolution_time = closed
+                .with_timezone(&Utc)
+                .signed_duration_since(opened.with_timezone(&Utc));
+            if let Ok(resolution_time) = resolution_time.to_std() {
+                state.metrics.observe_mttr(resolution_time);
+            }
+        }
+    }
+
     // Write audit event (hashes / ids only — no payloads, no raw evidence).
     let audit = AuditEventRecord {
         id: Uuid::new_v4().to_string(),
@@ -13384,6 +13401,24 @@ mod tests {
             first_closed_at,
             "closed_at must not change on second close"
         );
+    }
+
+    /// #1158 (SOC-005): closing an incident records a mean-time-to-resolve
+    /// sample (the real gap between `opened_at` and `closed_at`), not a
+    /// derived/zero value.
+    #[tokio::test]
+    async fn close_incident_records_mttr_sample() {
+        let (state, tenant_id, _) = setup_state("close_mttr").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_mttr_1", "deny_storm").await;
+
+        assert_eq!(state.metrics.soc_mttr.average_seconds(), 0.0);
+
+        let (status, _) = do_close(state.clone(), &tenant_id, "inc_mttr_1").await;
+        assert_eq!(status, StatusCode::OK);
+
+        // insert_test_incident hardcodes opened_at far in the past, so the
+        // resolution time (now - opened_at) must be a large positive value.
+        assert!(state.metrics.soc_mttr.average_seconds() > 0.0);
     }
 
     // ── SOC query layer: get_incident + soc_summary route tests ──────────────
