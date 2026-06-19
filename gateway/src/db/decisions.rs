@@ -156,6 +156,50 @@ pub async fn list_decisions(
     .await
 }
 
+/// Cursor-paginated sibling of [`list_decisions`] (#1142), used only by the
+/// `GET /v1/decisions` HTTP route handler — kept separate rather than
+/// changing `list_decisions` itself, since that function has ~10 unrelated
+/// internal callers elsewhere in the gateway that have no use for a cursor
+/// and shouldn't have to thread one through. `cursor`, when `Some`, is the
+/// `rowid` of the last item from a previous page (decoded from the opaque
+/// `X-Next-Cursor` response header by `routes::decode_cursor`) — rows are
+/// seeked via `rowid < cursor` instead of `OFFSET`, and `offset` is ignored
+/// when a cursor is supplied. Returns the page plus the next page's cursor
+/// (`None` at the end of the result set) — see [`super::paginate_rows`].
+pub async fn list_decisions_cursor(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+    agent_id: Option<&str>,
+    decision: Option<&str>,
+) -> Result<(Vec<DecisionRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
+         FROM decisions
+         WHERE tenant_id = ?
+           AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR decision = ?)
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(decision)
+    .bind(decision)
+    .bind(cursor)
+    .bind(cursor)
+    .bind(limit + 1)
+    .bind(if cursor.is_some() { 0 } else { offset })
+    .fetch_all(pool)
+    .await?;
+    super::paginate_rows(rows, limit)
+}
+
 /// #1283: cap on decisions scanned per backtest run. Higher than
 /// [`SOC_MAX_LIMIT`] (200, tuned for paginated UI listings) because an
 /// under-counted backtest would silently understate `estimated_daily_alert_volume`
@@ -400,6 +444,40 @@ pub async fn get_all_audit_events(
     .await
 }
 
+/// #1142: this endpoint never exposed `limit`/`offset` — it has always
+/// returned (up to) the 100 most recent matching events. `LIMIT` stays
+/// hardcoded at that same value; `cursor` only adds the ability to page
+/// *past* the first 100 via keyset seeking. Cursor-paginated sibling of
+/// [`get_all_audit_events`], used only by the `GET /v1/audit/events` HTTP
+/// route handler — kept separate for the same reason documented on
+/// [`list_decisions_cursor`].
+const AUDIT_EVENTS_PAGE_LIMIT: i64 = 100;
+
+pub async fn get_all_audit_events_cursor(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_id: Option<&str>,
+    cursor: Option<i64>,
+) -> Result<(Vec<AuditEventRecord>, Option<i64>), sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT *, rowid FROM audit_events
+         WHERE tenant_id = ?
+           AND (? IS NULL OR decision_id = ?)
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(decision_id)
+    .bind(decision_id)
+    .bind(cursor)
+    .bind(cursor)
+    .bind(AUDIT_EVENTS_PAGE_LIMIT + 1)
+    .fetch_all(pool)
+    .await?;
+    super::paginate_rows(rows, AUDIT_EVENTS_PAGE_LIMIT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +622,78 @@ mod tests {
             .await
             .unwrap();
         assert!(map.is_empty());
+    }
+
+    /// #1142: regression test for an off-by-one in `paginate_rows` — fetching
+    /// exactly `limit` rows from a result set that ends precisely there must
+    /// NOT emit a `next_cursor`. Two decisions exist; requesting `limit=2`
+    /// must return both with `next_cursor: None`, and seeking past them with
+    /// `cursor=Some(last_rowid)` must return an empty page (also `None`).
+    #[tokio::test]
+    async fn list_decisions_cursor_no_false_next_cursor_at_exact_boundary() {
+        let pool = setup_pool("decisions_cursor_boundary").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_a"))
+            .await
+            .unwrap();
+        insert_decision(&pool, &graph_perf_decision("dec_2", "tenant_a"))
+            .await
+            .unwrap();
+
+        let (page, next_cursor) = list_decisions_cursor(&pool, "tenant_a", 2, 0, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(
+            next_cursor, None,
+            "exact-boundary page must not claim more rows exist"
+        );
+
+        let oldest_rowid: i64 = sqlx::query_scalar("SELECT MIN(rowid) FROM decisions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let (empty_page, empty_cursor) =
+            list_decisions_cursor(&pool, "tenant_a", 2, 0, Some(oldest_rowid), None, None)
+                .await
+                .unwrap();
+        assert!(empty_page.is_empty());
+        assert_eq!(empty_cursor, None);
+    }
+
+    /// Same off-by-one regression as the decisions test above, for
+    /// `get_all_audit_events_cursor`.
+    #[tokio::test]
+    async fn get_all_audit_events_cursor_no_false_next_cursor_at_exact_boundary() {
+        let pool = setup_pool("audit_events_cursor_boundary").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_audit_event(&pool, &make_audit_event("evt_1", "tenant_a"))
+            .await
+            .unwrap();
+        insert_audit_event(&pool, &make_audit_event("evt_2", "tenant_a"))
+            .await
+            .unwrap();
+
+        let (page, next_cursor) = get_all_audit_events_cursor(&pool, "tenant_a", None, None)
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(
+            next_cursor, None,
+            "exact-boundary page must not claim more rows exist"
+        );
     }
 }

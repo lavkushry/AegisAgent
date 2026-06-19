@@ -4974,31 +4974,6 @@ mod tests {
         };
         db::insert_agent(&state.pool, &agent2).await.unwrap();
 
-        let decision_id1 = Uuid::new_v4().to_string();
-        let record1 = DecisionRecord {
-            id: decision_id1.clone(),
-            tenant_id: tenant_id.clone(),
-            agent_id: agent_id.clone(),
-            user_id: Some("user_1".to_string()),
-            run_id: Some("run_1".to_string()),
-            trace_id: Some("trace_1".to_string()),
-            skill: "fs".to_string(),
-            action: "read".to_string(),
-            resource: Some("foo.txt".to_string()),
-            input_json: "{}".to_string(),
-            decision: "allow".to_string(),
-            risk_score: Some(1),
-            reason: Some("ok".to_string()),
-            matched_policy_ids: None,
-            request_id: None,
-            latency_ms: None,
-            composite_risk_score: None,
-            root_trust_level: None,
-            parent_run_id: None,
-            created_at: Utc::now(),
-        };
-        db::insert_decision(&state.pool, &record1).await.unwrap();
-
         let decision_id2 = Uuid::new_v4().to_string();
         let record2 = DecisionRecord {
             id: decision_id2.clone(),
@@ -5024,6 +4999,31 @@ mod tests {
         };
         db::insert_decision(&state.pool, &record2).await.unwrap();
 
+        let decision_id1 = Uuid::new_v4().to_string();
+        let record1 = DecisionRecord {
+            id: decision_id1.clone(),
+            tenant_id: tenant_id.clone(),
+            agent_id: agent_id.clone(),
+            user_id: Some("user_1".to_string()),
+            run_id: Some("run_1".to_string()),
+            trace_id: Some("trace_1".to_string()),
+            skill: "fs".to_string(),
+            action: "read".to_string(),
+            resource: Some("foo.txt".to_string()),
+            input_json: "{}".to_string(),
+            decision: "allow".to_string(),
+            risk_score: Some(1),
+            reason: Some("ok".to_string()),
+            matched_policy_ids: None,
+            request_id: None,
+            latency_ms: None,
+            composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
+            created_at: Utc::now(),
+        };
+        db::insert_decision(&state.pool, &record1).await.unwrap();
+
         // 1. List decisions without filters
         let response = list_decisions(
             State(state.clone()),
@@ -5040,6 +5040,61 @@ mod tests {
         // Order is newest first, so record1 (created Utc::now()) should be first
         assert_eq!(list[0]["id"].as_str(), Some(decision_id1.as_str()));
         assert_eq!(list[1]["id"].as_str(), Some(decision_id2.as_str()));
+
+        // Keyset Pagination tests (#1142)
+        // A. Limit=1: should return first page with x-next-cursor header
+        let response_page1 = list_decisions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_page1.status(), StatusCode::OK);
+        let cursor_header = response_page1.headers().get("x-next-cursor").cloned();
+        assert!(
+            cursor_header.is_some(),
+            "x-next-cursor header should be present"
+        );
+        let cursor_val = cursor_header.unwrap().to_str().unwrap().to_string();
+
+        let body_page1 = to_bytes(response_page1.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_page1: serde_json::Value = serde_json::from_slice(&body_page1).unwrap();
+        let list_page1 = json_page1.as_array().unwrap();
+        assert_eq!(list_page1.len(), 1);
+        assert_eq!(list_page1[0]["id"].as_str(), Some(decision_id1.as_str()));
+        let response_page2 = list_decisions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some(format!("limit=2&cursor={}", cursor_val))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_page2.status(), StatusCode::OK);
+        assert!(
+            response_page2.headers().get("x-next-cursor").is_none(),
+            "x-next-cursor should not be present at the end of the pages"
+        );
+
+        let body_page2 = to_bytes(response_page2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_page2: serde_json::Value = serde_json::from_slice(&body_page2).unwrap();
+        let list_page2 = json_page2.as_array().unwrap();
+        assert_eq!(list_page2.len(), 1);
+        assert_eq!(list_page2[0]["id"].as_str(), Some(decision_id2.as_str()));
+
+        // C. Invalid cursor: should fail with 400 Bad Request
+        let response_invalid_cursor = list_decisions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("cursor=invalid_hex_token".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_invalid_cursor.status(), StatusCode::BAD_REQUEST);
 
         // 2. List decisions with filter: agent_id
         let response_filter = list_decisions(

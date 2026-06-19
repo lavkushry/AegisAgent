@@ -417,6 +417,44 @@ pub async fn list_soc_alerts(
     .await
 }
 
+/// Cursor-paginated sibling of [`list_soc_alerts`] (#1142), used only by the
+/// `GET /v1/alerts` HTTP route handler — see
+/// `decisions::list_decisions_cursor`'s doc comment for why this is a
+/// separate function rather than a change to `list_soc_alerts` itself.
+pub async fn list_soc_alerts_cursor(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    severity: Option<&str>,
+    agent_id: Option<&str>,
+    cursor: Option<i64>,
+) -> Result<(Vec<SocAlertRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
+         FROM soc_alerts
+         WHERE tenant_id = ?
+           AND (? IS NULL OR severity = ?)
+           AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(severity)
+    .bind(severity)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(cursor)
+    .bind(cursor)
+    .bind(limit + 1)
+    .bind(if cursor.is_some() { 0 } else { offset })
+    .fetch_all(pool)
+    .await?;
+    super::paginate_rows(rows, limit)
+}
+
 /// List incidents for a tenant, newest-first, with pagination and optional equality filters.
 /// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
 /// `status_filter` — optional equality filter (`"open"` or `"closed"`; `None` = all).
@@ -455,6 +493,52 @@ pub async fn list_soc_incidents(
     .bind(offset)
     .fetch_all(pool)
     .await
+}
+
+/// Cursor-paginated sibling of [`list_soc_incidents`] (#1142), used only by
+/// the `GET /v1/incidents` HTTP route handler — see
+/// `decisions::list_decisions_cursor`'s doc comment for why this is a
+/// separate function rather than a change to `list_soc_incidents` itself.
+/// Ordering switches from `opened_at DESC` to `rowid DESC` to give cursor
+/// seeking a tie-free sort key; in practice the two orderings agree
+/// (incidents are opened in insertion order).
+#[allow(clippy::too_many_arguments)]
+pub async fn list_soc_incidents_cursor(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    status_filter: Option<&str>,
+    severity: Option<&str>,
+    agent_id: Option<&str>,
+    cursor: Option<i64>,
+) -> Result<(Vec<SocIncidentRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at, rowid
+         FROM soc_incidents
+         WHERE tenant_id = ?
+           AND (? IS NULL OR status = ?)
+           AND (? IS NULL OR severity = ?)
+           AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(tenant_id)
+    .bind(status_filter)
+    .bind(status_filter)
+    .bind(severity)
+    .bind(severity)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(cursor)
+    .bind(cursor)
+    .bind(limit + 1)
+    .bind(if cursor.is_some() { 0 } else { offset })
+    .fetch_all(pool)
+    .await?;
+    super::paginate_rows(rows, limit)
 }
 
 /// Fetch a single SOC incident by id, scoped to the given tenant.
@@ -1007,5 +1091,60 @@ mod tests {
         assert_eq!(incidents.len(), 2);
 
         std::env::remove_var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS");
+    }
+
+    /// #1142: regression test for an off-by-one in `paginate_rows` — see
+    /// `decisions::list_decisions_cursor_no_false_next_cursor_at_exact_boundary`
+    /// for the full rationale. Two alerts exist; requesting `limit=2` must
+    /// return both with `next_cursor: None`.
+    #[tokio::test]
+    async fn list_soc_alerts_cursor_no_false_next_cursor_at_exact_boundary() {
+        let pool = setup_pool("alerts_cursor_boundary").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_alert(&pool, &make_alert("al_1", "tenant_a"))
+            .await
+            .unwrap();
+        insert_soc_alert(&pool, &make_alert("al_2", "tenant_a"))
+            .await
+            .unwrap();
+
+        let (page, next_cursor) = list_soc_alerts_cursor(&pool, "tenant_a", 2, 0, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(
+            next_cursor, None,
+            "exact-boundary page must not claim more rows exist"
+        );
+    }
+
+    /// Same off-by-one regression as the alerts test above, for
+    /// `list_soc_incidents_cursor`.
+    #[tokio::test]
+    async fn list_soc_incidents_cursor_no_false_next_cursor_at_exact_boundary() {
+        let pool = setup_pool("incidents_cursor_boundary").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_1", "tenant_a"))
+            .await
+            .unwrap();
+        insert_soc_incident(&pool, &make_incident("inc_2", "tenant_a"))
+            .await
+            .unwrap();
+
+        let (page, next_cursor) =
+            list_soc_incidents_cursor(&pool, "tenant_a", 2, 0, None, None, None, None)
+                .await
+                .unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(
+            next_cursor, None,
+            "exact-boundary page must not claim more rows exist"
+        );
     }
 }

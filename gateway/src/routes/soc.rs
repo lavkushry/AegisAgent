@@ -51,14 +51,24 @@ pub async fn get_timeline(
 ///
 /// Query params:
 ///   `decision_id` — optional equality filter (#1301).
+///   `cursor` (#1142) — see [`list_decisions`]'s doc comment. This endpoint
+///   has no `limit`/`offset` — it has always returned (up to) the 100 most
+///   recent matching events; `cursor` only adds the ability to page past
+///   that first 100.
 pub async fn get_audit_events(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let decision_id = parse_filter(raw_query.as_deref(), "decision_id");
-    match db::get_all_audit_events(&state.pool, &tenant_id, decision_id.as_deref()).await {
-        Ok(events) => (StatusCode::OK, Json(events)).into_response(),
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
+    match db::get_all_audit_events_cursor(&state.pool, &tenant_id, decision_id.as_deref(), cursor)
+        .await
+    {
+        Ok((events, next_cursor)) => paginated_response(&events, next_cursor),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
             (
@@ -74,6 +84,9 @@ pub async fn get_audit_events(
 ///
 /// Query params:
 ///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous
+///   page's `X-Next-Cursor` response header; takes priority over `offset`
+///   when both are supplied.
 ///   `agent_id` — optional equality filter.
 ///   `decision` — optional equality filter.
 pub async fn list_decisions(
@@ -82,20 +95,25 @@ pub async fn list_decisions(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
     let decision = parse_filter(raw_query.as_deref(), "decision");
 
-    match db::list_decisions(
+    match db::list_decisions_cursor(
         &state.pool,
         &tenant_id,
         limit,
         offset,
+        cursor,
         agent_id.as_deref(),
         decision.as_deref(),
     )
     .await
     {
-        Ok(decisions) => (StatusCode::OK, Json(decisions)).into_response(),
+        Ok((decisions, next_cursor)) => paginated_response(&decisions, next_cursor),
         Err(e) => {
             error!("Failed to list decisions: {:?}", e);
             (
@@ -415,6 +433,7 @@ pub async fn delete_detection_rule(
 ///
 /// Query params:
 ///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — see [`list_decisions`]'s doc comment.
 ///   `severity` — optional equality filter (e.g. `?severity=high`).
 ///   `agent_id`  — optional equality filter (e.g. `?agent_id=abc`).
 /// Returns a JSON array of [`SocAlertRecord`]s ordered newest-first.
@@ -426,20 +445,25 @@ pub async fn list_alerts(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
     let severity = parse_filter(raw_query.as_deref(), "severity");
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
 
-    match db::list_soc_alerts(
+    match db::list_soc_alerts_cursor(
         &state.pool,
         &tenant_id,
         limit,
         offset,
         severity.as_deref(),
         agent_id.as_deref(),
+        cursor,
     )
     .await
     {
-        Ok(alerts) => (StatusCode::OK, Json(alerts)).into_response(),
+        Ok((alerts, next_cursor)) => paginated_response(&alerts, next_cursor),
         Err(e) => {
             error!("Failed to list SOC alerts: {:?}", e);
             (
@@ -455,6 +479,7 @@ pub async fn list_alerts(
 ///
 /// Query params:
 ///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — see [`list_decisions`]'s doc comment.
 ///   `status`   — optional filter: `"open"` or `"closed"` (omit for all).
 ///   `severity` — optional equality filter (e.g. `?severity=high`).
 ///   `agent_id` — optional equality filter (e.g. `?agent_id=abc`).
@@ -467,11 +492,15 @@ pub async fn list_incidents(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
     let status_filter = parse_filter(raw_query.as_deref(), "status");
     let severity = parse_filter(raw_query.as_deref(), "severity");
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
 
-    match db::list_soc_incidents(
+    match db::list_soc_incidents_cursor(
         &state.pool,
         &tenant_id,
         limit,
@@ -479,10 +508,11 @@ pub async fn list_incidents(
         status_filter.as_deref(),
         severity.as_deref(),
         agent_id.as_deref(),
+        cursor,
     )
     .await
     {
-        Ok(incidents) => (StatusCode::OK, Json(incidents)).into_response(),
+        Ok((incidents, next_cursor)) => paginated_response(&incidents, next_cursor),
         Err(e) => {
             error!("Failed to list SOC incidents: {:?}", e);
             (
