@@ -99,6 +99,13 @@ nav:
       - Threat model: AegisAgent_Threat_Model.md
       - Operational design: AegisAgent_Operational_Design.md
       - MCP defense architecture: mcp-defense-architecture.md
+      - Decision records:
+          - Overview: adr/index.md
+          - "ADR-0001: Cedar policy engine": adr/0001-cedar-policy-engine.md
+          - "ADR-0002: SQLite-first storage": adr/0002-sqlite-first-storage.md
+          - "ADR-0003: aegis-jcs-1 canonicalization": adr/0003-aegis-jcs-1-canonicalization.md
+          - "ADR-0004: Ed25519 receipt signing": adr/0004-ed25519-receipt-signing.md
+          - "ADR-0005: Fail-closed defaults": adr/0005-fail-closed-defaults.md
   - Reference:
       - Runtime authorization API: runtime-authorization-api.md
       - Fail-closed behavior guide: fail-closed-behavior.md
