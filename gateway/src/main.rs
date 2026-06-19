@@ -246,6 +246,78 @@ async fn content_type_validation_middleware(
     next.run(request).await.into_response()
 }
 
+/// Bodies larger than this fail closed with a 500 rather than being hashed.
+/// Every current GET handler already bounds its output via an explicit
+/// `LIMIT` (see `database_migration.md`'s tenant-scoped pagination
+/// guidance), so in practice no real response approaches this cap — it
+/// exists to bound memory use, not to special-case a body the gateway
+/// actually expects to produce. Once `axum::body::to_bytes` exceeds its
+/// limit the underlying stream is already partially consumed, so there is
+/// no safe "pass the original body through untouched" fallback to fall back
+/// to; failing the request outright is the honest behavior.
+const ETAG_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+
+/// Middleware: ETag-based conditional caching for GET endpoints (#1141).
+///
+/// Hashes the response body (SHA-256) and sets it as a quoted `ETag`. A
+/// request whose `If-None-Match` matches gets a `304 Not Modified` with an
+/// empty body instead of the full payload. Applies generically to every GET
+/// route rather than an endpoint-specific allow-list — any GET response
+/// benefits, and there's no per-route logic to keep in sync as routes are
+/// added.
+///
+/// Scoped to GET + a 200 response only: POST/PUT/PATCH/DELETE are mutating
+/// and must not be cached, and non-200 responses (errors, the `/v1/ws/events`
+/// 101 upgrade) are passed through untouched. Placed before the compression
+/// layer in the middleware stack so the hash covers the canonical
+/// (uncompressed) body, not compression-algorithm-dependent bytes.
+async fn etag_middleware(request: Request<Body>, next: Next) -> impl IntoResponse {
+    let is_get = request.method() == Method::GET;
+    let if_none_match = request
+        .headers()
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let response = next.run(request).await;
+
+    if !is_get || response.status() != StatusCode::OK {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let bytes = match axum::body::to_bytes(body, ETAG_MAX_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Internal server error"})),
+            )
+                .into_response();
+        }
+    };
+
+    use sha2::{Digest, Sha256};
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(&bytes)));
+
+    if if_none_match.as_deref() == Some(etag.as_str()) {
+        let mut not_modified = axum::response::Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .body(Body::empty())
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        if let Ok(val) = HeaderValue::from_str(&etag) {
+            not_modified.headers_mut().insert(header::ETAG, val);
+        }
+        return not_modified;
+    }
+
+    let mut response = axum::response::Response::from_parts(parts, Body::from(bytes));
+    if let Ok(val) = HeaderValue::from_str(&etag) {
+        response.headers_mut().insert(header::ETAG, val);
+    }
+    response
+}
+
 /// Build the CORS layer from AEGIS_CORS_ORIGINS env var.
 /// - If unset: no CORS headers (default, most restrictive).
 /// - If set: parse comma-separated origins (e.g. "http://localhost:3000,https://app.example.com").
@@ -1050,15 +1122,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(middleware::from_fn(request_id_middleware))
         // 3. Content-Type validation — rejects non-JSON bodies on POST/PUT/PATCH
         .layer(middleware::from_fn(content_type_validation_middleware))
-        // 4. Response Compression (Gzip/Brotli/Deflate)
+        // 4. ETag conditional caching (#1141) — must run before compression
+        // so the hash covers the canonical uncompressed body.
+        .layer(middleware::from_fn(etag_middleware))
+        // 5. Response Compression (Gzip/Brotli/Deflate)
         .layer(tower_http::compression::CompressionLayer::new())
-        // 5. Request size limit
+        // 6. Request size limit
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
-        // 6. Global request timeout
+        // 7. Global request timeout
         .layer(tower_http::timeout::TimeoutLayer::new(
             std::time::Duration::from_secs(request_timeout_secs),
         ))
-        // 7. CatchPanic — outermost, so a panic anywhere in the stack returns
+        // 8. CatchPanic — outermost, so a panic anywhere in the stack returns
         // a structured 500 instead of dropping the connection (#1153).
         .layer(CatchPanicLayer::custom(panic_response(state.clone())));
 
@@ -1363,6 +1438,143 @@ mod tests {
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(format!("{}-shm", db_path));
         let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+
+    /// Builds a tiny router with a fixed-body GET route, a fixed-body POST
+    /// route, and a 404 route, all wrapped in just `etag_middleware` — no DB
+    /// or other state needed since the middleware doesn't touch either.
+    fn etag_test_app() -> Router {
+        use axum::routing::{get, post};
+
+        Router::new()
+            .route("/get", get(|| async { Json(json!({"hello": "world"})) }))
+            .route("/post", post(|| async { Json(json!({"hello": "world"})) }))
+            .route(
+                "/missing",
+                get(|| async { (StatusCode::NOT_FOUND, "not found") }),
+            )
+            .layer(middleware::from_fn(etag_middleware))
+    }
+
+    /// #1141: a GET response gets an `ETag` header, and a repeat request
+    /// carrying that exact `If-None-Match` value gets a `304` with an empty
+    /// body instead of the full payload.
+    #[tokio::test]
+    async fn etag_middleware_returns_304_on_matching_if_none_match() {
+        use tower::ServiceExt;
+
+        let app = etag_test_app();
+
+        let first = app
+            .clone()
+            .oneshot(Request::builder().uri("/get").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let etag = first
+            .headers()
+            .get(header::ETAG)
+            .expect("ETag header should be set")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(etag.starts_with('"') && etag.ends_with('"'));
+        let first_body = axum::body::to_bytes(first.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(first_body, axum::body::Bytes::from(r#"{"hello":"world"}"#));
+
+        let second = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/get")
+                    .header(header::IF_NONE_MATCH, &etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            second
+                .headers()
+                .get(header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            etag
+        );
+        let second_body = axum::body::to_bytes(second.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(second_body.is_empty());
+    }
+
+    /// A non-matching `If-None-Match` still gets the full 200 response with
+    /// the (unchanged, since the route always returns the same body) ETag.
+    #[tokio::test]
+    async fn etag_middleware_returns_full_body_on_mismatched_if_none_match() {
+        use tower::ServiceExt;
+
+        let app = etag_test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/get")
+                    .header(header::IF_NONE_MATCH, "\"not-the-real-etag\"")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::ETAG).is_some());
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body, axum::body::Bytes::from(r#"{"hello":"world"}"#));
+    }
+
+    /// POST responses are mutating and must never be cached — no ETag, and
+    /// the body is always returned in full regardless of `If-None-Match`.
+    #[tokio::test]
+    async fn etag_middleware_does_not_apply_to_non_get_requests() {
+        use tower::ServiceExt;
+
+        let app = etag_test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/post")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::ETAG).is_none());
+    }
+
+    /// Non-200 GET responses (errors) are passed through untouched — no
+    /// ETag is computed for a 404/4xx/5xx body.
+    #[tokio::test]
+    async fn etag_middleware_does_not_apply_to_non_200_responses() {
+        use tower::ServiceExt;
+
+        let app = etag_test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(response.headers().get(header::ETAG).is_none());
     }
 
     /// Build a minimal AppState + Router exposing only the /livez, /readyz,
