@@ -5772,15 +5772,47 @@ pub async fn delete_detection_rule(
     }
 }
 
-pub async fn reload_global_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+/// `POST /v1/policies/reload` — reloads the global Cedar policy file from
+/// disk. #1159 (OBS-006): this is a configuration change, so a successful
+/// reload writes a `config_change` audit event (`action: "policy_file_reload"`)
+/// for the calling tenant, distinct from the tenant-scoped Cedar policy CRUD
+/// trail in `policy_audit_log` (`record_policy_audit_log`).
+pub async fn reload_global_policies(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
     let policy_path =
         std::env::var("CEDAR_POLICY_PATH").unwrap_or_else(|_| "policies.cedar".into());
     match state.policy_engine.reload_file(&policy_path).await {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(json!({"message": "Global policies successfully reloaded"})),
-        )
-            .into_response(),
+        Ok(_) => {
+            let audit = AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                event_type: "config_change".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: Some("policy_file_reload".to_string()),
+                resource: None,
+                event_json: serde_json::to_string(&json!({ "policy_path": policy_path }))
+                    .unwrap_or_default(),
+                input_hash: None,
+                output_hash: None,
+                decision_id: None,
+                approval_id: None,
+                created_at: Utc::now(),
+            };
+            let _ = db::insert_audit_event(&state.pool, &audit).await;
+
+            (
+                StatusCode::OK,
+                Json(json!({"message": "Global policies successfully reloaded"})),
+            )
+                .into_response()
+        }
         Err(e) => {
             error!("Failed to reload global policy file: {:?}", e);
             (
@@ -15865,6 +15897,29 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #1159 (OBS-006): `POST /v1/policies/reload` must leave an audit
+    /// trail — config changes (here, a global Cedar policy file reload)
+    /// were previously silent.
+    #[tokio::test]
+    async fn reload_global_policies_emits_config_change_audit_event() {
+        let (state, tenant_id, _) = setup_state("reload_global_policies_audit").await;
+
+        let response = reload_global_policies(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        let event = events
+            .iter()
+            .find(|e| e.event_type == "config_change")
+            .expect("expected a config_change audit event");
+        assert_eq!(event.action.as_deref(), Some("policy_file_reload"));
+        assert!(event.event_json.contains("policies.cedar"));
     }
 
     /// TASK-0092 (#938): CRUD lifecycle for tenant-managed webhook
