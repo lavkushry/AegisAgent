@@ -842,6 +842,31 @@ pub(crate) fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
     })
 }
 
+/// #1450: turns a raw `?q=` value into a safe SQLite FTS5 MATCH expression
+/// for `GET /v1/decisions` / `GET /v1/audit/events` keyword search. Strips
+/// every FTS5 query-syntax metacharacter (quotes, colons, parens, hyphens,
+/// carets, asterisks, `%`/`+` from un-decoded URL encoding) so arbitrary
+/// user input can never produce an FTS5 syntax error or be interpreted as a
+/// column filter/boolean operator — only alphanumerics, underscores, and
+/// whitespace survive. Appends a trailing `*` so the last token
+/// prefix-matches (e.g. `?q=mer` matches `merge_pull_request`). Returns
+/// `None` for an empty/all-stripped query (no filter applied, never an
+/// unfiltered full scan in disguise). The result is only ever bound as a
+/// parameter to a static `MATCH ?` SQL string (CWE-89 safe) — never
+/// concatenated.
+pub(crate) fn sanitize_fts5_query(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '_')
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(format!("{trimmed}*"))
+    }
+}
+
 /// #1142: encodes a `rowid` into the opaque `?cursor=`/`X-Next-Cursor` token.
 /// Hex rather than a new base64 dependency — opacity here is an API
 /// ergonomics convention (discourage clients from relying on the cursor's
