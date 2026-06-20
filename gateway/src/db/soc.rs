@@ -1,7 +1,7 @@
-use super::SOC_MAX_LIMIT;
+use super::{SOC_MAX_LIMIT, SOC_WATCH_BATCH_LIMIT};
 use crate::models::*;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use sqlx::{FromRow, Row, SqlitePool};
 
 /// #1296: count `deny` decisions for `agent_id` since `since` (inclusive).
 /// Tenant-scoped, parameterized.
@@ -455,6 +455,61 @@ pub async fn list_soc_alerts_cursor(
     super::paginate_rows(rows, limit)
 }
 
+/// Highest `rowid` currently in `soc_alerts` for `tenant_id`, or `0` if none.
+/// Used by `GET /v1/alerts?watch=true` (#1146) to establish the watch's
+/// starting point — only alerts created *after* the watch connects are
+/// streamed, matching Kubernetes `?watch=true` semantics (no historical
+/// backfill; pair with a normal `GET /v1/alerts` call for that).
+pub async fn max_soc_alert_rowid(pool: &SqlitePool, tenant_id: &str) -> Result<i64, sqlx::Error> {
+    let (max_rowid,): (Option<i64>,) =
+        sqlx::query_as("SELECT MAX(rowid) FROM soc_alerts WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(max_rowid.unwrap_or(0))
+}
+
+/// Forward-watch sibling of [`list_soc_alerts_cursor`] (#1146): returns alerts
+/// with `rowid > since_rowid`, oldest-first, capped at `SOC_WATCH_BATCH_LIMIT`,
+/// alongside the highest `rowid` seen in the batch (the caller's next
+/// `since_rowid`). Used to poll for new alerts to push over
+/// `GET /v1/alerts?watch=true`'s SSE stream.
+pub async fn list_soc_alerts_since(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    since_rowid: i64,
+    severity: Option<&str>,
+    agent_id: Option<&str>,
+) -> Result<Vec<(SocAlertRecord, i64)>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
+         FROM soc_alerts
+         WHERE tenant_id = ?
+           AND rowid > ?
+           AND (? IS NULL OR severity = ?)
+           AND (? IS NULL OR agent_id = ?)
+         ORDER BY rowid ASC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(since_rowid)
+    .bind(severity)
+    .bind(severity)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(SOC_WATCH_BATCH_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            let record = SocAlertRecord::from_row(row)?;
+            let rowid: i64 = row.try_get("rowid")?;
+            Ok((record, rowid))
+        })
+        .collect()
+}
+
 /// List incidents for a tenant, newest-first, with pagination and optional equality filters.
 /// `limit` is capped at [`SOC_MAX_LIMIT`]; `offset` defaults to 0.
 /// `status_filter` — optional equality filter (`"open"` or `"closed"`; `None` = all).
@@ -543,6 +598,71 @@ pub async fn list_soc_incidents_cursor(
     .fetch_all(pool)
     .await?;
     super::paginate_rows(rows, limit)
+}
+
+/// Highest `rowid` currently in `soc_incidents` for `tenant_id`, or `0` if
+/// none. Watch-start counterpart to [`max_soc_alert_rowid`] for
+/// `GET /v1/incidents?watch=true` (#1146).
+pub async fn max_soc_incident_rowid(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<i64, sqlx::Error> {
+    let (max_rowid,): (Option<i64>,) =
+        sqlx::query_as("SELECT MAX(rowid) FROM soc_incidents WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(max_rowid.unwrap_or(0))
+}
+
+/// Forward-watch sibling of [`list_soc_incidents_cursor`] (#1146): returns
+/// incidents with `rowid > since_rowid`, oldest-first, capped at
+/// `SOC_WATCH_BATCH_LIMIT`, alongside the highest `rowid` seen in the batch.
+/// Used to poll for new incidents to push over
+/// `GET /v1/incidents?watch=true`'s SSE stream.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_soc_incidents_since(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    since_rowid: i64,
+    status_filter: Option<&str>,
+    severity: Option<&str>,
+    agent_id: Option<&str>,
+    kind: Option<&str>,
+) -> Result<Vec<(SocIncidentRecord, i64)>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at, rowid
+         FROM soc_incidents
+         WHERE tenant_id = ?
+           AND rowid > ?
+           AND (? IS NULL OR status = ?)
+           AND (? IS NULL OR severity = ?)
+           AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR kind = ?)
+         ORDER BY rowid ASC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(since_rowid)
+    .bind(status_filter)
+    .bind(status_filter)
+    .bind(severity)
+    .bind(severity)
+    .bind(agent_id)
+    .bind(agent_id)
+    .bind(kind)
+    .bind(kind)
+    .bind(SOC_WATCH_BATCH_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            let record = SocIncidentRecord::from_row(row)?;
+            let rowid: i64 = row.try_get("rowid")?;
+            Ok((record, rowid))
+        })
+        .collect()
 }
 
 /// Fetch a single SOC incident by id, scoped to the given tenant.
@@ -1188,5 +1308,87 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(unfiltered.len(), 2);
+    }
+
+    /// #1146: `GET /v1/alerts?watch=true`'s forward-watch query — only alerts
+    /// with `rowid > since_rowid` come back, oldest-first.
+    #[tokio::test]
+    async fn list_soc_alerts_since_returns_only_newer_rows_ascending() {
+        let pool = setup_pool("alerts_since").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_alert(&pool, &make_alert("al_1", "tenant_a"))
+            .await
+            .unwrap();
+        let watch_start = max_soc_alert_rowid(&pool, "tenant_a").await.unwrap();
+        assert_eq!(watch_start, 1);
+
+        // Nothing new yet.
+        let none_yet = list_soc_alerts_since(&pool, "tenant_a", watch_start, None, None)
+            .await
+            .unwrap();
+        assert!(none_yet.is_empty());
+
+        insert_soc_alert(&pool, &make_alert("al_2", "tenant_a"))
+            .await
+            .unwrap();
+        insert_soc_alert(&pool, &make_alert("al_3", "tenant_a"))
+            .await
+            .unwrap();
+
+        let new_alerts = list_soc_alerts_since(&pool, "tenant_a", watch_start, None, None)
+            .await
+            .unwrap();
+        assert_eq!(new_alerts.len(), 2);
+        assert_eq!(new_alerts[0].0.id, "al_2");
+        assert_eq!(new_alerts[1].0.id, "al_3");
+        assert_eq!(new_alerts[1].1, 3, "second row's rowid should be 3");
+    }
+
+    /// #1146: `GET /v1/incidents?watch=true`'s forward-watch query, mirroring
+    /// the alerts test above, plus the `kind` filter (#1145).
+    #[tokio::test]
+    async fn list_soc_incidents_since_returns_only_newer_rows_ascending() {
+        let pool = setup_pool("incidents_since").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_1", "tenant_a"))
+            .await
+            .unwrap();
+        let watch_start = max_soc_incident_rowid(&pool, "tenant_a").await.unwrap();
+        assert_eq!(watch_start, 1);
+
+        let mut drift_incident = make_incident("inc_drift", "tenant_a");
+        drift_incident.kind = "policy_drift".to_string();
+        insert_soc_incident(&pool, &drift_incident).await.unwrap();
+        insert_soc_incident(&pool, &make_incident("inc_3", "tenant_a"))
+            .await
+            .unwrap();
+
+        let new_incidents =
+            list_soc_incidents_since(&pool, "tenant_a", watch_start, None, None, None, None)
+                .await
+                .unwrap();
+        assert_eq!(new_incidents.len(), 2);
+        assert_eq!(new_incidents[0].0.id, "inc_drift");
+        assert_eq!(new_incidents[1].0.id, "inc_3");
+
+        let kind_filtered = list_soc_incidents_since(
+            &pool,
+            "tenant_a",
+            watch_start,
+            None,
+            None,
+            None,
+            Some("policy_drift"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(kind_filtered.len(), 1);
+        assert_eq!(kind_filtered[0].0.id, "inc_drift");
     }
 }

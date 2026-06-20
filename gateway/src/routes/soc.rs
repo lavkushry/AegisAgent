@@ -4,13 +4,18 @@ use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse,
+    },
     Json,
 };
 use chrono::{DateTime, Duration, Utc};
+use futures_util::stream::{self, Stream};
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -27,6 +32,25 @@ use crate::policy::PolicyEngine;
 use crate::sign;
 
 use super::*;
+
+/// Poll interval for `GET /v1/alerts|incidents?watch=true` (#1146)'s
+/// forward-watch background tasks. SSE watch mode is explicitly a simpler
+/// REST alternative to the lower-latency `/v1/ws/events` WebSocket stream
+/// (which broadcasts in real time off the live SOC event pipeline) — a short
+/// DB-poll interval is an acceptable, much lower-risk tradeoff than wiring a
+/// new broadcast channel into `events::drain`'s detection/correlation path.
+const SOC_WATCH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Adapts an `mpsc::Receiver` into a `Stream` for [`Sse::new`], without
+/// pulling in `tokio-stream` as a new dependency (`futures_util` is already
+/// a direct dependency).
+fn receiver_into_stream<T>(
+    rx: tokio::sync::mpsc::Receiver<T>,
+) -> impl Stream<Item = Result<T, Infallible>> {
+    stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (Ok(item), rx))
+    })
+}
 
 // Get Investigation Run Timeline
 pub async fn get_timeline(
@@ -465,6 +489,21 @@ pub async fn list_alerts(
     let severity = parse_filter(raw_query.as_deref(), "severity");
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
 
+    // #1146: `?watch=true` switches to an SSE stream of newly created alerts
+    // instead of a JSON page. Pagination/cursor params are ignored in watch
+    // mode (matching Kubernetes `?watch=true` semantics — no historical
+    // backfill; combine with a plain `GET /v1/alerts` call for that).
+    if parse_filter(raw_query.as_deref(), "watch").as_deref() == Some("true") {
+        return Sse::new(alerts_watch_stream(
+            state.pool.clone(),
+            tenant_id,
+            severity,
+            agent_id,
+        ))
+        .keep_alive(KeepAlive::default())
+        .into_response();
+    }
+
     match db::list_soc_alerts_cursor(
         &state.pool,
         &tenant_id,
@@ -486,6 +525,64 @@ pub async fn list_alerts(
                 .into_response()
         }
     }
+}
+
+/// Backing stream for `GET /v1/alerts?watch=true` (#1146): polls
+/// [`db::list_soc_alerts_since`] every `SOC_WATCH_POLL_INTERVAL` and emits one
+/// SSE `Event` per new alert, oldest-first. Runs as a detached background
+/// task feeding an mpsc channel — the task exits as soon as the SSE
+/// connection drops and the receiver is dropped (the next `tx.send` fails).
+/// `Sse::keep_alive` (applied by the caller) handles the heartbeat-ping
+/// acceptance criterion independently of this polling loop.
+fn alerts_watch_stream(
+    pool: sqlx::SqlitePool,
+    tenant_id: String,
+    severity: Option<String>,
+    agent_id: Option<String>,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(32);
+    tokio::spawn(async move {
+        let mut since_rowid = match db::max_soc_alert_rowid(&pool, &tenant_id).await {
+            Ok(rowid) => rowid,
+            Err(e) => {
+                error!("alerts watch: failed to establish starting rowid: {:?}", e);
+                return;
+            }
+        };
+        let mut interval = tokio::time::interval(SOC_WATCH_POLL_INTERVAL);
+        loop {
+            interval.tick().await;
+            let new_alerts = match db::list_soc_alerts_since(
+                &pool,
+                &tenant_id,
+                since_rowid,
+                severity.as_deref(),
+                agent_id.as_deref(),
+            )
+            .await
+            {
+                Ok(alerts) => alerts,
+                Err(e) => {
+                    error!("alerts watch: poll failed: {:?}", e);
+                    continue;
+                }
+            };
+            for (alert, rowid) in new_alerts {
+                since_rowid = since_rowid.max(rowid);
+                let Ok(data) = serde_json::to_string(&alert) else {
+                    continue;
+                };
+                if tx
+                    .send(Event::default().event("alert").data(data))
+                    .await
+                    .is_err()
+                {
+                    return; // receiver dropped — client disconnected
+                }
+            }
+        }
+    });
+    receiver_into_stream(rx)
 }
 
 /// GET /v1/incidents — list SOC correlation incidents for the authenticated tenant.
@@ -514,6 +611,23 @@ pub async fn list_incidents(
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
     let kind = parse_filter(raw_query.as_deref(), "kind");
 
+    // #1146: `?watch=true` switches to an SSE stream of newly created
+    // incidents instead of a JSON page — see `alerts_watch_stream`'s doc
+    // comment for the design rationale (poll-based, not wired into the live
+    // SOC broadcast pipeline).
+    if parse_filter(raw_query.as_deref(), "watch").as_deref() == Some("true") {
+        return Sse::new(incidents_watch_stream(
+            state.pool.clone(),
+            tenant_id,
+            status_filter,
+            severity,
+            agent_id,
+            kind,
+        ))
+        .keep_alive(KeepAlive::default())
+        .into_response();
+    }
+
     match db::list_soc_incidents_cursor(
         &state.pool,
         &tenant_id,
@@ -537,6 +651,67 @@ pub async fn list_incidents(
                 .into_response()
         }
     }
+}
+
+/// Backing stream for `GET /v1/incidents?watch=true` (#1146) — see
+/// [`alerts_watch_stream`]'s doc comment for the shared design rationale.
+#[allow(clippy::too_many_arguments)]
+fn incidents_watch_stream(
+    pool: sqlx::SqlitePool,
+    tenant_id: String,
+    status_filter: Option<String>,
+    severity: Option<String>,
+    agent_id: Option<String>,
+    kind: Option<String>,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(32);
+    tokio::spawn(async move {
+        let mut since_rowid = match db::max_soc_incident_rowid(&pool, &tenant_id).await {
+            Ok(rowid) => rowid,
+            Err(e) => {
+                error!(
+                    "incidents watch: failed to establish starting rowid: {:?}",
+                    e
+                );
+                return;
+            }
+        };
+        let mut interval = tokio::time::interval(SOC_WATCH_POLL_INTERVAL);
+        loop {
+            interval.tick().await;
+            let new_incidents = match db::list_soc_incidents_since(
+                &pool,
+                &tenant_id,
+                since_rowid,
+                status_filter.as_deref(),
+                severity.as_deref(),
+                agent_id.as_deref(),
+                kind.as_deref(),
+            )
+            .await
+            {
+                Ok(incidents) => incidents,
+                Err(e) => {
+                    error!("incidents watch: poll failed: {:?}", e);
+                    continue;
+                }
+            };
+            for (incident, rowid) in new_incidents {
+                since_rowid = since_rowid.max(rowid);
+                let Ok(data) = serde_json::to_string(&incident) else {
+                    continue;
+                };
+                if tx
+                    .send(Event::default().event("incident").data(data))
+                    .await
+                    .is_err()
+                {
+                    return; // receiver dropped — client disconnected
+                }
+            }
+        }
+    });
+    receiver_into_stream(rx)
 }
 
 // ── SOC query layer: incident detail + aggregate summary ─────────────────────
@@ -1084,6 +1259,103 @@ mod tests {
         let arr = json.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["id"], "inc_policy_drift");
+    }
+
+    /// #1146: `GET /v1/alerts?watch=true` returns an SSE stream that pushes
+    /// newly created alerts (and only those created *after* the watch
+    /// connects — no historical backfill).
+    #[tokio::test]
+    async fn list_alerts_watch_mode_streams_new_alerts_as_sse() {
+        use futures_util::StreamExt;
+
+        let (state, tenant_id, _agent_token) = setup_state("alerts_watch_sse").await;
+
+        let response = list_alerts(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("watch=true".to_string())),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "text/event-stream"
+        );
+
+        let mut body_stream = response.into_body().into_data_stream();
+
+        // Give the watch task a moment to establish its starting rowid
+        // before inserting the alert it should pick up.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let alert = SocAlertRecord {
+            id: "watch_alert_1".to_string(),
+            tenant_id: tenant_id.clone(),
+            rule: "test_rule".to_string(),
+            severity: "high".to_string(),
+            agent_id: "agent_watch".to_string(),
+            source_event_id: "evt_watch_1".to_string(),
+            summary: "Watch test alert".to_string(),
+            created_at: Utc::now().to_rfc3339(),
+        };
+        db::insert_soc_alert(&state.pool, &alert).await.unwrap();
+
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body_stream.next())
+            .await
+            .expect("SSE event must arrive within 5s")
+            .expect("stream must not end")
+            .expect("chunk must not be an error");
+        let text = String::from_utf8(chunk.to_vec()).unwrap();
+        assert!(text.contains("event:alert") || text.contains("event: alert"));
+        assert!(text.contains("watch_alert_1"));
+    }
+
+    /// #1146: `GET /v1/incidents?watch=true` mirrors the alerts watch test
+    /// above, including respecting the existing `kind` filter (#1145).
+    #[tokio::test]
+    async fn list_incidents_watch_mode_streams_new_incidents_as_sse() {
+        use futures_util::StreamExt;
+
+        let (state, tenant_id, _agent_token) = setup_state("incidents_watch_sse").await;
+
+        let response = list_incidents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("watch=true&kind=policy_drift".to_string())),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "text/event-stream"
+        );
+
+        let mut body_stream = response.into_body().into_data_stream();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Non-matching kind first — must not be streamed.
+        insert_test_incident(&state.pool, &tenant_id, "inc_deny_storm", "deny_storm").await;
+        // Matching kind — must be streamed.
+        insert_test_incident(&state.pool, &tenant_id, "inc_policy_drift", "policy_drift").await;
+
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body_stream.next())
+            .await
+            .expect("SSE event must arrive within 5s")
+            .expect("stream must not end")
+            .expect("chunk must not be an error");
+        let text = String::from_utf8(chunk.to_vec()).unwrap();
+        assert!(text.contains("event:incident") || text.contains("event: incident"));
+        assert!(text.contains("inc_policy_drift"));
+        assert!(!text.contains("inc_deny_storm"));
     }
 
     /// Helper: insert a bare-minimum incident row for a tenant (no agent required).
