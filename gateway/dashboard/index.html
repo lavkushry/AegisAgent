@@ -419,31 +419,113 @@
 
       <!-- 7. MCP SERVERS VIEW -->
       <div id="view-mcp" class="view-panel" style="display:none;">
-        <div class="view-header">
-          <h2>MCP Servers Registry</h2>
-        </div>
-        <div class="mcp-servers-layout">
-          <!-- Servers Table -->
-          <div class="mcp-servers-main">
-            <div class="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Server Key</th>
-                    <th>Name</th>
-                    <th>Transport</th>
-                    <th>Trust Level</th>
-                    <th>Inspection</th>
-                    <th>Drift Status</th>
-                    <th>Last Active</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="mcp-servers-tbody">
-                  <tr class="empty-row"><td colspan="8">Loading MCP registry...</td></tr>
-                </tbody>
-              </table>
+        <!-- List View -->
+        <div id="mcp-list-container">
+          <div class="view-header">
+            <h2>MCP Servers Registry</h2>
+          </div>
+          <div class="mcp-servers-layout">
+            <!-- Servers Table -->
+            <div class="mcp-servers-main">
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Server Key</th>
+                      <th>Name</th>
+                      <th>Transport</th>
+                      <th>Trust Level</th>
+                      <th>Inspection</th>
+                      <th>Drift Status</th>
+                      <th>Last Active</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="mcp-servers-tbody">
+                    <tr class="empty-row"><td colspan="8">Loading MCP registry...</td></tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Detail View: Approved Tool Allowlist (#1334) -->
+        <div id="mcp-detail-container" style="display:none;">
+          <div class="detail-header">
+            <button class="btn btn-secondary btn-sm" id="back-to-mcp-btn">&larr; Back to registry</button>
+            <div class="incident-title-row">
+              <h2 id="mcp-detail-server-key">MCP Server Detail</h2>
+              <span class="badge" id="mcp-detail-status">active</span>
+            </div>
+          </div>
+
+          <div class="incident-detail-grid">
+            <div class="incident-main">
+              <div class="provable-timeline-card">
+                <div class="timeline-header">
+                  <h3>Approved Tool Allowlist</h3>
+                </div>
+                <div class="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Tool Key</th>
+                        <th>Name</th>
+                        <th>Risk</th>
+                        <th>Mutates State</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="mcp-detail-tools-tbody">
+                      <tr class="empty-row"><td colspan="6">Loading tools...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="rca-card">
+                <div class="rca-header">
+                  <h3>Manifest Drift History</h3>
+                </div>
+                <div class="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Captured At</th>
+                        <th>Manifest Hash</th>
+                      </tr>
+                    </thead>
+                    <tbody id="mcp-detail-history-tbody">
+                      <tr class="empty-row"><td colspan="2">Loading manifest history...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <aside class="incident-sidebar">
+              <div class="containment-card">
+                <h3>Server Containment</h3>
+                <div class="containment-actions-list">
+                  <div class="agent-status-box">
+                    <span>Quarantine Status:</span>
+                    <strong id="mcp-detail-quarantine-status">Unknown</strong>
+                  </div>
+                  <button class="btn btn-danger btn-block" id="mcp-quarantine-btn">Quarantine Server</button>
+                  <button class="btn btn-secondary btn-block" id="mcp-restore-btn">Restore Server</button>
+                </div>
+              </div>
+
+              <div class="incident-meta-card">
+                <h3>Server Metadata</h3>
+                <div class="meta-row"><span>Manifest Hash:</span><code id="mcp-detail-manifest-hash" class="mono hash"></code></div>
+                <div class="meta-row"><span>Last Discovery:</span><span id="mcp-detail-last-discovery"></span></div>
+                <div class="meta-row"><span>Trust Level:</span><span id="mcp-detail-trust-level"></span></div>
+                <div class="meta-row"><span>Transport:</span><span id="mcp-detail-transport"></span></div>
+              </div>
+            </aside>
           </div>
         </div>
       </div>

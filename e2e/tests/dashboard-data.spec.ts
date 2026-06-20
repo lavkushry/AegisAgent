@@ -3,6 +3,7 @@ import {
   createAllowedDecision,
   createPendingApproval,
   registerTestAgent,
+  registerTestMcpServer,
   TENANT_ID,
 } from "./helpers";
 
@@ -38,6 +39,67 @@ test.describe("dashboard data views", () => {
       timeout: 10_000,
     });
     await expect(page.locator("#mcp-servers-tbody")).toContainText("github-mcp-demo");
+  });
+
+  test("MCP server detail view: tool allowlist approve/disable and quarantine/restore (#1334)", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    // Self-contained: a dedicated server/tool, not the shared seeded
+    // github-mcp-demo, since this test mutates tool and quarantine status.
+    const serverKey = `dashboard-e2e-mcp-${Date.now()}`;
+    await registerTestMcpServer(request, baseURL!, serverKey);
+
+    await page.goto("/dashboard/");
+    await page.locator('.menu-item[data-view="mcp"]').click();
+    const row = page.locator("#mcp-servers-tbody tr", { hasText: serverKey });
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await row.click();
+
+    // Detail view replaces the list view.
+    await expect(page.locator("#mcp-detail-container")).toBeVisible();
+    await expect(page.locator("#mcp-list-container")).toBeHidden();
+    await expect(page.locator("#mcp-detail-server-key")).toContainText(serverKey);
+    await expect(page.locator("#mcp-detail-manifest-hash")).toContainText("sha256:");
+    await expect(page.locator("#mcp-detail-history-tbody")).toContainText("sha256:");
+
+    // Tool starts "pending" (discover_mcp_tools default) — approve it.
+    const toolRow = page.locator("#mcp-detail-tools-tbody tr", {
+      hasText: "create_issue",
+    });
+    await expect(toolRow).toContainText("pending");
+    page.once("dialog", (dialog) => dialog.accept());
+    await toolRow.locator(".approve-tool-btn").click();
+    await expect(toolRow).toContainText("approved", { timeout: 10_000 });
+    await expect(toolRow.locator(".approve-tool-btn")).toBeDisabled();
+
+    // Disable it.
+    page.once("dialog", (dialog) => dialog.accept());
+    await toolRow.locator(".disable-tool-btn").click();
+    await expect(toolRow).toContainText("disabled", { timeout: 10_000 });
+    await expect(toolRow.locator(".disable-tool-btn")).toBeDisabled();
+
+    // Server-level quarantine/restore (separate from per-tool status).
+    await expect(page.locator("#mcp-detail-quarantine-status")).toContainText("Active");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#mcp-quarantine-btn").click();
+    await expect(page.locator("#mcp-detail-quarantine-status")).toContainText(
+      "Quarantined",
+      { timeout: 10_000 },
+    );
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#mcp-restore-btn").click();
+    await expect(page.locator("#mcp-detail-quarantine-status")).toContainText(
+      "Active",
+      { timeout: 10_000 },
+    );
+
+    // Back to the registry list.
+    await page.locator("#back-to-mcp-btn").click();
+    await expect(page.locator("#mcp-list-container")).toBeVisible();
+    await expect(page.locator("#mcp-detail-container")).toBeHidden();
   });
 
   test("Explore view executes a search and renders the decisions table", async ({

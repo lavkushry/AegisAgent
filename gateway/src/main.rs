@@ -955,6 +955,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/mcp/servers/:server_key/inspect",
             post(routes::inspect_mcp_response),
         )
+        .route(
+            "/v1/mcp/servers/:server_key/manifest-history",
+            get(routes::get_mcp_manifest_history),
+        )
         // Policy / Interception
         .route("/v1/authorize", post(routes::authorize_action))
         // SOC-004 (#1187): agentless ingestion of external event sources

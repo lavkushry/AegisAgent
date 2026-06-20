@@ -389,6 +389,51 @@ pub async fn get_mcp_tool_manifest(
     }
 }
 
+/// #1334: surfaces `db::list_mcp_manifest_snapshots` (most recent first,
+/// capped at 20) over HTTP so the dashboard's MCP server detail view can
+/// render manifest drift history. Tenant-scoped, fail-closed (404 for an
+/// unknown server, matching `get_mcp_tool_manifest`'s existing pattern).
+pub async fn get_mcp_manifest_history(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(server_key): Path<String>,
+) -> impl IntoResponse {
+    match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "MCP server not found"})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to look up MCP server: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    }
+
+    match db::list_mcp_manifest_snapshots(&state.pool, &tenant_id, &server_key, 20).await {
+        Ok(snapshots) => (
+            StatusCode::OK,
+            Json(json!({"server_key": server_key, "snapshots": snapshots})),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to list MCP manifest snapshots: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 pub async fn approve_mcp_tool(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -1292,6 +1337,90 @@ mod tests {
             "changed manifest must produce a different hash"
         );
         assert_eq!(snapshots[1].manifest_hash, first_hash);
+    }
+
+    /// #1334: `GET /v1/mcp/servers/:server_key/manifest-history` surfaces the
+    /// existing `db::list_mcp_manifest_snapshots` data (previously DB-only,
+    /// no HTTP route) so the dashboard's MCP server detail view can render
+    /// drift/manifest history without a new DB layer.
+    #[tokio::test]
+    async fn manifest_history_route_returns_snapshots_most_recent_first() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_manifest_history_route").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![drift_tool("create_issue", "medium")],
+            }),
+        )
+        .await;
+        discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![drift_tool("create_issue", "critical")],
+            }),
+        )
+        .await;
+
+        let response = get_mcp_manifest_history(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let snapshots = body["snapshots"].as_array().unwrap();
+        assert_eq!(snapshots.len(), 2, "both discoveries recorded a snapshot");
+        assert!(snapshots[0]["manifest_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert!(snapshots[0]["manifest_json"]
+            .as_str()
+            .unwrap()
+            .contains("critical"));
+        assert!(snapshots[1]["manifest_json"]
+            .as_str()
+            .unwrap()
+            .contains("medium"));
+    }
+
+    #[tokio::test]
+    async fn manifest_history_route_404s_for_unknown_server() {
+        let (state, tenant_id, _agent_token, _events_rx) =
+            setup_state_with_events("mcp_manifest_history_404").await;
+
+        let response = get_mcp_manifest_history(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("nonexistent-mcp".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     /// TASK-0152 (#998): `discover_mcp_tools` must register a `skills` row
