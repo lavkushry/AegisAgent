@@ -29,7 +29,13 @@ use gateway::policy;
 use gateway::qdrant;
 use gateway::routes;
 
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
 use routes::AppState;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use std::fs::File;
+use std::io::BufReader;
+use tokio_rustls::TlsAcceptor;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -879,6 +885,21 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/version", get(version_handler))
 }
 
+fn load_certs(path: &str) -> std::io::Result<Vec<CertificateDer<'static>>> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+    Ok(certs)
+}
+
+fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let key = rustls_pemfile::private_key(&mut reader)?
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "No private key found"))?;
+    Ok(key)
+}
+
 #[tokio::main]
 #[allow(deprecated)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1293,7 +1314,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Construct Axum router with middleware layers
     let app = Router::new()
-        .merge(SwaggerUi::new("/v1/docs").url("/v1/openapi.json", routes::ApiDoc::openapi()))
+        .merge(SwaggerUi::new("/v1/docs").url("/v1/docs/openapi.json", routes::ApiDoc::openapi()))
         .nest(
             "/v1",
             api_routes().layer(middleware::from_fn(routes::deprecation_middleware)),
@@ -1340,34 +1361,174 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // a structured 500 instead of dropping the connection (#1153).
         .layer(CatchPanicLayer::custom(panic_response(state.clone())));
 
-    // Bind address — configurable via AEGIS_BIND_ADDR, defaults to 127.0.0.1:8080
-    // for security (local-only in dev/test). Production deployments should set this
-    // to 0.0.0.0:<port> behind a reverse proxy.
     let bind_addr =
         std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    info!("AegisAgent Listening on http://{}", listener.local_addr()?);
+
+    // Check for TLS cert and key environment variables
+    let cert_env = std::env::var("AEGIS_TLS_CERT").ok();
+    let key_env = std::env::var("AEGIS_TLS_KEY").ok();
+
+    let use_tls = match (cert_env, key_env) {
+        (Some(cert_path), Some(key_path)) => Some((cert_path, key_path)),
+        (Some(_), None) => {
+            tracing::warn!(
+                "AEGIS_TLS_CERT is set, but AEGIS_TLS_KEY is not set. Falling back to plain HTTP."
+            );
+            None
+        }
+        (None, Some(_)) => {
+            tracing::warn!(
+                "AEGIS_TLS_KEY is set, but AEGIS_TLS_CERT is not set. Falling back to plain HTTP."
+            );
+            None
+        }
+        (None, None) => None,
+    };
 
     // Startup is complete: DB pool + migrations, policy engine, and background
-    // jobs are all initialized and the listener is bound. /startupz now reports
-    // ready (#1208).
+    // jobs are all initialized. /startupz now reports ready (#1208).
     state
         .startup_complete
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
-    // Graceful shutdown: listen for SIGTERM (container orchestrators) and Ctrl-C.
-    // In-flight requests are drained before the process exits.
-    //
-    // `into_make_service_with_connect_info::<SocketAddr>()` makes the
-    // client's source address available via the `ConnectInfo<SocketAddr>`
-    // extractor (#1307: per-IP rate limiting on approval-decision
-    // callbacks).
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    if let Some((cert_path, key_path)) = use_tls {
+        info!("Loading TLS certificates from {} ...", cert_path);
+        let certs = load_certs(&cert_path)?;
+        info!("Loading TLS private key from {} ...", key_path);
+        let key = load_private_key(&key_path)?;
+
+        // Ensure a default crypto provider is installed for rustls
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let mut tls_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+        // Enforce minimum TLS 1.2 and support HTTP/1.1 and HTTP/2
+        tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+        let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+        let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+        info!(
+            "AegisAgent Listening on https://{} (with same-port HTTP->HTTPS redirect)",
+            listener.local_addr()?
+        );
+
+        let (close_tx, mut close_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        loop {
+            tokio::select! {
+                res = listener.accept() => {
+                    let (socket, _) = match res {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            tracing::error!("accept error: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                    let tls_acceptor = tls_acceptor.clone();
+                    let app = app.clone();
+                    let close_tx_clone = close_tx.clone();
+
+                    tokio::spawn(async move {
+                        let _keep_alive = close_tx_clone;
+                        let client_addr = socket.peer_addr().unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0)));
+
+                        // Peek the first byte to see if it's TLS Client Hello (0x16)
+                        let mut peek_buf = [0u8; 1];
+                        match socket.peek(&mut peek_buf).await {
+                            Ok(1) if peek_buf[0] == 0x16 => {
+                                // TLS Client Hello detected
+                                match tls_acceptor.accept(socket).await {
+                                    Ok(tls_stream) => {
+                                        let io = TokioIo::new(tls_stream);
+                                        let service = hyper::service::service_fn(move |req: axum::http::Request<hyper::body::Incoming>| {
+                                            let mut router = app.clone();
+                                            let mut req = req.map(Body::new);
+                                            req.extensions_mut().insert(axum::extract::ConnectInfo(client_addr));
+                                            async move {
+                                                use tower::Service;
+                                                router.call(req).await
+                                            }
+                                        });
+
+                                        if let Err(err) = auto::Builder::new(TokioExecutor::new())
+                                            .serve_connection(io, service)
+                                            .await
+                                        {
+                                            tracing::debug!("failed to serve TLS connection: {:?}", err);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        tracing::debug!("TLS handshake failed: {:?}", err);
+                                    }
+                                }
+                            }
+                            Ok(1) => {
+                                // Plain HTTP detected, redirect to HTTPS
+                                let io = TokioIo::new(socket);
+                                let redirect_service = hyper::service::service_fn(move |req: axum::http::Request<hyper::body::Incoming>| {
+                                    let host = req.headers()
+                                        .get(axum::http::header::HOST)
+                                        .and_then(|h| h.to_str().ok())
+                                        .unwrap_or("");
+                                    let path_and_query = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("");
+                                    let redirect_url = format!("https://{}{}", host, path_and_query);
+
+                                    let response = axum::http::Response::builder()
+                                        .status(axum::http::StatusCode::PERMANENT_REDIRECT)
+                                        .header(axum::http::header::LOCATION, redirect_url)
+                                        .body(Body::empty())
+                                        .unwrap();
+                                    async move {
+                                        Ok::<_, std::convert::Infallible>(response)
+                                    }
+                                });
+
+                                if let Err(err) = auto::Builder::new(TokioExecutor::new())
+                                    .serve_connection(io, redirect_service)
+                                    .await
+                                {
+                                    tracing::debug!("failed to serve HTTP redirect: {:?}", err);
+                                }
+                            }
+                            _ => {}
+                        }
+                    });
+                }
+                _ = shutdown_signal() => {
+                    info!("Received shutdown signal, stopping accept loop...");
+                    break;
+                }
+            }
+        }
+
+        // Drop the original sender so the receiver can eventually resolve
+        drop(close_tx);
+        // Wait for all connections to finish (with a timeout, e.g., same AEGIS_DRAIN_TIMEOUT_SECS)
+        let drain_timeout = std::env::var("AEGIS_DRAIN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(drain_timeout),
+            close_rx.recv(),
+        )
+        .await;
+    } else {
+        // Fallback to plain HTTP serving
+        let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+        info!("AegisAgent Listening on http://{}", listener.local_addr()?);
+
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    }
 
     info!("AegisAgent HTTP server stopped. Draining background event channel...");
     drop(state);
