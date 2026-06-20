@@ -78,8 +78,10 @@ async fn livez_handler() -> impl IntoResponse {
 }
 
 /// GET /readyz — Kubernetes readiness probe (#1208). Returns 200 only when the
-/// database is reachable, so an orchestrator stops routing traffic to a
-/// gateway that can't serve requests (fail-closed).
+/// database is reachable and every tracked background task (#1152: event
+/// drain, audit-batch writer, periodic jobs) is still running, so an
+/// orchestrator stops routing traffic to a gateway that can't serve requests
+/// or has silently lost a background subsystem (fail-closed).
 async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let audit_writer_status = if state
         .audit_writer_unhealthy
@@ -89,18 +91,55 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
     } else {
         "up"
     };
+    let dead_background_tasks: Vec<&str> = state
+        .background_task_handles
+        .iter()
+        .filter(|(_, handle)| handle.is_finished())
+        .map(|(name, _)| *name)
+        .collect();
+    let background_tasks_status = if dead_background_tasks.is_empty() {
+        "up"
+    } else {
+        "down"
+    };
+
     match db::health_check(&state.pool).await {
-        Ok(()) => (
+        Ok(()) if dead_background_tasks.is_empty() => (
             StatusCode::OK,
-            Json(json!({"status": "ready", "db": "up", "audit_writer": audit_writer_status})),
+            Json(json!({
+                "status": "ready",
+                "db": "up",
+                "audit_writer": audit_writer_status,
+                "background_tasks": background_tasks_status,
+            })),
         ),
+        Ok(()) => {
+            tracing::error!(
+                "readyz check found dead background tasks: {:?}",
+                dead_background_tasks
+            );
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "status": "not_ready",
+                    "db": "up",
+                    "audit_writer": audit_writer_status,
+                    "background_tasks": background_tasks_status,
+                    "dead_background_tasks": dead_background_tasks,
+                })),
+            )
+        }
         Err(e) => {
             tracing::warn!("readyz check DB ping failed: {:?}", e);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(
-                    json!({"status": "not_ready", "db": "down", "audit_writer": audit_writer_status}),
-                ),
+                Json(json!({
+                    "status": "not_ready",
+                    "db": "down",
+                    "audit_writer": audit_writer_status,
+                    "background_tasks": background_tasks_status,
+                    "dead_background_tasks": dead_background_tasks,
+                })),
             )
         }
     }
@@ -691,6 +730,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let metrics = Arc::new(metrics::SecurityMetrics::new());
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
     let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone(), metrics.clone()));
+    let drain_abort_handle = drain_handle.abort_handle();
 
     // #1315: audit-event write batching. The authorize hot path hands
     // non-critical `audit_events` rows to this sink; a background task
@@ -708,6 +748,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_batch::flush_interval_from_env(),
         audit_writer_unhealthy.clone(),
     ));
+    let audit_batch_abort_handle = audit_batch_handle.abort_handle();
 
     // #0107: periodic receipt chain integrity check across all tenants. Any
     // broken link or hash mismatch is recorded as a critical SOC alert.
@@ -716,10 +757,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(jobs::DEFAULT_INTERVAL_SECS);
-    tokio::spawn(jobs::run_receipt_chain_integrity_job(
+    let receipt_integrity_abort_handle = tokio::spawn(jobs::run_receipt_chain_integrity_job(
         pool.clone(),
         receipt_integrity_interval_secs,
-    ));
+    ))
+    .abort_handle();
 
     // #0106: periodically archive old audit_events rows into
     // audit_events_archive to keep the live table bounded.
@@ -731,11 +773,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(jobs::DEFAULT_AUDIT_RETENTION_DAYS);
-    tokio::spawn(jobs::run_audit_event_archival_job(
+    let audit_archival_abort_handle = tokio::spawn(jobs::run_audit_event_archival_job(
         pool.clone(),
         audit_archival_interval_secs,
         audit_retention_days,
-    ));
+    ))
+    .abort_handle();
 
     // #0105: periodically delete stale approvals (decided, or expired and
     // never decided) to keep the approvals table bounded.
@@ -747,11 +790,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(jobs::DEFAULT_APPROVAL_RETENTION_DAYS);
-    tokio::spawn(jobs::run_approval_cleanup_job(
+    let approval_cleanup_abort_handle = tokio::spawn(jobs::run_approval_cleanup_job(
         pool.clone(),
         approval_cleanup_interval_secs,
         approval_retention_days,
-    ));
+    ))
+    .abort_handle();
+
+    // #1152: zero-I/O liveness tracking for the fire-and-forget background
+    // tasks above — `AbortHandle::is_finished()` reports whether a task
+    // panicked and stopped running, surfaced on GET /readyz. `drain_handle`
+    // and `audit_batch_handle` themselves stay owned by this function (they
+    // are awaited further down during graceful shutdown); abort handles are
+    // a non-owning, freely cloneable view that doesn't interfere with that.
+    let background_task_handles = vec![
+        ("event_drain", drain_abort_handle),
+        ("audit_batch_writer", audit_batch_abort_handle),
+        (
+            "receipt_chain_integrity_job",
+            receipt_integrity_abort_handle,
+        ),
+        ("audit_event_archival_job", audit_archival_abort_handle),
+        ("approval_cleanup_job", approval_cleanup_abort_handle),
+    ];
 
     // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
     let approval_ttl_secs: i64 = std::env::var("AEGIS_APPROVAL_TTL_SECS")
@@ -903,6 +964,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         slack_signing_secret,
         github_pr_commenter,
         github_checks_client,
+        background_task_handles,
     });
 
     // Read request body size limit (default 1MB)
@@ -1418,6 +1480,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         let app = Router::new()
@@ -1632,6 +1695,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         let app = Router::new()
@@ -1796,6 +1860,84 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["audit_writer"], "down");
         assert_eq!(parsed["db"], "up");
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1152: a background task (event drain, audit-batch writer, periodic
+    /// job) that panics simply stops running forever — unlike a transient DB
+    /// blip, it never self-heals. `GET /readyz` must report this and gate the
+    /// status code, since routing traffic to a gateway with a permanently
+    /// dead subsystem is exactly what readiness probes exist to prevent.
+    #[tokio::test]
+    async fn readyz_reports_dead_background_task_as_not_ready() {
+        use tower::ServiceExt;
+
+        let db_url = format!(
+            "sqlite://target/test_probes_readyz_dead_task_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let pool = db::init_db(&db_url).await.unwrap();
+        let policy_engine = crate::policy::PolicyEngine::init("policies.cedar")
+            .await
+            .unwrap();
+        let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
+        let (events, _events_rx) =
+            events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
+
+        // A task that we immediately abort, simulating a panicked background task.
+        let doomed_handle = tokio::spawn(std::future::pending::<()>());
+        let doomed_abort_handle = doomed_handle.abort_handle();
+        doomed_abort_handle.abort();
+        // Let the runtime actually mark the task finished before asserting on it.
+        tokio::task::yield_now().await;
+        assert!(doomed_abort_handle.is_finished());
+
+        let state = Arc::new(routes::AppState {
+            pool,
+            policy_engine,
+            events,
+            metrics,
+            approval_ttl_secs: 1800,
+            rate_limiter: routes::RateLimiter::new(1000.0, 1000.0),
+            quota_manager: routes::QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: routes::SkillActionCache::new(1024),
+            replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(false),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
+
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+            background_task_handles: vec![("doomed_task", doomed_abort_handle)],
+        });
+
+        let app = Router::new()
+            .route("/readyz", get(readyz_handler))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "not_ready");
+        assert_eq!(parsed["db"], "up");
+        assert_eq!(parsed["background_tasks"], "down");
+        assert_eq!(parsed["dead_background_tasks"][0], "doomed_task");
 
         cleanup_db(&db_url);
     }

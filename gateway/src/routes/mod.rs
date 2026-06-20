@@ -465,6 +465,16 @@ pub struct AppState {
     /// (same token as [`Self::github_pr_commenter`]). When `None`, check runs
     /// are silently skipped.
     pub github_checks_client: Option<std::sync::Arc<crate::gh_checks::GhChecksClient>>,
+    /// Abort handles for fire-and-forget background tasks (event drain,
+    /// audit-batch writer, periodic jobs) (#1152). `AbortHandle::is_finished()`
+    /// is a zero-I/O signal that a task panicked and permanently stopped
+    /// running, backing the `background_tasks` field on `GET /readyz`. Each
+    /// handle is cloned from its task's `JoinHandle` at spawn time via
+    /// `JoinHandle::abort_handle()` — this never aborts the task itself (only
+    /// calling `.abort()` does), so the original `JoinHandle` can still be
+    /// owned and awaited elsewhere (e.g. graceful shutdown draining the event
+    /// channel). Empty in tests, which never spawn the real background tasks.
+    pub background_task_handles: Vec<(&'static str, tokio::task::AbortHandle)>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -1668,6 +1678,7 @@ pub mod benchutil {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         Ok((state, tenant_id, agent_token))
@@ -1880,6 +1891,7 @@ pub(crate) mod test_helpers {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         (state, tenant_id, agent_token)
@@ -1920,6 +1932,7 @@ pub(crate) mod test_helpers {
             slack_signing_secret: Some(secret.to_string()),
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         (state, tenant_id, agent_token)
@@ -2014,6 +2027,7 @@ pub(crate) mod test_helpers {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -2065,6 +2079,7 @@ pub(crate) mod test_helpers {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         (state, tenant_id, agent_token)
