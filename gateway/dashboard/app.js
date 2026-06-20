@@ -20,6 +20,7 @@
     agents: [],
     mcpServers: [],
     receipts: [],
+    riskScoreboard: [],
     selectedIncident: null,
     selectedMcpServerKey: null,
     
@@ -114,7 +115,12 @@
     
     // Fleet / Agents List
     agentsTbody: document.getElementById("agents-tbody"),
-    
+
+    // Agent Risk Scoreboard (#1290)
+    riskScoreboardTbody: document.getElementById("risk-scoreboard-tbody"),
+    exportRiskScoreboardCsvBtn: document.getElementById("export-risk-scoreboard-csv-btn"),
+    topRiskAgentsContainer: document.getElementById("top-risk-agents-container"),
+
     // MCP Server List & Detail (#1334)
     mcpListContainer: document.getElementById("mcp-list-container"),
     mcpServersTbody: document.getElementById("mcp-servers-tbody"),
@@ -247,7 +253,7 @@
   });
 
   // Attach card navigation
-  document.querySelectorAll(".stat-card.hoverable").forEach(function(card) {
+  document.querySelectorAll("[data-target-view]").forEach(function(card) {
     card.addEventListener("click", function() {
       var view = card.getAttribute("data-target-view");
       if (view) switchView(view);
@@ -328,6 +334,9 @@
       case "agents":
         fetchAgentsView();
         break;
+      case "risk-scoreboard":
+        fetchRiskScoreboardView();
+        break;
       case "mcp":
         if (refs.mcpDetailContainer.style.display === "block" && state.selectedMcpServerKey) {
           fetchMcpServerDetail(state.selectedMcpServerKey);
@@ -401,6 +410,11 @@
     apiFetch("/v1/incidents?limit=1&offset=0").then(function (data) {
       var rows = Array.isArray(data) ? data : (data.incidents ? data.incidents : []);
       renderTopIncident(rows[0]);
+    }).catch(console.error);
+
+    // Fetch top 5 riskiest agents (#1290)
+    apiFetch("/v1/agents/risk-scoreboard").then(function (data) {
+      renderTopRiskAgents(data.slice(0, 5));
     }).catch(console.error);
   }
 
@@ -1048,6 +1062,95 @@
       });
     }
   }
+
+  // ── Agent Risk Scoreboard (#1290) ──
+  // AC: "rising (up red), falling (down green), stable (right grey)" — rising
+  // risk is the bad direction (red), falling risk is good (green).
+  var TREND_ARROW = {
+    rising: { symbol: "↑", className: "text-error" },
+    falling: { symbol: "↓", className: "text-success" },
+    stable: { symbol: "→", className: "text-muted" }
+  };
+
+  function trendArrowHtml(trend) {
+    var arrow = TREND_ARROW[trend] || TREND_ARROW.stable;
+    return `<span class="${arrow.className}">${arrow.symbol} ${escapeHtml(trend)}</span>`;
+  }
+
+  function renderTopRiskAgents(top5) {
+    if (top5.length === 0) {
+      refs.topRiskAgentsContainer.innerHTML = "<div class='empty-row'>No agent activity recorded yet.</div>";
+      return;
+    }
+    refs.topRiskAgentsContainer.innerHTML = top5.map(function (entry) {
+      return `
+        <div class="feed-item">
+          <div class="feed-item-header">
+            <span class="mono">${escapeHtml(entry.agent_key)}</span>
+            <span>${trendArrowHtml(entry.trend)}</span>
+          </div>
+          <div class="feed-item-desc">
+            Rolling 24h avg risk: <strong>${entry.current_avg_risk_score.toFixed(1)}</strong>
+            &mdash; ${entry.decision_count_24h} decision(s)
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function fetchRiskScoreboardView() {
+    apiFetch("/v1/agents/risk-scoreboard").then(function (data) {
+      state.riskScoreboard = data;
+      refs.riskScoreboardTbody.innerHTML = "";
+      if (data.length === 0) {
+        refs.riskScoreboardTbody.innerHTML = "<tr class='empty-row'><td colspan='5'>No agents registered yet.</td></tr>";
+        return;
+      }
+      data.forEach(function (entry) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${escapeHtml(entry.agent_key)}</td>
+          <td><strong>${entry.current_avg_risk_score.toFixed(1)}</strong></td>
+          <td class="mono">${entry.decision_count_24h}</td>
+          <td>${trendArrowHtml(entry.trend)}</td>
+          <td><button class="btn btn-secondary btn-sm view-agent-explore-btn" data-agent-id="${entry.agent_id}">View in Explore</button></td>
+        `;
+        tr.querySelector(".view-agent-explore-btn").addEventListener("click", function() {
+          addFilterAndSwitchToExplore("agent_id", entry.agent_id);
+        });
+        refs.riskScoreboardTbody.appendChild(tr);
+      });
+    }).catch(function(err) {
+      showError("Failed to load risk scoreboard: " + err.message);
+    });
+  }
+
+  function addFilterAndSwitchToExplore(key, value) {
+    switchView("explore");
+    addFilter(key, value);
+  }
+
+  refs.exportRiskScoreboardCsvBtn.addEventListener("click", function() {
+    var url = state.gatewayUrl.replace(/\/+$/, "") + "/v1/agents/risk-scoreboard?format=csv";
+    var headers = { "X-Aegis-Tenant-ID": state.tenantId };
+    if (state.token) headers["Authorization"] = "Bearer " + state.token;
+
+    fetch(url, { headers: headers }).then(function (resp) {
+      if (!resp.ok) throw new Error("HTTP error " + resp.status);
+      return resp.blob();
+    }).then(function (blob) {
+      var downloadUrl = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = "agent-risk-scoreboard.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
+    }).catch(function(err) {
+      alert("CSV export failed: " + err.message);
+    });
+  });
 
   // ── Agents Fleet View ──
   function fetchAgentsView() {

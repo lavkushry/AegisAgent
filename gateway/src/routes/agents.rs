@@ -188,6 +188,51 @@ pub async fn list_agents(
     }
 }
 
+/// #1290: `GET /v1/agents/risk-scoreboard` — rolling 24h average
+/// `composite_risk_score` per agent, ranked highest-first, with a trend vs.
+/// the prior 24h window. `?format=csv` returns `text/csv` for the dashboard's
+/// CSV export button; default is JSON.
+pub async fn get_agent_risk_scoreboard(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let board = match db::get_agent_risk_scoreboard(&state.pool, &tenant_id).await {
+        Ok(board) => board,
+        Err(e) => {
+            error!("Failed to get agent risk scoreboard: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    if super::parse_filter(raw_query.as_deref(), "format").as_deref() == Some("csv") {
+        let mut csv =
+            String::from("agent_id,agent_key,current_avg_risk_score,decision_count_24h,trend\n");
+        for entry in &board {
+            csv.push_str(&format!(
+                "{},{},{},{},{}\n",
+                entry.agent_id,
+                entry.agent_key,
+                entry.current_avg_risk_score,
+                entry.decision_count_24h,
+                entry.trend
+            ));
+        }
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/csv")],
+            csv,
+        )
+            .into_response();
+    }
+
+    (StatusCode::OK, Json(board)).into_response()
+}
+
 pub async fn get_agent(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -944,6 +989,54 @@ mod tests {
             .unwrap();
         let json_p: serde_json::Value = serde_json::from_slice(&body_p).unwrap();
         assert_eq!(json_p.as_array().unwrap().len(), 2);
+    }
+
+    /// #1290: `GET /v1/agents/risk-scoreboard` returns the same data as
+    /// `db::get_agent_risk_scoreboard`, and `?format=csv` returns a `text/csv`
+    /// body with a header row. Also exercises the route actually being
+    /// reachable — `/v1/agents/risk-scoreboard` and `/v1/agents/:id` share a
+    /// path depth, so this catches any router registration regression.
+    #[tokio::test]
+    async fn test_agent_risk_scoreboard_route_json_and_csv() {
+        let (state, tenant_id, _agent_token) = setup_state("risk_scoreboard_route").await;
+
+        let response = get_agent_risk_scoreboard(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let board: Vec<AgentRiskScoreboardEntry> = serde_json::from_slice(&body).unwrap();
+        // setup_state registers one default agent.
+        assert_eq!(board.len(), 1);
+        assert_eq!(board[0].decision_count_24h, 0);
+        assert_eq!(board[0].trend, "stable");
+
+        let csv_response = get_agent_risk_scoreboard(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("format=csv".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(csv_response.status(), StatusCode::OK);
+        assert_eq!(
+            csv_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "text/csv"
+        );
+        let csv_body = to_bytes(csv_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let csv_text = String::from_utf8(csv_body.to_vec()).unwrap();
+        assert!(csv_text
+            .starts_with("agent_id,agent_key,current_avg_risk_score,decision_count_24h,trend\n"));
+        assert_eq!(csv_text.lines().count(), 2, "header + 1 agent row");
     }
 
     #[tokio::test]

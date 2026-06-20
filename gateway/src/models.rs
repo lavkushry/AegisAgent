@@ -849,6 +849,21 @@ pub struct TrustLevelCount {
     pub count: i64,
 }
 
+/// #1290: one row of the dashboard's Agent Risk Scoreboard — the rolling
+/// 24h average `composite_risk_score` per agent, ranked highest-first, with
+/// a trend relative to the prior 24h window (24-48h ago).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRiskScoreboardEntry {
+    pub agent_id: String,
+    pub agent_key: String,
+    pub current_avg_risk_score: f64,
+    pub decision_count_24h: i64,
+    /// `"rising"`, `"falling"`, or `"stable"` — see
+    /// [`crate::db::get_agent_risk_scoreboard`] for the threshold and the
+    /// no-baseline-data fallback.
+    pub trend: String,
+}
+
 /// Row count for a single table, part of `DbStats` (#950).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableRowCount {

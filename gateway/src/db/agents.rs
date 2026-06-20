@@ -106,6 +106,83 @@ pub async fn get_agent_by_id(
     .await
 }
 
+/// #1290: rolling 24h average `composite_risk_score` per agent, ranked
+/// highest-first, for the dashboard's Agent Risk Scoreboard. Compares against
+/// the prior 24h window (24-48h ago) to derive a `trend`:
+/// - `"stable"` if there's no current-window activity or no prior-window
+///   baseline to compare against (insufficient data, not a real signal).
+/// - `"rising"` / `"falling"` if the average moved by more than 5 points
+///   (out of the 0-100 composite scale) — a small threshold to avoid
+///   flapping between rising/falling on noise from a couple of decisions.
+///
+/// Agents with zero decisions in the last 24h still appear (LEFT JOIN), with
+/// `current_avg_risk_score: 0.0` and `decision_count_24h: 0`. Tenant-scoped,
+/// parameterized.
+type RiskScoreboardRow = (String, String, Option<f64>, i64, Option<f64>);
+
+pub async fn get_agent_risk_scoreboard(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> Result<Vec<AgentRiskScoreboardEntry>, sqlx::Error> {
+    let rows: Vec<RiskScoreboardRow> = sqlx::query_as(
+        "SELECT a.id, a.agent_key, cur.avg_score, COALESCE(cur.decision_count, 0), prev.avg_score
+         FROM agents a
+         LEFT JOIN (
+             SELECT agent_id, AVG(composite_risk_score) AS avg_score, COUNT(*) AS decision_count
+             FROM decisions
+             WHERE tenant_id = ? AND composite_risk_score IS NOT NULL
+                 AND created_at >= datetime('now', '-24 hours')
+             GROUP BY agent_id
+         ) cur ON cur.agent_id = a.id
+         LEFT JOIN (
+             SELECT agent_id, AVG(composite_risk_score) AS avg_score
+             FROM decisions
+             WHERE tenant_id = ? AND composite_risk_score IS NOT NULL
+                 AND created_at >= datetime('now', '-48 hours')
+                 AND created_at < datetime('now', '-24 hours')
+             GROUP BY agent_id
+         ) prev ON prev.agent_id = a.id
+         WHERE a.tenant_id = ? AND a.status != 'deleted'
+         ORDER BY COALESCE(cur.avg_score, 0) DESC",
+    )
+    .bind(tenant_id)
+    .bind(tenant_id)
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(agent_id, agent_key, current_avg, decision_count_24h, previous_avg)| {
+                let current_avg_risk_score = current_avg.unwrap_or(0.0);
+                let trend = match (decision_count_24h, previous_avg) {
+                    (0, _) | (_, None) => "stable",
+                    (_, Some(prev)) => {
+                        let delta = current_avg_risk_score - prev;
+                        if delta > 5.0 {
+                            "rising"
+                        } else if delta < -5.0 {
+                            "falling"
+                        } else {
+                            "stable"
+                        }
+                    }
+                }
+                .to_string();
+
+                AgentRiskScoreboardEntry {
+                    agent_id,
+                    agent_key,
+                    current_avg_risk_score,
+                    decision_count_24h,
+                    trend,
+                }
+            },
+        )
+        .collect())
+}
+
 pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key, allowed_environments)
@@ -588,5 +665,90 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(open_high.len(), 2);
+    }
+
+    /// #1290: `get_agent_risk_scoreboard` ranks agents by rolling 24h average
+    /// `composite_risk_score` (highest first), derives a trend against the
+    /// prior 24h window, and still lists agents with zero recent decisions.
+    #[tokio::test]
+    async fn get_agent_risk_scoreboard_ranks_and_derives_trend() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        register_tenant(&pool, "tenant_scoreboard", "Scoreboard Tenant", "developer")
+            .await
+            .unwrap();
+        for (id, key) in [
+            ("agent_rising", "agent_rising"),
+            ("agent_falling", "agent_falling"),
+            ("agent_idle", "agent_idle"),
+        ] {
+            sqlx::query(
+                "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES (?, 'tenant_scoreboard', ?, ?, 'Scoreboard Agent', 'dev', 'low', 'active')",
+            )
+            .bind(id)
+            .bind(key)
+            .bind(format!("token_{id}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // agent_rising: current-window avg 90 (two decisions: 80, 100),
+        // prior-window avg 50 (one decision) -> delta +40 -> rising.
+        for (dec_id, score) in [("dec_r1", 80), ("dec_r2", 100)] {
+            let mut d = graph_perf_decision(dec_id, "tenant_scoreboard");
+            d.agent_id = "agent_rising".to_string();
+            d.composite_risk_score = Some(score);
+            insert_decision(&pool, &d).await.unwrap();
+        }
+        let mut prior_rising = graph_perf_decision("dec_r_prior", "tenant_scoreboard");
+        prior_rising.agent_id = "agent_rising".to_string();
+        prior_rising.composite_risk_score = Some(50);
+        insert_decision(&pool, &prior_rising).await.unwrap();
+        sqlx::query("UPDATE decisions SET created_at = datetime('now', '-30 hours') WHERE id = 'dec_r_prior'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // agent_falling: current-window avg 10, prior-window avg 80 ->
+        // delta -70 -> falling.
+        let mut cur_falling = graph_perf_decision("dec_f1", "tenant_scoreboard");
+        cur_falling.agent_id = "agent_falling".to_string();
+        cur_falling.composite_risk_score = Some(10);
+        insert_decision(&pool, &cur_falling).await.unwrap();
+        let mut prior_falling = graph_perf_decision("dec_f_prior", "tenant_scoreboard");
+        prior_falling.agent_id = "agent_falling".to_string();
+        prior_falling.composite_risk_score = Some(80);
+        insert_decision(&pool, &prior_falling).await.unwrap();
+        sqlx::query("UPDATE decisions SET created_at = datetime('now', '-30 hours') WHERE id = 'dec_f_prior'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // agent_idle: no decisions at all.
+
+        let board = get_agent_risk_scoreboard(&pool, "tenant_scoreboard")
+            .await
+            .unwrap();
+        assert_eq!(
+            board.len(),
+            3,
+            "all 3 agents listed, including the idle one"
+        );
+
+        // Ranked highest-current-avg first: rising (90) > falling (10) > idle (0).
+        assert_eq!(board[0].agent_key, "agent_rising");
+        assert!((board[0].current_avg_risk_score - 90.0).abs() < 0.01);
+        assert_eq!(board[0].decision_count_24h, 2);
+        assert_eq!(board[0].trend, "rising");
+
+        assert_eq!(board[1].agent_key, "agent_falling");
+        assert!((board[1].current_avg_risk_score - 10.0).abs() < 0.01);
+        assert_eq!(board[1].trend, "falling");
+
+        assert_eq!(board[2].agent_key, "agent_idle");
+        assert_eq!(board[2].current_avg_risk_score, 0.0);
+        assert_eq!(board[2].decision_count_24h, 0);
+        assert_eq!(board[2].trend, "stable");
     }
 }

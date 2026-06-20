@@ -925,6 +925,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/agents/register", post(routes::register_agent))
         .route("/v1/agents", get(routes::list_agents))
         .route(
+            "/v1/agents/risk-scoreboard",
+            get(routes::get_agent_risk_scoreboard),
+        )
+        .route(
             "/v1/agents/:id",
             get(routes::get_agent)
                 .patch(routes::patch_agent)

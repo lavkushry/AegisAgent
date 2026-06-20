@@ -515,6 +515,7 @@ select:focus {
 .text-warning { color: var(--color-warning); }
 .text-critical { color: var(--color-critical); }
 .text-success { color: var(--color-success); }
+.text-muted { color: var(--text-muted); }
 
 /* ── DASHBOARD BODY & PANELS ── */
 .dashboard-body {
