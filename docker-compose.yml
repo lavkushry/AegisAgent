@@ -13,7 +13,10 @@ services:
       - ./data:/data
       - ./policies.cedar:/app/policies.cedar:ro
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      # #1207: the distroless runtime image has no curl/shell — the binary
+      # execs itself with --healthcheck instead (see gateway/Dockerfile and
+      # main.rs's check_liveness).
+      test: ["CMD", "/usr/local/bin/aegis-gateway", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 6
