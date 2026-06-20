@@ -688,6 +688,194 @@ fn match_key_at(chars: &[char], i: usize, key: &str) -> Option<usize> {
     Some(i + key.len())
 }
 
+fn api_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Registrations
+        .route("/agents/register", post(routes::register_agent))
+        .route("/agents", get(routes::list_agents))
+        .route(
+            "/agents/risk-scoreboard",
+            get(routes::get_agent_risk_scoreboard),
+        )
+        .route(
+            "/agents/:id",
+            get(routes::get_agent)
+                .patch(routes::patch_agent)
+                .delete(routes::delete_agent),
+        )
+        .route("/tools", post(routes::register_tool))
+        .route(
+            "/mcp/servers",
+            get(routes::list_mcp_servers).post(routes::register_mcp_server),
+        )
+        .route(
+            "/mcp/servers/:server_key",
+            get(routes::get_mcp_server).put(routes::update_mcp_server),
+        )
+        .route(
+            "/mcp/servers/:server_key/tools",
+            get(routes::get_mcp_tool_manifest).post(routes::discover_mcp_tools),
+        )
+        .route(
+            "/mcp/servers/:server_key/tools/:tool_key/approve",
+            post(routes::approve_mcp_tool),
+        )
+        .route(
+            "/mcp/servers/:server_key/tools/:tool_key/disable",
+            post(routes::disable_mcp_tool),
+        )
+        .route(
+            "/mcp/servers/:server_key/inspect",
+            post(routes::inspect_mcp_response),
+        )
+        .route(
+            "/mcp/servers/:server_key/manifest-history",
+            get(routes::get_mcp_manifest_history),
+        )
+        // Policy / Interception
+        .route("/authorize", post(routes::authorize_action))
+        // SOC-004 (#1187): agentless ingestion of external event sources
+        .route("/ingest", post(routes::ingest_event))
+        // #1381: dedicated GitHub App webhook receiver with HMAC-SHA256 verification
+        .route("/webhooks/github", post(routes::receive_github_webhook))
+        .route("/decisions", get(routes::list_decisions))
+        .route("/decisions/:id", get(routes::get_decision))
+        .route(
+            "/policies",
+            get(routes::list_policies).post(routes::create_policy),
+        )
+        .route(
+            "/policies/:id",
+            put(routes::update_policy).delete(routes::delete_policy),
+        )
+        .route("/policies/:id/rollback", post(routes::rollback_policy))
+        .route("/policies/reload", post(routes::reload_global_policies))
+        .route("/policies/audit-log", get(routes::list_policy_audit_log))
+        .route(
+            "/tenants/risk-weights",
+            get(routes::get_tenant_risk_weights).put(routes::put_tenant_risk_weights),
+        )
+        .route(
+            "/tenants/risk-escalation",
+            get(routes::get_tenant_risk_escalation_config)
+                .put(routes::put_tenant_risk_escalation_config),
+        )
+        .route(
+            "/webhook_subscriptions",
+            get(routes::list_webhook_subscriptions).post(routes::create_webhook_subscription),
+        )
+        .route(
+            "/webhook_subscriptions/:id",
+            delete(routes::delete_webhook_subscription),
+        )
+        .route(
+            "/detection_rules",
+            get(routes::list_detection_rules).post(routes::upsert_detection_rule),
+        )
+        .route(
+            "/detection_rules/:id",
+            delete(routes::delete_detection_rule),
+        )
+        .route(
+            "/soc/rules",
+            get(routes::get_soc_rules).post(routes::create_soc_rule),
+        )
+        .route("/soc/rules/reload", post(routes::reload_soc_rules))
+        .route(
+            "/soc/rules/:rule_key/backtest",
+            post(routes::backtest_soc_rule),
+        )
+        // #1272: Evidence Graph Query API
+        .route("/graph/run/:run_id", get(routes::get_graph_for_run))
+        .route(
+            "/graph/incident/:incident_id",
+            get(routes::get_graph_for_incident),
+        )
+        .route("/graph/agent/:agent_id", get(routes::get_graph_for_agent))
+        .route(
+            "/api_keys",
+            get(routes::list_api_keys).post(routes::create_api_key),
+        )
+        .route("/api_keys/:id/revoke", post(routes::revoke_api_key))
+        // Approvals
+        .route("/approvals", get(routes::list_approvals))
+        .route("/approvals/:id", get(routes::get_approval))
+        .route("/approvals/:id/approve", post(routes::approve_approval))
+        .route("/approvals/:id/reject", post(routes::reject_approval))
+        .route("/approvals/:id/edit", post(routes::edit_approval))
+        .route("/approvals/:id/consume", post(routes::consume_approval))
+        // Slack interactive-component callback (#1276)
+        .route("/callbacks/slack", post(routes::slack_callback))
+        // Audits
+        .route("/runs/:id/timeline", get(routes::get_timeline))
+        .route("/audit/events", get(routes::get_audit_events))
+        // Verifiable action receipts
+        .route("/receipts", get(routes::list_receipts))
+        .route("/receipts/:id", get(routes::get_receipt))
+        .route("/receipts/:id/verify", get(routes::verify_receipt))
+        .route("/receipts/verify-chain", post(routes::verify_receipt_chain))
+        // SOC Phase 5: Indexer Query API — paginated, tenant-scoped SOC views
+        .route("/alerts", get(routes::list_alerts))
+        .route("/incidents", get(routes::list_incidents))
+        // SOC query layer: incident detail + aggregate summary
+        .route("/incidents/:id", get(routes::get_incident))
+        .route("/soc/summary", get(routes::soc_summary))
+        // SOC Phase 6: Incident lifecycle — close an open incident
+        .route("/incidents/:id/close", post(routes::close_incident))
+        // SOC Phase 6: RCA Narrator
+        .route("/incidents/:id/narrate", get(routes::narrate_incident))
+        // SOC-006 (#1189): per-incident compliance evidence pack export
+        .route(
+            "/incidents/:id/evidence-pack",
+            get(routes::get_incident_evidence_pack),
+        )
+        // SOC Phase 4: Response API — agent freeze/revoke/quarantine, MCP quarantine
+        .route("/agents/:id/freeze", post(routes::freeze_agent))
+        .route("/agents/:id/unfreeze", post(routes::unfreeze_agent))
+        .route("/agents/:id/revoke", post(routes::revoke_agent))
+        .route("/agents/:id/restore", post(routes::restore_agent))
+        // #1295: agent token rotation (manual + leak-report auto-rotation)
+        .route("/agents/:id/rotate-token", post(routes::rotate_agent_token))
+        .route(
+            "/agents/:id/report-leaked-token",
+            post(routes::report_leaked_agent_token),
+        )
+        .route(
+            "/agents/:id/permissions",
+            get(routes::list_agent_tool_permissions).post(routes::grant_agent_tool_permission),
+        )
+        .route(
+            "/agents/:id/permissions/:tool_key",
+            delete(routes::revoke_agent_tool_permission),
+        )
+        .route(
+            "/mcp/servers/:server_key/quarantine",
+            post(routes::quarantine_mcp_server),
+        )
+        .route(
+            "/mcp/servers/:server_key/restore",
+            post(routes::restore_mcp_server),
+        )
+        // Tenants
+        .route("/tenants", post(routes::create_tenant))
+        .route(
+            "/tenants/:id",
+            get(routes::get_tenant).delete(routes::delete_tenant),
+        )
+        .route("/tenants/:id/export", get(routes::export_tenant))
+        // Compliance Evidence Pack (#1298)
+        .route("/compliance/evidence-pack", get(routes::get_evidence_pack))
+        // WebSocket live event stream
+        .route("/ws/events", get(routes::ws_events))
+        // Statistics
+        .route("/stats", get(routes::get_tenant_stats))
+        .route("/admin/db-stats", get(routes::get_db_stats))
+        .route("/admin/backup", post(routes::create_db_backup))
+        // OpenAPI Specification
+        .route("/openapi.json", get(routes::get_openapi_spec))
+        .route("/version", get(version_handler))
+}
+
 #[tokio::main]
 #[allow(deprecated)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1102,202 +1290,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Construct Axum router with middleware layers
     let app = Router::new()
-        // Registrations
-        .route("/v1/agents/register", post(routes::register_agent))
-        .route("/v1/agents", get(routes::list_agents))
-        .route(
-            "/v1/agents/risk-scoreboard",
-            get(routes::get_agent_risk_scoreboard),
+        .nest(
+            "/v1",
+            api_routes().layer(middleware::from_fn(routes::deprecation_middleware)),
         )
-        .route(
-            "/v1/agents/:id",
-            get(routes::get_agent)
-                .patch(routes::patch_agent)
-                .delete(routes::delete_agent),
-        )
-        .route("/v1/tools", post(routes::register_tool))
-        .route(
-            "/v1/mcp/servers",
-            get(routes::list_mcp_servers).post(routes::register_mcp_server),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key",
-            get(routes::get_mcp_server).put(routes::update_mcp_server),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key/tools",
-            get(routes::get_mcp_tool_manifest).post(routes::discover_mcp_tools),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key/tools/:tool_key/approve",
-            post(routes::approve_mcp_tool),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key/tools/:tool_key/disable",
-            post(routes::disable_mcp_tool),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key/inspect",
-            post(routes::inspect_mcp_response),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key/manifest-history",
-            get(routes::get_mcp_manifest_history),
-        )
-        // Policy / Interception
-        .route("/v1/authorize", post(routes::authorize_action))
-        // SOC-004 (#1187): agentless ingestion of external event sources
-        .route("/v1/ingest", post(routes::ingest_event))
-        // #1381: dedicated GitHub App webhook receiver with HMAC-SHA256 verification
-        .route("/v1/webhooks/github", post(routes::receive_github_webhook))
-        .route("/v1/decisions", get(routes::list_decisions))
-        .route("/v1/decisions/:id", get(routes::get_decision))
-        .route(
-            "/v1/policies",
-            get(routes::list_policies).post(routes::create_policy),
-        )
-        .route(
-            "/v1/policies/:id",
-            put(routes::update_policy).delete(routes::delete_policy),
-        )
-        .route("/v1/policies/:id/rollback", post(routes::rollback_policy))
-        .route("/v1/policies/reload", post(routes::reload_global_policies))
-        .route("/v1/policies/audit-log", get(routes::list_policy_audit_log))
-        .route(
-            "/v1/tenants/risk-weights",
-            get(routes::get_tenant_risk_weights).put(routes::put_tenant_risk_weights),
-        )
-        .route(
-            "/v1/tenants/risk-escalation",
-            get(routes::get_tenant_risk_escalation_config)
-                .put(routes::put_tenant_risk_escalation_config),
-        )
-        .route(
-            "/v1/webhook_subscriptions",
-            get(routes::list_webhook_subscriptions).post(routes::create_webhook_subscription),
-        )
-        .route(
-            "/v1/webhook_subscriptions/:id",
-            axum::routing::delete(routes::delete_webhook_subscription),
-        )
-        .route(
-            "/v1/detection_rules",
-            get(routes::list_detection_rules).post(routes::upsert_detection_rule),
-        )
-        .route(
-            "/v1/detection_rules/:id",
-            axum::routing::delete(routes::delete_detection_rule),
-        )
-        .route(
-            "/v1/soc/rules",
-            get(routes::get_soc_rules).post(routes::create_soc_rule),
-        )
-        .route("/v1/soc/rules/reload", post(routes::reload_soc_rules))
-        .route(
-            "/v1/soc/rules/:rule_key/backtest",
-            post(routes::backtest_soc_rule),
-        )
-        // #1272: Evidence Graph Query API
-        .route("/v1/graph/run/:run_id", get(routes::get_graph_for_run))
-        .route(
-            "/v1/graph/incident/:incident_id",
-            get(routes::get_graph_for_incident),
-        )
-        .route(
-            "/v1/graph/agent/:agent_id",
-            get(routes::get_graph_for_agent),
-        )
-        .route(
-            "/v1/api_keys",
-            get(routes::list_api_keys).post(routes::create_api_key),
-        )
-        .route("/v1/api_keys/:id/revoke", post(routes::revoke_api_key))
-        // Approvals
-        .route("/v1/approvals", get(routes::list_approvals))
-        .route("/v1/approvals/:id", get(routes::get_approval))
-        .route("/v1/approvals/:id/approve", post(routes::approve_approval))
-        .route("/v1/approvals/:id/reject", post(routes::reject_approval))
-        .route("/v1/approvals/:id/edit", post(routes::edit_approval))
-        .route("/v1/approvals/:id/consume", post(routes::consume_approval))
-        // Slack interactive-component callback (#1276): HMAC-verified, not
-        // tenant-scoped via the Authorization header — tenant comes from the
-        // signed callback payload itself.
-        .route("/v1/callbacks/slack", post(routes::slack_callback))
-        // Audits
-        .route("/v1/runs/:id/timeline", get(routes::get_timeline))
-        .route("/v1/audit/events", get(routes::get_audit_events))
-        // Verifiable action receipts
-        .route("/v1/receipts", get(routes::list_receipts))
-        .route("/v1/receipts/:id", get(routes::get_receipt))
-        .route("/v1/receipts/:id/verify", get(routes::verify_receipt))
-        .route(
-            "/v1/receipts/verify-chain",
-            post(routes::verify_receipt_chain),
-        )
-        // SOC Phase 5: Indexer Query API — paginated, tenant-scoped SOC views
-        .route("/v1/alerts", get(routes::list_alerts))
-        .route("/v1/incidents", get(routes::list_incidents))
-        // SOC query layer: incident detail + aggregate summary
-        .route("/v1/incidents/:id", get(routes::get_incident))
-        .route("/v1/soc/summary", get(routes::soc_summary))
-        // SOC Phase 6: Incident lifecycle — close an open incident
-        .route("/v1/incidents/:id/close", post(routes::close_incident))
-        // SOC Phase 6: RCA Narrator — on-demand, human-triggered, LAW-2 compliant
-        .route("/v1/incidents/:id/narrate", get(routes::narrate_incident))
-        // SOC-006 (#1189): per-incident compliance evidence pack export
-        .route(
-            "/v1/incidents/:id/evidence-pack",
-            get(routes::get_incident_evidence_pack),
-        )
-        // SOC Phase 4: Response API — agent freeze/revoke/quarantine, MCP quarantine
-        .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
-        .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))
-        .route("/v1/agents/:id/revoke", post(routes::revoke_agent))
-        .route("/v1/agents/:id/restore", post(routes::restore_agent))
-        // #1295: agent token rotation (manual + leak-report auto-rotation)
-        .route(
-            "/v1/agents/:id/rotate-token",
-            post(routes::rotate_agent_token),
-        )
-        .route(
-            "/v1/agents/:id/report-leaked-token",
-            post(routes::report_leaked_agent_token),
-        )
-        .route(
-            "/v1/agents/:id/permissions",
-            get(routes::list_agent_tool_permissions).post(routes::grant_agent_tool_permission),
-        )
-        .route(
-            "/v1/agents/:id/permissions/:tool_key",
-            delete(routes::revoke_agent_tool_permission),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key/quarantine",
-            post(routes::quarantine_mcp_server),
-        )
-        .route(
-            "/v1/mcp/servers/:server_key/restore",
-            post(routes::restore_mcp_server),
-        )
-        // Tenants
-        .route("/v1/tenants", post(routes::create_tenant))
-        .route(
-            "/v1/tenants/:id",
-            get(routes::get_tenant).delete(routes::delete_tenant),
-        )
-        .route("/v1/tenants/:id/export", get(routes::export_tenant))
-        // Compliance Evidence Pack (#1298): SOC 2 Type II / EU AI Act Art. 14
-        .route(
-            "/v1/compliance/evidence-pack",
-            get(routes::get_evidence_pack),
-        )
-        // WebSocket live event stream
-        .route("/v1/ws/events", get(routes::ws_events))
-        // Statistics
-        .route("/v1/stats", get(routes::get_tenant_stats))
-        .route("/v1/admin/db-stats", get(routes::get_db_stats))
-        .route("/v1/admin/backup", post(routes::create_db_backup))
-        // SOC Console Dashboard static serving
+        .nest("/v2", api_routes())
+        // Dashboard Console static serving (unversioned)
         .route(
             "/dashboard",
             get(|| async { axum::response::Redirect::permanent("/dashboard/") }),
@@ -1305,15 +1303,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/dashboard/", get(routes::serve_dashboard_index))
         .route("/dashboard/app.js", get(routes::serve_dashboard_js))
         .route("/dashboard/aegis.css", get(routes::serve_dashboard_css))
-        // OpenAPI Specification
-        .route("/v1/openapi.json", get(routes::get_openapi_spec))
-        // Health and version
+        // Health and probes (unversioned)
         .route("/health", get(health_handler))
         // Kubernetes-native probes (#1208): liveness, readiness, startup
         .route("/livez", get(livez_handler))
         .route("/readyz", get(readyz_handler))
         .route("/startupz", get(startupz_handler))
-        .route("/v1/version", get(version_handler))
         // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
         .route("/metrics", get(metrics_handler))
         .with_state(state.clone())
@@ -1830,6 +1825,12 @@ mod tests {
         });
 
         let app = Router::new()
+            .nest(
+                "/v1",
+                api_routes().layer(middleware::from_fn(routes::deprecation_middleware)),
+            )
+            .nest("/v2", api_routes())
+            .route("/health", get(health_handler))
             .route("/livez", get(livez_handler))
             .route("/readyz", get(readyz_handler))
             .route("/startupz", get(startupz_handler))
@@ -2099,6 +2100,72 @@ mod tests {
         assert!(text.contains("# TYPE db_pool_connections_active gauge"));
         assert!(text.contains("# TYPE db_pool_connections_idle gauge"));
         assert!(text.contains("# TYPE db_pool_acquire_wait_seconds gauge"));
+
+        cleanup_db(&db_url);
+    }
+
+    /// Test prefix routing, version endpoint, and deprecation/sunset headers.
+    #[tokio::test]
+    async fn test_api_versioning_and_deprecation_headers() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("api_versioning").await;
+
+        // 1. Test /v1/version returns Sunset and Deprecation headers
+        let req_v1 = Request::builder()
+            .uri("/v1/version")
+            .body(Body::empty())
+            .unwrap();
+        let resp_v1 = app.clone().oneshot(req_v1).await.unwrap();
+        assert_eq!(resp_v1.status(), StatusCode::OK);
+
+        let headers_v1 = resp_v1.headers();
+        assert_eq!(
+            headers_v1.get("deprecation").unwrap().to_str().unwrap(),
+            "true"
+        );
+        assert_eq!(
+            headers_v1.get("sunset").unwrap().to_str().unwrap(),
+            "Wed, 31 Dec 2026 23:59:59 GMT"
+        );
+
+        let body_v1 = axum::body::to_bytes(resp_v1.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_v1: serde_json::Value = serde_json::from_slice(&body_v1).unwrap();
+        assert_eq!(json_v1["name"], "aegis-gateway");
+        assert!(json_v1["version"].is_string());
+
+        // 2. Test /v2/version does NOT return Sunset or Deprecation headers
+        let req_v2 = Request::builder()
+            .uri("/v2/version")
+            .body(Body::empty())
+            .unwrap();
+        let resp_v2 = app.clone().oneshot(req_v2).await.unwrap();
+        assert_eq!(resp_v2.status(), StatusCode::OK);
+
+        let headers_v2 = resp_v2.headers();
+        assert!(headers_v2.get("deprecation").is_none());
+        assert!(headers_v2.get("sunset").is_none());
+
+        let body_v2 = axum::body::to_bytes(resp_v2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_v2: serde_json::Value = serde_json::from_slice(&body_v2).unwrap();
+        assert_eq!(json_v2["name"], "aegis-gateway");
+        assert_eq!(json_v2["version"], json_v1["version"]);
+
+        // 3. Test unversioned /livez does NOT return Sunset or Deprecation headers
+        let req_livez = Request::builder()
+            .uri("/livez")
+            .body(Body::empty())
+            .unwrap();
+        let resp_livez = app.clone().oneshot(req_livez).await.unwrap();
+        assert_eq!(resp_livez.status(), StatusCode::OK);
+
+        let headers_livez = resp_livez.headers();
+        assert!(headers_livez.get("deprecation").is_none());
+        assert!(headers_livez.get("sunset").is_none());
 
         cleanup_db(&db_url);
     }
