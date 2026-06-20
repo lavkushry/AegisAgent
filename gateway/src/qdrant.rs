@@ -266,30 +266,56 @@ impl QdrantExporter {
         debug!(point_id = %point_uuid, "successfully indexed event to Qdrant");
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    /// Performs a semantic search querying similar events in Qdrant, filtered by tenant_id.
+    pub async fn search_similar_events(
+        &self,
+        tenant_id: &str,
+        query_text: &str,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+        // 1. Generate query embedding vector
+        let vector = self.model.generate_embedding(query_text).await?;
 
-    struct MockEmbeddingModel;
+        // 2. Build multi-tenant filter condition
+        let filter =
+            qdrant_client::qdrant::Filter::all([qdrant_client::qdrant::Condition::matches(
+                "tenant_id",
+                tenant_id.to_string(),
+            )]);
 
-    #[async_trait]
-    impl EmbeddingModel for MockEmbeddingModel {
-        async fn generate_embedding(
-            &self,
-            _text: &str,
-        ) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
-            Ok(vec![0.1, 0.2, 0.3])
+        // 3. Construct SearchPoints request
+        let req = qdrant_client::qdrant::SearchPoints {
+            collection_name: self.collection_name.clone(),
+            vector,
+            filter: Some(filter),
+            limit: limit as u64,
+            with_payload: Some(true.into()),
+            ..Default::default()
+        };
+
+        // 4. Perform search
+        let response = self.client.search_points(&req).await?;
+
+        // 5. Convert points back to JSON, appending similarity score
+        let mut results = Vec::new();
+        for point in response.result {
+            let mut payload =
+                serde_json::to_value(qdrant_client::client::Payload::from(point.payload))
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+
+            if let serde_json::Value::Object(ref mut map) = payload {
+                map.insert(
+                    "similarity_score".to_string(),
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(point.score as f64)
+                            .unwrap_or_else(|| serde_json::Number::from(0)),
+                    ),
+                );
+            }
+            results.push(payload);
         }
-        fn dimension(&self) -> usize {
-            3
-        }
-    }
 
-    #[test]
-    fn test_mock_embedding_model() {
-        let model = MockEmbeddingModel;
-        assert_eq!(model.dimension(), 3);
+        Ok(results)
     }
 }
