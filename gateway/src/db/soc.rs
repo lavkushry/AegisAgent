@@ -511,6 +511,7 @@ pub async fn list_soc_incidents_cursor(
     status_filter: Option<&str>,
     severity: Option<&str>,
     agent_id: Option<&str>,
+    kind: Option<&str>,
     cursor: Option<i64>,
 ) -> Result<(Vec<SocIncidentRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
@@ -521,6 +522,7 @@ pub async fn list_soc_incidents_cursor(
            AND (? IS NULL OR status = ?)
            AND (? IS NULL OR severity = ?)
            AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR kind = ?)
            AND (? IS NULL OR rowid < ?)
          ORDER BY rowid DESC
          LIMIT ? OFFSET ?",
@@ -532,6 +534,8 @@ pub async fn list_soc_incidents_cursor(
     .bind(severity)
     .bind(agent_id)
     .bind(agent_id)
+    .bind(kind)
+    .bind(kind)
     .bind(cursor)
     .bind(cursor)
     .bind(limit + 1)
@@ -1138,7 +1142,7 @@ mod tests {
             .unwrap();
 
         let (page, next_cursor) =
-            list_soc_incidents_cursor(&pool, "tenant_a", 2, 0, None, None, None, None)
+            list_soc_incidents_cursor(&pool, "tenant_a", 2, 0, None, None, None, None, None)
                 .await
                 .unwrap();
         assert_eq!(page.len(), 2);
@@ -1146,5 +1150,43 @@ mod tests {
             next_cursor, None,
             "exact-boundary page must not claim more rows exist"
         );
+    }
+
+    /// #1145: `GET /v1/incidents?kind=...` field filtering.
+    #[tokio::test]
+    async fn list_soc_incidents_cursor_filters_by_kind() {
+        let pool = setup_pool("incidents_kind_filter").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        insert_soc_incident(&pool, &make_incident("inc_deny_storm", "tenant_a"))
+            .await
+            .unwrap();
+        let mut drift_incident = make_incident("inc_policy_drift", "tenant_a");
+        drift_incident.kind = "policy_drift".to_string();
+        insert_soc_incident(&pool, &drift_incident).await.unwrap();
+
+        let (page, _) = list_soc_incidents_cursor(
+            &pool,
+            "tenant_a",
+            10,
+            0,
+            None,
+            None,
+            None,
+            Some("policy_drift"),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "inc_policy_drift");
+
+        let (unfiltered, _) =
+            list_soc_incidents_cursor(&pool, "tenant_a", 10, 0, None, None, None, None, None)
+                .await
+                .unwrap();
+        assert_eq!(unfiltered.len(), 2);
     }
 }

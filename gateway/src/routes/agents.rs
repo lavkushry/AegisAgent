@@ -174,8 +174,17 @@ pub async fn list_agents(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let status_filter = super::parse_filter(raw_query.as_deref(), "status");
 
-    match db::list_agents(&state.pool, &tenant_id, limit, offset).await {
+    match db::list_agents(
+        &state.pool,
+        &tenant_id,
+        limit,
+        offset,
+        status_filter.as_deref(),
+    )
+    .await
+    {
         Ok(agents) => (StatusCode::OK, Json(agents)).into_response(),
         Err(e) => {
             error!("Failed to list agents: {:?}", e);
@@ -1011,6 +1020,102 @@ mod tests {
             .unwrap();
         let json_p: serde_json::Value = serde_json::from_slice(&body_p).unwrap();
         assert_eq!(json_p.as_array().unwrap().len(), 2);
+    }
+
+    /// #1145: `GET /v1/agents?status=...` field filtering. Also verifies the
+    /// pre-#1145 default (no filter) still excludes soft-deleted agents.
+    #[tokio::test]
+    async fn list_agents_route_filters_by_status() {
+        let (state, tenant_id, _agent_token) = setup_state("list_agents_status_filter").await;
+
+        for (idx, status) in ["active", "active", "quarantined", "deleted"]
+            .iter()
+            .enumerate()
+        {
+            let agent = AgentRecord {
+                id: format!("status_filter_agent_{}", idx),
+                tenant_id: tenant_id.clone(),
+                agent_key: format!("status-filter-agent-key-{}", idx),
+                agent_token: format!("status-filter-agent-token-{}", idx),
+                name: format!("Status Filter Agent {}", idx),
+                owner_team: Some("platform".to_string()),
+                owner_email: None,
+                environment: "production".to_string(),
+                framework: None,
+                model_provider: None,
+                model_name: None,
+                purpose: None,
+                risk_tier: "high".to_string(),
+                status: status.to_string(),
+                last_seen_at: None,
+                frozen_reason: None,
+                force_approval: false,
+                quarantined_at: None,
+                signing_key: None,
+                allowed_environments: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            db::insert_agent(&state.pool, &agent).await.unwrap();
+        }
+
+        // ?status=active matches exactly the 2 active agents seeded above
+        // (the default setup agent from `setup_state` is also "active", so 3).
+        let response = list_agents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("status=active".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        assert!(arr.iter().all(|a| a["status"] == "active"));
+
+        // ?status=quarantined matches exactly 1.
+        let response_q = list_agents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("status=quarantined".to_string())),
+        )
+        .await
+        .into_response();
+        let body_q = to_bytes(response_q.into_body(), usize::MAX).await.unwrap();
+        let json_q: serde_json::Value = serde_json::from_slice(&body_q).unwrap();
+        assert_eq!(json_q.as_array().unwrap().len(), 1);
+
+        // No filter: default behavior still hides the soft-deleted agent.
+        let response_default = list_agents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        let body_default = to_bytes(response_default.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_default: serde_json::Value = serde_json::from_slice(&body_default).unwrap();
+        let arr_default = json_default.as_array().unwrap();
+        assert!(arr_default.iter().all(|a| a["status"] != "deleted"));
+
+        // ?status=deleted explicitly surfaces the soft-deleted agent.
+        let response_deleted = list_agents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("status=deleted".to_string())),
+        )
+        .await
+        .into_response();
+        let body_deleted = to_bytes(response_deleted.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_deleted: serde_json::Value = serde_json::from_slice(&body_deleted).unwrap();
+        assert_eq!(json_deleted.as_array().unwrap().len(), 1);
+        assert_eq!(json_deleted.as_array().unwrap()[0]["status"], "deleted");
     }
 
     /// #1290: `GET /v1/agents/risk-scoreboard` returns the same data as

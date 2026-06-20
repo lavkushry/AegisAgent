@@ -512,6 +512,7 @@ pub async fn list_incidents(
     let status_filter = parse_filter(raw_query.as_deref(), "status");
     let severity = parse_filter(raw_query.as_deref(), "severity");
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
+    let kind = parse_filter(raw_query.as_deref(), "kind");
 
     match db::list_soc_incidents_cursor(
         &state.pool,
@@ -521,6 +522,7 @@ pub async fn list_incidents(
         status_filter.as_deref(),
         severity.as_deref(),
         agent_id.as_deref(),
+        kind.as_deref(),
         cursor,
     )
     .await
@@ -1058,6 +1060,30 @@ mod tests {
         assert_eq!(arr[0]["id"], "route_inc_1");
         assert_eq!(arr[0]["kind"], "deny_storm");
         assert_eq!(arr[0]["tenant_id"], tenant_id.as_str());
+    }
+
+    /// #1145: `GET /v1/incidents?kind=...` field filtering.
+    #[tokio::test]
+    async fn list_incidents_route_filters_by_kind() {
+        let (state, tenant_id, _agent_token) = setup_state("incidents_kind_filter_route").await;
+
+        insert_test_incident(&state.pool, &tenant_id, "inc_deny_storm", "deny_storm").await;
+        insert_test_incident(&state.pool, &tenant_id, "inc_policy_drift", "policy_drift").await;
+
+        let response = list_incidents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("kind=policy_drift".to_string())),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "inc_policy_drift");
     }
 
     /// Helper: insert a bare-minimum incident row for a tenant (no agent required).
