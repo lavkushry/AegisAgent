@@ -800,6 +800,51 @@ tbody tr:hover td {
   font-weight: 600;
 }
 
+/* #1294: Trust Level Distribution bars (Overview page) */
+.trust-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+
+.trust-bar-label {
+  flex: 0 0 180px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trust-bar-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.trust-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width var(--duration-normal, 300ms) ease;
+}
+
+.trust-bar-fill.badge-success { background-color: var(--color-success); }
+.trust-bar-fill.badge-info { background-color: var(--color-info); }
+.trust-bar-fill.badge-warning { background-color: var(--color-warning); }
+.trust-bar-fill.badge-error { background-color: var(--color-error); }
+.trust-bar-fill.badge-critical { background-color: var(--color-critical); }
+.trust-bar-fill.badge-dark { background-color: var(--text-muted); }
+
+.trust-bar-count {
+  flex: 0 0 36px;
+  text-align: right;
+  color: #fff;
+  font-weight: 600;
+}
+
 .explore-results {
   display: flex;
   flex-direction: column;
