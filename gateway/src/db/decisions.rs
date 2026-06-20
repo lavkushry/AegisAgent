@@ -166,6 +166,16 @@ pub async fn list_decisions(
 /// seeked via `rowid < cursor` instead of `OFFSET`, and `offset` is ignored
 /// when a cursor is supplied. Returns the page plus the next page's cursor
 /// (`None` at the end of the result set) — see [`super::paginate_rows`].
+///
+/// `q` (#1450), when `Some`, is an already-sanitized SQLite FTS5 MATCH
+/// expression (built by `routes::sanitize_fts5_query` from the raw `?q=`
+/// value) — never raw user input, and only ever bound as a parameter to the
+/// static `MATCH ?` clause below (CWE-89 safe). Matches are looked up via
+/// the shared `audit_search_index` FTS5 table (migration
+/// `0018_fts5_search_index.sql`), scoped to this row's `source_table` and
+/// `tenant_id` so a search can never surface another tenant's or another
+/// source table's rows.
+#[allow(clippy::too_many_arguments)]
 pub async fn list_decisions_cursor(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -174,6 +184,7 @@ pub async fn list_decisions_cursor(
     cursor: Option<i64>,
     agent_id: Option<&str>,
     decision: Option<&str>,
+    q: Option<&str>,
 ) -> Result<(Vec<DecisionRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let rows = sqlx::query(
@@ -183,6 +194,10 @@ pub async fn list_decisions_cursor(
            AND (? IS NULL OR agent_id = ?)
            AND (? IS NULL OR decision = ?)
            AND (? IS NULL OR rowid < ?)
+           AND (? IS NULL OR id IN (
+                 SELECT source_id FROM audit_search_index
+                 WHERE searchable_text MATCH ? AND source_table = 'decisions' AND tenant_id = ?
+               ))
          ORDER BY rowid DESC
          LIMIT ? OFFSET ?",
     )
@@ -193,6 +208,9 @@ pub async fn list_decisions_cursor(
     .bind(decision)
     .bind(cursor)
     .bind(cursor)
+    .bind(q)
+    .bind(q)
+    .bind(tenant_id)
     .bind(limit + 1)
     .bind(if cursor.is_some() { 0 } else { offset })
     .fetch_all(pool)
@@ -453,17 +471,25 @@ pub async fn get_all_audit_events(
 /// [`list_decisions_cursor`].
 const AUDIT_EVENTS_PAGE_LIMIT: i64 = 100;
 
+/// `q` (#1450): see [`list_decisions_cursor`]'s doc comment — same
+/// already-sanitized FTS5 MATCH expression contract, scoped here to
+/// `source_table = 'audit_events'`.
 pub async fn get_all_audit_events_cursor(
     pool: &SqlitePool,
     tenant_id: &str,
     decision_id: Option<&str>,
     cursor: Option<i64>,
+    q: Option<&str>,
 ) -> Result<(Vec<AuditEventRecord>, Option<i64>), sqlx::Error> {
     let rows = sqlx::query(
         "SELECT *, rowid FROM audit_events
          WHERE tenant_id = ?
            AND (? IS NULL OR decision_id = ?)
            AND (? IS NULL OR rowid < ?)
+           AND (? IS NULL OR id IN (
+                 SELECT source_id FROM audit_search_index
+                 WHERE searchable_text MATCH ? AND source_table = 'audit_events' AND tenant_id = ?
+               ))
          ORDER BY rowid DESC
          LIMIT ?",
     )
@@ -472,6 +498,9 @@ pub async fn get_all_audit_events_cursor(
     .bind(decision_id)
     .bind(cursor)
     .bind(cursor)
+    .bind(q)
+    .bind(q)
+    .bind(tenant_id)
     .bind(AUDIT_EVENTS_PAGE_LIMIT + 1)
     .fetch_all(pool)
     .await?;
@@ -650,9 +679,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (page, next_cursor) = list_decisions_cursor(&pool, "tenant_a", 2, 0, None, None, None)
-            .await
-            .unwrap();
+        let (page, next_cursor) =
+            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, None, None, None)
+                .await
+                .unwrap();
         assert_eq!(page.len(), 2);
         assert_eq!(
             next_cursor, None,
@@ -663,12 +693,115 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let (empty_page, empty_cursor) =
-            list_decisions_cursor(&pool, "tenant_a", 2, 0, Some(oldest_rowid), None, None)
-                .await
-                .unwrap();
+        let (empty_page, empty_cursor) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            2,
+            0,
+            Some(oldest_rowid),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(empty_page.is_empty());
         assert_eq!(empty_cursor, None);
+    }
+
+    /// #1450: `?q=` keyword search via the shared FTS5 `audit_search_index`.
+    /// Covers exact-token matching, prefix-matching (the trailing `*` added
+    /// by `routes::sanitize_fts5_query`), and strict tenant isolation (the
+    /// `tenant_id` filter inside the FTS subquery itself, not just the
+    /// outer query's own tenant filter).
+    #[tokio::test]
+    async fn list_decisions_cursor_q_filters_via_fts5_search_index() {
+        let pool = setup_pool("decisions_fts_search").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // `graph_perf_decision` defaults to action "merge_pull_request".
+        insert_decision(&pool, &graph_perf_decision("dec_merge", "tenant_a"))
+            .await
+            .unwrap();
+
+        let mut other_decision = graph_perf_decision("dec_other", "tenant_a");
+        other_decision.action = "read_file".to_string();
+        insert_decision(&pool, &other_decision).await.unwrap();
+
+        // Same searchable action text under a different tenant — must never
+        // leak into tenant_a's results.
+        insert_decision(&pool, &graph_perf_decision("dec_cross_tenant", "tenant_b"))
+            .await
+            .unwrap();
+
+        // Exact-token match.
+        let (page, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            None,
+            None,
+            Some("merge_pull_request*"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "dec_merge");
+
+        // Prefix match — exactly what `sanitize_fts5_query` produces for a
+        // partial term like `?q=mer`.
+        let (prefix_page, _) =
+            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, None, None, Some("mer*"))
+                .await
+                .unwrap();
+        assert_eq!(prefix_page.len(), 1);
+        assert_eq!(prefix_page[0].id, "dec_merge");
+
+        // Tenant isolation: tenant_b's matching row must never appear when
+        // searching as tenant_a, and vice versa.
+        let (tenant_b_page, _) = list_decisions_cursor(
+            &pool,
+            "tenant_b",
+            50,
+            0,
+            None,
+            None,
+            None,
+            Some("merge_pull_request*"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(tenant_b_page.len(), 1);
+        assert_eq!(tenant_b_page[0].id, "dec_cross_tenant");
+
+        // No match.
+        let (no_match, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            None,
+            None,
+            Some("zzzznomatch*"),
+        )
+        .await
+        .unwrap();
+        assert!(no_match.is_empty());
     }
 
     /// Same off-by-one regression as the decisions test above, for
@@ -687,7 +820,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (page, next_cursor) = get_all_audit_events_cursor(&pool, "tenant_a", None, None)
+        let (page, next_cursor) = get_all_audit_events_cursor(&pool, "tenant_a", None, None, None)
             .await
             .unwrap();
         assert_eq!(page.len(), 2);
@@ -695,5 +828,66 @@ mod tests {
             next_cursor, None,
             "exact-boundary page must not claim more rows exist"
         );
+    }
+
+    /// #1450: `?q=` keyword search on `get_all_audit_events_cursor` — same
+    /// exact/prefix/tenant-isolation contract as
+    /// `list_decisions_cursor_q_filters_via_fts5_search_index`, scoped to
+    /// `source_table = 'audit_events'`.
+    #[tokio::test]
+    async fn get_all_audit_events_cursor_q_filters_via_fts5_search_index() {
+        let pool = setup_pool("audit_events_fts_search").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        // `make_audit_event` defaults to action "read" on a "decision" event_type.
+        insert_audit_event(&pool, &make_audit_event("evt_match", "tenant_a"))
+            .await
+            .unwrap();
+
+        let mut other_event = make_audit_event("evt_other", "tenant_a");
+        other_event.event_type = "policy_change".to_string();
+        other_event.action = Some("delete".to_string());
+        insert_audit_event(&pool, &other_event).await.unwrap();
+
+        // Same searchable text under a different tenant — must never leak
+        // into tenant_a's results.
+        insert_audit_event(&pool, &make_audit_event("evt_cross_tenant", "tenant_b"))
+            .await
+            .unwrap();
+
+        // Exact-token match.
+        let (page, _) = get_all_audit_events_cursor(&pool, "tenant_a", None, None, Some("read*"))
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "evt_match");
+
+        // Prefix match.
+        let (prefix_page, _) =
+            get_all_audit_events_cursor(&pool, "tenant_a", None, None, Some("rea*"))
+                .await
+                .unwrap();
+        assert_eq!(prefix_page.len(), 1);
+        assert_eq!(prefix_page[0].id, "evt_match");
+
+        // Tenant isolation.
+        let (tenant_b_page, _) =
+            get_all_audit_events_cursor(&pool, "tenant_b", None, None, Some("read*"))
+                .await
+                .unwrap();
+        assert_eq!(tenant_b_page.len(), 1);
+        assert_eq!(tenant_b_page[0].id, "evt_cross_tenant");
+
+        // No match.
+        let (no_match, _) =
+            get_all_audit_events_cursor(&pool, "tenant_a", None, None, Some("zzzznomatch*"))
+                .await
+                .unwrap();
+        assert!(no_match.is_empty());
     }
 }

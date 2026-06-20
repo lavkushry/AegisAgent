@@ -55,6 +55,8 @@ pub async fn get_timeline(
 ///   has no `limit`/`offset` — it has always returned (up to) the 100 most
 ///   recent matching events; `cursor` only adds the ability to page past
 ///   that first 100.
+///   `q` (#1450) — optional full-text keyword search (FTS5, prefix-matching)
+///   over `event_type`/`skill`/`action`/`resource`/`agent_id`.
 pub async fn get_audit_events(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -65,8 +67,15 @@ pub async fn get_audit_events(
         Ok(c) => c,
         Err(resp) => return *resp,
     };
-    match db::get_all_audit_events_cursor(&state.pool, &tenant_id, decision_id.as_deref(), cursor)
-        .await
+    let q = parse_filter(raw_query.as_deref(), "q").and_then(|raw| sanitize_fts5_query(&raw));
+    match db::get_all_audit_events_cursor(
+        &state.pool,
+        &tenant_id,
+        decision_id.as_deref(),
+        cursor,
+        q.as_deref(),
+    )
+    .await
     {
         Ok((events, next_cursor)) => paginated_response(&events, next_cursor),
         Err(e) => {
@@ -89,6 +98,8 @@ pub async fn get_audit_events(
 ///   when both are supplied.
 ///   `agent_id` — optional equality filter.
 ///   `decision` — optional equality filter.
+///   `q` (#1450) — optional full-text keyword search (FTS5, prefix-matching)
+///   over `skill`/`action`/`resource`/`reason`/`decision`/`agent_id`.
 pub async fn list_decisions(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -101,6 +112,7 @@ pub async fn list_decisions(
     };
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
     let decision = parse_filter(raw_query.as_deref(), "decision");
+    let q = parse_filter(raw_query.as_deref(), "q").and_then(|raw| sanitize_fts5_query(&raw));
 
     match db::list_decisions_cursor(
         &state.pool,
@@ -110,6 +122,7 @@ pub async fn list_decisions(
         cursor,
         agent_id.as_deref(),
         decision.as_deref(),
+        q.as_deref(),
     )
     .await
     {
