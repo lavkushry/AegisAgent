@@ -224,6 +224,17 @@ pub async fn get_approval(
                 .edited_skill_call
                 .as_ref()
                 .and_then(|s| serde_json::from_str(s).ok());
+            // #1326: the *original* frozen tool call and its triggering agent
+            // were stored at approval-creation time but never surfaced over the
+            // API — a human approver had no way to see what they were
+            // approving. Additive fields only; existing consumers are unaffected.
+            let tool_call: Option<AuthorizeToolCall> =
+                serde_json::from_str(&app.original_skill_call).ok();
+            let agent_id = db::get_decision_by_id(&state.pool, &tenant_id, &app.decision_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|d| d.agent_id);
             // A still-pending approval past its window is dead: report EXPIRED so
             // any client (even a forked SDK) fails closed instead of waiting.
             let effective_status = if app.status == "created" && approval_is_expired(&app) {
@@ -240,6 +251,8 @@ pub async fn get_approval(
                     "approver_user_id": app.approver_user_id,
                     "reason": app.reason,
                     "action_hash": app.original_call_hash,
+                    "tool_call": tool_call,
+                    "agent_id": agent_id,
                     "edited_tool_call": edited_call,
                     "expires_at": app.expires_at,
                     "decided_at": app.decided_at,
@@ -800,6 +813,14 @@ pub async fn list_approvals(
 
     match db::list_pending_approvals(&state.pool, &tenant_id, limit, offset).await {
         Ok(approvals) => {
+            // #1326: batch-fetch the originating decisions once (not one query
+            // per approval) purely to surface `agent_id` — a human approver
+            // needs to know which agent is asking, not just an action hash.
+            let decision_ids: Vec<String> =
+                approvals.iter().map(|a| a.decision_id.clone()).collect();
+            let decisions_by_id = db::list_decisions_by_ids(&state.pool, &tenant_id, &decision_ids)
+                .await
+                .unwrap_or_default();
             let mapped: Vec<serde_json::Value> = approvals
                 .into_iter()
                 .map(|app| {
@@ -807,6 +828,9 @@ pub async fn list_approvals(
                         .edited_skill_call
                         .as_ref()
                         .and_then(|s| serde_json::from_str(s).ok());
+                    let tool_call: Option<AuthorizeToolCall> =
+                        serde_json::from_str(&app.original_skill_call).ok();
+                    let agent_id = decisions_by_id.get(&app.decision_id).map(|d| &d.agent_id);
                     let effective_status = if app.status == "created" && approval_is_expired(&app) {
                         "EXPIRED".to_string()
                     } else {
@@ -819,6 +843,8 @@ pub async fn list_approvals(
                         "approver_user_id": app.approver_user_id,
                         "reason": app.reason,
                         "action_hash": app.original_call_hash,
+                        "tool_call": tool_call,
+                        "agent_id": agent_id,
                         "edited_tool_call": edited_call,
                         "expires_at": app.expires_at,
                         "decided_at": app.decided_at,
@@ -1609,6 +1635,114 @@ mod tests {
         let list = json.as_array().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0]["approval_id"].as_str(), Some(approval_id1.as_str()));
+    }
+
+    /// #1326: the dashboard's Approvals queue needs to show a human approver
+    /// *what* they're approving (agent, tool, action, resource) — not just an
+    /// opaque action hash. `agent_id` is resolved from the approval's linked
+    /// decision row; `tool_call` is the original frozen `AuthorizeToolCall`
+    /// that was already stored on the approval but never surfaced over the API.
+    #[tokio::test]
+    async fn test_list_approvals_route_includes_agent_id_and_tool_call() {
+        let (state, tenant_id, agent_token) = setup_state("list_approvals_enriched").await;
+        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_id = agent.id.clone();
+
+        let decision_id = Uuid::new_v4().to_string();
+        let record_dec = DecisionRecord {
+            id: decision_id.clone(),
+            tenant_id: tenant_id.clone(),
+            agent_id: agent_id.clone(),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "github".to_string(),
+            action: "merge_pull_request".to_string(),
+            resource: Some("octocat/demo#42".to_string()),
+            input_json: "{}".to_string(),
+            decision: "require_approval".to_string(),
+            risk_score: None,
+            reason: None,
+            matched_policy_ids: None,
+            request_id: None,
+            latency_ms: None,
+            composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
+            created_at: Utc::now(),
+        };
+        db::insert_decision(&state.pool, &record_dec).await.unwrap();
+
+        let tool_call_json = serde_json::json!({
+            "tool": "github",
+            "action": "merge_pull_request",
+            "resource": "octocat/demo#42",
+            "mutates_state": true,
+            "parameters": {"base_branch": "main"}
+        })
+        .to_string();
+
+        let approval_id = Uuid::new_v4().to_string();
+        let record = ApprovalRecord {
+            id: approval_id.clone(),
+            tenant_id: tenant_id.clone(),
+            decision_id: decision_id.clone(),
+            status: "created".to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: tool_call_json,
+            original_call_hash: "hash1".to_string(),
+            edited_skill_call: None,
+            expires_at: Some(Utc::now() + Duration::minutes(10)),
+            decided_at: None,
+            callback_url: None,
+            callback_secret_hash: None,
+            created_at: Utc::now(),
+        };
+        db::insert_approval(&state.pool, &record).await.unwrap();
+
+        let response = list_approvals(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let list = json.as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["agent_id"].as_str(), Some(agent_id.as_str()));
+        assert_eq!(list[0]["tool_call"]["tool"].as_str(), Some("github"));
+        assert_eq!(
+            list[0]["tool_call"]["action"].as_str(),
+            Some("merge_pull_request")
+        );
+        assert_eq!(
+            list[0]["tool_call"]["resource"].as_str(),
+            Some("octocat/demo#42")
+        );
+
+        // GET /v1/approvals/:id must surface the same enrichment.
+        let single_response = get_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(Uuid::parse_str(&approval_id).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(single_response.status(), StatusCode::OK);
+        let single_body = to_bytes(single_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let single_json: serde_json::Value = serde_json::from_slice(&single_body).unwrap();
+        assert_eq!(single_json["agent_id"].as_str(), Some(agent_id.as_str()));
+        assert_eq!(single_json["tool_call"]["tool"].as_str(), Some("github"));
     }
 
     /// #0145: tenant isolation — an approval created under tenant A is invisible
