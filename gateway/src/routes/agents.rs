@@ -331,11 +331,22 @@ pub async fn delete_agent(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match db::set_agent_status(&state.pool, &tenant_id, &id, "deleted").await {
-        Ok(true) => (
-            StatusCode::OK,
-            Json(json!({"message": "Agent successfully deleted"})),
-        )
-            .into_response(),
+        Ok(true) => {
+            write_admin_action_audit_event(
+                &state.pool,
+                &tenant_id,
+                "agent_deleted",
+                Some(&id),
+                None,
+                json!({"agent_id": id}),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({"message": "Agent successfully deleted"})),
+            )
+                .into_response()
+        }
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "Agent not found"})),
@@ -850,15 +861,26 @@ pub async fn revoke_agent_tool_permission(
     Path((agent_id, tool_key)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match db::revoke_agent_tool_permission(&state.pool, &tenant_id, &agent_id, &tool_key).await {
-        Ok(true) => (
-            StatusCode::OK,
-            Json(json!({
-                "agent_id": agent_id,
-                "tool_key": tool_key,
-                "revoked": true
-            })),
-        )
-            .into_response(),
+        Ok(true) => {
+            write_admin_action_audit_event(
+                &state.pool,
+                &tenant_id,
+                "agent_tool_permission_revoked",
+                Some(&agent_id),
+                Some(&tool_key),
+                json!({"agent_id": agent_id, "tool_key": tool_key}),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "agent_id": agent_id,
+                    "tool_key": tool_key,
+                    "revoked": true
+                })),
+            )
+                .into_response()
+        }
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "Permission not found"})),
@@ -1259,6 +1281,121 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #1157: `DELETE /v1/agents/:id` previously left no audit trail at all.
+    /// Verify a successful delete now writes an `admin_action` audit row.
+    #[tokio::test]
+    async fn delete_agent_route_writes_admin_action_audit_event() {
+        let (state, tenant_id, _agent_token) = setup_state("delete_agent_audit_trail").await;
+
+        let agent = AgentRecord {
+            id: "delete_agent_audit_id".to_string(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "delete-agent-audit-key".to_string(),
+            agent_token: "delete-agent-audit-token".to_string(),
+            name: "Delete Audit Test Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        let response = delete_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("delete_agent_audit_id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        let admin_event = events
+            .iter()
+            .find(|e| {
+                e.event_type == "admin_action" && e.action.as_deref() == Some("agent_deleted")
+            })
+            .expect("expected an admin_action audit event for agent_deleted");
+        assert_eq!(
+            admin_event.agent_id.as_deref(),
+            Some("delete_agent_audit_id")
+        );
+    }
+
+    /// #1157: `DELETE /v1/agents/:id/permissions/:tool_key` previously left no
+    /// audit trail at all. Verify a successful revoke now writes an
+    /// `admin_action` audit row.
+    #[tokio::test]
+    async fn revoke_agent_tool_permission_route_writes_admin_action_audit_event() {
+        let (state, tenant_id, _agent_token) = setup_state("revoke_permission_audit_trail").await;
+
+        let agent = AgentRecord {
+            id: "revoke_permission_agent_id".to_string(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "revoke-permission-agent-key".to_string(),
+            agent_token: "revoke-permission-agent-token".to_string(),
+            name: "Revoke Permission Test Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent.id, "github")
+            .await
+            .unwrap();
+
+        let response = revoke_agent_tool_permission(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path((agent.id.clone(), "github".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        let admin_event = events
+            .iter()
+            .find(|e| {
+                e.event_type == "admin_action"
+                    && e.action.as_deref() == Some("agent_tool_permission_revoked")
+            })
+            .expect("expected an admin_action audit event for agent_tool_permission_revoked");
+        assert_eq!(admin_event.agent_id.as_deref(), Some(agent.id.as_str()));
+        assert_eq!(admin_event.resource.as_deref(), Some("github"));
     }
 
     /// `POST /v1/agents/:id/restore` sets a quarantined agent back to `active`
