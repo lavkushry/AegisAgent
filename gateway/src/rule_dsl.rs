@@ -241,7 +241,7 @@ impl YamlRule {
 /// offending rule's `rule_key` where possible.
 pub fn parse_rules(yaml: &str) -> Result<Vec<YamlRule>, String> {
     let rules: Vec<YamlRule> =
-        serde_yaml::from_str(yaml).map_err(|e| format!("YAML parse error: {e}"))?;
+        serde_yml::from_str(yaml).map_err(|e| format!("YAML parse error: {e}"))?;
     for rule in &rules {
         rule.validate()
             .map_err(|e| format!("rule '{}': {e}", rule.rule_key))?;
@@ -270,7 +270,7 @@ pub fn yaml_rule_from_condition(
     condition_yaml: &str,
     summary_template: &str,
 ) -> Result<YamlRule, String> {
-    let condition: RuleCondition = serde_yaml::from_str(condition_yaml)
+    let condition: RuleCondition = serde_yml::from_str(condition_yaml)
         .map_err(|e| format!("condition: YAML parse error: {e}"))?;
     let rule = YamlRule {
         rule_key: rule_key.to_string(),
