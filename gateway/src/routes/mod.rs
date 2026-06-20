@@ -842,6 +842,53 @@ pub(crate) fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
     })
 }
 
+/// #1157: a couple of destructive/state-changing admin endpoints
+/// (`delete_agent`, `revoke_agent_tool_permission`) wrote no audit trail at
+/// all — unlike their siblings (`freeze_agent`, `quarantine_mcp_server`,
+/// `close_incident`, etc.), which already insert an operation-specific
+/// `event_type` (e.g. `agent_frozen`, `mcp_server_quarantined`,
+/// `incident_closed`) and are left unchanged here to avoid a breaking
+/// rename. This helper gives the previously-uncovered endpoints a single,
+/// filterable `event_type: "admin_action"`, with `action` distinguishing
+/// the specific operation (`GET /v1/audit/events?event_type=admin_action`).
+/// Deliberately excludes `delete_tenant`: a GDPR right-to-erasure delete
+/// that wipes the tenant's own `audit_events` rows can't usefully audit
+/// itself away.
+/// Best-effort (errors are logged, never propagated) — matching every other
+/// audit-write call site in this codebase, since a failed audit write must
+/// never block the admin action it's describing.
+pub(crate) async fn write_admin_action_audit_event(
+    pool: &sqlx::SqlitePool,
+    tenant_id: &str,
+    action: &str,
+    agent_id: Option<&str>,
+    resource: Option<&str>,
+    details: Value,
+) {
+    let audit = AuditEventRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.to_string(),
+        event_type: "admin_action".to_string(),
+        agent_id: agent_id.map(|s| s.to_string()),
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        span_id: None,
+        skill: None,
+        action: Some(action.to_string()),
+        resource: resource.map(|s| s.to_string()),
+        event_json: serde_json::to_string(&details).unwrap_or_default(),
+        input_hash: None,
+        output_hash: None,
+        decision_id: None,
+        approval_id: None,
+        created_at: Utc::now(),
+    };
+    if let Err(e) = db::insert_audit_event(pool, &audit).await {
+        error!("Failed to write admin_action audit event ({action}): {e:?}");
+    }
+}
+
 /// #1450: turns a raw `?q=` value into a safe SQLite FTS5 MATCH expression
 /// for `GET /v1/decisions` / `GET /v1/audit/events` keyword search. Strips
 /// every FTS5 query-syntax metacharacter (quotes, colons, parens, hyphens,
