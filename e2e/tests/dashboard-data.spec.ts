@@ -163,6 +163,57 @@ test.describe("dashboard data views", () => {
     );
   });
 
+  test("Agent Risk Scoreboard: ranks agents, exports CSV, and links to Explore (#1290)", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    // Self-contained: a dedicated agent with 2 decisions, so the
+    // decision_count_24h assertion below is exact regardless of what other
+    // (possibly parallel) tests are doing to the tenant-wide scoreboard.
+    const agentKey = `dashboard-e2e-risk-${Date.now()}`;
+    const agent = await registerTestAgent(request, baseURL!, agentKey);
+    await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey);
+    await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey);
+
+    await page.goto("/dashboard/");
+
+    // Overview: Top 5 Riskiest Agents renders real content, not stuck on
+    // "Loading..." or erroring — which specific 5 agents show up is a
+    // tenant-wide ranking shared with parallel tests, so that's all that's
+    // safe to assert here.
+    await expect(page.locator("#top-risk-agents-container")).not.toContainText(
+      "Loading",
+      { timeout: 10_000 },
+    );
+
+    await page.locator('.menu-item[data-view="risk-scoreboard"]').click();
+    const row = page.locator("#risk-scoreboard-tbody tr", { hasText: agentKey });
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await expect(row).toContainText("2"); // decision_count_24h
+    await expect(row.locator("td", { hasText: /↑|↓|→/ })).toBeVisible();
+
+    // CSV export.
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("#export-risk-scoreboard-csv-btn").click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("agent-risk-scoreboard.csv");
+    const csvPath = await download.path();
+    const csvContent = require("fs").readFileSync(csvPath, "utf-8");
+    expect(csvContent.split("\n")[0]).toBe(
+      "agent_id,agent_key,current_avg_risk_score,decision_count_24h,trend",
+    );
+    expect(csvContent).toContain(agentKey);
+
+    // "View in Explore" navigates and filters by this agent's UUID.
+    await row.locator(".view-agent-explore-btn").click();
+    await expect(page.locator("#view-explore")).toBeVisible();
+    await expect(page.locator("#active-filters-container")).toContainText(agent.id);
+    await expect(page.locator("#explore-tbody")).toContainText(agent.id, {
+      timeout: 10_000,
+    });
+  });
+
   test("Explore view executes a search and renders the decisions table", async ({
     page,
     request,

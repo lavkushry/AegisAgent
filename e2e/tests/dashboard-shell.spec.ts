@@ -67,6 +67,7 @@ test.describe("dashboard shell", () => {
     ["incidents", "Incidents", "#view-incidents"],
     ["approvals", "Approvals", "#view-approvals"],
     ["agents", "Agents Fleet", "#view-agents"],
+    ["risk-scoreboard", "Risk Scoreboard", "#view-risk-scoreboard"],
     ["mcp", "MCP Servers", "#view-mcp"],
     ["receipts", "Integrity Logs", "#view-receipts"],
   ];
