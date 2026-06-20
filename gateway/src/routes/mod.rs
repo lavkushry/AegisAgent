@@ -1829,6 +1829,27 @@ pub mod benchutil {
     }
 }
 
+/// Middleware to append standard Deprecation and Sunset headers to all v1 API responses.
+pub async fn deprecation_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> impl axum::response::IntoResponse {
+    let mut response = next.run(request).await;
+    if let Ok(deprecation_val) = axum::http::HeaderValue::from_str("true") {
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("deprecation"),
+            deprecation_val,
+        );
+    }
+    if let Ok(sunset_val) = axum::http::HeaderValue::from_str("Wed, 31 Dec 2026 23:59:59 GMT") {
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("sunset"),
+            sunset_val,
+        );
+    }
+    response
+}
+
 #[cfg(test)]
 #[cfg(test)]
 #[allow(unused_imports)]
