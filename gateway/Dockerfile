@@ -7,6 +7,11 @@ WORKDIR /build
 ENV CARGO_NET_RETRY=10
 ENV CARGO_HTTP_MULTIPLEXING=false
 
+# #1160: repo-root .cargo/config.toml sets `--cfg tokio_unstable` (needed by
+# the /debug/runtime endpoint's per-worker poll/busy-duration counters) — this
+# build runs `cargo build` from /build (this WORKDIR), mirroring how CI invokes
+# it from the repo root, so the config must land at the same relative path.
+COPY .cargo ./.cargo
 COPY gateway/Cargo.toml gateway/Cargo.lock ./gateway/
 COPY gateway/src ./gateway/src
 COPY gateway/canon ./gateway/canon
