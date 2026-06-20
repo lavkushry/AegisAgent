@@ -1,3 +1,4 @@
+use crate::error::StatusError;
 use axum::{
     body::Body,
     http::{header, HeaderMap, Method, Request, StatusCode},
@@ -41,11 +42,7 @@ pub async fn csrf_validation_middleware(request: Request<Body>, next: Next) -> i
                     // Valid CSRF token, allow request to proceed
                 }
                 _ => {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(json!({"error": "Invalid or missing CSRF token"})),
-                    )
-                        .into_response();
+                    return StatusError::forbidden("Invalid or missing CSRF token").into_response();
                 }
             }
         }

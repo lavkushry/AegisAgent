@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -207,20 +208,12 @@ pub async fn get_graph_for_run(
         Ok(decisions) => decisions,
         Err(e) => {
             error!("Failed to list decisions for run {}: {:?}", run_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
     if decisions.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Run not found"})),
-        )
-            .into_response();
+        return StatusError::not_found("Run not found").into_response();
     }
 
     let mut graph = EvidenceGraph::new();
@@ -279,19 +272,11 @@ pub async fn get_graph_for_incident(
     let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
         Ok(Some(incident)) => incident,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Incident not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("Incident not found").into_response();
         }
         Err(e) => {
             error!("Failed to fetch incident {}: {:?}", incident_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -422,19 +407,11 @@ pub async fn get_graph_for_agent(
     let agent = match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
         Ok(Some(agent)) => agent,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Agent not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("Agent not found").into_response();
         }
         Err(e) => {
             error!("Failed to fetch agent {}: {:?}", agent_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 

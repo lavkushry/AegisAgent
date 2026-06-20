@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use gateway::audit_batch;
 use gateway::db;
+use gateway::error::StatusError;
 use gateway::events;
 use gateway::gh_checks;
 use gateway::gh_comment;
@@ -201,8 +202,7 @@ fn panic_response(
         error!("handler panicked: {}", detail);
         state.metrics.inc_handler_panic();
 
-        let body = Json(json!({"error": "Internal server error"}));
-        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+        StatusError::internal("Internal server error").into_response()
     }
 }
 
@@ -297,10 +297,7 @@ async fn content_type_validation_middleware(
             && content_type.contains("application/x-www-form-urlencoded");
 
         if content_length > 0 && !content_type.contains("application/json") && !is_slack_callback {
-            return (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                Json(json!({"error": "Content-Type must be application/json"})),
-            )
+            return StatusError::unsupported_media_type("Content-Type must be application/json")
                 .into_response();
         }
     }
@@ -351,11 +348,7 @@ async fn etag_middleware(request: Request<Body>, next: Next) -> impl IntoRespons
     let bytes = match axum::body::to_bytes(body, ETAG_MAX_BODY_BYTES).await {
         Ok(bytes) => bytes,
         Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Internal server error"})),
-            )
-                .into_response();
+            return StatusError::internal("Internal server error").into_response();
         }
     };
 
@@ -1854,7 +1847,7 @@ mod tests {
             .await
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["error"], "Internal server error");
+        assert_eq!(parsed["message"], "Internal server error");
 
         assert_eq!(
             state

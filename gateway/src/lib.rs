@@ -19,6 +19,7 @@ pub mod baseline;
 pub mod correlate;
 pub mod db;
 pub mod detect;
+pub mod error;
 pub mod events;
 pub mod gh_checks;
 pub mod gh_comment;
