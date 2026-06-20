@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -65,18 +66,10 @@ pub async fn verify_receipt(
             )
                 .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Receipt not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Receipt not found").into_response(),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -103,11 +96,7 @@ pub async fn list_receipts(
         Ok((receipts, next_cursor)) => paginated_response(&receipts, next_cursor),
         Err(e) => {
             error!("Failed to list receipts: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -120,18 +109,10 @@ pub async fn get_receipt(
 ) -> impl IntoResponse {
     match db::get_action_receipt_by_id(&state.pool, &tenant_id, &id).await {
         Ok(Some(receipt)) => (StatusCode::OK, Json(receipt)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Receipt not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Receipt not found").into_response(),
         Err(e) => {
             error!("Failed to get receipt: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }

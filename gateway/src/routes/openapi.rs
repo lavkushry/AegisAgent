@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use crate::error::{ErrorReason, StatusError};
 use crate::models::*;
 use utoipa::OpenApi;
 
@@ -122,6 +123,8 @@ use utoipa::OpenApi;
             TrustLevelCount,
             crate::risk::RiskWeights,
             crate::risk_escalation::RiskEscalationConfig,
+            StatusError,
+            ErrorReason,
         )
     ),
     modifiers(&SecurityModifier),
@@ -226,7 +229,7 @@ fn list_agents_api() {}
     ),
     responses(
         (status = 200, description = "Agent details", body = AgentRecord),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn get_agent_api() {}
@@ -241,7 +244,7 @@ fn get_agent_api() {}
     request_body = PatchAgentRequest,
     responses(
         (status = 200, description = "Agent updated", body = AgentRecord),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn patch_agent_api() {}
@@ -255,7 +258,7 @@ fn patch_agent_api() {}
     ),
     responses(
         (status = 200, description = "Agent deleted"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn delete_agent_api() {}
@@ -269,7 +272,7 @@ fn delete_agent_api() {}
     ),
     responses(
         (status = 200, description = "Agent frozen"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn freeze_agent_api() {}
@@ -283,7 +286,7 @@ fn freeze_agent_api() {}
     ),
     responses(
         (status = 200, description = "Agent unfrozen"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn unfreeze_agent_api() {}
@@ -297,7 +300,7 @@ fn unfreeze_agent_api() {}
     ),
     responses(
         (status = 200, description = "Agent revoked"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn revoke_agent_api() {}
@@ -311,7 +314,7 @@ fn revoke_agent_api() {}
     ),
     responses(
         (status = 200, description = "Agent restored"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn restore_agent_api() {}
@@ -325,7 +328,7 @@ fn restore_agent_api() {}
     ),
     responses(
         (status = 200, description = "Agent token rotated", body = RegisterAgentResponse),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn rotate_agent_token_api() {}
@@ -339,7 +342,7 @@ fn rotate_agent_token_api() {}
     ),
     responses(
         (status = 200, description = "Token leak reported"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn report_leaked_agent_token_api() {}
@@ -353,7 +356,7 @@ fn report_leaked_agent_token_api() {}
     ),
     responses(
         (status = 200, description = "List of permissions", body = Vec<AgentToolPermission>),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn list_agent_tool_permissions_api() {}
@@ -368,7 +371,7 @@ fn list_agent_tool_permissions_api() {}
     request_body = GrantToolPermissionRequest,
     responses(
         (status = 200, description = "Permission granted"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn grant_agent_tool_permission_api() {}
@@ -383,7 +386,7 @@ fn grant_agent_tool_permission_api() {}
     ),
     responses(
         (status = 200, description = "Permission revoked"),
-        (status = 404, description = "Agent or permission not found")
+        (status = 404, description = "Agent or permission not found", body = StatusError)
     )
 )]
 fn revoke_agent_tool_permission_api() {}
@@ -429,7 +432,7 @@ fn create_mcp_server_api() {}
     ),
     responses(
         (status = 200, description = "MCP server details", body = McpServerRecord),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn get_mcp_server_api() {}
@@ -444,7 +447,7 @@ fn get_mcp_server_api() {}
     request_body = UpdateMcpServerRequest,
     responses(
         (status = 200, description = "MCP server updated", body = McpServerRecord),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn update_mcp_server_api() {}
@@ -458,7 +461,7 @@ fn update_mcp_server_api() {}
     ),
     responses(
         (status = 200, description = "List of tools", body = Vec<McpToolRecord>),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn get_mcp_server_tools_api() {}
@@ -473,7 +476,7 @@ fn get_mcp_server_tools_api() {}
     request_body = DiscoverMcpToolsRequest,
     responses(
         (status = 200, description = "Tools discovered successfully", body = Vec<McpToolStatusResponse>),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn discover_mcp_tools_api() {}
@@ -488,7 +491,7 @@ fn discover_mcp_tools_api() {}
     ),
     responses(
         (status = 200, description = "Tool approved"),
-        (status = 404, description = "Server or tool not found")
+        (status = 404, description = "Server or tool not found", body = StatusError)
     )
 )]
 fn approve_mcp_tool_api() {}
@@ -503,7 +506,7 @@ fn approve_mcp_tool_api() {}
     ),
     responses(
         (status = 200, description = "Tool disabled"),
-        (status = 404, description = "Server or tool not found")
+        (status = 404, description = "Server or tool not found", body = StatusError)
     )
 )]
 fn disable_mcp_tool_api() {}
@@ -517,7 +520,7 @@ fn disable_mcp_tool_api() {}
     ),
     responses(
         (status = 200, description = "MCP Server quarantined"),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn quarantine_mcp_server_api() {}
@@ -531,7 +534,7 @@ fn quarantine_mcp_server_api() {}
     ),
     responses(
         (status = 200, description = "MCP Server restored"),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn restore_mcp_server_api() {}
@@ -545,7 +548,7 @@ fn restore_mcp_server_api() {}
     ),
     responses(
         (status = 200, description = "Manifest drift snapshot history", body = Vec<McpManifestSnapshotRecord>),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn get_mcp_server_manifest_history_api() {}
@@ -560,7 +563,7 @@ fn get_mcp_server_manifest_history_api() {}
     request_body = InspectMcpResponseRequest,
     responses(
         (status = 200, description = "Inspection completed successfully"),
-        (status = 404, description = "Server not found")
+        (status = 404, description = "Server not found", body = StatusError)
     )
 )]
 fn inspect_mcp_response_api() {}
@@ -594,7 +597,7 @@ fn list_decisions_api() {}
     ),
     responses(
         (status = 200, description = "Decision details", body = DecisionRecord),
-        (status = 404, description = "Decision not found")
+        (status = 404, description = "Decision not found", body = StatusError)
     )
 )]
 fn get_decision_api() {}
@@ -628,7 +631,7 @@ fn create_policy_api() {}
     ),
     responses(
         (status = 200, description = "Policy updated successfully", body = PolicyRecord),
-        (status = 404, description = "Policy not found")
+        (status = 404, description = "Policy not found", body = StatusError)
     )
 )]
 fn update_policy_api() {}
@@ -642,7 +645,7 @@ fn update_policy_api() {}
     ),
     responses(
         (status = 200, description = "Policy deleted successfully"),
-        (status = 404, description = "Policy not found")
+        (status = 404, description = "Policy not found", body = StatusError)
     )
 )]
 fn delete_policy_api() {}
@@ -656,7 +659,7 @@ fn delete_policy_api() {}
     ),
     responses(
         (status = 200, description = "Policy rolled back to the previous version", body = PolicyRecord),
-        (status = 404, description = "Policy not found or no archived version to roll back to")
+        (status = 404, description = "Policy not found or no archived version to roll back to", body = StatusError)
     )
 )]
 fn rollback_policy_api() {}
@@ -742,7 +745,7 @@ fn create_webhook_subscription_api() {}
     ),
     responses(
         (status = 200, description = "Webhook subscription deleted successfully"),
-        (status = 404, description = "Subscription not found")
+        (status = 404, description = "Subscription not found", body = StatusError)
     )
 )]
 fn delete_webhook_subscription_api() {}
@@ -776,7 +779,7 @@ fn upsert_detection_rule_api() {}
     ),
     responses(
         (status = 200, description = "Detection rule deleted successfully"),
-        (status = 404, description = "Detection rule not found")
+        (status = 404, description = "Detection rule not found", body = StatusError)
     )
 )]
 fn delete_detection_rule_api() {}
@@ -820,7 +823,7 @@ fn reload_soc_rules_api() {}
     ),
     responses(
         (status = 200, description = "Backtest run completed successfully"),
-        (status = 404, description = "Rule not found")
+        (status = 404, description = "Rule not found", body = StatusError)
     )
 )]
 fn backtest_soc_rule_api() {}
@@ -834,7 +837,7 @@ fn backtest_soc_rule_api() {}
     ),
     responses(
         (status = 200, description = "Run evidence graph details"),
-        (status = 404, description = "Run not found")
+        (status = 404, description = "Run not found", body = StatusError)
     )
 )]
 fn get_graph_for_run_api() {}
@@ -848,7 +851,7 @@ fn get_graph_for_run_api() {}
     ),
     responses(
         (status = 200, description = "Incident evidence graph details"),
-        (status = 404, description = "Incident not found")
+        (status = 404, description = "Incident not found", body = StatusError)
     )
 )]
 fn get_graph_for_incident_api() {}
@@ -862,7 +865,7 @@ fn get_graph_for_incident_api() {}
     ),
     responses(
         (status = 200, description = "Agent-centric evidence graph details"),
-        (status = 404, description = "Agent not found")
+        (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
 fn get_graph_for_agent_api() {}
@@ -896,7 +899,7 @@ fn create_api_key_api() {}
     ),
     responses(
         (status = 200, description = "API key revoked successfully"),
-        (status = 404, description = "API key not found")
+        (status = 404, description = "API key not found", body = StatusError)
     )
 )]
 fn revoke_api_key_api() {}
@@ -920,7 +923,7 @@ fn list_approvals_api() {}
     ),
     responses(
         (status = 200, description = "Approval details", body = ApprovalRecord),
-        (status = 404, description = "Approval not found")
+        (status = 404, description = "Approval not found", body = StatusError)
     )
 )]
 fn get_approval_api() {}
@@ -935,7 +938,7 @@ fn get_approval_api() {}
     request_body = ApproveRequest,
     responses(
         (status = 200, description = "Approved successfully"),
-        (status = 404, description = "Approval not found")
+        (status = 404, description = "Approval not found", body = StatusError)
     )
 )]
 fn approve_approval_api() {}
@@ -950,7 +953,7 @@ fn approve_approval_api() {}
     request_body = ApproveRequest,
     responses(
         (status = 200, description = "Rejected successfully"),
-        (status = 404, description = "Approval not found")
+        (status = 404, description = "Approval not found", body = StatusError)
     )
 )]
 fn reject_approval_api() {}
@@ -965,7 +968,7 @@ fn reject_approval_api() {}
     request_body = EditApprovalRequest,
     responses(
         (status = 200, description = "Approval parameters updated", body = ApprovalRecord),
-        (status = 404, description = "Approval not found")
+        (status = 404, description = "Approval not found", body = StatusError)
     )
 )]
 fn edit_approval_api() {}
@@ -979,7 +982,7 @@ fn edit_approval_api() {}
     ),
     responses(
         (status = 200, description = "Approval consumed successfully"),
-        (status = 404, description = "Approval not found")
+        (status = 404, description = "Approval not found", body = StatusError)
     )
 )]
 fn consume_approval_api() {}
@@ -993,7 +996,7 @@ fn consume_approval_api() {}
     ),
     responses(
         (status = 200, description = "List of timeline events", body = Vec<AuditEventRecord>),
-        (status = 404, description = "Run not found")
+        (status = 404, description = "Run not found", body = StatusError)
     )
 )]
 fn get_timeline_api() {}
@@ -1014,7 +1017,7 @@ fn get_audit_events_api() {}
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "ZIP archive of compliance evidence pack"),
-        (status = 400, description = "Invalid parameters")
+        (status = 400, description = "Invalid parameters", body = StatusError)
     )
 )]
 fn get_evidence_pack_api() {}
@@ -1038,7 +1041,7 @@ fn list_receipts_api() {}
     ),
     responses(
         (status = 200, description = "Receipt details", body = ActionReceiptRecord),
-        (status = 404, description = "Receipt not found")
+        (status = 404, description = "Receipt not found", body = StatusError)
     )
 )]
 fn get_receipt_api() {}
@@ -1052,7 +1055,7 @@ fn get_receipt_api() {}
     ),
     responses(
         (status = 200, description = "Receipt verification status"),
-        (status = 404, description = "Receipt not found")
+        (status = 404, description = "Receipt not found", body = StatusError)
     )
 )]
 fn verify_receipt_api() {}
@@ -1096,7 +1099,7 @@ fn list_incidents_api() {}
     ),
     responses(
         (status = 200, description = "Incident details", body = SocIncidentRecord),
-        (status = 404, description = "Incident not found")
+        (status = 404, description = "Incident not found", body = StatusError)
     )
 )]
 fn get_incident_api() {}
@@ -1110,7 +1113,7 @@ fn get_incident_api() {}
     ),
     responses(
         (status = 200, description = "Incident closed successfully"),
-        (status = 404, description = "Incident not found")
+        (status = 404, description = "Incident not found", body = StatusError)
     )
 )]
 fn close_incident_api() {}
@@ -1124,7 +1127,7 @@ fn close_incident_api() {}
     ),
     responses(
         (status = 200, description = "Incident narrative text"),
-        (status = 404, description = "Incident not found")
+        (status = 404, description = "Incident not found", body = StatusError)
     )
 )]
 fn narrate_incident_api() {}
@@ -1138,7 +1141,7 @@ fn narrate_incident_api() {}
     ),
     responses(
         (status = 200, description = "ZIP archive of incident evidence pack"),
-        (status = 404, description = "Incident not found")
+        (status = 404, description = "Incident not found", body = StatusError)
     )
 )]
 fn get_incident_evidence_pack_api() {}
@@ -1163,8 +1166,8 @@ fn soc_summary_api() {}
     ),
     responses(
         (status = 200, description = "List of semantically similar alerts/incidents"),
-        (status = 400, description = "Empty query parameter"),
-        (status = 501, description = "Semantic search not configured")
+        (status = 400, description = "Empty query parameter", body = StatusError),
+        (status = 501, description = "Semantic search not configured", body = StatusError)
     )
 )]
 fn semantic_search_api() {}
@@ -1189,7 +1192,7 @@ fn create_tenant_api() {}
     ),
     responses(
         (status = 200, description = "Tenant details", body = TenantRecord),
-        (status = 404, description = "Tenant not found")
+        (status = 404, description = "Tenant not found", body = StatusError)
     )
 )]
 fn get_tenant_api() {}
@@ -1203,7 +1206,7 @@ fn get_tenant_api() {}
     ),
     responses(
         (status = 204, description = "Tenant deleted successfully"),
-        (status = 404, description = "Tenant not found")
+        (status = 404, description = "Tenant not found", body = StatusError)
     )
 )]
 fn delete_tenant_api() {}
@@ -1217,7 +1220,7 @@ fn delete_tenant_api() {}
     ),
     responses(
         (status = 200, description = "Tenant data portability export details", body = TenantExport),
-        (status = 404, description = "Tenant not found")
+        (status = 404, description = "Tenant not found", body = StatusError)
     )
 )]
 fn export_tenant_api() {}
@@ -1259,8 +1262,8 @@ fn get_db_stats_api() {}
     request_body = CreateBackupRequest,
     responses(
         (status = 200, description = "Backup created successfully", body = CreateBackupResponse),
-        (status = 400, description = "Invalid filename"),
-        (status = 409, description = "Backup file already exists")
+        (status = 400, description = "Invalid filename", body = StatusError),
+        (status = 409, description = "Backup file already exists", body = StatusError)
     )
 )]
 fn create_db_backup_api() {}

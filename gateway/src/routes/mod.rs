@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -517,7 +518,7 @@ where
     S: Send + Sync,
     Arc<AppState>: axum::extract::FromRef<S>,
 {
-    type Rejection = (StatusCode, Json<serde_json::Value>);
+    type Rejection = StatusError;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
@@ -527,16 +528,10 @@ where
             .headers
             .get("Authorization")
             .and_then(|h| h.to_str().ok())
-            .ok_or((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing Authorization header"})),
-            ))?;
+            .ok_or(StatusError::unauthorized("Missing Authorization header"))?;
 
         if !auth_header.starts_with("Bearer ") {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid Authorization format"})),
-            ));
+            return Err(StatusError::unauthorized("Invalid Authorization format"));
         }
 
         let token = &auth_header["Bearer ".len()..];
@@ -550,22 +545,14 @@ where
                 .map(|v| v == "true")
                 .unwrap_or(false)
             {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid or expired JWT token"})),
-                ));
+                return Err(StatusError::unauthorized("Invalid or expired JWT token"));
             }
 
             // Fallback to old heuristic
             if token.starts_with("tenant_") {
                 token.to_string()
             } else {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(
-                        json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"}),
-                    ),
-                ));
+                return Err(StatusError::unauthorized("Invalid token. Bearer token must start with 'tenant_' when JWT is not required"));
             }
         };
 
@@ -574,16 +561,13 @@ where
 
         match db::get_tenant_by_id(&app_state.pool, &tenant_id).await {
             Ok(Some(_)) => Ok(TenantId(tenant_id)),
-            Ok(None) => Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": format!("Tenant '{}' not found", tenant_id)})),
-            )),
+            Ok(None) => Err(StatusError::not_found(format!(
+                "Tenant '{}' not found",
+                tenant_id
+            ))),
             Err(e) => {
                 error!("Database error checking tenant: {:?}", e);
-                Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error checking tenant"})),
-                ))
+                Err(StatusError::internal("Database error checking tenant"))
             }
         }
     }
@@ -964,15 +948,9 @@ pub(crate) fn parse_cursor(
 ) -> Result<Option<i64>, Box<axum::response::Response>> {
     match parse_filter(query, "cursor") {
         None => Ok(None),
-        Some(raw) => decode_cursor(&raw).map(Some).ok_or_else(|| {
-            Box::new(
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "Invalid cursor"})),
-                )
-                    .into_response(),
-            )
-        }),
+        Some(raw) => decode_cursor(&raw)
+            .map(Some)
+            .ok_or_else(|| Box::new(StatusError::bad_request("Invalid cursor").into_response())),
     }
 }
 

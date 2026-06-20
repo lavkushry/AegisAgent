@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -97,14 +98,11 @@ pub(crate) async fn approval_callback_rate_limit_guard(
         .check_rate_limit(&addr.ip().to_string())
     {
         return Some(
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(json!({
-                    "error": "Too many approval attempts from this IP. Try again later.",
-                    "reason": "rate_limited_ip",
-                })),
+            StatusError::too_many_requests(
+                "Too many approval attempts from this IP. Try again later.",
             )
-                .into_response(),
+            .with_details(serde_json::json!({"reason": "rate_limited_ip"}))
+            .into_response(),
         );
     }
 
@@ -113,14 +111,7 @@ pub(crate) async fn approval_callback_rate_limit_guard(
         .is_blocked(&approval_id.to_string())
     {
         return Some(
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(json!({
-                    "error": "Too many failed attempts for this approval. Try again later.",
-                    "approval_id": approval_id,
-                    "reason": "rate_limited_approval_attempts",
-                })),
-            )
+            StatusError::too_many_requests("Too many failed attempts for this approval. Try again later.").with_details(serde_json::json!({"approval_id": approval_id, "reason": "rate_limited_approval_attempts"}))
                 .into_response(),
         );
     }
@@ -180,34 +171,12 @@ pub(crate) async fn conflict_response_for_failed_transition(
                 Some(&approval.decision_id),
             )
             .await;
-            (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": "Approval has expired",
-                    "approval_id": approval_id,
-                    "reason": "approval_expired",
-                })),
-            )
+            StatusError::conflict("Approval has expired").with_details(serde_json::json!({"approval_id": approval_id, "reason": "approval_expired"}))
                 .into_response()
         }
-        Some(approval) => (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Approval already decided",
-                "status": approval.status,
-                "approval_id": approval_id,
-                "reason": "approval_already_decided",
-            })),
-        )
+        Some(approval) => StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
             .into_response(),
-        None => (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Approval already decided",
-                "approval_id": approval_id,
-                "reason": "approval_already_decided",
-            })),
-        )
+        None => StatusError::conflict("Approval already decided").with_details(serde_json::json!({"approval_id": approval_id, "reason": "approval_already_decided"}))
             .into_response(),
     }
 }
@@ -260,18 +229,10 @@ pub async fn get_approval(
             )
                 .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Approval request not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Approval request not found").into_response(),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -298,11 +259,7 @@ pub async fn consume_approval(
             Ok(c) => c,
             Err(e) => {
                 error!("Failed to consume approval: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
@@ -332,14 +289,11 @@ pub async fn consume_approval(
             bound_decision_id.as_deref(),
         )
         .await;
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Approval not consumable (already used, expired, or not approved)",
-                "approval_id": approval_id,
-            })),
+        return StatusError::conflict(
+            "Approval not consumable (already used, expired, or not approved)",
         )
-            .into_response();
+        .with_details(serde_json::json!({"approval_id": approval_id}))
+        .into_response();
     }
 
     // Return the bound action hash so the SDK can re-verify before executing.
@@ -360,13 +314,7 @@ pub async fn consume_approval(
                     approval_id = %approval_id,
                     "approval_hash_mismatch: claimed hash does not match bound hash"
                 );
-                return (
-                    StatusCode::CONFLICT,
-                    Json(json!({
-                        "error": "Action hash mismatch: the action to be executed differs from the approved action",
-                        "approval_id": approval_id,
-                    })),
-                )
+                return StatusError::conflict("Action hash mismatch: the action to be executed differs from the approved action").with_details(serde_json::json!({"approval_id": approval_id}))
                     .into_response();
             }
         }
@@ -415,33 +363,17 @@ pub(crate) async fn approve_approval_inner(
         match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
             Ok(Some(app)) => app,
             Ok(None) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({"error": "Approval request not found"})),
-                )
-                    .into_response();
+                return StatusError::not_found("Approval request not found").into_response();
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
     // Only a pending approval may be approved (no re-deciding an APPROVED/REJECTED/EDITED one).
     if approval.status != "created" {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Approval already decided",
-                "status": approval.status,
-                "approval_id": approval_id,
-                "reason": "approval_already_decided",
-            })),
-        )
+        return StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
             .into_response();
     }
 
@@ -460,14 +392,10 @@ pub(crate) async fn approve_approval_inner(
             Some(&approval.decision_id),
         )
         .await;
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Approval has expired",
-                "approval_id": approval_id,
-                "reason": "approval_expired",
-            })),
-        )
+        return StatusError::conflict("Approval has expired")
+            .with_details(
+                serde_json::json!({"approval_id": approval_id, "reason": "approval_expired"}),
+            )
             .into_response();
     }
 
@@ -489,11 +417,7 @@ pub(crate) async fn approve_approval_inner(
         Ok(updated) => updated,
         Err(e) => {
             error!("Failed to approve request: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to approve request"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to approve request").into_response();
         }
     };
 
@@ -572,19 +496,11 @@ pub(crate) async fn reject_approval_inner(
         match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
             Ok(Some(app)) => app,
             Ok(None) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({"error": "Approval request not found"})),
-                )
-                    .into_response();
+                return StatusError::not_found("Approval request not found").into_response();
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
@@ -606,11 +522,7 @@ pub(crate) async fn reject_approval_inner(
         Ok(updated) => updated,
         Err(e) => {
             error!("Failed to reject request: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to reject request"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to reject request").into_response();
         }
     };
 
@@ -692,34 +604,18 @@ pub(crate) async fn edit_approval_inner(
         match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
             Ok(Some(app)) => app,
             Ok(None) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({"error": "Approval request not found"})),
-                )
-                    .into_response();
+                return StatusError::not_found("Approval request not found").into_response();
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
     // Only a pending approval may be edited (no editing an APPROVED/REJECTED/
     // already-EDITED/consumed one).
     if approval.status != "created" {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Approval already decided",
-                "status": approval.status,
-                "approval_id": approval_id,
-                "reason": "approval_already_decided",
-            })),
-        )
+        return StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
             .into_response();
     }
 
@@ -747,11 +643,7 @@ pub(crate) async fn edit_approval_inner(
         Ok(updated) => updated,
         Err(e) => {
             error!("Failed to edit approval: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to edit request"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to edit request").into_response();
         }
     };
 
@@ -855,11 +747,7 @@ pub async fn list_approvals(
         }
         Err(e) => {
             error!("Failed to list pending approvals: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -1009,7 +897,7 @@ mod tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["reason"], "approval_expired");
+        assert_eq!(json["details"]["reason"], "approval_expired");
 
         // The stored status must remain "created" — the conditional UPDATE
         // must not have stomped it.
@@ -1061,8 +949,8 @@ mod tests {
         assert_eq!(reject.status(), StatusCode::CONFLICT);
         let body = to_bytes(reject.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["reason"], "approval_already_decided");
-        assert_eq!(json["status"], "APPROVED");
+        assert_eq!(json["details"]["reason"], "approval_already_decided");
+        assert_eq!(json["details"]["status"], "APPROVED");
 
         let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
             .await
@@ -1108,7 +996,7 @@ mod tests {
         assert_eq!(reject.status(), StatusCode::CONFLICT);
         let body = to_bytes(reject.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["reason"], "approval_expired");
+        assert_eq!(json["details"]["reason"], "approval_expired");
 
         let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
             .await
@@ -1165,7 +1053,7 @@ mod tests {
         assert_eq!(edit_resp.status(), StatusCode::CONFLICT);
         let body = to_bytes(edit_resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["reason"], "approval_expired");
+        assert_eq!(json["details"]["reason"], "approval_expired");
 
         let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
             .await
@@ -1234,7 +1122,7 @@ mod tests {
         };
         let body = to_bytes(loser.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["reason"], "approval_already_decided");
+        assert_eq!(json["details"]["reason"], "approval_already_decided");
 
         let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
             .await
@@ -1384,7 +1272,7 @@ mod tests {
                 );
                 let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
                 let json: Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(json["reason"], "rate_limited_ip");
+                assert_eq!(json["details"]["reason"], "rate_limited_ip");
             }
         }
     }
@@ -1439,7 +1327,7 @@ mod tests {
         assert_eq!(reject.status(), StatusCode::TOO_MANY_REQUESTS);
         let body = to_bytes(reject.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["reason"], "rate_limited_ip");
+        assert_eq!(json["details"]["reason"], "rate_limited_ip");
 
         let edited_tool_call = mcp_authorize_request("github", "merge_pull_request").tool_call;
         let edit = edit_approval(
@@ -1459,7 +1347,7 @@ mod tests {
         assert_eq!(edit.status(), StatusCode::TOO_MANY_REQUESTS);
         let body = to_bytes(edit.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["reason"], "rate_limited_ip");
+        assert_eq!(json["details"]["reason"], "rate_limited_ip");
     }
 
     /// #1307 (AC#2): 6 failed approval attempts against the same
@@ -1500,7 +1388,7 @@ mod tests {
                 );
                 let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
                 let json: Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(json["reason"], "rate_limited_approval_attempts");
+                assert_eq!(json["details"]["reason"], "rate_limited_approval_attempts");
             }
         }
     }
@@ -1864,7 +1752,7 @@ mod tests {
 
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(json["reason"], "stale_timestamp");
+        assert_eq!(json["details"]["reason"], "stale_timestamp");
     }
 
     /// #1276: a callback signed with the wrong secret is rejected with `401`
@@ -1896,7 +1784,7 @@ mod tests {
 
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(json["reason"], "invalid_signature");
+        assert_eq!(json["details"]["reason"], "invalid_signature");
     }
 
     /// #1329: a captured valid (timestamp, signature) pair replayed against a
@@ -1936,7 +1824,7 @@ mod tests {
 
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(json["reason"], "invalid_signature");
+        assert_eq!(json["details"]["reason"], "invalid_signature");
     }
 
     /// #1276: a validly-signed callback with `action_id: "approve"` and

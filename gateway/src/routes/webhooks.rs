@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -149,7 +150,7 @@ pub async fn slack_callback(
     body: Bytes,
 ) -> axum::response::Response {
     let Some(secret) = state.slack_signing_secret.as_ref() else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "Not found"}))).into_response();
+        return StatusError::not_found("Not found").into_response();
     };
 
     let timestamp = match headers
@@ -158,13 +159,8 @@ pub async fn slack_callback(
     {
         Some(ts) if slack_timestamp_is_fresh(ts, Utc::now()) => ts,
         _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "missing or stale X-Slack-Request-Timestamp",
-                    "reason": "stale_timestamp",
-                })),
-            )
+            return StatusError::unauthorized("missing or stale X-Slack-Request-Timestamp")
+                .with_details(serde_json::json!({"reason": "stale_timestamp"}))
                 .into_response();
         }
     };
@@ -175,31 +171,19 @@ pub async fn slack_callback(
     {
         Some(sig) if verify_slack_signature(secret, timestamp, &body, sig) => {}
         _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "invalid Slack callback signature",
-                    "reason": "invalid_signature",
-                })),
-            )
+            return StatusError::unauthorized("invalid Slack callback signature")
+                .with_details(serde_json::json!({"reason": "invalid_signature"}))
                 .into_response();
         }
     }
 
     let Some(payload_json) = extract_slack_payload_field(&body) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "missing or invalid 'payload' field"})),
-        )
-            .into_response();
+        return StatusError::bad_request("missing or invalid 'payload' field").into_response();
     };
     let payload: Value = match serde_json::from_str(&payload_json) {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("invalid 'payload' JSON: {}", e)})),
-            )
+            return StatusError::bad_request(format!("invalid 'payload' JSON: {}", e))
                 .into_response();
         }
     };
@@ -223,19 +207,12 @@ pub async fn slack_callback(
         Some((tenant_id, approval_id)) => match Uuid::parse_str(approval_id) {
             Ok(id) => (tenant_id.to_string(), id),
             Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "invalid approval id in callback value"})),
-                )
+                return StatusError::bad_request("invalid approval id in callback value")
                     .into_response();
             }
         },
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "missing or malformed callback value"})),
-            )
-                .into_response();
+            return StatusError::bad_request("missing or malformed callback value").into_response();
         }
     };
 
@@ -252,11 +229,7 @@ pub async fn slack_callback(
             reject_approval_inner(state.clone(), tenant_id, approval_id, decision_payload).await
         }
         _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "unsupported action_id"})),
-            )
-                .into_response();
+            return StatusError::bad_request("unsupported action_id").into_response();
         }
     };
     record_approval_attempt_failure(&state, &response, &approval_id);
@@ -288,11 +261,7 @@ pub async fn ingest_event(
     let payload: IngestRequest = match serde_json::from_slice(&body) {
         Ok(payload) => payload,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("invalid JSON body: {}", e)})),
-            )
-                .into_response();
+            return StatusError::bad_request(format!("invalid JSON body: {}", e)).into_response();
         }
     };
 
@@ -304,24 +273,14 @@ pub async fn ingest_event(
         if let Some(secret) = state.github_webhook_secret.as_ref() {
             match headers.get("X-Hub-Signature-256") {
                 None => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(json!({
-                            "error": "missing X-Hub-Signature-256 header",
-                            "reason": "missing_signature",
-                        })),
-                    )
+                    return StatusError::unauthorized("missing X-Hub-Signature-256 header")
+                        .with_details(serde_json::json!({"reason": "missing_signature"}))
                         .into_response();
                 }
                 Some(sig_header) => {
                     if !verify_github_webhook_signature(secret, &body, sig_header) {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({
-                                "error": "invalid webhook signature",
-                                "reason": "invalid_signature",
-                            })),
-                        )
+                        return StatusError::unauthorized("invalid webhook signature")
+                            .with_details(serde_json::json!({"reason": "invalid_signature"}))
                             .into_response();
                     }
                 }
@@ -330,21 +289,13 @@ pub async fn ingest_event(
     }
 
     match crate::ingest::normalize(&tenant_id, &payload.source, &payload.payload) {
-        Err(()) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": format!(
-                    "unsupported ingest source '{}'; supported: {:?}",
-                    payload.source,
-                    crate::ingest::SUPPORTED_SOURCES
-                )
-            })),
-        )
-            .into_response(),
-        Ok(None) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "payload could not be normalized for this source"})),
-        )
+        Err(()) => StatusError::bad_request(format!(
+            "unsupported ingest source '{}'; supported: {:?}",
+            payload.source,
+            crate::ingest::SUPPORTED_SOURCES
+        ))
+        .into_response(),
+        Ok(None) => StatusError::bad_request("payload could not be normalized for this source")
             .into_response(),
         Ok(Some(event)) => {
             let event_id = event.event_id.clone();
@@ -381,11 +332,7 @@ pub async fn receive_github_webhook(
     let tenant_id = match get_runtime_tenant_from_headers(&headers) {
         Some(t) => t,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "missing X-Aegis-Tenant-ID header"})),
-            )
-                .into_response();
+            return StatusError::bad_request("missing X-Aegis-Tenant-ID header").into_response();
         }
     };
 
@@ -393,35 +340,22 @@ pub async fn receive_github_webhook(
     // the secret is not configured so the endpoint cannot be used accidentally.
     match state.github_webhook_secret.as_ref() {
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "webhook not configured: AEGIS_GITHUB_WEBHOOK_SECRET is not set",
-                    "reason": "webhook_not_configured",
-                })),
+            return StatusError::unauthorized(
+                "webhook not configured: AEGIS_GITHUB_WEBHOOK_SECRET is not set",
             )
-                .into_response();
+            .with_details(serde_json::json!({"reason": "webhook_not_configured"}))
+            .into_response();
         }
         Some(secret) => match headers.get("X-Hub-Signature-256") {
             None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "error": "missing X-Hub-Signature-256 header",
-                        "reason": "missing_signature",
-                    })),
-                )
+                return StatusError::unauthorized("missing X-Hub-Signature-256 header")
+                    .with_details(serde_json::json!({"reason": "missing_signature"}))
                     .into_response();
             }
             Some(sig_header) => {
                 if !verify_github_webhook_signature(secret, &body, sig_header) {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(json!({
-                            "error": "invalid webhook signature",
-                            "reason": "invalid_signature",
-                        })),
-                    )
+                    return StatusError::unauthorized("invalid webhook signature")
+                        .with_details(serde_json::json!({"reason": "invalid_signature"}))
                         .into_response();
                 }
             }
@@ -432,13 +366,8 @@ pub async fn receive_github_webhook(
     let event_type = match headers.get("X-GitHub-Event").and_then(|h| h.to_str().ok()) {
         Some(et) => et.to_string(),
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "missing X-GitHub-Event header",
-                    "reason": "missing_event_type",
-                })),
-            )
+            return StatusError::bad_request("missing X-GitHub-Event header")
+                .with_details(serde_json::json!({"reason": "missing_event_type"}))
                 .into_response();
         }
     };
@@ -447,11 +376,7 @@ pub async fn receive_github_webhook(
     let payload: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("invalid JSON body: {}", e)})),
-            )
-                .into_response();
+            return StatusError::bad_request(format!("invalid JSON body: {}", e)).into_response();
         }
     };
 
@@ -490,19 +415,11 @@ pub async fn create_webhook_subscription(
 ) -> impl IntoResponse {
     let min_severity = payload.min_severity.unwrap_or_else(|| "info".to_string());
     if min_severity != "info" && min_severity != "high" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "min_severity must be 'info' or 'high'"})),
-        )
-            .into_response();
+        return StatusError::bad_request("min_severity must be 'info' or 'high'").into_response();
     }
     let format = payload.format.unwrap_or_else(|| "json".to_string());
     if format != "json" && format != "cef" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "format must be 'json' or 'cef'"})),
-        )
-            .into_response();
+        return StatusError::bad_request("format must be 'json' or 'cef'").into_response();
     }
 
     let secret_hash = payload.secret.as_ref().map(|s| sha256_hex(s.as_bytes()));
@@ -541,11 +458,7 @@ pub async fn create_webhook_subscription(
             .into_response(),
         Err(e) => {
             error!("Failed to create webhook subscription: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -559,11 +472,7 @@ pub async fn list_webhook_subscriptions(
         Ok(subs) => (StatusCode::OK, Json(subs)).into_response(),
         Err(e) => {
             error!("Failed to list webhook subscriptions: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -580,18 +489,10 @@ pub async fn delete_webhook_subscription(
             Json(json!({"message": "Webhook subscription successfully deleted"})),
         )
             .into_response(),
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Webhook subscription not found"})),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("Webhook subscription not found").into_response(),
         Err(e) => {
             error!("Failed to delete webhook subscription: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -798,7 +699,7 @@ mod tests {
 
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(json["reason"], "invalid_signature");
+        assert_eq!(json["details"]["reason"], "invalid_signature");
     }
 
     /// #1339: a `github_webhook` ingest request with NO
@@ -832,7 +733,7 @@ mod tests {
 
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(json["reason"], "missing_signature");
+        assert_eq!(json["details"]["reason"], "missing_signature");
     }
 
     /// #1339 (AC#4): a `github_webhook` ingest request with a VALID signature
@@ -1023,7 +924,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["reason"], "invalid_signature");
+        assert_eq!(v["details"]["reason"], "invalid_signature");
     }
 
     #[tokio::test]
@@ -1050,7 +951,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["reason"], "missing_signature");
+        assert_eq!(v["details"]["reason"], "missing_signature");
     }
 
     #[tokio::test]
@@ -1077,7 +978,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["reason"], "webhook_not_configured");
+        assert_eq!(v["details"]["reason"], "webhook_not_configured");
     }
 
     #[tokio::test]
@@ -1105,7 +1006,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["reason"], "missing_event_type");
+        assert_eq!(v["details"]["reason"], "missing_event_type");
     }
 
     #[tokio::test]

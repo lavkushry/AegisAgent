@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -62,11 +63,7 @@ pub async fn get_timeline(
         Ok(events) => (StatusCode::OK, Json(events)).into_response(),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -104,11 +101,7 @@ pub async fn get_audit_events(
         Ok((events, next_cursor)) => paginated_response(&events, next_cursor),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -153,11 +146,7 @@ pub async fn list_decisions(
         Ok((decisions, next_cursor)) => paginated_response(&decisions, next_cursor),
         Err(e) => {
             error!("Failed to list decisions: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -170,18 +159,10 @@ pub async fn get_decision(
 ) -> impl IntoResponse {
     match db::get_decision_by_id(&state.pool, &tenant_id, &id).await {
         Ok(Some(decision)) => (StatusCode::OK, Json(decision)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Decision not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Decision not found").into_response(),
         Err(e) => {
             error!("Failed to get decision: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -214,11 +195,7 @@ pub async fn upsert_detection_rule(
         Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(e) => {
             error!("Failed to upsert detection rule: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -232,11 +209,7 @@ pub async fn list_detection_rules(
         Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -298,11 +271,7 @@ pub async fn get_soc_rules(
         Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -336,19 +305,12 @@ pub async fn backtest_soc_rule(
         Ok(rules) => rules,
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
     let Some(effective_rule) = rules.into_iter().find(|r| r.rule.rule_key == rule_key) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": format!("No effective rule with rule_key '{rule_key}'")})),
-        )
+        return StatusError::not_found(format!("No effective rule with rule_key '{rule_key}'"))
             .into_response();
     };
 
@@ -356,11 +318,7 @@ pub async fn backtest_soc_rule(
         Ok(decisions) => decisions,
         Err(e) => {
             error!("Failed to list decisions for backtest: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -393,11 +351,7 @@ pub async fn create_soc_rule(
         &payload.condition,
         &payload.summary_template,
     ) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("Invalid detection rule: {e}")})),
-        )
-            .into_response();
+        return StatusError::bad_request(format!("Invalid detection rule: {e}")).into_response();
     }
 
     match db::upsert_detection_rule(
@@ -415,11 +369,7 @@ pub async fn create_soc_rule(
         Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(e) => {
             error!("Failed to upsert detection rule: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -450,18 +400,10 @@ pub async fn delete_detection_rule(
             Json(json!({"message": "Detection rule successfully deleted"})),
         )
             .into_response(),
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Detection rule not found"})),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("Detection rule not found").into_response(),
         Err(e) => {
             error!("Failed to delete detection rule: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -518,11 +460,7 @@ pub async fn list_alerts(
         Ok((alerts, next_cursor)) => paginated_response(&alerts, next_cursor),
         Err(e) => {
             error!("Failed to list SOC alerts: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -644,11 +582,7 @@ pub async fn list_incidents(
         Ok((incidents, next_cursor)) => paginated_response(&incidents, next_cursor),
         Err(e) => {
             error!("Failed to list SOC incidents: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -730,18 +664,10 @@ pub async fn get_incident(
 ) -> impl IntoResponse {
     match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
         Ok(Some(incident)) => (StatusCode::OK, Json(incident)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Incident not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Incident not found").into_response(),
         Err(e) => {
             error!("Failed to fetch SOC incident {}: {:?}", incident_id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -761,11 +687,7 @@ pub async fn soc_summary(
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(e) => {
             error!("Failed to compute SOC summary: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -784,21 +706,16 @@ pub async fn semantic_search(
     axum::extract::Query(params): axum::extract::Query<SemanticSearchParams>,
 ) -> impl IntoResponse {
     if params.query.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Query parameter cannot be empty"})),
-        )
-            .into_response();
+        return StatusError::bad_request("Query parameter cannot be empty").into_response();
     }
 
     let exporter = match &state.qdrant_exporter {
         Some(exp) => exp,
         None => {
-            return (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(json!({"error": "Qdrant semantic search is not configured on this gateway"})),
+            return StatusError::not_implemented(
+                "Qdrant semantic search is not configured on this gateway",
             )
-                .into_response();
+            .into_response();
         }
     };
 
@@ -811,11 +728,7 @@ pub async fn semantic_search(
         Ok(results) => (StatusCode::OK, Json(results)).into_response(),
         Err(e) => {
             error!("Semantic search failed: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Semantic search error: {}", e)})),
-            )
-                .into_response()
+            StatusError::internal(format!("Semantic search error: {}", e)).into_response()
         }
     }
 }
@@ -846,19 +759,11 @@ pub async fn close_incident(
     let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
         Ok(Some(inc)) => inc,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Incident not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("Incident not found").into_response();
         }
         Err(e) => {
             error!("Failed to fetch incident for close: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -881,11 +786,7 @@ pub async fn close_incident(
         Ok(b) => b,
         Err(e) => {
             error!("Failed to close incident {}: {:?}", incident_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -903,11 +804,7 @@ pub async fn close_incident(
                 })),
             )
                 .into_response(),
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response(),
+            _ => StatusError::internal("Database error").into_response(),
         };
     }
 
@@ -997,19 +894,11 @@ pub async fn narrate_incident(
     let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
         Ok(Some(inc)) => inc,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Incident not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("Incident not found").into_response();
         }
         Err(e) => {
             error!("Failed to fetch incident for narration: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -1053,19 +942,11 @@ pub async fn get_incident_evidence_pack(
     let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
         Ok(Some(inc)) => inc,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Incident not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("Incident not found").into_response();
         }
         Err(e) => {
             error!("Failed to fetch incident for evidence pack: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -1077,11 +958,7 @@ pub async fn get_incident_evidence_pack(
             Ok(rows) => rows,
             Err(e) => {
                 error!("Failed to load alerts for evidence pack: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
@@ -1108,11 +985,7 @@ pub async fn get_incident_evidence_pack(
         Ok(map) => map.into_values().collect::<Vec<_>>(),
         Err(e) => {
             error!("Failed to load receipts for evidence pack: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -1121,11 +994,7 @@ pub async fn get_incident_evidence_pack(
             Ok(rows) => rows,
             Err(e) => {
                 error!("Failed to load audit events for evidence pack: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
@@ -1144,11 +1013,7 @@ pub async fn get_incident_evidence_pack(
         Ok(bytes) => bytes,
         Err(e) => {
             error!("Failed to build incident evidence pack zip: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to build evidence pack"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to build evidence pack").into_response();
         }
     };
 
@@ -1235,19 +1100,14 @@ pub async fn ws_events(
             .map(|v| v == "true")
             .unwrap_or(false)
         {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid or expired JWT token"})),
-            )
-                .into_response();
+            return StatusError::unauthorized("Invalid or expired JWT token").into_response();
         } else if token.starts_with("tenant_") {
             token.to_string()
         } else {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid token. Query token must start with 'tenant_' when JWT is not required"})),
+            return StatusError::unauthorized(
+                "Invalid token. Query token must start with 'tenant_' when JWT is not required",
             )
-                .into_response();
+            .into_response();
         }
     } else {
         let auth_header = headers.get("Authorization").and_then(|h| h.to_str().ok());
@@ -1259,33 +1119,22 @@ pub async fn ws_events(
                     .map(|v| v == "true")
                     .unwrap_or(false)
                 {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(json!({"error": "Invalid or expired JWT token"})),
-                    )
+                    return StatusError::unauthorized("Invalid or expired JWT token")
                         .into_response();
                 } else if token.starts_with("tenant_") {
                     token.to_string()
                 } else {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"})),
-                    )
+                    return StatusError::unauthorized("Invalid token. Bearer token must start with 'tenant_' when JWT is not required")
                         .into_response();
                 }
             } else {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid Authorization format"})),
-                )
-                    .into_response();
+                return StatusError::unauthorized("Invalid Authorization format").into_response();
             }
         } else {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing authentication. A valid token or JWT must be provided."})),
+            return StatusError::unauthorized(
+                "Missing authentication. A valid token or JWT must be provided.",
             )
-                .into_response();
+            .into_response();
         }
     };
 
@@ -1986,7 +1835,7 @@ mod tests {
             StatusCode::NOT_FOUND,
             "must not expose another tenant's incident"
         );
-        assert!(json["error"].as_str().is_some());
+        assert!(json["message"].as_str().is_some());
     }
 
     /// A second `POST /v1/incidents/:id/close` is idempotent — returns 200 with
@@ -2051,7 +1900,7 @@ mod tests {
 
         let (status, json) = do_get_incident(state, &tenant_id, "does_not_exist").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert!(json["error"].as_str().is_some());
+        assert!(json["message"].as_str().is_some());
     }
 
     /// GET /v1/incidents/:id returns 404 when the incident belongs to a different
@@ -2650,7 +2499,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            json["error"],
+            json["message"],
             "Qdrant semantic search is not configured on this gateway"
         );
     }
@@ -2673,6 +2522,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "Query parameter cannot be empty");
+        assert_eq!(json["message"], "Query parameter cannot be empty");
     }
 }

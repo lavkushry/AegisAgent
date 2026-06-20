@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -110,13 +111,7 @@ pub async fn authorize_action(
     // Parse JSON from raw bytes — keeping bytes for HMAC signature verification (#1403).
     let payload: AuthorizeRequest = match serde_json::from_slice(&body) {
         Ok(p) => p,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid JSON body"})),
-            )
-                .into_response()
-        }
+        Err(_) => return StatusError::bad_request("Invalid JSON body").into_response(),
     };
 
     // #1281: dry-run / simulation mode — evaluate but persist nothing. Read
@@ -141,41 +136,24 @@ pub async fn authorize_action(
     // Resolve agent from Bearer agent_token
     let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
         Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing agent token"})),
-            )
-                .into_response()
-        }
+        _ => return StatusError::unauthorized("Missing agent token").into_response(),
     };
 
     let runtime_tenant_id = match get_runtime_tenant_from_headers(&headers) {
         Some(tid) => tid,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Missing X-Aegis-Tenant-ID or X-Tenant-ID header"})),
-            )
+            return StatusError::bad_request("Missing X-Aegis-Tenant-ID or X-Tenant-ID header")
                 .into_response()
         }
     };
     let agent = match db::get_agent_by_token(&state.pool, &runtime_tenant_id, auth_header).await {
         Ok(Some(a)) => a,
         Ok(None) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid or quarantined agent token"})),
-            )
-                .into_response()
+            return StatusError::unauthorized("Invalid or quarantined agent token").into_response()
         }
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -197,11 +175,7 @@ pub async fn authorize_action(
                     "Request signature missing for agent={} tenant={}",
                     agent_id, tenant_id
                 );
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "missing_request_signature"})),
-                )
-                    .into_response();
+                return StatusError::unauthorized("missing_request_signature").into_response();
             }
         };
         if !db::verify_request_signature(signing_key, &body, &sig_header) {
@@ -209,11 +183,7 @@ pub async fn authorize_action(
                 "Request signature invalid for agent={} tenant={}",
                 agent_id, tenant_id
             );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "invalid_request_signature"})),
-            )
-                .into_response();
+            return StatusError::unauthorized("invalid_request_signature").into_response();
         }
     }
 
@@ -272,11 +242,7 @@ pub async fn authorize_action(
         Ok(_) => {} // None = unrestricted; Some(true) = permitted
         Err(e) => {
             error!("DB error checking tool permissions: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     }
 
@@ -301,13 +267,8 @@ pub async fn authorize_action(
                     "Replay protection: rejecting request with stale timestamp for tenant={} agent={} (age={}s)",
                     tenant_id, agent_id, age_secs
                 );
-                return (
-                    StatusCode::CONFLICT,
-                    Json(json!({
-                        "error": "Request timestamp outside the acceptable window",
-                        "reason": "replay_timestamp_expired"
-                    })),
-                )
+                return StatusError::conflict("Request timestamp outside the acceptable window")
+                    .with_details(serde_json::json!({"reason": "replay_timestamp_expired"}))
                     .into_response();
             }
         }
@@ -324,13 +285,8 @@ pub async fn authorize_action(
                 "Replay protection: rejecting duplicate nonce for tenant={} agent={}",
                 tenant_id, agent_id
             );
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": "Duplicate nonce: possible replay attack",
-                    "reason": "replay_nonce_reused"
-                })),
-            )
+            return StatusError::conflict("Duplicate nonce: possible replay attack")
+                .with_details(serde_json::json!({"reason": "replay_nonce_reused"}))
                 .into_response();
         }
     }
@@ -358,11 +314,7 @@ pub async fn authorize_action(
                 Ok(None) => {}
                 Err(e) => {
                     error!("Idempotency lookup failed: {:?}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": "Database error"})),
-                    )
-                        .into_response();
+                    return StatusError::internal("Database error").into_response();
                 }
             }
         }
@@ -374,20 +326,13 @@ pub async fn authorize_action(
 
     // Check Rate Limiting (TASK-0012)
     if !state.rate_limiter.check_rate_limit(&tenant_id) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({"error": "Too many requests. Rate limit exceeded."})),
-        )
+        return StatusError::too_many_requests("Too many requests. Rate limit exceeded.")
             .into_response();
     }
 
     // Check Request Quota (TASK-0013)
     if !state.quota_manager.check_quota(&tenant_id) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({"error": "Request quota exceeded."})),
-        )
-            .into_response();
+        return StatusError::too_many_requests("Request quota exceeded.").into_response();
     }
 
     // Check if the agent is frozen or revoked (TASK-0014)
@@ -429,11 +374,7 @@ pub async fn authorize_action(
             Ok(score) => score,
             Err(e) => {
                 error!("Failed to write agent-frozen denial: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
@@ -486,11 +427,7 @@ pub async fn authorize_action(
             Ok(None) => None,
             Err(e) => {
                 error!("Failed to look up registered action: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         },
     };
@@ -544,11 +481,7 @@ pub async fn authorize_action(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write quarantined-server denial: {:?}", e);
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({"error": "Database error"})),
-                        )
-                            .into_response();
+                        return StatusError::internal("Database error").into_response();
                     }
                 };
 
@@ -573,11 +506,7 @@ pub async fn authorize_action(
             Ok(_) => {}
             Err(e) => {
                 error!("Failed to look up MCP server status: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         }
 
@@ -618,11 +547,7 @@ pub async fn authorize_action(
                         Ok(score) => score,
                         Err(e) => {
                             error!("Failed to write MCP denial decision: {:?}", e);
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({"error": "Database error"})),
-                            )
-                                .into_response();
+                            return StatusError::internal("Database error").into_response();
                         }
                     };
 
@@ -677,11 +602,7 @@ pub async fn authorize_action(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write unknown MCP denial decision: {:?}", e);
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({"error": "Database error"})),
-                        )
-                            .into_response();
+                        return StatusError::internal("Database error").into_response();
                     }
                 };
 
@@ -705,11 +626,7 @@ pub async fn authorize_action(
             }
             Err(e) => {
                 error!("Failed to look up MCP tool: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         }
     }
@@ -734,10 +651,7 @@ pub async fn authorize_action(
             Ok(d) => d,
             Err(e) => {
                 error!("Policy engine error: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": format!("Policy engine failure: {}", e)})),
-                )
+                return StatusError::internal(format!("Policy engine failure: {}", e))
                     .into_response();
             }
         };
@@ -1005,11 +919,7 @@ pub async fn authorize_action(
 
         if let Err(e) = db::insert_approval(&state.pool, &approval_record).await {
             error!("Failed to create approval request: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to create approval request"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to create approval request").into_response();
         }
 
         // Write audit event for approval creation
@@ -1302,8 +1212,8 @@ mod tests {
         let (mut parts_invalid, _) = request_invalid.into_parts();
         let res = TenantId::from_request_parts(&mut parts_invalid, &state).await;
         assert!(res.is_err());
-        let (status, _) = res.unwrap_err();
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let err = res.unwrap_err();
+        assert_eq!(err.code, StatusCode::UNAUTHORIZED.as_u16());
 
         // Clean up env vars
         std::env::remove_var("AEGIS_JWT_SECRET");
@@ -1341,10 +1251,10 @@ mod tests {
         let (mut parts_bad, _) = request_bad_heuristic.into_parts();
         let res_bad = TenantId::from_request_parts(&mut parts_bad, &state).await;
         assert!(res_bad.is_err());
-        let (status, body) = res_bad.unwrap_err();
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let err_bad = res_bad.unwrap_err();
+        assert_eq!(err_bad.code, StatusCode::UNAUTHORIZED.as_u16());
         assert_eq!(
-            body["error"],
+            err_bad.message,
             "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"
         );
 
@@ -1383,7 +1293,7 @@ mod tests {
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(
-            json["error"],
+            json["message"],
             "Missing X-Aegis-Tenant-ID or X-Tenant-ID header"
         );
     }
@@ -3040,7 +2950,7 @@ mod tests {
 
         let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["reason"], "replay_nonce_reused");
+        assert_eq!(parsed["details"]["reason"], "replay_nonce_reused");
     }
 
     /// #1306 AC #3: a request with `nonce` set and a `timestamp` more than 5
@@ -3065,7 +2975,7 @@ mod tests {
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["reason"], "replay_timestamp_expired");
+        assert_eq!(parsed["details"]["reason"], "replay_timestamp_expired");
     }
 
     /// #1306: two requests with different nonces (both fresh timestamps) are
@@ -3167,7 +3077,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["error"], "missing_request_signature");
+        assert_eq!(v["message"], "missing_request_signature");
     }
 
     #[tokio::test]
@@ -3190,7 +3100,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["error"], "invalid_request_signature");
+        assert_eq!(v["message"], "invalid_request_signature");
     }
 
     #[tokio::test]
@@ -3217,7 +3127,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["error"], "invalid_request_signature");
+        assert_eq!(v["message"], "invalid_request_signature");
     }
 
     #[tokio::test]
@@ -5062,7 +4972,7 @@ mod tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "Tenant 'tenant_nonexistent_xyz' not found");
+        assert_eq!(json["message"], "Tenant 'tenant_nonexistent_xyz' not found");
     }
 
     /// #1167: 100 tenants are created concurrently, each with its own agent,
