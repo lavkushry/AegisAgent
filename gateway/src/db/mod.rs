@@ -91,6 +91,10 @@ where
 pub const SOC_DEFAULT_LIMIT: i64 = 50;
 /// Hard cap to prevent accidentally returning enormous result sets.
 pub const SOC_MAX_LIMIT: i64 = 200;
+/// Per-poll batch cap for `GET /v1/alerts|incidents?watch=true` (#1146)'s
+/// forward-watch queries — bounds how many new rows one SSE poll tick can
+/// push at once.
+pub const SOC_WATCH_BATCH_LIMIT: i64 = 100;
 
 /// #1142: maps a fetched page of `SqliteRow`s (each carrying a trailing
 /// `rowid` column, selected explicitly by every cursor-paginated query) into

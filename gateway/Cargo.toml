@@ -49,10 +49,16 @@ unicode-normalization = "0.1.25"
 # Compliance Evidence Pack export (#1298): in-memory ZIP construction for
 # GET /v1/compliance/evidence-pack.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# SSE watch-mode streams (#1146): `stream::unfold` adapts an mpsc::Receiver
+# into a Stream for axum's `Sse` response, without pulling in tokio-stream as
+# a second stream-adapter crate. Already present as a transitive dependency
+# (and previously a direct dev-dependency for WS tests) — promoted to a
+# direct runtime dependency with its existing locked version, same precedent
+# as the percent-encoding/unicode-normalization promotions above.
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"
-futures-util = "0.3"
 # TASK-1313: end-to-end /v1/authorize criterion benchmark. `async_tokio`
 # enables `Bencher::to_async`/`iter` against a `tokio::runtime::Runtime` so we
 # can benchmark the real (async) `authorize_action` handler.
