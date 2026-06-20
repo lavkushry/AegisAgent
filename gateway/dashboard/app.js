@@ -21,6 +21,7 @@
     mcpServers: [],
     receipts: [],
     selectedIncident: null,
+    selectedMcpServerKey: null,
     
     // Explore View Filters
     searchQuery: "",
@@ -112,9 +113,23 @@
     // Fleet / Agents List
     agentsTbody: document.getElementById("agents-tbody"),
     
-    // MCP Server List
+    // MCP Server List & Detail (#1334)
+    mcpListContainer: document.getElementById("mcp-list-container"),
     mcpServersTbody: document.getElementById("mcp-servers-tbody"),
-    
+    mcpDetailContainer: document.getElementById("mcp-detail-container"),
+    backToMcpBtn: document.getElementById("back-to-mcp-btn"),
+    mcpDetailServerKey: document.getElementById("mcp-detail-server-key"),
+    mcpDetailStatus: document.getElementById("mcp-detail-status"),
+    mcpDetailToolsTbody: document.getElementById("mcp-detail-tools-tbody"),
+    mcpDetailHistoryTbody: document.getElementById("mcp-detail-history-tbody"),
+    mcpDetailQuarantineStatus: document.getElementById("mcp-detail-quarantine-status"),
+    mcpQuarantineBtn: document.getElementById("mcp-quarantine-btn"),
+    mcpRestoreBtn: document.getElementById("mcp-restore-btn"),
+    mcpDetailManifestHash: document.getElementById("mcp-detail-manifest-hash"),
+    mcpDetailLastDiscovery: document.getElementById("mcp-detail-last-discovery"),
+    mcpDetailTrustLevel: document.getElementById("mcp-detail-trust-level"),
+    mcpDetailTransport: document.getElementById("mcp-detail-transport"),
+
     // Integrity receipts
     receiptsTbody: document.getElementById("receipts-tbody"),
     verifyWholeChainBtn: document.getElementById("verify-whole-chain-btn"),
@@ -208,6 +223,12 @@
     if (viewName !== "incidents") {
       refs.incidentDetailContainer.style.display = "none";
       refs.incidentsListContainer.style.display = "block";
+    }
+
+    // Proactively close MCP server detail if moving away (#1334)
+    if (viewName !== "mcp") {
+      refs.mcpDetailContainer.style.display = "none";
+      refs.mcpListContainer.style.display = "block";
     }
 
     // Load initial data for selected view
@@ -306,7 +327,11 @@
         fetchAgentsView();
         break;
       case "mcp":
-        fetchMcpView();
+        if (refs.mcpDetailContainer.style.display === "block" && state.selectedMcpServerKey) {
+          fetchMcpServerDetail(state.selectedMcpServerKey);
+        } else {
+          fetchMcpView();
+        }
         break;
       case "receipts":
         fetchReceiptsView();
@@ -1068,6 +1093,7 @@
 
       data.forEach(function (m) {
         var tr = document.createElement("tr");
+        tr.className = "incident-row";
         // "quarantined" is how the gateway's manifest-drift auto-response
         // (mcp.rs) flags a server whose tool manifest changed since pinning.
         var isDrift = m.status === "quarantined";
@@ -1084,16 +1110,164 @@
           <td class="mono">${m.last_discovery_at ? new Date(m.last_discovery_at).toLocaleTimeString() : "Never"}</td>
           <td>
             <div style="display:flex; gap:6px;">
-              <button class="btn btn-secondary btn-sm approve-server-btn" data-id="${m.server_key}">Pin Manifest</button>
+              <button class="btn btn-secondary btn-sm open-mcp-server-btn" data-id="${m.server_key}">Manage Tools</button>
             </div>
           </td>
         `;
+
+        tr.querySelector(".open-mcp-server-btn").addEventListener("click", function(e) {
+          e.stopPropagation();
+          openMcpServerDetail(m.server_key);
+        });
+
+        tr.addEventListener("click", function() {
+          openMcpServerDetail(m.server_key);
+        });
+
         refs.mcpServersTbody.appendChild(tr);
       });
     }).catch(function(err) {
       showError("Failed to load MCP servers: " + err.message);
     });
   }
+
+  // ── MCP Server Detail: Approved Tool Allowlist (#1334) ──
+  function openMcpServerDetail(serverKey) {
+    state.selectedMcpServerKey = serverKey;
+    refs.mcpListContainer.style.display = "none";
+    refs.mcpDetailContainer.style.display = "block";
+    refs.mcpDetailServerKey.textContent = "MCP Server: " + serverKey;
+    refs.mcpDetailToolsTbody.innerHTML = "<tr class='empty-row'><td colspan='6'>Loading tools...</td></tr>";
+    refs.mcpDetailHistoryTbody.innerHTML = "<tr class='empty-row'><td colspan='2'>Loading manifest history...</td></tr>";
+    fetchMcpServerDetail(serverKey);
+  }
+
+  function fetchMcpServerDetail(serverKey) {
+    apiFetch("/v1/mcp/servers/" + serverKey).then(function (server) {
+      renderMcpServerMeta(server);
+    }).catch(function(err) {
+      showError("Failed to load MCP server: " + err.message);
+    });
+
+    apiFetch("/v1/mcp/servers/" + serverKey + "/tools").then(function (data) {
+      renderMcpDetailTools(serverKey, data.tools || []);
+    }).catch(function(err) {
+      refs.mcpDetailToolsTbody.innerHTML = "<tr class='empty-row'><td colspan='6'>Failed to load tools: " + escapeHtml(err.message) + "</td></tr>";
+    });
+
+    apiFetch("/v1/mcp/servers/" + serverKey + "/manifest-history").then(function (data) {
+      renderMcpManifestHistory(data.snapshots || []);
+    }).catch(function(err) {
+      refs.mcpDetailHistoryTbody.innerHTML = "<tr class='empty-row'><td colspan='2'>Failed to load manifest history: " + escapeHtml(err.message) + "</td></tr>";
+    });
+  }
+
+  function renderMcpServerMeta(server) {
+    var isQuarantined = server.status === "quarantined";
+    refs.mcpDetailStatus.textContent = server.status;
+    refs.mcpDetailStatus.className = "badge " + (isQuarantined ? "badge-critical" : "badge-success");
+    refs.mcpDetailQuarantineStatus.textContent = isQuarantined ? "Quarantined" : "Active";
+    refs.mcpDetailQuarantineStatus.className = isQuarantined ? "text-critical" : "text-success";
+    refs.mcpDetailManifestHash.textContent = server.manifest_hash || "Not yet pinned";
+    refs.mcpDetailLastDiscovery.textContent = server.last_discovery_at ? new Date(server.last_discovery_at).toLocaleString() : "Never";
+    refs.mcpDetailTrustLevel.textContent = server.trust_level;
+    refs.mcpDetailTransport.textContent = server.transport;
+  }
+
+  function renderMcpDetailTools(serverKey, tools) {
+    refs.mcpDetailToolsTbody.innerHTML = "";
+    if (tools.length === 0) {
+      refs.mcpDetailToolsTbody.innerHTML = "<tr class='empty-row'><td colspan='6'>No tools discovered for this server yet.</td></tr>";
+      return;
+    }
+
+    tools.forEach(function (tool) {
+      var tr = document.createElement("tr");
+      var statusClass = tool.status === "approved" ? "badge-success" : (tool.status === "disabled" ? "badge-error" : "badge-warning");
+
+      tr.innerHTML = `
+        <td class="mono"><strong>${escapeHtml(tool.tool_key)}</strong></td>
+        <td>${escapeHtml(tool.name || "N/A")}</td>
+        <td><span class="badge badge-dark">${escapeHtml(tool.risk || "unknown")}</span></td>
+        <td>${tool.mutates_state ? "Yes" : "No"}</td>
+        <td><span class="badge ${statusClass}">${escapeHtml(tool.status)}</span></td>
+        <td>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-success btn-sm approve-tool-btn" data-tool="${tool.tool_key}" ${tool.status === "approved" ? "disabled" : ""}>Approve</button>
+            <button class="btn btn-danger btn-sm disable-tool-btn" data-tool="${tool.tool_key}" ${tool.status === "disabled" ? "disabled" : ""}>Disable</button>
+          </div>
+        </td>
+      `;
+
+      tr.querySelector(".approve-tool-btn").addEventListener("click", function() {
+        handleMcpToolStatusChange(serverKey, tool.tool_key, "approve");
+      });
+      tr.querySelector(".disable-tool-btn").addEventListener("click", function() {
+        handleMcpToolStatusChange(serverKey, tool.tool_key, "disable");
+      });
+
+      refs.mcpDetailToolsTbody.appendChild(tr);
+    });
+  }
+
+  function handleMcpToolStatusChange(serverKey, toolKey, action) {
+    if (!confirm("Confirm " + action + " for tool " + toolKey + " on " + serverKey + "?")) {
+      return;
+    }
+    apiFetch("/v1/mcp/servers/" + serverKey + "/tools/" + toolKey + "/" + action, "POST").then(function() {
+      fetchMcpServerDetail(serverKey);
+    }).catch(function(err) {
+      alert("Failed to " + action + " tool: " + err.message);
+    });
+  }
+
+  function renderMcpManifestHistory(snapshots) {
+    refs.mcpDetailHistoryTbody.innerHTML = "";
+    if (snapshots.length === 0) {
+      refs.mcpDetailHistoryTbody.innerHTML = "<tr class='empty-row'><td colspan='2'>No manifest snapshots recorded yet.</td></tr>";
+      return;
+    }
+
+    snapshots.forEach(function (snap) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="mono">${new Date(snap.created_at).toLocaleString()}</td>
+        <td class="mono hash">${escapeHtml(snap.manifest_hash)}</td>
+      `;
+      refs.mcpDetailHistoryTbody.appendChild(tr);
+    });
+  }
+
+  // Containment: Quarantine / Restore
+  refs.mcpQuarantineBtn.addEventListener("click", function() {
+    if (confirm("Are you sure you want to QUARANTINE MCP server " + state.selectedMcpServerKey + "? All tool calls from this server will be denied until restored.")) {
+      apiFetch("/v1/mcp/servers/" + state.selectedMcpServerKey + "/quarantine", "POST").then(function() {
+        alert("MCP server quarantined.");
+        fetchMcpServerDetail(state.selectedMcpServerKey);
+      }).catch(function(err) {
+        alert("Quarantine failed: " + err.message);
+      });
+    }
+  });
+
+  refs.mcpRestoreBtn.addEventListener("click", function() {
+    if (confirm("Restore MCP server " + state.selectedMcpServerKey + " to active status?")) {
+      apiFetch("/v1/mcp/servers/" + state.selectedMcpServerKey + "/restore", "POST").then(function() {
+        alert("MCP server restored.");
+        fetchMcpServerDetail(state.selectedMcpServerKey);
+      }).catch(function(err) {
+        alert("Restore failed: " + err.message);
+      });
+    }
+  });
+
+  // Go back to MCP registry list
+  refs.backToMcpBtn.addEventListener("click", function() {
+    refs.mcpDetailContainer.style.display = "none";
+    refs.mcpListContainer.style.display = "block";
+    state.selectedMcpServerKey = null;
+    fetchMcpView();
+  });
 
   // ── Receipts / Integrity logs View ──
   function fetchReceiptsView() {

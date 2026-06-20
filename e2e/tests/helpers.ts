@@ -126,3 +126,63 @@ export async function createAllowedDecision(
     throw new Error(`Failed to seed an allowed decision: HTTP ${resp.status()}`);
   }
 }
+
+/**
+ * Registers a dedicated E2E test MCP server and runs one discovery call
+ * (one tool, `pending` status), so the #1334 MCP server detail view test is
+ * self-contained — it doesn't depend on or mutate the shared
+ * `github-mcp-demo` server seeded by scripts/seed-demo.sh, which other
+ * (possibly parallel) tests also read.
+ */
+export async function registerTestMcpServer(
+  request: APIRequestContext,
+  baseURL: string,
+  serverKey: string,
+): Promise<void> {
+  const registerResp = await request.post(`${baseURL}/v1/mcp/servers`, {
+    headers: {
+      Authorization: `Bearer ${TENANT_ID}`,
+      "X-Aegis-Tenant-ID": TENANT_ID,
+      "Content-Type": "application/json",
+    },
+    data: {
+      server_key: serverKey,
+      name: "Dashboard E2E Test MCP Server",
+      owner_team: "platform",
+      transport: "http",
+      source: "playwright-e2e",
+      trust_level: "trusted_internal_signed",
+      endpoint: "http://127.0.0.1:9001/mcp",
+    },
+  });
+  if (!registerResp.ok()) {
+    throw new Error(`Failed to register test MCP server: HTTP ${registerResp.status()}`);
+  }
+
+  const discoverResp = await request.post(
+    `${baseURL}/v1/mcp/servers/${serverKey}/tools`,
+    {
+      headers: {
+        Authorization: `Bearer ${TENANT_ID}`,
+        "X-Aegis-Tenant-ID": TENANT_ID,
+        "Content-Type": "application/json",
+      },
+      data: {
+        tools: [
+          {
+            tool_key: "create_issue",
+            name: "Create issue",
+            description: "Create a GitHub issue through MCP",
+            input_schema: { type: "object" },
+            risk: "medium",
+            mutates_state: true,
+            approval_required: false,
+          },
+        ],
+      },
+    },
+  );
+  if (!discoverResp.ok()) {
+    throw new Error(`Failed to discover tools for test MCP server: HTTP ${discoverResp.status()}`);
+  }
+}
