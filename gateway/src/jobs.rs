@@ -3,7 +3,9 @@
 
 use chrono::{Duration, Utc};
 use sqlx::SqlitePool;
-use tracing::{error, info, warn};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::db;
@@ -24,6 +26,16 @@ pub const DEFAULT_APPROVAL_CLEANUP_INTERVAL_SECS: u64 = 86400;
 
 /// Default approvals retention window before stale rows are deleted.
 pub const DEFAULT_APPROVAL_RETENTION_DAYS: i64 = 30;
+
+/// Default interval between leader-election renewal attempts (REL-003,
+/// #1149).
+pub const DEFAULT_LEADER_ELECTION_INTERVAL_SECS: u64 = 5;
+
+/// Default leader lease duration. Combined with the renewal interval above,
+/// worst-case leadership transfer after a leader dies is
+/// `lease + election_interval` ≈ 20s + 5s = 25s, under the issue's "within
+/// 30s" criterion.
+pub const DEFAULT_LEADER_LEASE_SECS: i64 = 20;
 
 /// Walk a chain of receipts (oldest-first) and verify that every
 /// `receipt_hash` matches its recomputed value and that `prev_receipt_hash`
@@ -92,10 +104,23 @@ pub async fn check_all_tenant_receipt_chains(pool: &SqlitePool) -> Result<(), sq
 
 /// Run `check_all_tenant_receipt_chains` on a fixed interval until the process
 /// exits. Intended to be `tokio::spawn`ed once at startup.
-pub async fn run_receipt_chain_integrity_job(pool: SqlitePool, interval_secs: u64) {
+///
+/// `is_leader` gates the actual work (REL-003, #1149): every instance ticks
+/// on schedule, but only the current leader runs the check, so multiple
+/// instances sharing one DB don't redundantly (and concurrently) sweep the
+/// same rows.
+pub async fn run_receipt_chain_integrity_job(
+    pool: SqlitePool,
+    interval_secs: u64,
+    is_leader: Arc<AtomicBool>,
+) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     loop {
         interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("receipt chain integrity job: standby (not leader)");
+            continue;
+        }
         if let Err(e) = check_all_tenant_receipt_chains(&pool).await {
             error!("receipt chain integrity job failed: {:?}", e);
         }
@@ -105,15 +130,20 @@ pub async fn run_receipt_chain_integrity_job(pool: SqlitePool, interval_secs: u6
 /// Run `db::archive_audit_events_older_than` on a fixed interval until the
 /// process exits, moving `audit_events` rows older than `retention_days` into
 /// `audit_events_archive` (#0106). Intended to be `tokio::spawn`ed once at
-/// startup.
+/// startup. `is_leader` gates the work — see `run_receipt_chain_integrity_job`.
 pub async fn run_audit_event_archival_job(
     pool: SqlitePool,
     interval_secs: u64,
     retention_days: i64,
+    is_leader: Arc<AtomicBool>,
 ) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     loop {
         interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("audit event archival job: standby (not leader)");
+            continue;
+        }
         let cutoff = Utc::now() - Duration::days(retention_days);
         match db::archive_audit_events_older_than(&pool, cutoff).await {
             Ok(0) => {}
@@ -126,11 +156,20 @@ pub async fn run_audit_event_archival_job(
 /// Run `db::delete_expired_approvals_older_than` on a fixed interval until the
 /// process exits, removing decided or expired-and-stale `approvals` rows
 /// older than `retention_days` (#0105). Intended to be `tokio::spawn`ed once
-/// at startup.
-pub async fn run_approval_cleanup_job(pool: SqlitePool, interval_secs: u64, retention_days: i64) {
+/// at startup. `is_leader` gates the work — see `run_receipt_chain_integrity_job`.
+pub async fn run_approval_cleanup_job(
+    pool: SqlitePool,
+    interval_secs: u64,
+    retention_days: i64,
+    is_leader: Arc<AtomicBool>,
+) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     loop {
         interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("approval cleanup job: standby (not leader)");
+            continue;
+        }
         let cutoff = Utc::now() - Duration::days(retention_days);
         match db::delete_expired_approvals_older_than(&pool, cutoff).await {
             Ok(0) => {}
@@ -191,6 +230,45 @@ pub async fn run_pool_health_sampler(
         interval.tick().await;
         if let Err(e) = sample_pool_health(&pool, &metrics).await {
             error!("pool health sampler failed: {:?}", e);
+        }
+    }
+}
+
+/// Run [`db::try_acquire_or_renew_leadership`] on a fixed interval until the
+/// process exits, keeping `is_leader` in sync so the three maintenance jobs
+/// above can gate on it (REL-003, #1149). Logs at `info!` only on a
+/// leader/standby *transition*, `debug!` on every unchanged tick, to avoid
+/// flooding the info log every `interval_secs`.
+pub async fn run_leader_election_loop(
+    pool: SqlitePool,
+    instance_id: String,
+    is_leader: Arc<AtomicBool>,
+    interval_secs: u64,
+    lease_duration: Duration,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    let mut was_leader = false;
+    loop {
+        interval.tick().await;
+        match db::try_acquire_or_renew_leadership(&pool, &instance_id, lease_duration).await {
+            Ok(leader_now) => {
+                is_leader.store(leader_now, Ordering::Relaxed);
+                if leader_now != was_leader {
+                    if leader_now {
+                        info!("instance {} acquired leadership", instance_id);
+                    } else {
+                        info!("instance {} lost leadership; standby", instance_id);
+                    }
+                    was_leader = leader_now;
+                } else {
+                    debug!(
+                        "instance {} leadership status: {}",
+                        instance_id,
+                        if leader_now { "leader" } else { "standby" }
+                    );
+                }
+            }
+            Err(e) => error!("leader election tick failed: {:?}", e),
         }
     }
 }
@@ -318,6 +396,95 @@ mod tests {
         assert!(alerts
             .iter()
             .any(|a| a.rule == "receipt_chain_integrity_failure" && a.severity == "critical"));
+    }
+
+    /// REL-003 (#1149): the sole instance running `run_leader_election_loop`
+    /// must acquire leadership (transition `is_leader` to `true`) within a
+    /// couple of ticks.
+    #[tokio::test]
+    async fn leader_election_loop_acquires_leadership_when_alone() {
+        let pool = setup_pool("leader_loop_acquire").await;
+        let is_leader = Arc::new(AtomicBool::new(false));
+
+        let handle = tokio::spawn(run_leader_election_loop(
+            pool,
+            "test-instance".to_string(),
+            is_leader.clone(),
+            1, // tick every 1s — interval.tick() fires immediately on the first poll
+            Duration::seconds(20),
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(is_leader.load(Ordering::Relaxed));
+
+        handle.abort();
+    }
+
+    /// REL-003 (#1149): `run_audit_event_archival_job` must not touch the DB
+    /// while `is_leader` is false ("standby"), and must perform the archival
+    /// once it becomes true — proving the gate applies to real work, not
+    /// just a flag.
+    #[tokio::test]
+    async fn audit_event_archival_job_is_gated_by_is_leader() {
+        let pool = setup_pool("archival_job_gated").await;
+        db::register_tenant(&pool, "tenant_archival_gated", "Gated", "developer")
+            .await
+            .unwrap();
+
+        let old_event = crate::models::AuditEventRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: "tenant_archival_gated".to_string(),
+            event_type: "decision".to_string(),
+            agent_id: None,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: None,
+            action: None,
+            resource: None,
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: None,
+            approval_id: None,
+            created_at: Utc::now() - Duration::days(200),
+        };
+        db::insert_audit_event(&pool, &old_event).await.unwrap();
+
+        let is_leader = Arc::new(AtomicBool::new(false));
+        let handle = tokio::spawn(run_audit_event_archival_job(
+            pool.clone(),
+            1, // tick every 1s
+            DEFAULT_AUDIT_RETENTION_DAYS,
+            is_leader.clone(),
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let still_present: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = ?")
+                .bind(&old_event.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            still_present.0, 1,
+            "standby instance must not archive while not leader"
+        );
+
+        is_leader.store(true, Ordering::Relaxed);
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        let archived: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = ?")
+            .bind(&old_event.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            archived.0, 0,
+            "leader instance must archive the old row once leadership is held"
+        );
+
+        handle.abort();
     }
 }
 

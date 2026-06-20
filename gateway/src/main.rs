@@ -1094,8 +1094,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let audit_batch_abort_handle = audit_batch_handle.abort_handle();
 
+    // REL-003 (#1149): SQLite advisory-lock-based leader election so multiple
+    // gateway instances sharing one DB don't all run the maintenance jobs
+    // below concurrently. `is_leader` starts false (fail-safe: no instance
+    // runs maintenance work until the first election tick confirms it).
+    let is_leader = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let instance_id = Uuid::new_v4().to_string();
+    let leader_election_interval_secs: u64 = std::env::var("AEGIS_LEADER_ELECTION_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_LEADER_ELECTION_INTERVAL_SECS);
+    let leader_lease_secs: i64 = std::env::var("AEGIS_LEADER_LEASE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_LEADER_LEASE_SECS);
+    let leader_election_abort_handle = tokio::spawn(jobs::run_leader_election_loop(
+        pool.clone(),
+        instance_id,
+        is_leader.clone(),
+        leader_election_interval_secs,
+        chrono::Duration::seconds(leader_lease_secs),
+    ))
+    .abort_handle();
+
     // #0107: periodic receipt chain integrity check across all tenants. Any
     // broken link or hash mismatch is recorded as a critical SOC alert.
+    // Gated on is_leader (#1149) — see run_leader_election_loop above.
     let receipt_integrity_interval_secs: u64 =
         std::env::var("AEGIS_RECEIPT_INTEGRITY_INTERVAL_SECS")
             .ok()
@@ -1104,11 +1128,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let receipt_integrity_abort_handle = tokio::spawn(jobs::run_receipt_chain_integrity_job(
         pool.clone(),
         receipt_integrity_interval_secs,
+        is_leader.clone(),
     ))
     .abort_handle();
 
     // #0106: periodically archive old audit_events rows into
-    // audit_events_archive to keep the live table bounded.
+    // audit_events_archive to keep the live table bounded. Gated on
+    // is_leader (#1149).
     let audit_archival_interval_secs: u64 = std::env::var("AEGIS_AUDIT_ARCHIVAL_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1121,11 +1147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool.clone(),
         audit_archival_interval_secs,
         audit_retention_days,
+        is_leader.clone(),
     ))
     .abort_handle();
 
     // #0105: periodically delete stale approvals (decided, or expired and
-    // never decided) to keep the approvals table bounded.
+    // never decided) to keep the approvals table bounded. Gated on is_leader
+    // (#1149).
     let approval_cleanup_interval_secs: u64 = std::env::var("AEGIS_APPROVAL_CLEANUP_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1138,6 +1166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool.clone(),
         approval_cleanup_interval_secs,
         approval_retention_days,
+        is_leader.clone(),
     ))
     .abort_handle();
 
@@ -1164,6 +1193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let background_task_handles = vec![
         ("event_drain", drain_abort_handle),
         ("audit_batch_writer", audit_batch_abort_handle),
+        ("leader_election_loop", leader_election_abort_handle),
         (
             "receipt_chain_integrity_job",
             receipt_integrity_abort_handle,
