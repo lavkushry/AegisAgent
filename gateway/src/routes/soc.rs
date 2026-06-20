@@ -980,6 +980,198 @@ pub async fn narrate_incident(
         .into_response()
 }
 
+/// `GET /v1/incidents/:id/evidence-pack` — per-incident compliance evidence
+/// export (SOC-006, #1189). Bundles the incident, the alerts and decisions
+/// that contributed to it, the receipts/audit events tied to those
+/// decisions, and an RCA narrative into a downloadable ZIP — a focused,
+/// single-incident counterpart to the tenant-wide
+/// `GET /v1/compliance/evidence-pack` (#1298).
+///
+/// Linkage: `soc_incidents.source_event_ids` and `soc_alerts.source_event_id`
+/// are both populated from the same `AseEvent.event_id`, and
+/// `audit_events.id` is that same event_id at emission time — so alerts and
+/// decisions are resolved by exact `IN (...)` match, not a heuristic (the
+/// same linkage `GET /v1/graph/incident/:incident_id` (#1272) already uses).
+///
+/// 404 if the incident doesn't exist for this tenant. Tenant-scoped
+/// throughout — every query binds `tenant_id` (CWE-284).
+pub async fn get_incident_evidence_pack(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Incident not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch incident for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let event_ids: Vec<String> =
+        serde_json::from_str(&incident.source_event_ids).unwrap_or_default();
+
+    let alerts =
+        match db::list_soc_alerts_by_source_event_ids(&state.pool, &tenant_id, &event_ids).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("Failed to load alerts for evidence pack: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    // Resolve event_ids -> decision_ids (#1272's established linkage),
+    // de-duplicated, preserving the order encountered.
+    let mut decision_ids: Vec<String> = Vec::new();
+    for event_id in &event_ids {
+        if let Ok(Some(decision_id)) =
+            db::get_audit_event_decision_id(&state.pool, &tenant_id, event_id).await
+        {
+            if !decision_ids.contains(&decision_id) {
+                decision_ids.push(decision_id);
+            }
+        }
+    }
+
+    let receipts = match db::list_action_receipts_by_decision_ids(
+        &state.pool,
+        &tenant_id,
+        &decision_ids,
+    )
+    .await
+    {
+        Ok(map) => map.into_values().collect::<Vec<_>>(),
+        Err(e) => {
+            error!("Failed to load receipts for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let audit_events =
+        match db::list_audit_events_by_decision_ids(&state.pool, &tenant_id, &decision_ids).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("Failed to load audit events for evidence pack: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    // Same hermetic-by-default narrator as `narrate_incident` — no network
+    // call unless AEGIS_NARRATOR=claude is explicitly configured.
+    let narrator = crate::narrate::from_env();
+    let rca_narrative = narrator.narrate(&incident);
+
+    let zip_bytes = match build_incident_evidence_pack_zip(
+        &incident,
+        &alerts,
+        &receipts,
+        &audit_events,
+        &rca_narrative,
+    ) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            error!("Failed to build incident evidence pack zip: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to build evidence pack"})),
+            )
+                .into_response();
+        }
+    };
+
+    info!(incident_id = %incident_id, "incident evidence pack generated");
+
+    let filename = format!(
+        "evidence-pack-incident-{incident_id}-{}.zip",
+        Utc::now().timestamp()
+    );
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/zip".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        zip_bytes,
+    )
+        .into_response()
+}
+
+/// Serialize one incident's evidence bundle into an in-memory ZIP archive
+/// (#1189). Bounded by a single incident's linked data (typically a handful
+/// of alerts/decisions), unlike the tenant-wide, potentially unbounded
+/// `build_evidence_pack_zip` (#1298) — in-memory construction is the same
+/// established pattern, not a new streaming-writer dependency, since the
+/// per-incident data volume doesn't justify one.
+fn build_incident_evidence_pack_zip(
+    incident: &SocIncidentRecord,
+    alerts: &[SocAlertRecord],
+    receipts: &[ActionReceiptRecord],
+    audit_events: &[AuditEventRecord],
+    rca_narrative: &str,
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        writer.start_file("incident.json", options)?;
+        let incident_bytes = serde_json::to_vec_pretty(incident)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &incident_bytes)?;
+
+        writer.start_file("alerts.json", options)?;
+        let alerts_bytes = serde_json::to_vec_pretty(alerts)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &alerts_bytes)?;
+
+        writer.start_file("receipts.json", options)?;
+        let receipts_bytes = serde_json::to_vec_pretty(receipts)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &receipts_bytes)?;
+
+        writer.start_file("audit_events.json", options)?;
+        let audit_events_bytes = serde_json::to_vec_pretty(audit_events)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &audit_events_bytes)?;
+
+        writer.start_file("rca_narrative.md", options)?;
+        std::io::Write::write_all(&mut writer, rca_narrative.as_bytes())?;
+
+        writer.finish()?;
+    }
+    Ok(cursor.into_inner())
+}
+
 pub async fn ws_events(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
@@ -1445,6 +1637,262 @@ mod tests {
             response.status(),
             StatusCode::NOT_FOUND,
             "must not expose another tenant's incident"
+        );
+    }
+
+    // ── get_incident_evidence_pack route tests (#1189) ─────────────────────────
+
+    fn zip_entry_names(bytes: &[u8]) -> std::collections::HashSet<String> {
+        let reader = std::io::Cursor::new(bytes);
+        let archive = zip::ZipArchive::new(reader).unwrap();
+        archive.file_names().map(|s| s.to_string()).collect()
+    }
+
+    fn zip_entry_string(bytes: &[u8], name: &str) -> String {
+        let reader = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+        let mut file = archive.by_name(name).unwrap();
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut file, &mut out).unwrap();
+        out
+    }
+
+    /// Seeds a full incident evidence chain — agent, decision, audit event,
+    /// alert (linked via `source_event_id`), receipt (linked via
+    /// `decision_id`), and the incident itself (linked via
+    /// `source_event_ids`) — mirroring the linkage `get_graph_for_incident`
+    /// (#1272) already relies on.
+    async fn seed_incident_evidence_chain(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        incident_id: &str,
+    ) {
+        let agent_id = format!("{incident_id}_agent");
+        let agent = AgentRecord {
+            id: agent_id.clone(),
+            tenant_id: tenant_id.to_string(),
+            agent_key: format!("{agent_id}-key"),
+            agent_token: format!("{agent_id}-token"),
+            name: "Evidence Pack Agent".to_string(),
+            owner_team: None,
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "medium".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        let decision_id = format!("{incident_id}_decision");
+        let decision = DecisionRecord {
+            id: decision_id.clone(),
+            tenant_id: tenant_id.to_string(),
+            agent_id: agent_id.clone(),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "github".to_string(),
+            action: "merge_pull_request".to_string(),
+            resource: Some("payments#1".to_string()),
+            input_json: "{}".to_string(),
+            decision: "deny".to_string(),
+            risk_score: Some(80),
+            reason: Some("test reason".to_string()),
+            matched_policy_ids: None,
+            request_id: None,
+            latency_ms: Some(5),
+            composite_risk_score: Some(50),
+            root_trust_level: None,
+            parent_run_id: None,
+            created_at: Utc::now(),
+        };
+        db::insert_decision(&state.pool, &decision).await.unwrap();
+
+        let event_id = format!("{incident_id}_event");
+        let audit_event = AuditEventRecord {
+            id: event_id.clone(),
+            tenant_id: tenant_id.to_string(),
+            event_type: "decision".to_string(),
+            agent_id: Some(agent_id.clone()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: Some("github".to_string()),
+            action: Some("merge_pull_request".to_string()),
+            resource: Some("payments#1".to_string()),
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: Some(decision_id.clone()),
+            approval_id: None,
+            created_at: Utc::now(),
+        };
+        db::insert_audit_event(&state.pool, &audit_event)
+            .await
+            .unwrap();
+
+        let alert = SocAlertRecord {
+            id: format!("{incident_id}_alert"),
+            tenant_id: tenant_id.to_string(),
+            rule: "confused_deputy_block".to_string(),
+            severity: "high".to_string(),
+            agent_id: agent_id.clone(),
+            source_event_id: event_id.clone(),
+            summary: "Evidence pack test alert".to_string(),
+            created_at: Utc::now().to_rfc3339(),
+        };
+        db::insert_soc_alert(&state.pool, &alert).await.unwrap();
+
+        db::append_action_receipt_atomic(&state.pool, tenant_id, |prev_hash| ActionReceiptRecord {
+            id: format!("{incident_id}_receipt"),
+            tenant_id: tenant_id.to_string(),
+            decision_id: Some(decision_id.clone()),
+            ts: Utc::now().to_rfc3339(),
+            agent_id: Some(agent_id.clone()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            tool: Some("github".to_string()),
+            action: Some("merge_pull_request".to_string()),
+            resource: Some("payments#1".to_string()),
+            source_trust: "trusted_internal_signed".to_string(),
+            decision: "deny".to_string(),
+            approver: None,
+            action_hash: Some("aaaa".to_string()),
+            prev_receipt_hash: prev_hash,
+            receipt_hash: String::new(),
+            canon_version: "aegis-jcs-1".to_string(),
+            signature: None,
+            signer_public_key: None,
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+        let incident = SocIncidentRecord {
+            id: incident_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            kind: "deny_storm".to_string(),
+            severity: "high".to_string(),
+            agent_id: agent_id.clone(),
+            summary: "Evidence pack test incident".to_string(),
+            source_event_ids: serde_json::to_string(&vec![event_id.clone()]).unwrap(),
+            opened_at: "2026-06-06T10:00:00Z".to_string(),
+            status: "open".to_string(),
+            closed_at: None,
+        };
+        db::insert_soc_incident(&state.pool, &incident)
+            .await
+            .unwrap();
+    }
+
+    /// SOC-006 (#1189): `GET /v1/incidents/:id/evidence-pack` bundles the
+    /// incident, its linked alerts/receipts/audit events, and an RCA
+    /// narrative into a downloadable ZIP with all five expected entries.
+    #[tokio::test]
+    async fn get_incident_evidence_pack_returns_zip_with_expected_entries() {
+        let (state, tenant_id, _agent_token) = setup_state("evidence_pack_own").await;
+        seed_incident_evidence_chain(&state, &tenant_id, "inc_evidence_1").await;
+
+        let response = get_incident_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("inc_evidence_1".to_string()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/zip"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let entries = zip_entry_names(&body);
+        for expected in [
+            "incident.json",
+            "alerts.json",
+            "receipts.json",
+            "audit_events.json",
+            "rca_narrative.md",
+        ] {
+            assert!(
+                entries.contains(expected),
+                "missing zip entry: {expected} (have {entries:?})"
+            );
+        }
+
+        let incident: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "incident.json")).unwrap();
+        assert_eq!(incident["id"], "inc_evidence_1");
+
+        let alerts: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "alerts.json")).unwrap();
+        assert_eq!(alerts.as_array().unwrap().len(), 1);
+        assert_eq!(alerts[0]["id"], "inc_evidence_1_alert");
+
+        let receipts: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "receipts.json")).unwrap();
+        assert_eq!(receipts.as_array().unwrap().len(), 1);
+        assert_eq!(receipts[0]["id"], "inc_evidence_1_receipt");
+
+        let audit_events: serde_json::Value =
+            serde_json::from_str(&zip_entry_string(&body, "audit_events.json")).unwrap();
+        assert_eq!(audit_events.as_array().unwrap().len(), 1);
+        assert_eq!(audit_events[0]["id"], "inc_evidence_1_event");
+
+        let narrative = zip_entry_string(&body, "rca_narrative.md");
+        assert!(narrative.contains("deny_storm"));
+    }
+
+    /// 404 for an incident that doesn't exist (or belongs to another
+    /// tenant) — never leaks cross-tenant evidence.
+    #[tokio::test]
+    async fn get_incident_evidence_pack_returns_404_for_unknown_or_cross_tenant_incident() {
+        let (state, tenant_id, _agent_token) = setup_state("evidence_pack_404").await;
+
+        let other_tenant = "tenant_other_evidence_pack";
+        db::register_tenant(&state.pool, other_tenant, "Other", "developer")
+            .await
+            .unwrap();
+        seed_incident_evidence_chain(&state, other_tenant, "inc_other_evidence").await;
+
+        let missing = get_incident_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("inc_does_not_exist".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        let cross_tenant = get_incident_evidence_pack(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("inc_other_evidence".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            cross_tenant.status(),
+            StatusCode::NOT_FOUND,
+            "must not expose another tenant's incident evidence"
         );
     }
 

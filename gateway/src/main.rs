@@ -1154,6 +1154,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator — on-demand, human-triggered, LAW-2 compliant
         .route("/v1/incidents/:id/narrate", get(routes::narrate_incident))
+        // SOC-006 (#1189): per-incident compliance evidence pack export
+        .route(
+            "/v1/incidents/:id/evidence-pack",
+            get(routes::get_incident_evidence_pack),
+        )
         // SOC Phase 4: Response API — agent freeze/revoke/quarantine, MCP quarantine
         .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
         .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))

@@ -342,6 +342,35 @@ pub async fn get_audit_event_decision_id(
     .map(|opt| opt.flatten())
 }
 
+/// Batch-fetch audit events linked to any of `decision_ids` (SOC-006, #1189):
+/// used by `GET /v1/incidents/:id/evidence-pack`, mirroring
+/// `list_action_receipts_by_decision_ids`'s batching to avoid a per-decision
+/// round trip. Unlike receipts (one per decision), an audit event row is not
+/// 1:1 with a decision, so this returns a flat `Vec`, not a map. Empty
+/// `decision_ids` short-circuits to an empty result without querying.
+pub async fn list_audit_events_by_decision_ids(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_ids: &[String],
+) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
+    if decision_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = decision_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "SELECT * FROM audit_events WHERE tenant_id = ? AND decision_id IN ({placeholders}) ORDER BY created_at ASC, rowid ASC"
+    );
+    let mut q = sqlx::query_as::<_, AuditEventRecord>(&query).bind(tenant_id);
+    for id in decision_ids {
+        q = q.bind(id);
+    }
+    q.fetch_all(pool).await
+}
+
 /// Format an [`AuditEventRecord::created_at`] at microsecond precision
 /// (#1303) rather than relying on the column's `DEFAULT CURRENT_TIMESTAMP`
 /// (second precision, assigned at insert time). Without this, events emitted
@@ -611,6 +640,101 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(still_present.0, 1);
+    }
+
+    /// #1189: `list_audit_events_by_decision_ids` batches across multiple
+    /// decision_ids, returns every matching row (not 1:1 like receipts), and
+    /// stays tenant-scoped.
+    #[tokio::test]
+    async fn list_audit_events_by_decision_ids_returns_only_matching_tenant_scoped_rows() {
+        let pool = setup_pool("audit_events_by_decision_ids").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        let base_event = AuditEventRecord {
+            id: "evt_base".to_string(),
+            tenant_id: "tenant_a".to_string(),
+            event_type: "decision".to_string(),
+            agent_id: None,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: None,
+            action: None,
+            resource: None,
+            event_json: "{}".to_string(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: Some("dec_1".to_string()),
+            approval_id: None,
+            created_at: Utc::now(),
+        };
+        // Two audit events linked to the same decision_id (not 1:1, unlike receipts).
+        insert_audit_event(&pool, &base_event).await.unwrap();
+        insert_audit_event(
+            &pool,
+            &AuditEventRecord {
+                id: "evt_base_2".to_string(),
+                ..base_event.clone()
+            },
+        )
+        .await
+        .unwrap();
+        insert_audit_event(
+            &pool,
+            &AuditEventRecord {
+                id: "evt_dec2".to_string(),
+                decision_id: Some("dec_2".to_string()),
+                ..base_event.clone()
+            },
+        )
+        .await
+        .unwrap();
+        // Unrelated decision_id for the same tenant — must not be included.
+        insert_audit_event(
+            &pool,
+            &AuditEventRecord {
+                id: "evt_unrelated".to_string(),
+                decision_id: Some("dec_unrelated".to_string()),
+                ..base_event.clone()
+            },
+        )
+        .await
+        .unwrap();
+        // Cross-tenant audit event sharing a requested decision_id — must
+        // never leak into tenant_a's result.
+        insert_audit_event(
+            &pool,
+            &AuditEventRecord {
+                id: "evt_cross".to_string(),
+                tenant_id: "tenant_b".to_string(),
+                decision_id: Some("dec_1".to_string()),
+                ..base_event.clone()
+            },
+        )
+        .await
+        .unwrap();
+
+        let decision_ids = vec!["dec_1".to_string(), "dec_2".to_string()];
+        let events = list_audit_events_by_decision_ids(&pool, "tenant_a", &decision_ids)
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 3);
+        let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"evt_base"));
+        assert!(ids.contains(&"evt_base_2"));
+        assert!(ids.contains(&"evt_dec2"));
+
+        let empty = list_audit_events_by_decision_ids(&pool, "tenant_a", &[])
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
     }
 
     /// #1315: an empty batch is a no-op (no transaction error).

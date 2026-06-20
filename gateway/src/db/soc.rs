@@ -455,6 +455,33 @@ pub async fn list_soc_alerts_cursor(
     super::paginate_rows(rows, limit)
 }
 
+/// Batch-fetch alerts whose `source_event_id` is one of `event_ids`
+/// (SOC-006, #1189): used by `GET /v1/incidents/:id/evidence-pack` to find
+/// the alerts that contributed to an incident — `soc_alerts.source_event_id`
+/// and `soc_incidents.source_event_ids` are both populated from the same
+/// `AseEvent.event_id`, so a direct `IN (...)` match is exact, not heuristic.
+/// Empty `event_ids` short-circuits to an empty result without querying.
+pub async fn list_soc_alerts_by_source_event_ids(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    event_ids: &[String],
+) -> Result<Vec<SocAlertRecord>, sqlx::Error> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = event_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let query = format!(
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at
+         FROM soc_alerts
+         WHERE tenant_id = ? AND source_event_id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as::<_, SocAlertRecord>(&query).bind(tenant_id);
+    for id in event_ids {
+        q = q.bind(id);
+    }
+    q.fetch_all(pool).await
+}
+
 /// Highest `rowid` currently in `soc_alerts` for `tenant_id`, or `0` if none.
 /// Used by `GET /v1/alerts?watch=true` (#1146) to establish the watch's
 /// starting point — only alerts created *after* the watch connects are
@@ -1390,5 +1417,53 @@ mod tests {
         .unwrap();
         assert_eq!(kind_filtered.len(), 1);
         assert_eq!(kind_filtered[0].0.id, "inc_drift");
+    }
+
+    /// #1189: `list_soc_alerts_by_source_event_ids` matches alerts by exact
+    /// `source_event_id` and stays tenant-scoped even when another tenant has
+    /// an alert with the same `source_event_id` string.
+    #[tokio::test]
+    async fn list_soc_alerts_by_source_event_ids_returns_only_matching_tenant_scoped_rows() {
+        let pool = setup_pool("alerts_by_source_event_ids").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+
+        let mut alert_1 = make_alert("al_1", "tenant_a");
+        alert_1.source_event_id = "evt_1".to_string();
+        insert_soc_alert(&pool, &alert_1).await.unwrap();
+
+        let mut alert_2 = make_alert("al_2", "tenant_a");
+        alert_2.source_event_id = "evt_2".to_string();
+        insert_soc_alert(&pool, &alert_2).await.unwrap();
+
+        // Unrelated event_id for the same tenant — must not be included.
+        let mut alert_3 = make_alert("al_3", "tenant_a");
+        alert_3.source_event_id = "evt_unrelated".to_string();
+        insert_soc_alert(&pool, &alert_3).await.unwrap();
+
+        // Cross-tenant alert sharing one of the requested event_ids — must
+        // never leak into tenant_a's result.
+        let mut alert_cross = make_alert("al_cross", "tenant_b");
+        alert_cross.source_event_id = "evt_1".to_string();
+        insert_soc_alert(&pool, &alert_cross).await.unwrap();
+
+        let event_ids = vec!["evt_1".to_string(), "evt_2".to_string()];
+        let alerts = list_soc_alerts_by_source_event_ids(&pool, "tenant_a", &event_ids)
+            .await
+            .unwrap();
+
+        assert_eq!(alerts.len(), 2);
+        let ids: Vec<&str> = alerts.iter().map(|a| a.id.as_str()).collect();
+        assert!(ids.contains(&"al_1"));
+        assert!(ids.contains(&"al_2"));
+
+        let empty = list_soc_alerts_by_source_event_ids(&pool, "tenant_a", &[])
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
     }
 }
