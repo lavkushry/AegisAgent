@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // --- API Request and Response Structures ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterAgentRequest {
     pub agent_key: String,
     pub name: String,
@@ -25,14 +26,14 @@ pub struct RegisterAgentRequest {
     pub allowed_environments: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterAgentResponse {
     pub id: Uuid,
     pub agent_key: String,
     pub agent_token: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PatchAgentRequest {
     pub name: Option<String>,
     pub owner_team: Option<String>,
@@ -46,7 +47,7 @@ pub struct PatchAgentRequest {
     pub status: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterToolAction {
     pub action_key: String,
     pub description: Option<String>,
@@ -57,7 +58,7 @@ pub struct RegisterToolAction {
     pub default_decision: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterToolRequest {
     pub skill_key: String,
     pub name: String,
@@ -68,7 +69,7 @@ pub struct RegisterToolRequest {
     pub actions: Vec<RegisterToolAction>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterMcpServerRequest {
     pub server_key: String,
     pub name: String,
@@ -79,14 +80,14 @@ pub struct RegisterMcpServerRequest {
     pub endpoint: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterMcpServerResponse {
     pub server_id: String,
     pub server_key: String,
     pub status: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct McpToolManifestItem {
     pub tool_key: String,
     pub name: String,
@@ -97,31 +98,31 @@ pub struct McpToolManifestItem {
     pub approval_required: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DiscoverMcpToolsRequest {
     pub tools: Vec<McpToolManifestItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct McpToolStatusResponse {
     pub server_key: String,
     pub tool_key: String,
     pub status: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeAgentContext {
     pub id: String,
     pub environment: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeUserContext {
     pub id: String,
     pub role: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeToolCall {
     pub tool: String,
     pub action: String,
@@ -130,13 +131,13 @@ pub struct AuthorizeToolCall {
     pub parameters: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeDynamicContext {
     pub source_trust: String,
     pub contains_sensitive_data: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeTraceContext {
     pub run_id: String,
     pub trace_id: String,
@@ -162,14 +163,14 @@ pub struct AuthorizeTraceContext {
 /// (redaction invariant). A future dispatcher can sign callback payloads with
 /// `sha256(secret)` as the HMAC key, which the receiver can re-derive from
 /// the secret it already holds.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApprovalCallback {
     pub url: String,
     #[serde(default)]
     pub secret: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeRequest {
     pub request_id: Option<String>,
     pub agent: AuthorizeAgentContext,
@@ -202,7 +203,7 @@ pub struct AuthorizeRequest {
     pub dry_run: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApprovalResponseInfo {
     pub approval_id: Uuid,
     pub status: String,
@@ -211,7 +212,7 @@ pub struct ApprovalResponseInfo {
     pub action_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeResponse {
     pub decision_id: Uuid,
     pub decision: String, // allow, deny, require_approval, quarantine, redact, log_only
@@ -239,13 +240,13 @@ pub struct AuthorizeResponse {
     pub dry_run: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApproveRequest {
     pub approver_user_id: String,
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EditApprovalRequest {
     pub approver_user_id: String,
     pub edited_tool_call: AuthorizeToolCall,
@@ -254,7 +255,7 @@ pub struct EditApprovalRequest {
 
 // --- Database Entity Structs ---
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct TenantRecord {
     pub id: String,
     pub name: String,
@@ -277,7 +278,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct AgentRecord {
     pub id: String,
     pub tenant_id: String,
@@ -333,7 +334,7 @@ pub struct AgentRecord {
 }
 
 /// A single agent-to-tool permission binding (#1390).
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct AgentToolPermission {
     pub id: String,
     pub tenant_id: String,
@@ -343,13 +344,13 @@ pub struct AgentToolPermission {
 }
 
 /// Request body for `POST /v1/agents/:id/permissions` (#1390).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct GrantToolPermissionRequest {
     pub tool_key: String,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, ToSchema)]
 pub struct SkillRecord {
     pub id: String,
     pub tenant_id: String,
@@ -363,7 +364,7 @@ pub struct SkillRecord {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, ToSchema)]
 pub struct SkillActionRecord {
     pub id: String,
     pub skill_id: String,
@@ -377,7 +378,7 @@ pub struct SkillActionRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct McpServerRecord {
     pub id: String,
     pub tenant_id: String,
@@ -410,7 +411,7 @@ pub struct McpServerRecord {
 /// the computed `mcp-manifest-1` hash and the raw discovered tool list so
 /// manifest drift can be diffed after the fact. #1336: also read in production
 /// by `discover_mcp_tools` to classify drift severity against the prior snapshot.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct McpManifestSnapshotRecord {
     pub id: String,
     pub tenant_id: String,
@@ -420,7 +421,7 @@ pub struct McpManifestSnapshotRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct McpToolRecord {
     pub id: String,
     pub tenant_id: String,
@@ -438,7 +439,7 @@ pub struct McpToolRecord {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct PolicyRecord {
     pub id: String,
     pub tenant_id: String,
@@ -455,7 +456,7 @@ pub struct PolicyRecord {
 /// TASK-0091 (#937): an archived prior version of a [`PolicyRecord`], written
 /// by `routes::update_policy` before the `policies` row is overwritten in
 /// place — gives operators an audit trail of every prior policy version.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct PolicyVersionRecord {
     pub id: String,
     pub tenant_id: String,
@@ -475,7 +476,7 @@ pub struct PolicyVersionRecord {
 /// `/v1/authorize` decision so operators can see an agent's risk trend over
 /// time rather than only its latest decision's score.
 #[cfg(test)]
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct AgentRiskScoreRecord {
     pub id: String,
     pub tenant_id: String,
@@ -486,7 +487,7 @@ pub struct AgentRiskScoreRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,
     pub tenant_id: String,
@@ -533,7 +534,7 @@ pub struct DecisionRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct ApprovalRecord {
     pub id: String,
     pub tenant_id: String,
@@ -568,7 +569,7 @@ pub struct ApprovalRecord {
 /// is a separate, server-generated plaintext secret (returned once at
 /// creation, like `agent_token`) used to HMAC-sign outbound deliveries —
 /// `secret_hash` above is a one-way hash and cannot be used for that.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct WebhookSubscriptionRecord {
     pub id: String,
     pub tenant_id: String,
@@ -602,7 +603,7 @@ pub struct WebhookSubscriptionRecord {
 /// body that will eventually be loaded by `detect.rs` to replace the
 /// hardcoded Rust detection functions. `enabled` lets operators turn a rule
 /// off without deleting it.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DetectionRuleRecord {
     pub id: String,
     pub tenant_id: String,
@@ -617,7 +618,7 @@ pub struct DetectionRuleRecord {
 
 /// TASK-0093 (#939): a tenant-managed API key. `key_hash` is `sha256(key)` —
 /// the plaintext key is returned exactly once at creation and never persisted.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct ApiKeyRecord {
     pub id: String,
     pub tenant_id: String,
@@ -629,7 +630,7 @@ pub struct ApiKeyRecord {
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct AuditEventRecord {
     pub id: String,
     pub tenant_id: String,
@@ -658,7 +659,7 @@ pub struct AuditEventRecord {
 /// GDPR data-portability bundle (#946): the complete set of a single tenant's
 /// records, assembled tenant-scoped for `GET /v1/tenants/:id/export`. Serialized
 /// to JSON; every list is filtered by `tenant_id`, so it never crosses tenants.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TenantExport {
     /// Format tag so consumers can version the export shape.
     pub schema: String,
@@ -678,7 +679,7 @@ pub struct TenantExport {
 /// Stores identifiers, summary and severity only — never raw payloads or secrets
 /// (redaction invariant). Tenant-scoped; `source_event_id` links back to the ASE
 /// event that triggered the alert.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct SocAlertRecord {
     pub id: String,
     pub tenant_id: String,
@@ -697,7 +698,7 @@ pub struct SocAlertRecord {
 /// Phase 6 lifecycle: `status` is `"open"` on creation and flips to `"closed"` via
 /// `POST /v1/incidents/:id/close`. `closed_at` is set to the RFC-3339 close timestamp
 /// at that point (NULL while open). The RCA narrator is gated on closed incidents.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct SocIncidentRecord {
     pub id: String,
     pub tenant_id: String,
@@ -717,7 +718,7 @@ pub struct SocIncidentRecord {
 /// All counts are derived from parameterized COUNT queries bound to `tenant_id` —
 /// no cross-tenant leakage (CWE-284). `alerts_high` = severity='high';
 /// `incidents_open` / `incidents_closed` split on the lifecycle `status` column.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SocSummary {
     pub alerts_total: i64,
     pub alerts_high: i64,
@@ -729,7 +730,7 @@ pub struct SocSummary {
 /// Tamper-evident, hash-chained action receipt. The hashed body is every field
 /// here EXCEPT `receipt_hash` and `created_at` (see routes::receipt_body_value),
 /// with the previous link (`prev_receipt_hash`) inside the body. Scheme aegis-jcs-1.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct ActionReceiptRecord {
     pub id: String,
     pub tenant_id: String,
@@ -770,7 +771,7 @@ pub struct ActionReceiptRecord {
 /// be re-verified end-to-end (see `routes::policy_audit_log_entry_value`).
 /// The `policy_audit_log` table additionally has SQLite triggers that abort
 /// any `UPDATE`/`DELETE`, making it append-only at the database level.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct PolicyAuditLogRecord {
     pub id: String,
     pub tenant_id: String,
@@ -792,14 +793,14 @@ pub struct PolicyAuditLogRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateTenantRequest {
     pub id: String,
     pub name: String,
     pub plan: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UpdateMcpServerRequest {
     pub name: Option<String>,
     pub owner_team: Option<Option<String>>,
@@ -815,7 +816,7 @@ pub struct UpdateMcpServerRequest {
 /// `POST /v1/mcp/servers/:server_key/inspect` (#1333) request body. The SDK
 /// submits this *after* executing an MCP-routed tool call — the gateway
 /// itself never observes tool responses on the `/v1/authorize` path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct InspectMcpResponseRequest {
     pub agent_id: String,
     pub tool_key: String,
@@ -827,7 +828,7 @@ pub struct InspectMcpResponseRequest {
     pub run_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TenantStats {
     pub total_decisions: i64,
     pub decisions_allow: i64,
@@ -843,7 +844,7 @@ pub struct TenantStats {
     pub trust_level_breakdown: Vec<TrustLevelCount>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TrustLevelCount {
     pub trust_level: String,
     pub count: i64,
@@ -852,7 +853,7 @@ pub struct TrustLevelCount {
 /// #1290: one row of the dashboard's Agent Risk Scoreboard — the rolling
 /// 24h average `composite_risk_score` per agent, ranked highest-first, with
 /// a trend relative to the prior 24h window (24-48h ago).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct AgentRiskScoreboardEntry {
     pub agent_id: String,
     pub agent_key: String,
@@ -865,7 +866,7 @@ pub struct AgentRiskScoreboardEntry {
 }
 
 /// Row count for a single table, part of `DbStats` (#950).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TableRowCount {
     pub table: String,
     pub row_count: i64,
@@ -874,7 +875,7 @@ pub struct TableRowCount {
 /// Operational database-level monitoring stats (#949, #950): on-disk size of
 /// the SQLite database file, and a per-table row count breakdown. Global
 /// (not tenant-scoped) — reflects the whole DB file shared by all tenants.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DbStats {
     pub size_bytes: i64,
     pub tables: Vec<TableRowCount>,
@@ -883,12 +884,12 @@ pub struct DbStats {
 /// Request body for `POST /v1/admin/backup` (#945). `filename` is a bare
 /// filename (no path separators) for the backup copy, written under the
 /// directory configured by `AEGIS_BACKUP_DIR` (default `backups`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateBackupRequest {
     pub filename: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateBackupResponse {
     pub path: String,
     pub size_bytes: i64,
