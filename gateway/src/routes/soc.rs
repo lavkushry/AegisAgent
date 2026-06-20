@@ -2493,6 +2493,7 @@ mod tests {
             events_rx,
             state.pool.clone(),
             state.metrics.clone(),
+            None,
         ));
 
         let app = Router::new()

@@ -62,6 +62,14 @@ Open, self-hostable, framework-neutral.
 
     [:octicons-arrow-right-24: Receipt spec](action-receipt-spec.md)
 
+-   :material-database-search:{ .lg .middle } **Qdrant integration**
+
+    ---
+
+    Semantic audit log indexing and vector search.
+
+    [:octicons-arrow-right-24: Qdrant guide](qdrant-integration.md)
+
 </div>
 
 ## What is AegisAgent?

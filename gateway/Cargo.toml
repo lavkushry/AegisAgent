@@ -31,7 +31,7 @@ hmac = "0.12"
 # is required at runtime (keys are provisioned out-of-band as hex).
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }
 hex = "=0.4.3"
-uuid = { version = "1.8", features = ["v4", "serde"] }
+uuid = { version = "1.8", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 tracing = "0.1"
@@ -53,9 +53,13 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # into a Stream for axum's `Sse` response, without pulling in tokio-stream as
 # a second stream-adapter crate. Already present as a transitive dependency
 # (and previously a direct dev-dependency for WS tests) — promoted to a
-# direct runtime dependency with its existing locked version, same precedent
-# as the percent-encoding/unicode-normalization promotions above.
 futures-util = "0.3"
+qdrant-client = "=1.10.2"
+fastembed = { version = "4", optional = true }
+
+[features]
+default = []
+local-embeddings = ["dep:fastembed"]
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"
