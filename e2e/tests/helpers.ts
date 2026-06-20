@@ -93,13 +93,17 @@ export async function createPendingApproval(
  * lands in `decisions` (and thus `total_decisions` >= 1 in `/v1/stats`)
  * without depending on any other test having already run. Requires
  * `github`/`read_issue` to already be a registered tool action (seeded by
- * scripts/seed-demo.sh).
+ * scripts/seed-demo.sh). `sourceTrust` defaults to `trusted_internal_signed`;
+ * pass another of the 6 context-trust levels (#1294) to exercise the
+ * dashboard's trust-level breakdown without depending on a mutating action
+ * (which a low-trust level would route to deny/require_approval instead).
  */
 export async function createAllowedDecision(
   request: APIRequestContext,
   baseURL: string,
   agentToken: string,
   agentKey: string,
+  sourceTrust: string = "trusted_internal_signed",
 ): Promise<void> {
   const resp = await request.post(`${baseURL}/v1/authorize`, {
     headers: {
@@ -117,7 +121,7 @@ export async function createAllowedDecision(
         parameters: {},
       },
       context: {
-        source_trust: "trusted_internal_signed",
+        source_trust: sourceTrust,
         contains_sensitive_data: false,
       },
     },

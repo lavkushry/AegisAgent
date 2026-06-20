@@ -835,6 +835,18 @@ pub struct TenantStats {
     pub decisions_require_approval: i64,
     pub total_agents: i64,
     pub total_receipts: i64,
+    /// #1294: per-`root_trust_level` decision counts, for the dashboard's
+    /// Trust Level Distribution chart and "% from untrusted sources" stat.
+    /// Rows predating the #1293 trust-chain migration have a `NULL`
+    /// `root_trust_level`, grouped here under `"unknown"`.
+    #[serde(default)]
+    pub trust_level_breakdown: Vec<TrustLevelCount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustLevelCount {
+    pub trust_level: String,
+    pub count: i64,
 }
 
 /// Row count for a single table, part of `DbStats` (#950).

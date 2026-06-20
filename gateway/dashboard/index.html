@@ -129,6 +129,10 @@
               <h3>Blocked (Denies)</h3>
               <div class="stat-value text-error" id="stat-denied">0</div>
             </div>
+            <div class="stat-card hoverable" data-target-view="explore">
+              <h3>Untrusted Sources</h3>
+              <div class="stat-value text-warning" id="stat-untrusted-pct">0%</div>
+            </div>
             <div class="stat-card hoverable" data-target-view="approvals">
               <h3>Pending Approvals</h3>
               <div class="stat-value text-warning" id="stat-approvals">0</div>
@@ -158,6 +162,15 @@
                 <div class="chart-container" id="decision-rate-chart">
                   <!-- Dynamic SVG will be rendered here -->
                   <svg width="100%" height="100%" viewBox="0 0 600 200" preserveAspectRatio="none" id="svg-decision-chart"></svg>
+                </div>
+              </div>
+
+              <div class="chart-card">
+                <div class="chart-header">
+                  <h2>Trust Level Distribution</h2>
+                </div>
+                <div id="trust-level-distribution">
+                  <!-- Rendered dynamically (#1294) -->
                 </div>
               </div>
 

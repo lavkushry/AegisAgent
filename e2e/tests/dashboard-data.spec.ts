@@ -102,6 +102,67 @@ test.describe("dashboard data views", () => {
     await expect(page.locator("#mcp-detail-container")).toBeHidden();
   });
 
+  test("Trust Level Distribution: color-coded badges, overview chart, and untrusted-sources stat (#1294)", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    // Self-contained: a dedicated agent with one decision at each of two
+    // trust levels, so this test doesn't depend on what trust levels other
+    // (possibly parallel) tests have produced.
+    const agentKey = `dashboard-e2e-trust-${Date.now()}`;
+    const agent = await registerTestAgent(request, baseURL!, agentKey);
+    await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey, "trusted_internal_signed");
+    await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey, "untrusted_external");
+
+    // Overview: the Trust Level Distribution chart and "Untrusted Sources"
+    // stat are tenant-wide aggregates shared with parallel tests, so assert
+    // only on what's true regardless of what else is running: the bar for
+    // each level we just created becomes visible (decisions are append-only,
+    // so once a level appears it stays — no flaky exact-count assertion),
+    // and the stat renders a well-formed percentage.
+    await page.goto("/dashboard/");
+    await expect(page.locator("#trust-level-distribution")).toContainText(
+      "untrusted_external",
+      { timeout: 10_000 },
+    );
+    await expect(page.locator("#trust-level-distribution")).toContainText(
+      "trusted_internal_signed",
+    );
+    await expect(page.locator("#stat-untrusted-pct")).toHaveText(/^\d+%$/);
+
+    // Explore: our two decisions render with color-coded trust badges, not
+    // the old flat badge-dark for every level.
+    await page.locator('.menu-item[data-view="explore"]').click();
+    await page.locator("#execute-search-btn").click();
+
+    // Column 5 is "Source Trust" — scope to it so the decision badge
+    // ("allow", also badge-success) isn't matched too.
+    const trustedRow = page.locator("#explore-tbody tr", {
+      hasText: agent.id,
+    }).filter({ hasText: "trusted_internal_signed" });
+    await expect(trustedRow.locator("td:nth-child(5) .badge-success")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    const untrustedRow = page.locator("#explore-tbody tr", {
+      hasText: agent.id,
+    }).filter({ hasText: "untrusted_external" });
+    await expect(untrustedRow.locator("td:nth-child(5) .badge-error")).toBeVisible();
+
+    // Trust facet sidebar is filterable (pre-existing capability, #1294 AC).
+    const facetEntry = page.locator("#facet-trust .facet-item", {
+      hasText: "untrusted_external",
+    });
+    await facetEntry.click();
+    await expect(page.locator("#active-filters-container")).toContainText(
+      "trust",
+    );
+    await expect(page.locator("#explore-tbody")).not.toContainText(
+      "trusted_internal_signed",
+    );
+  });
+
   test("Explore view executes a search and renders the decisions table", async ({
     page,
     request,

@@ -61,11 +61,13 @@
     statIncidents: document.getElementById("stat-incidents"),
     statAlerts: document.getElementById("stat-alerts"),
     statChainStatus: document.getElementById("stat-chain-status"),
-    
+    statUntrustedPct: document.getElementById("stat-untrusted-pct"),
+
     // Overview elements
     liveFeed: document.getElementById("live-feed-events"),
     topIncidentContainer: document.getElementById("top-incident-container"),
     svgDecisionChart: document.getElementById("svg-decision-chart"),
+    trustLevelDistribution: document.getElementById("trust-level-distribution"),
     
     // Explore Elements
     exploreQueryInput: document.getElementById("explore-query-input"),
@@ -374,6 +376,7 @@
     apiFetch("/v1/stats").then(function (data) {
       refs.statProtected.textContent = data.total_decisions || 0;
       refs.statDenied.textContent = data.decisions_deny || 0;
+      renderTrustLevelDistribution(data.trust_level_breakdown || [], data.total_decisions || 0);
       refs.globalStatusDot.className = "status-dot green";
       refs.globalStatusText.textContent = "Connected";
     }).catch(function(err) {
@@ -501,6 +504,42 @@
       <path d="${linePath}" fill="none" stroke="#6366f1" stroke-width="2.5" />
       ${labels}
     `;
+  }
+
+  // #1294: renders the per-trust-level decision breakdown as a bar list and
+  // updates the "Untrusted Sources" overview stat. "Untrusted" is defined as
+  // untrusted_external + malicious_suspected — the two levels the Cedar
+  // policy pack denies mutating actions for outright (see CLAUDE.md's
+  // "Critical invariants" on trust-provenance).
+  function renderTrustLevelDistribution(breakdown, totalDecisions) {
+    var untrustedCount = 0;
+    breakdown.forEach(function (entry) {
+      if (entry.trust_level === "untrusted_external" || entry.trust_level === "malicious_suspected") {
+        untrustedCount += entry.count;
+      }
+    });
+    var pct = totalDecisions > 0 ? Math.round((untrustedCount / totalDecisions) * 100) : 0;
+    refs.statUntrustedPct.textContent = pct + "%";
+
+    if (breakdown.length === 0) {
+      refs.trustLevelDistribution.innerHTML = "<div class='empty-row'>No decisions recorded yet.</div>";
+      return;
+    }
+
+    var maxCount = Math.max.apply(null, breakdown.map(function (e) { return e.count; }));
+    var sorted = breakdown.slice().sort(function (a, b) { return b.count - a.count; });
+
+    refs.trustLevelDistribution.innerHTML = sorted.map(function (entry) {
+      var widthPct = maxCount > 0 ? (entry.count / maxCount) * 100 : 0;
+      var badgeClass = trustBadgeClass(entry.trust_level);
+      return `
+        <div class="trust-bar-row">
+          <span class="trust-bar-label">${escapeHtml(entry.trust_level)}</span>
+          <span class="trust-bar-track"><span class="trust-bar-fill ${badgeClass}" style="width:${widthPct}%;"></span></span>
+          <span class="trust-bar-count">${entry.count}</span>
+        </div>
+      `;
+    }).join("");
   }
 
   function renderTopIncident(incident) {
@@ -634,7 +673,7 @@
         <td class="mono">${d.agent_id}</td>
         <td><code>${d.skill}.${d.action}</code></td>
         <td><span class="${decClass}">${d.decision}</span></td>
-        <td><span class="badge badge-dark">${d.root_trust_level}</span></td>
+        <td><span class="badge ${trustBadgeClass(d.root_trust_level)}">${d.root_trust_level}</span></td>
         <td class="mono">${d.risk_score || 0}</td>
         <td class="mono hash">${d.id.slice(0, 8)}...</td>
       `;
@@ -670,7 +709,7 @@
     trustKeys.forEach(function (key) {
       var li = document.createElement("li");
       li.className = "facet-item";
-      li.innerHTML = `<span>${key}</span> <strong>${trusts[key]}</strong>`;
+      li.innerHTML = `<span><span class="badge ${trustBadgeClass(key)}" style="margin-right:6px;">&nbsp;</span>${key}</span> <strong>${trusts[key]}</strong>`;
       li.addEventListener("click", function(k) { return function() { addFilter("trust", k); } }(key));
       refs.facetTrust.appendChild(li);
     });
@@ -1343,6 +1382,22 @@
   });
 
   // ── Helper Utilities ──
+  // #1294: maps the 6 context-trust-provenance levels (see CLAUDE.md's
+  // "Critical invariants" — tighten-only, never loosened) to badge colors so
+  // operators can scan trust at a glance instead of reading raw enum text.
+  var TRUST_BADGE_CLASSES = {
+    trusted_internal_signed: "badge-success",
+    trusted_internal_unsigned: "badge-info",
+    semi_trusted_customer: "badge-warning",
+    untrusted_external: "badge-error",
+    malicious_suspected: "badge-critical",
+    unknown: "badge-dark"
+  };
+
+  function trustBadgeClass(level) {
+    return TRUST_BADGE_CLASSES[level] || "badge-dark";
+  }
+
   function escapeHtml(str) {
     if (!str) return "";
     return str

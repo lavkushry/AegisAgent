@@ -517,6 +517,21 @@ pub async fn get_tenant_stats(
             .fetch_one(pool)
             .await?;
 
+    // #1294: per-trust-level breakdown for the dashboard's Trust Level
+    // Distribution chart. COALESCE groups pre-#1293 rows (NULL
+    // root_trust_level) under "unknown" rather than leaving a NULL group key.
+    let trust_level_rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT COALESCE(root_trust_level, 'unknown') AS trust_level, COUNT(*) AS count \
+         FROM decisions WHERE tenant_id = ? GROUP BY trust_level",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    let trust_level_breakdown = trust_level_rows
+        .into_iter()
+        .map(|(trust_level, count)| crate::models::TrustLevelCount { trust_level, count })
+        .collect();
+
     Ok(crate::models::TenantStats {
         total_decisions,
         decisions_allow,
@@ -524,6 +539,7 @@ pub async fn get_tenant_stats(
         decisions_require_approval,
         total_agents,
         total_receipts,
+        trust_level_breakdown,
     })
 }
 
@@ -1020,5 +1036,59 @@ mod tests {
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("dec_1").unwrap().id, "recv_1");
         assert!(!map.contains_key("dec_2"));
+    }
+
+    /// #1294: `get_tenant_stats` groups decisions by `root_trust_level` for
+    /// the dashboard's Trust Level Distribution chart. A `NULL`
+    /// `root_trust_level` (pre-#1293 rows) groups under `"unknown"` rather
+    /// than being dropped or panicking on a NULL group key.
+    #[tokio::test]
+    async fn get_tenant_stats_includes_trust_level_breakdown() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        register_tenant(
+            &pool,
+            "tenant_trust_breakdown",
+            "Trust Breakdown Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+                "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES ('agent_graph_perf', 'tenant_trust_breakdown', 'agent_graph_perf', 'token_trust_breakdown', 'Trust Breakdown Agent', 'dev', 'low', 'active')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut signed = graph_perf_decision("dec_signed", "tenant_trust_breakdown");
+        signed.root_trust_level = Some("trusted_internal_signed".to_string());
+        insert_decision(&pool, &signed).await.unwrap();
+
+        let mut untrusted = graph_perf_decision("dec_untrusted", "tenant_trust_breakdown");
+        untrusted.root_trust_level = Some("untrusted_external".to_string());
+        insert_decision(&pool, &untrusted).await.unwrap();
+
+        let mut untrusted_2 = graph_perf_decision("dec_untrusted_2", "tenant_trust_breakdown");
+        untrusted_2.root_trust_level = Some("untrusted_external".to_string());
+        insert_decision(&pool, &untrusted_2).await.unwrap();
+
+        // No root_trust_level set — must group under "unknown", not NULL.
+        let legacy = graph_perf_decision("dec_legacy", "tenant_trust_breakdown");
+        insert_decision(&pool, &legacy).await.unwrap();
+
+        let stats = get_tenant_stats(&pool, "tenant_trust_breakdown")
+            .await
+            .unwrap();
+        assert_eq!(stats.total_decisions, 4);
+
+        let breakdown: std::collections::HashMap<String, i64> = stats
+            .trust_level_breakdown
+            .into_iter()
+            .map(|t| (t.trust_level, t.count))
+            .collect();
+        assert_eq!(breakdown.get("trusted_internal_signed"), Some(&1));
+        assert_eq!(breakdown.get("untrusted_external"), Some(&2));
+        assert_eq!(breakdown.get("unknown"), Some(&1));
     }
 }
