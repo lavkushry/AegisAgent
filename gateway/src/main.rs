@@ -916,7 +916,12 @@ async fn check_liveness(bind_addr: &str) -> bool {
 #[allow(deprecated)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `--healthcheck` short-circuits before any of the normal startup (DB
-    // connect, migrations, tracing) — see `check_liveness` above.
+    // connect, migrations, tracing) — see `check_liveness` above. Not a
+    // security/identity decision (Semgrep's generic argv rule is about
+    // trusting argv[0] as a path/identity, which this isn't) — it only
+    // selects which of two equally-unprivileged code paths to run; the
+    // healthcheck path itself does nothing but GET its own /livez.
+    // nosemgrep: rust.lang.security.args.args
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
         let bind_addr =
             std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
