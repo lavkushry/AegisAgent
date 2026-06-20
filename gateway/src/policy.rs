@@ -3,7 +3,7 @@ use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use unicode_normalization::UnicodeNormalization;
 
 /// Normalize a tool or action identifier before building the Cedar entity UID.
@@ -32,7 +32,7 @@ pub enum PolicyError {
 }
 
 pub struct PolicyEngine {
-    base_policy_set: RwLock<PolicySet>,
+    base_policy_set: RwLock<Arc<PolicySet>>,
     /// Raw Cedar source of the base policy set (#1352). Kept alongside the
     /// parsed `base_policy_set` so [`Self::reload_tenant_policies`] can
     /// re-parse the base text together with a tenant's custom policy bodies
@@ -40,7 +40,7 @@ pub struct PolicyEngine {
     /// auto-id collisions that occur when each policy source is parsed
     /// independently and then merged via [`PolicySet::add`].
     base_policy_src: RwLock<String>,
-    tenant_policy_sets: RwLock<HashMap<String, PolicySet>>,
+    tenant_policy_sets: RwLock<HashMap<String, Arc<PolicySet>>>,
 }
 
 impl PolicyEngine {
@@ -53,7 +53,7 @@ impl PolicyEngine {
             PolicySet::from_str(&policy_str).map_err(|e| PolicyError::Parse(e.to_string()))?;
 
         Ok(Self {
-            base_policy_set: RwLock::new(policy_set),
+            base_policy_set: RwLock::new(Arc::new(policy_set)),
             base_policy_src: RwLock::new(policy_str),
             tenant_policy_sets: RwLock::new(HashMap::new()),
         })
@@ -123,7 +123,7 @@ impl PolicyEngine {
             .tenant_policy_sets
             .write()
             .unwrap_or_else(|e| e.into_inner());
-        sets.insert(tenant_id.to_string(), policy_set);
+        sets.insert(tenant_id.to_string(), Arc::new(policy_set));
 
         Ok(())
     }
@@ -142,7 +142,7 @@ impl PolicyEngine {
                 .base_policy_set
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
-            *base = policy_set;
+            *base = Arc::new(policy_set);
         }
         {
             let mut src = self
@@ -234,17 +234,21 @@ impl PolicyEngine {
         let entities = Entities::empty();
 
         // Read lock to get this tenant's policy set
-        let sets = self
-            .tenant_policy_sets
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        let policy_set = sets.get(tenant_id).cloned().unwrap_or_else(|| {
-            let base = self
-                .base_policy_set
+        let policy_set = {
+            let sets = self
+                .tenant_policy_sets
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
-            base.clone()
-        });
+            if let Some(set) = sets.get(tenant_id) {
+                set.clone()
+            } else {
+                let base = self
+                    .base_policy_set
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner());
+                base.clone()
+            }
+        };
 
         let response = authorizer.is_authorized(&request, &policy_set, &entities);
 
