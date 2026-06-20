@@ -1,0 +1,8 @@
+[build]
+# #1160: tokio-metrics' RuntimeMetrics fields for poll counts (total_polls_count
+# etc.) require tokio's unstable runtime introspection API
+# (tokio::runtime::Handle::metrics()), which is gated behind this cfg flag.
+# Applies repo-wide since CI/Docker invoke cargo from the repo root with
+# --manifest-path gateway/Cargo.toml (Cargo's config discovery walks up from
+# the current working directory, not the manifest path).
+rustflags = ["--cfg", "tokio_unstable"]

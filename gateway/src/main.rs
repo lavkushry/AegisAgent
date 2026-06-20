@@ -235,6 +235,52 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
     )
 }
 
+/// First-call-wins approximation of process start, used only to compute the
+/// scheduler utilization ratio on `GET /debug/runtime` — a few milliseconds
+/// of skew between actual process start and the first request doesn't matter
+/// for a debug endpoint, and avoids threading a new field through every
+/// `AppState` construction site (14 across gateway/src, mostly test helpers)
+/// just for this one derived metric.
+static RUNTIME_METRICS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// GET /debug/runtime (#1160) — Tokio runtime introspection, mirroring
+/// Kubernetes' `/debug/pprof` convention for an in-process diagnostics
+/// endpoint. Bound only on the existing 127.0.0.1 listener; no new bind, no
+/// public exposure (same invariant as `/metrics`). Requires the
+/// `tokio_unstable` cfg (set repo-wide via `.cargo/config.toml`) for
+/// per-worker poll/busy-duration counters — `num_alive_tasks`/
+/// `global_queue_depth` alone are stable, but "total polls" and "scheduler
+/// utilization" are not derivable without it.
+async fn debug_runtime_handler() -> impl IntoResponse {
+    let start = *RUNTIME_METRICS_START.get_or_init(std::time::Instant::now);
+    let metrics = tokio::runtime::Handle::current().metrics();
+    let workers_count = metrics.num_workers();
+
+    let mut total_poll_count: u64 = 0;
+    let mut total_busy_duration = std::time::Duration::ZERO;
+    for worker in 0..workers_count {
+        total_poll_count += metrics.worker_poll_count(worker);
+        total_busy_duration += metrics.worker_total_busy_duration(worker);
+    }
+
+    let elapsed = start.elapsed();
+    let scheduler_utilization = if elapsed.is_zero() || workers_count == 0 {
+        0.0
+    } else {
+        (total_busy_duration.as_secs_f64() / (elapsed.as_secs_f64() * workers_count as f64))
+            .clamp(0.0, 1.0)
+    };
+
+    Json(json!({
+        "active_tasks_count": metrics.num_alive_tasks(),
+        "workers_count": workers_count,
+        "total_poll_count": total_poll_count,
+        "global_queue_depth": metrics.global_queue_depth(),
+        "scheduler_utilization": scheduler_utilization,
+        "uptime_secs": elapsed.as_secs_f64(),
+    }))
+}
+
 /// Middleware: propagate or generate X-Request-ID on every request/response.
 /// If the client sends an `X-Request-ID` header, it is forwarded through the
 /// response. Otherwise a new UUID v4 is generated and attached. This enables
@@ -1388,6 +1434,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/startupz", get(startupz_handler))
         // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
         .route("/metrics", get(metrics_handler))
+        // Tokio runtime introspection (#1160, 127.0.0.1 only — same listener)
+        .route("/debug/runtime", get(debug_runtime_handler))
         .with_state(state.clone())
         // Middleware stack (outermost = first to run):
         // 1. CORS — must be outermost to handle preflight OPTIONS
@@ -2052,6 +2100,7 @@ mod tests {
             .route("/readyz", get(readyz_handler))
             .route("/startupz", get(startupz_handler))
             .route("/metrics", get(metrics_handler))
+            .route("/debug/runtime", get(debug_runtime_handler))
             .with_state(state.clone());
 
         (app, state, db_url)
@@ -2086,6 +2135,42 @@ mod tests {
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["status"], "alive");
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1160: `GET /debug/runtime` returns Tokio runtime introspection
+    /// stats. Asserts presence and basic sanity of the fields the issue's
+    /// acceptance criteria call out (active task count, total polls,
+    /// scheduler utilization) rather than exact values, since those are
+    /// inherently nondeterministic under `#[tokio::test]`.
+    #[tokio::test]
+    async fn debug_runtime_returns_tokio_metrics() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("debug_runtime").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/debug/runtime")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed["active_tasks_count"].as_u64().is_some());
+        assert!(parsed["workers_count"].as_u64().unwrap() >= 1);
+        assert!(parsed["total_poll_count"].as_u64().is_some());
+        assert!(parsed["global_queue_depth"].as_u64().is_some());
+        let utilization = parsed["scheduler_utilization"].as_f64().unwrap();
+        assert!((0.0..=1.0).contains(&utilization));
 
         cleanup_db(&db_url);
     }
