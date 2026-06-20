@@ -770,6 +770,56 @@ pub async fn soc_summary(
     }
 }
 
+/// Query parameters for `GET /soc/semantic-search` (#1451).
+#[derive(Debug, serde::Deserialize)]
+pub struct SemanticSearchParams {
+    pub query: String,
+    pub limit: Option<usize>,
+}
+
+/// GET /soc/semantic-search — search for semantically similar audit logs in Qdrant (multi-tenant isolated).
+pub async fn semantic_search(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::Query(params): axum::extract::Query<SemanticSearchParams>,
+) -> impl IntoResponse {
+    if params.query.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Query parameter cannot be empty"})),
+        )
+            .into_response();
+    }
+
+    let exporter = match &state.qdrant_exporter {
+        Some(exp) => exp,
+        None => {
+            return (
+                StatusCode::NOT_IMPLEMENTED,
+                Json(json!({"error": "Qdrant semantic search is not configured on this gateway"})),
+            )
+                .into_response();
+        }
+    };
+
+    let limit = params.limit.unwrap_or(10);
+
+    match exporter
+        .search_similar_events(&tenant_id, &params.query, limit)
+        .await
+    {
+        Ok(results) => (StatusCode::OK, Json(results)).into_response(),
+        Err(e) => {
+            error!("Semantic search failed: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Semantic search error: {}", e)})),
+            )
+                .into_response()
+        }
+    }
+}
+
 // ── SOC Phase 6: Incident lifecycle ──────────────────────────────────────────
 
 /// `POST /v1/incidents/:id/close` — close an open SOC incident.
@@ -2579,5 +2629,50 @@ mod tests {
         );
 
         let _ = ws_stream.close(None).await;
+    }
+
+    #[tokio::test]
+    async fn test_semantic_search_not_implemented() {
+        let (state, tenant_id, _agent_token) = setup_state("semantic_search_ni").await;
+
+        let response = semantic_search(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::Query(SemanticSearchParams {
+                query: "malicious activity".to_string(),
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["error"],
+            "Qdrant semantic search is not configured on this gateway"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_semantic_search_bad_request_empty_query() {
+        let (state, tenant_id, _agent_token) = setup_state("semantic_search_br").await;
+
+        let response = semantic_search(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::Query(SemanticSearchParams {
+                query: "   ".to_string(),
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "Query parameter cannot be empty");
     }
 }
