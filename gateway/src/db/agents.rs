@@ -76,16 +76,29 @@ pub async fn get_agent_by_key(
         .await
 }
 
+/// #1145: `?status=` field filtering. When `status_filter` is `None`, the
+/// default soft-delete exclusion (`status != 'deleted'`) applies, matching
+/// pre-#1145 behavior; when set, it's an exact match instead (so explicitly
+/// requesting `status=deleted` is honored rather than always hidden).
 pub async fn list_agents(
     pool: &SqlitePool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
+    status_filter: Option<&str>,
 ) -> Result<Vec<AgentRecord>, sqlx::Error> {
     sqlx::query_as::<_, AgentRecord>(
-        "SELECT * FROM agents WHERE tenant_id = ? AND status != 'deleted' ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        "SELECT * FROM agents
+         WHERE tenant_id = ?
+           AND (
+             (? IS NULL AND status != 'deleted')
+             OR status = ?
+           )
+         ORDER BY created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(tenant_id)
+    .bind(status_filter)
+    .bind(status_filter)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
