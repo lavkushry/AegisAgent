@@ -13,6 +13,7 @@ COPY gateway/canon ./gateway/canon
 COPY gateway/benches ./gateway/benches
 COPY gateway/migrations ./gateway/migrations
 COPY gateway/policies.cedar ./gateway/policies.cedar
+COPY gateway/dashboard ./gateway/dashboard
 RUN cargo build --release --manifest-path gateway/Cargo.toml
 
 FROM debian:bookworm-slim
