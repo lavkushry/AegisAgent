@@ -274,6 +274,35 @@ pub async fn get_decision_by_id(
     .await
 }
 
+/// #1326: batch-fetch decisions by id, tenant-scoped. Used to enrich a page
+/// of pending approvals with their originating decision's `agent_id` in one
+/// query, mirroring `list_approvals_by_decision_ids`'s batching to avoid an
+/// N+1 query per row.
+pub async fn list_decisions_by_ids(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    decision_ids: &[String],
+) -> Result<std::collections::HashMap<String, DecisionRecord>, sqlx::Error> {
+    if decision_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = decision_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+         FROM decisions WHERE tenant_id = ? AND id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as::<_, DecisionRecord>(&query).bind(tenant_id);
+    for id in decision_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| (r.id.clone(), r)).collect())
+}
+
 /// #1272: all decisions for a single agent run, tenant-scoped. Used to build
 /// the `GET /v1/graph/run/:run_id` evidence subgraph.
 pub async fn list_decisions_by_run_id(

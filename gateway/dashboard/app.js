@@ -336,18 +336,19 @@
       if (refs.tileAlerts) refs.tileAlerts.textContent = count;
     }).catch(console.error);
 
-    // Stat 3: Approvals Queue
+    // Stat 3: Approvals Queue — GET /v1/approvals already server-side filters
+    // to non-expired, undecided ("created") rows, so every row returned here
+    // is pending by construction.
     apiFetch("/v1/approvals").then(function (data) {
-      var pending = data.filter(function (a) { return a.status === "pending"; });
-      refs.menuApprovalsCount.textContent = pending.length;
-      refs.menuApprovalsCount.style.display = pending.length > 0 ? "inline-block" : "none";
-      refs.statApprovals.textContent = pending.length;
+      refs.menuApprovalsCount.textContent = data.length;
+      refs.menuApprovalsCount.style.display = data.length > 0 ? "inline-block" : "none";
+      refs.statApprovals.textContent = data.length;
     }).catch(console.error);
 
     // Stat 4: Tenant statistics (Protected and Denies count)
     apiFetch("/v1/stats").then(function (data) {
-      refs.statProtected.textContent = data.protected_actions_total || 0;
-      refs.statDenied.textContent = data.denied_actions_total || 0;
+      refs.statProtected.textContent = data.total_decisions || 0;
+      refs.statDenied.textContent = data.decisions_deny || 0;
       refs.globalStatusDot.className = "status-dot green";
       refs.globalStatusText.textContent = "Connected";
     }).catch(function(err) {
@@ -536,7 +537,7 @@
           if (key === "decision" && d.decision.toLowerCase() !== val) return false;
           if (key === "agent_id" && d.agent_id.toLowerCase().indexOf(val) === -1) return false;
           if (key === "tool" && d.skill.toLowerCase().indexOf(val) === -1) return false;
-          if (key === "trust" && d.source_trust.toLowerCase() !== val) return false;
+          if (key === "trust" && d.root_trust_level.toLowerCase() !== val) return false;
         }
         return true;
       });
@@ -608,7 +609,7 @@
         <td class="mono">${d.agent_id}</td>
         <td><code>${d.skill}.${d.action}</code></td>
         <td><span class="${decClass}">${d.decision}</span></td>
-        <td><span class="badge badge-dark">${d.source_trust}</span></td>
+        <td><span class="badge badge-dark">${d.root_trust_level}</span></td>
         <td class="mono">${d.risk_score || 0}</td>
         <td class="mono hash">${d.id.slice(0, 8)}...</td>
       `;
@@ -624,7 +625,7 @@
 
     allRows.forEach(function (d) {
       if (decisions[d.decision] !== undefined) decisions[d.decision]++;
-      trusts[d.source_trust] = (trusts[d.source_trust] || 0) + 1;
+      trusts[d.root_trust_level] = (trusts[d.root_trust_level] || 0) + 1;
       tools[d.skill] = (tools[d.skill] || 0) + 1;
     });
 
@@ -773,8 +774,8 @@
 
     // 2. Fetch agent operational status
     apiFetch("/v1/agents/" + state.selectedIncident.agent_id).then(function (data) {
-      refs.incDetailAgentStatus.textContent = data.operational_status;
-      refs.incDetailAgentStatus.className = data.operational_status === "active" ? "text-success" : "text-critical";
+      refs.incDetailAgentStatus.textContent = data.status;
+      refs.incDetailAgentStatus.className = data.status === "active" ? "text-success" : "text-critical";
     }).catch(console.error);
 
     // 3. Fetch Incident timeline/events
@@ -907,29 +908,30 @@
   // ── Approvals View ──
   function fetchApprovalsView() {
     apiFetch("/v1/approvals").then(function (data) {
+      // GET /v1/approvals already server-side filters to non-expired,
+      // undecided ("created") rows — every row here is pending by construction.
       state.approvals = data;
-      var pending = data.filter(function (a) { return a.status === "pending"; });
-      refs.approvalsViewCount.textContent = pending.length;
-      
+      refs.approvalsViewCount.textContent = data.length;
+
       refs.approvalsCardsContainer.innerHTML = "";
-      if (pending.length === 0) {
+      if (data.length === 0) {
         refs.approvalsCardsContainer.innerHTML = "<div class='empty-row' style='grid-column: 1/-1;'>No pending approvals in queue. System operational.</div>";
         return;
       }
 
-      pending.forEach(function (app) {
+      data.forEach(function (app) {
         var card = document.createElement("div");
         card.className = "approval-card";
-        
+
         var date = new Date(app.expires_at);
         var timeText = isNaN(date.getTime()) ? "N/A" : date.toLocaleTimeString();
-        
-        // Render pretty parameters
+
+        var toolCall = app.tool_call || {};
         var paramsStr = "{}";
         try {
-          paramsStr = JSON.stringify(JSON.parse(app.original_call_parameters), null, 2);
+          paramsStr = JSON.stringify(toolCall.parameters || {}, null, 2);
         } catch (_) {
-          paramsStr = app.original_call_parameters || "{}";
+          paramsStr = "{}";
         }
 
         card.innerHTML = `
@@ -938,26 +940,26 @@
             <span class="approval-expiry">Expires: ${timeText}</span>
           </div>
           <div class="approval-card-body">
-            <div>Agent: <strong class="mono">${app.agent_id}</strong></div>
-            <div>Action: <code>${app.skill}.${app.action}</code></div>
-            <div>Resource: <code>${app.resource || "N/A"}</code></div>
-            <div class="mono hash" style="font-size:10px;">action_hash: ${app.original_call_hash.slice(0, 16)}...</div>
+            <div>Agent: <strong class="mono">${app.agent_id || "N/A"}</strong></div>
+            <div>Action: <code>${toolCall.tool || "?"}.${toolCall.action || "?"}</code></div>
+            <div>Resource: <code>${toolCall.resource || "N/A"}</code></div>
+            <div class="mono hash" style="font-size:10px;">action_hash: ${app.action_hash.slice(0, 16)}...</div>
             <div class="approval-code-box">
               <pre>params: ${escapeHtml(paramsStr)}</pre>
             </div>
           </div>
           <div class="approval-card-footer">
-            <button class="btn btn-success btn-sm approve-btn" data-id="${app.id}">Approve</button>
-            <button class="btn btn-danger btn-sm reject-btn" data-id="${app.id}">Reject</button>
+            <button class="btn btn-success btn-sm approve-btn" data-id="${app.approval_id}">Approve</button>
+            <button class="btn btn-danger btn-sm reject-btn" data-id="${app.approval_id}">Reject</button>
           </div>
         `;
 
         card.querySelector(".approve-btn").addEventListener("click", function() {
-          handleApprovalAction(app.id, "approve");
+          handleApprovalAction(app.approval_id, "approve");
         });
 
         card.querySelector(".reject-btn").addEventListener("click", function() {
-          handleApprovalAction(app.id, "reject");
+          handleApprovalAction(app.approval_id, "reject");
         });
 
         refs.approvalsCardsContainer.appendChild(card);
@@ -969,7 +971,11 @@
 
   function handleApprovalAction(id, action) {
     if (confirm("Confirm " + action + " for approval " + id + "?")) {
-      apiFetch("/v1/approvals/" + id + "/" + action, "POST", {}).then(function() {
+      // approver_user_id is a required field on the gateway's ApproveRequest —
+      // this console has no per-operator login, so it records "dashboard-operator".
+      apiFetch("/v1/approvals/" + id + "/" + action, "POST", {
+        approver_user_id: "dashboard-operator"
+      }).then(function() {
         alert("Approval " + action + "d successfully!");
         fetchApprovalsView();
         fetchOverviewCounters();
@@ -992,17 +998,17 @@
 
       data.forEach(function (ag) {
         var tr = document.createElement("tr");
-        
-        var isFrozen = ag.operational_status === "frozen";
-        var isRevoked = ag.operational_status === "revoked";
-        
+
+        var isFrozen = ag.status === "frozen";
+        var isRevoked = ag.status === "revoked";
+
         var statusBadgeClass = isFrozen ? "badge badge-warning" : (isRevoked ? "badge badge-critical" : "badge badge-success");
-        
+
         tr.innerHTML = `
-          <td class="mono"><strong>${ag.id}</strong></td>
-          <td>${ag.owner || "N/A"}</td>
+          <td class="mono"><strong>${ag.agent_key || ag.id}</strong></td>
+          <td>${ag.owner_team || "N/A"}</td>
           <td>${ag.environment || "dev"}</td>
-          <td><span class="${statusBadgeClass}">${ag.operational_status}</span></td>
+          <td><span class="${statusBadgeClass}">${ag.status}</span></td>
           <td><code>${ag.allowed_environments || "All"}</code></td>
           <td class="mono">${new Date(ag.created_at).toLocaleDateString()}</td>
           <td class="mono">${ag.last_seen_at ? new Date(ag.last_seen_at).toLocaleTimeString() : "Never"}</td>
@@ -1062,18 +1068,20 @@
 
       data.forEach(function (m) {
         var tr = document.createElement("tr");
-        var isDrift = m.drift_status === "drifted";
+        // "quarantined" is how the gateway's manifest-drift auto-response
+        // (mcp.rs) flags a server whose tool manifest changed since pinning.
+        var isDrift = m.status === "quarantined";
         var driftBadgeClass = isDrift ? "badge badge-critical" : "badge badge-success";
         var isInspect = m.inspection_enabled;
-        
+
         tr.innerHTML = `
           <td class="mono"><strong>${m.server_key}</strong></td>
           <td>${m.name || "N/A"}</td>
-          <td><code>${m.transport_type}</code></td>
+          <td><code>${m.transport}</code></td>
           <td><span class="badge badge-dark">${m.trust_level}</span></td>
           <td><span class="badge ${isInspect ? "badge-success" : "badge-dark"}">${isInspect ? "enabled" : "disabled"}</span></td>
-          <td><span class="${driftBadgeClass}">${m.drift_status || "pinned"}</span></td>
-          <td class="mono">${m.last_active_at ? new Date(m.last_active_at).toLocaleTimeString() : "Never"}</td>
+          <td><span class="${driftBadgeClass}">${isDrift ? "drifted" : "pinned"}</span></td>
+          <td class="mono">${m.last_discovery_at ? new Date(m.last_discovery_at).toLocaleTimeString() : "Never"}</td>
           <td>
             <div style="display:flex; gap:6px;">
               <button class="btn btn-secondary btn-sm approve-server-btn" data-id="${m.server_key}">Pin Manifest</button>

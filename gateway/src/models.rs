@@ -282,6 +282,12 @@ pub struct AgentRecord {
     pub id: String,
     pub tenant_id: String,
     pub agent_key: String,
+    /// SHA-256 hash of the agent's bearer token (CWE-200, #1326): `GET
+    /// /v1/agents`/`GET /v1/agents/:id` previously serialized this whole
+    /// struct directly, leaking the hash over the management API even though
+    /// it's never needed there — the plaintext token is returned exactly
+    /// once, at registration/rotation time, via a distinct response shape.
+    #[serde(default, skip_serializing)]
     pub agent_token: String,
     pub name: String,
     pub owner_team: Option<String>,
@@ -314,7 +320,9 @@ pub struct AgentRecord {
     /// HMAC-SHA256 signing key for request-body integrity verification (#1403).
     /// `None` = opt-out (backwards compatible). When set, every `/v1/authorize`
     /// call must carry a valid `X-Aegis-Request-Signature: sha256=<hex>` header.
-    #[serde(default)]
+    /// Unlike `agent_token` this is a live plaintext shared secret (not a
+    /// hash) — never serialize it over the API (CWE-522, #1326).
+    #[serde(default, skip_serializing)]
     pub signing_key: Option<String>,
     /// JSON-encoded list of environments this agent may call from (#1391), e.g.
     /// `["production","staging"]`. `None` = unrestricted (backwards-compatible).

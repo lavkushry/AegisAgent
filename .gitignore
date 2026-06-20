@@ -56,5 +56,10 @@ Thumbs.db
 # Node.js (TypeScript SDK)
 node_modules/
 
+# Playwright dashboard E2E (#1326)
+e2e/test-results/
+e2e/playwright-report/
+e2e/.cache/
+
 # Claude Code agent worktrees (local, ephemeral)
 .claude/worktrees/
