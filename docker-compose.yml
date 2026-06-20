@@ -1,10 +1,28 @@
 services:
+  # #1207: the gateway image now runs as distroless's built-in nonroot
+  # uid/gid (65532) instead of root. The bind-mounted ./data directory is
+  # created by Docker (or a developer's `mkdir`) under the *host* user, so
+  # the nonroot gateway process can't write to it without this — a tiny
+  # one-shot root-running container that chmods the mount before the
+  # gateway starts. 0777 is intentionally permissive (not just 65532-owned)
+  # since the host-side uid varies across local dev machines and CI
+  # runners; this is the existing local-dev/test data dir, not a
+  # multi-tenant production path (see CLAUDE.md's 127.0.0.1-only invariant).
+  init-data-dir:
+    image: busybox:1.36
+    command: ["sh", "-c", "mkdir -p /data && chmod -R 0777 /data"]
+    volumes:
+      - ./data:/data
+
   gateway:
     build:
       context: .
       dockerfile: gateway/Dockerfile
     image: aegisagent-gateway:local
     network_mode: host
+    depends_on:
+      init-data-dir:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: sqlite:///data/aegis.db
       CEDAR_POLICY_PATH: /app/policies.cedar
@@ -13,7 +31,10 @@ services:
       - ./data:/data
       - ./policies.cedar:/app/policies.cedar:ro
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      # #1207: the distroless runtime image has no curl/shell — the binary
+      # execs itself with --healthcheck instead (see gateway/Dockerfile and
+      # main.rs's check_liveness).
+      test: ["CMD", "/usr/local/bin/aegis-gateway", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 6

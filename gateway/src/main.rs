@@ -900,9 +900,38 @@ fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
     Ok(key)
 }
 
+/// Self-healthcheck for the distroless runtime image (#1207): no shell, no
+/// `curl`, no package manager in `gcr.io/distroless/cc-debian12` — Docker's
+/// `HEALTHCHECK` directive instead execs this binary with `--healthcheck`,
+/// which GETs the already-running gateway's own `/livez` and exits 0/1.
+async fn check_liveness(bind_addr: &str) -> bool {
+    let url = format!("http://{bind_addr}/livez");
+    matches!(
+        reqwest::Client::new().get(&url).send().await,
+        Ok(resp) if resp.status().is_success()
+    )
+}
+
 #[tokio::main]
 #[allow(deprecated)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `--healthcheck` short-circuits before any of the normal startup (DB
+    // connect, migrations, tracing) — see `check_liveness` above. Not a
+    // security/identity decision (Semgrep's generic argv rule is about
+    // trusting argv[0] as a path/identity, which this isn't) — it only
+    // selects which of two equally-unprivileged code paths to run; the
+    // healthcheck path itself does nothing but GET its own /livez.
+    // nosemgrep: rust.lang.security.args.args
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        let bind_addr =
+            std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+        std::process::exit(if check_liveness(&bind_addr).await {
+            0
+        } else {
+            1
+        });
+    }
+
     // Initialize tracing with structured JSON logging and log redaction
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -2034,6 +2063,34 @@ mod tests {
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["status"], "alive");
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1207: `check_liveness` is what `--healthcheck` calls inside the
+    /// distroless runtime image (no curl/shell available there) — verifies
+    /// it correctly reports true against a real listening gateway's
+    /// `/livez` and false against an address nothing is listening on.
+    #[tokio::test]
+    async fn check_liveness_true_when_livez_reachable_false_otherwise() {
+        let (app, _state, db_url) = probe_test_app("check_liveness").await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        assert!(check_liveness(&addr.to_string()).await);
+
+        // Bind-then-drop to get a port nothing is listening on, rather than
+        // guessing an arbitrary "probably free" port number.
+        let closed_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_addr = closed_listener.local_addr().unwrap();
+        drop(closed_listener);
+        assert!(!check_liveness(&closed_addr.to_string()).await);
 
         cleanup_db(&db_url);
     }
