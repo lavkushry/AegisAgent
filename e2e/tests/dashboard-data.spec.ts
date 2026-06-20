@@ -40,7 +40,18 @@ test.describe("dashboard data views", () => {
     await expect(page.locator("#mcp-servers-tbody")).toContainText("github-mcp-demo");
   });
 
-  test("Explore view executes a search and renders the decisions table", async ({ page }) => {
+  test("Explore view executes a search and renders the decisions table", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    // Self-contained: don't rely on another (possibly parallel) test having
+    // already produced a decision row — every /v1/authorize call also writes
+    // a receipt, so this covers the Integrity Logs test below too.
+    const agentKey = `dashboard-e2e-explore-${Date.now()}`;
+    const agent = await registerTestAgent(request, baseURL!, agentKey);
+    await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey);
+
     await page.goto("/dashboard/");
     await page.locator('.menu-item[data-view="explore"]').click();
     await page.locator("#execute-search-btn").click();
@@ -51,7 +62,17 @@ test.describe("dashboard data views", () => {
     await expect(page.locator("#explore-tbody tr.empty-row")).toHaveCount(0);
   });
 
-  test("Integrity Logs view renders the receipt chain with verify actions", async ({ page }) => {
+  test("Integrity Logs view renders the receipt chain with verify actions", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    // Self-contained for the same reason as the Explore test above — every
+    // decision (`/v1/authorize` call) emits a receipt (#1326 #1271).
+    const agentKey = `dashboard-e2e-receipts-${Date.now()}`;
+    const agent = await registerTestAgent(request, baseURL!, agentKey);
+    await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey);
+
     await page.goto("/dashboard/");
     await page.locator('.menu-item[data-view="receipts"]').click();
     await expect(page.locator("#receipts-tbody tr.empty-row")).toHaveCount(0, {
