@@ -1855,6 +1855,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -1904,6 +1905,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         // First request is allowed through quota
@@ -6052,6 +6054,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         register_high_risk_action(state.clone()).await;
@@ -6242,6 +6245,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            background_task_handles: Vec::new(),
         });
 
         register_high_risk_action(state.clone()).await;
