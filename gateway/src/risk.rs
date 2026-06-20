@@ -21,7 +21,9 @@
 /// Per-tenant configurable weights. Defaults come from `AEGIS_RISK_*` env vars
 /// (see [`RiskWeights::from_env`]) and may be overridden per-tenant via
 /// `tenant_risk_weights` (see `db::get_risk_weights`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 pub struct RiskWeights {
     /// Added when `RiskInputs::mutates_state` is true.
     pub environment_weight_mutating: i32,

@@ -11,10 +11,11 @@
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
+use utoipa::ToSchema;
 
 /// Per-tenant configuration for [`maybe_escalate_agent_risk_tier`]. Falls
 /// back to [`Default`] when a tenant has no override row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ToSchema)]
 pub struct RiskEscalationConfig {
     /// Escalate once more than this many `deny` decisions land within the window.
     pub denial_threshold: i64,

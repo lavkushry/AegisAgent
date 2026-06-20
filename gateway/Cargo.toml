@@ -56,6 +56,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 futures-util = "0.3"
 qdrant-client = "=1.10.2"
 fastembed = { version = "4", optional = true }
+utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "6", features = ["axum"] }
 
 [features]
 default = []

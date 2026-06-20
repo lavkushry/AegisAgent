@@ -1167,7 +1167,7 @@ mod tests {
         assert_eq!(spec_resp.status(), StatusCode::OK);
         let body_spec = to_bytes(spec_resp.into_body(), usize::MAX).await.unwrap();
         let spec_json: Value = serde_json::from_slice(&body_spec).unwrap();
-        assert_eq!(spec_json["openapi"], "3.1.0");
+        assert_eq!(spec_json["openapi"], "3.0.3");
         assert_eq!(spec_json["info"]["title"], "AegisAgent Control Plane API");
     }
 

@@ -30,6 +30,8 @@ use gateway::qdrant;
 use gateway::routes;
 
 use routes::AppState;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 /// Gateway version — kept in sync with Cargo.toml.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1291,6 +1293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Construct Axum router with middleware layers
     let app = Router::new()
+        .merge(SwaggerUi::new("/v1/docs").url("/v1/openapi.json", routes::ApiDoc::openapi()))
         .nest(
             "/v1",
             api_routes().layer(middleware::from_fn(routes::deprecation_middleware)),
