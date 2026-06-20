@@ -140,6 +140,61 @@ pub async fn run_approval_cleanup_job(pool: SqlitePool, interval_secs: u64, rete
     }
 }
 
+/// Default interval between DB connection-pool health samples (REL-004, #1150).
+pub const DEFAULT_POOL_HEALTH_SAMPLE_INTERVAL_SECS: u64 = 30;
+
+/// Busy-ratio threshold above which `sample_pool_health` logs a warning
+/// (REL-004, #1150's "alert threshold" acceptance criterion).
+const POOL_BUSY_WARN_THRESHOLD: f64 = 0.8;
+
+/// One DB connection-pool health sample: times a synthetic `pool.acquire()`
+/// (released immediately back to the pool) into
+/// `metrics.db_pool_acquire_wait`, and logs a warning if the pool is over
+/// `POOL_BUSY_WARN_THRESHOLD` busy. A real query call already implicitly
+/// acquires a connection on every request; this synthetic probe gives the
+/// same acquire-latency signal under current load without instrumenting
+/// every one of the codebase's call sites individually.
+pub async fn sample_pool_health(
+    pool: &SqlitePool,
+    metrics: &crate::metrics::SecurityMetrics,
+) -> Result<(), sqlx::Error> {
+    let start = std::time::Instant::now();
+    let conn = pool.acquire().await?;
+    metrics.db_pool_acquire_wait.observe(start.elapsed());
+    drop(conn); // release back to the pool immediately
+
+    let max_connections = pool.options().get_max_connections();
+    if max_connections > 0 {
+        let active = pool.size().saturating_sub(pool.num_idle() as u32);
+        let busy_ratio = f64::from(active) / f64::from(max_connections);
+        if busy_ratio > POOL_BUSY_WARN_THRESHOLD {
+            warn!(
+                "DB connection pool {:.0}% busy: {}/{} connections active",
+                busy_ratio * 100.0,
+                active,
+                max_connections
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Run [`sample_pool_health`] on a fixed interval until the process exits.
+/// Intended to be `tokio::spawn`ed once at startup.
+pub async fn run_pool_health_sampler(
+    pool: SqlitePool,
+    interval_secs: u64,
+    metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if let Err(e) = sample_pool_health(&pool, &metrics).await {
+            error!("pool health sampler failed: {:?}", e);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +239,21 @@ mod tests {
         };
         rec.receipt_hash = compute_receipt_hash(&rec);
         rec
+    }
+
+    /// #1150: one pass of `sample_pool_health` must record exactly one
+    /// `db_pool_acquire_wait` observation.
+    #[tokio::test]
+    async fn sample_pool_health_records_one_acquire_observation() {
+        let pool = setup_pool("pool_health_sample").await;
+        let metrics = crate::metrics::SecurityMetrics::new();
+
+        assert_eq!(metrics.db_pool_acquire_wait.average_seconds(), 0.0);
+        sample_pool_health(&pool, &metrics).await.unwrap();
+        assert_eq!(metrics.db_pool_acquire_wait.count(), 1);
+
+        sample_pool_health(&pool, &metrics).await.unwrap();
+        assert_eq!(metrics.db_pool_acquire_wait.count(), 2);
     }
 
     #[tokio::test]

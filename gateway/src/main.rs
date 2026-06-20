@@ -201,7 +201,21 @@ fn panic_response(
 /// Bound only on the existing 127.0.0.1 listener; no new bind, no public exposure.
 /// Labels are omitted to avoid leaking tenant/agent identifiers.
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let body = state.metrics.render_prometheus();
+    let mut body = state.metrics.render_prometheus();
+    // REL-004 (#1150): point-in-time pool gauges, read directly from the live
+    // pool at scrape time — no separate sampling/storage needed for these two
+    // (unlike `db_pool_acquire_wait_seconds`, which needs a timed probe and is
+    // rendered as part of `render_prometheus` above).
+    let idle = state.pool.num_idle() as u32;
+    let active = state.pool.size().saturating_sub(idle);
+    body.push_str(&format!(
+        "# HELP db_pool_connections_active Number of SQLite pool connections currently checked out\n\
+         # TYPE db_pool_connections_active gauge\n\
+         db_pool_connections_active {active}\n\
+         # HELP db_pool_connections_idle Number of SQLite pool connections currently idle\n\
+         # TYPE db_pool_connections_idle gauge\n\
+         db_pool_connections_idle {idle}\n"
+    ));
     (
         StatusCode::OK,
         [(
@@ -797,6 +811,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // REL-004 (#1150): periodically sample DB connection-pool acquire
+    // latency and log a warning when the pool is over 80% busy.
+    let pool_health_sample_interval_secs: u64 =
+        std::env::var("AEGIS_POOL_HEALTH_SAMPLE_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(jobs::DEFAULT_POOL_HEALTH_SAMPLE_INTERVAL_SECS);
+    let pool_health_sampler_abort_handle = tokio::spawn(jobs::run_pool_health_sampler(
+        pool.clone(),
+        pool_health_sample_interval_secs,
+        metrics.clone(),
+    ))
+    .abort_handle();
+
     // #1152: zero-I/O liveness tracking for the fire-and-forget background
     // tasks above — `AbortHandle::is_finished()` reports whether a task
     // panicked and stopped running, surfaced on GET /readyz. `drain_handle`
@@ -812,6 +840,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
+        ("pool_health_sampler", pool_health_sampler_abort_handle),
     ];
 
     // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
@@ -1702,6 +1731,7 @@ mod tests {
             .route("/livez", get(livez_handler))
             .route("/readyz", get(readyz_handler))
             .route("/startupz", get(startupz_handler))
+            .route("/metrics", get(metrics_handler))
             .with_state(state.clone());
 
         (app, state, db_url)
@@ -1938,6 +1968,34 @@ mod tests {
         assert_eq!(parsed["db"], "up");
         assert_eq!(parsed["background_tasks"], "down");
         assert_eq!(parsed["dead_background_tasks"][0], "doomed_task");
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1150: `GET /metrics` exposes point-in-time DB connection-pool gauges.
+    #[tokio::test]
+    async fn metrics_endpoint_exposes_db_pool_gauges() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("metrics_pool_gauges").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("# TYPE db_pool_connections_active gauge"));
+        assert!(text.contains("# TYPE db_pool_connections_idle gauge"));
+        assert!(text.contains("# TYPE db_pool_acquire_wait_seconds gauge"));
 
         cleanup_db(&db_url);
     }

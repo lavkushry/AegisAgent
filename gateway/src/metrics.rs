@@ -107,6 +107,11 @@ impl RollingAverage {
         self.count.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Total number of observations recorded.
+    pub fn count(&self) -> u64 {
+        self.count.load(Ordering::Relaxed)
+    }
+
     /// Mean of all observations recorded so far, in seconds. `0.0` if no
     /// observations have been recorded yet.
     pub fn average_seconds(&self) -> f64 {
@@ -168,6 +173,12 @@ pub struct SecurityMetrics {
     /// (SOC-005, #1158). Sampled in `routes::close_incident` from the real
     /// gap between `opened_at` and `closed_at`.
     pub soc_mttr: RollingAverage,
+    /// Rolling mean DB connection-pool acquire latency (REL-004, #1150).
+    /// Sampled by `jobs::sample_pool_health`'s periodic background probe — a
+    /// synthetic `pool.acquire()` timed and released immediately, since
+    /// instrumenting every real query call site across the codebase would be
+    /// far more invasive for the same observability signal under load.
+    pub db_pool_acquire_wait: RollingAverage,
 }
 
 impl SecurityMetrics {
@@ -343,6 +354,10 @@ impl SecurityMetrics {
         out.push_str(&self.soc_mttr.render(
             "aegis_soc_mttr_seconds",
             "Rolling mean time from incident open to incident close",
+        ));
+        out.push_str(&self.db_pool_acquire_wait.render(
+            "db_pool_acquire_wait_seconds",
+            "Rolling mean DB connection-pool acquire latency, sampled periodically",
         ));
 
         out
