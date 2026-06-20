@@ -1427,6 +1427,7 @@ mod tests {
             events_rx,
             state_raw.pool.clone(),
             state_raw.metrics.clone(),
+            None,
         ));
 
         // Create a custom app state with rate limit capacity = 1
@@ -1451,6 +1452,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            qdrant_exporter: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1501,6 +1503,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            qdrant_exporter: None,
             background_task_handles: Vec::new(),
         });
 
@@ -5650,6 +5653,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            qdrant_exporter: None,
             background_task_handles: Vec::new(),
         });
 
@@ -5841,6 +5845,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            qdrant_exporter: None,
             background_task_handles: Vec::new(),
         });
 

@@ -980,6 +980,198 @@ pub async fn narrate_incident(
         .into_response()
 }
 
+/// `GET /v1/incidents/:id/evidence-pack` — per-incident compliance evidence
+/// export (SOC-006, #1189). Bundles the incident, the alerts and decisions
+/// that contributed to it, the receipts/audit events tied to those
+/// decisions, and an RCA narrative into a downloadable ZIP — a focused,
+/// single-incident counterpart to the tenant-wide
+/// `GET /v1/compliance/evidence-pack` (#1298).
+///
+/// Linkage: `soc_incidents.source_event_ids` and `soc_alerts.source_event_id`
+/// are both populated from the same `AseEvent.event_id`, and
+/// `audit_events.id` is that same event_id at emission time — so alerts and
+/// decisions are resolved by exact `IN (...)` match, not a heuristic (the
+/// same linkage `GET /v1/graph/incident/:incident_id` (#1272) already uses).
+///
+/// 404 if the incident doesn't exist for this tenant. Tenant-scoped
+/// throughout — every query binds `tenant_id` (CWE-284).
+pub async fn get_incident_evidence_pack(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(incident_id): Path<String>,
+) -> impl IntoResponse {
+    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        Ok(Some(inc)) => inc,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Incident not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch incident for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let event_ids: Vec<String> =
+        serde_json::from_str(&incident.source_event_ids).unwrap_or_default();
+
+    let alerts =
+        match db::list_soc_alerts_by_source_event_ids(&state.pool, &tenant_id, &event_ids).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("Failed to load alerts for evidence pack: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    // Resolve event_ids -> decision_ids (#1272's established linkage),
+    // de-duplicated, preserving the order encountered.
+    let mut decision_ids: Vec<String> = Vec::new();
+    for event_id in &event_ids {
+        if let Ok(Some(decision_id)) =
+            db::get_audit_event_decision_id(&state.pool, &tenant_id, event_id).await
+        {
+            if !decision_ids.contains(&decision_id) {
+                decision_ids.push(decision_id);
+            }
+        }
+    }
+
+    let receipts = match db::list_action_receipts_by_decision_ids(
+        &state.pool,
+        &tenant_id,
+        &decision_ids,
+    )
+    .await
+    {
+        Ok(map) => map.into_values().collect::<Vec<_>>(),
+        Err(e) => {
+            error!("Failed to load receipts for evidence pack: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let audit_events =
+        match db::list_audit_events_by_decision_ids(&state.pool, &tenant_id, &decision_ids).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("Failed to load audit events for evidence pack: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Database error"})),
+                )
+                    .into_response();
+            }
+        };
+
+    // Same hermetic-by-default narrator as `narrate_incident` — no network
+    // call unless AEGIS_NARRATOR=claude is explicitly configured.
+    let narrator = crate::narrate::from_env();
+    let rca_narrative = narrator.narrate(&incident);
+
+    let zip_bytes = match build_incident_evidence_pack_zip(
+        &incident,
+        &alerts,
+        &receipts,
+        &audit_events,
+        &rca_narrative,
+    ) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            error!("Failed to build incident evidence pack zip: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to build evidence pack"})),
+            )
+                .into_response();
+        }
+    };
+
+    info!(incident_id = %incident_id, "incident evidence pack generated");
+
+    let filename = format!(
+        "evidence-pack-incident-{incident_id}-{}.zip",
+        Utc::now().timestamp()
+    );
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/zip".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        zip_bytes,
+    )
+        .into_response()
+}
+
+/// Serialize one incident's evidence bundle into an in-memory ZIP archive
+/// (#1189). Bounded by a single incident's linked data (typically a handful
+/// of alerts/decisions), unlike the tenant-wide, potentially unbounded
+/// `build_evidence_pack_zip` (#1298) — in-memory construction is the same
+/// established pattern, not a new streaming-writer dependency, since the
+/// per-incident data volume doesn't justify one.
+fn build_incident_evidence_pack_zip(
+    incident: &SocIncidentRecord,
+    alerts: &[SocAlertRecord],
+    receipts: &[ActionReceiptRecord],
+    audit_events: &[AuditEventRecord],
+    rca_narrative: &str,
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        writer.start_file("incident.json", options)?;
+        let incident_bytes = serde_json::to_vec_pretty(incident)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &incident_bytes)?;
+
+        writer.start_file("alerts.json", options)?;
+        let alerts_bytes = serde_json::to_vec_pretty(alerts)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &alerts_bytes)?;
+
+        writer.start_file("receipts.json", options)?;
+        let receipts_bytes = serde_json::to_vec_pretty(receipts)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &receipts_bytes)?;
+
+        writer.start_file("audit_events.json", options)?;
+        let audit_events_bytes = serde_json::to_vec_pretty(audit_events)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::io::Write::write_all(&mut writer, &audit_events_bytes)?;
+
+        writer.start_file("rca_narrative.md", options)?;
+        std::io::Write::write_all(&mut writer, rca_narrative.as_bytes())?;
+
+        writer.finish()?;
+    }
+    Ok(cursor.into_inner())
+}
+
 pub async fn ws_events(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
@@ -2045,6 +2237,7 @@ mod tests {
             events_rx,
             state.pool.clone(),
             state.metrics.clone(),
+            None,
         ));
 
         let app = Router::new()

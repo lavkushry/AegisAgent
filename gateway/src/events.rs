@@ -264,6 +264,7 @@ pub async fn drain(
     mut rx: mpsc::Receiver<AseEvent>,
     pool: SqlitePool,
     metrics: Arc<SecurityMetrics>,
+    exporter: Option<Arc<crate::qdrant::QdrantExporter>>,
 ) -> usize {
     let detector = Detector::default();
     // Phase 2: construct the notify sink once from env; NullSink when
@@ -288,6 +289,17 @@ pub async fn drain(
             action = %ev.action,
             "ASE",
         );
+
+        // If Qdrant exporter is configured, vectorize and index the event out-of-band.
+        if let Some(ref exp) = exporter {
+            let exp_clone = exp.clone();
+            let ev_clone = ev.clone();
+            tokio::spawn(async move {
+                if let Err(e) = exp_clone.export_event(ev_clone).await {
+                    error!("Failed to index event in Qdrant out-of-band: {:?}", e);
+                }
+            });
+        }
 
         // SOC-002 (#1185): resolve the SOC Response Engine's autonomy level for
         // this event's tenant. L0 (log-only) suppresses all notifications and
@@ -658,7 +670,7 @@ mod tests {
         // Spawn the drain task (Phase 0 consumer + Phases 1/2/3/5).
         let (tx, rx) = mpsc::channel(16);
         let metrics = Arc::new(SecurityMetrics::new());
-        let drain_handle = tokio::spawn(drain(rx, pool.clone(), metrics));
+        let drain_handle = tokio::spawn(drain(rx, pool.clone(), metrics, None));
 
         // Emit DENY_STORM_N (5) deny events for the same (tenant, agent).
         for i in 0..crate::correlate::DENY_STORM_N {

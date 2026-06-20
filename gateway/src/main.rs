@@ -26,6 +26,7 @@ use gateway::gh_comment;
 use gateway::jobs;
 use gateway::metrics;
 use gateway::policy;
+use gateway::qdrant;
 use gateway::routes;
 
 use routes::AppState;
@@ -688,6 +689,7 @@ fn match_key_at(chars: &[char], i: usize, key: &str) -> Option<usize> {
 }
 
 #[tokio::main]
+#[allow(deprecated)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing with structured JSON logging and log redaction
     let subscriber = tracing_subscriber::registry()
@@ -736,6 +738,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Loading Cedar policies from: {} ...", policy_path);
     let policy_engine = policy::PolicyEngine::init(&policy_path).await?;
 
+    // Optional Qdrant exporter initialization
+    let qdrant_exporter = if let Ok(qdrant_url) = std::env::var("AEGIS_QDRANT_URL") {
+        info!(
+            "Qdrant URL set to: {}. Initializing semantic indexing exporter...",
+            qdrant_url
+        );
+
+        let qdrant_api_key = std::env::var("AEGIS_QDRANT_API_KEY").ok();
+        let collection_name = std::env::var("AEGIS_QDRANT_COLLECTION")
+            .unwrap_or_else(|_| "aegis_audit_events".to_string());
+
+        let strategy =
+            std::env::var("AEGIS_EMBEDDING_STRATEGY").unwrap_or_else(|_| "api".to_string());
+
+        let model_name = std::env::var("AEGIS_EMBEDDING_MODEL")
+            .unwrap_or_else(|_| "text-embedding-3-small".to_string());
+
+        let dimension = std::env::var("AEGIS_EMBEDDING_DIMENSION")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1536);
+
+        // Build embedding model strategy
+        let embedding_model: Arc<dyn qdrant::EmbeddingModel> = if strategy == "local" {
+            #[cfg(feature = "local-embeddings")]
+            {
+                info!(
+                    "Using in-process ONNX local embedding model: {}",
+                    model_name
+                );
+                let fastembed_model = fastembed::TextEmbedding::try_new(
+                    fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
+                        .with_show_download_progress(false),
+                )?;
+                Arc::new(qdrant::LocalEmbeddingModel {
+                    model: fastembed_model,
+                    dimension,
+                })
+            }
+            #[cfg(not(feature = "local-embeddings"))]
+            {
+                return Err("AEGIS_EMBEDDING_STRATEGY is set to 'local', but 'local-embeddings' feature was not compiled.".into());
+            }
+        } else {
+            // API strategy
+            let embedding_url = std::env::var("AEGIS_EMBEDDING_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1/embeddings".to_string());
+            let embedding_key = std::env::var("AEGIS_EMBEDDING_KEY").ok();
+            info!(
+                "Using OpenAI-compatible HTTP embedding client (URL: {}, Model: {})",
+                embedding_url, model_name
+            );
+
+            Arc::new(qdrant::HttpEmbeddingModel {
+                client: reqwest::Client::new(),
+                url: embedding_url,
+                key: embedding_key,
+                model: model_name,
+                dimension,
+            })
+        };
+
+        // Build Qdrant client
+        let mut config = qdrant_client::prelude::QdrantClientConfig::from_url(&qdrant_url);
+        if let Some(ref api_key) = qdrant_api_key {
+            config.set_api_key(api_key);
+        }
+        let qdrant_client = qdrant_client::prelude::QdrantClient::new(Some(config))?;
+
+        let exporter = qdrant::QdrantExporter::new(qdrant_client, embedding_model, collection_name);
+
+        // Initialize Qdrant collection
+        if let Err(e) = exporter.init_collection().await {
+            tracing::error!("Failed to initialize Qdrant collection: {:?}", e);
+            return Err(e as Box<dyn std::error::Error>);
+        }
+
+        Some(Arc::new(exporter))
+    } else {
+        None
+    };
+
     // Async SOC event stream (Phase 0 keystone): the authorize hot path emits
     // non-blocking onto this channel; a background task drains it. Every later
     // SOC phase (detection, correlation, response, indexing) consumes this one
@@ -743,7 +827,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
     let metrics = Arc::new(metrics::SecurityMetrics::new());
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
-    let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone(), metrics.clone()));
+    let drain_handle = tokio::spawn(events::drain(
+        events_rx,
+        pool.clone(),
+        metrics.clone(),
+        qdrant_exporter.clone(),
+    ));
     let drain_abort_handle = drain_handle.abort_handle();
 
     // #1315: audit-event write batching. The authorize hot path hands
@@ -993,6 +1082,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         slack_signing_secret,
         github_pr_commenter,
         github_checks_client,
+        qdrant_exporter,
         background_task_handles,
     });
 
@@ -1154,6 +1244,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator — on-demand, human-triggered, LAW-2 compliant
         .route("/v1/incidents/:id/narrate", get(routes::narrate_incident))
+        // SOC-006 (#1189): per-incident compliance evidence pack export
+        .route(
+            "/v1/incidents/:id/evidence-pack",
+            get(routes::get_incident_evidence_pack),
+        )
         // SOC Phase 4: Response API — agent freeze/revoke/quarantine, MCP quarantine
         .route("/v1/agents/:id/freeze", post(routes::freeze_agent))
         .route("/v1/agents/:id/unfreeze", post(routes::unfreeze_agent))
@@ -1413,7 +1508,12 @@ mod tests {
         let metrics = Arc::new(metrics::SecurityMetrics::new());
         let (events_sink, events_rx) =
             events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
-        let drain_handle = tokio::spawn(events::drain(events_rx, pool.clone(), metrics.clone()));
+        let drain_handle = tokio::spawn(events::drain(
+            events_rx,
+            pool.clone(),
+            metrics.clone(),
+            None,
+        ));
 
         // Emit an event
         let event = events::AseEvent {
@@ -1509,6 +1609,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            qdrant_exporter: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1724,6 +1825,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            qdrant_exporter: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1943,6 +2045,7 @@ mod tests {
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
+            qdrant_exporter: None,
             background_task_handles: vec![("doomed_task", doomed_abort_handle)],
         });
 

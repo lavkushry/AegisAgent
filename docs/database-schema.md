@@ -270,3 +270,5 @@ erDiagram
   checks `PRAGMA table_info(<table>)` before `ALTER TABLE ... ADD COLUMN`, so
   re-running `run_migrations` against an already-migrated database is a no-op
   (locked in by `db::tests::migrations_are_idempotent_on_existing_database`, #0108).
+- **Qdrant Vector Database:** When enabled, Agent Security Events (`AseEvent`) are asynchronously vectorized and indexed in Qdrant. See the [Qdrant guide](qdrant-integration.md) for details on semantic indexing and configurations.
+

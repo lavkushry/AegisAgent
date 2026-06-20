@@ -31,6 +31,7 @@ pub mod models;
 pub mod narrate;
 pub mod notify;
 pub mod policy;
+pub mod qdrant;
 pub mod respond;
 pub mod risk;
 pub mod risk_escalation;
