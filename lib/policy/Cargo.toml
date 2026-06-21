@@ -1,0 +1,18 @@
+[package]
+name = "aegis-policy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aegis-common = { path = "../common" }
+aegis-api = { path = "../api" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+cedar-policy = { workspace = true }
+tracing = { workspace = true }
+percent-encoding = "2.3.2"
+unicode-normalization = "0.1.25"
+thiserror = { workspace = true }
+tokio = { workspace = true }

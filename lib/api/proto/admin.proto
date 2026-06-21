@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package aegis;
+
+service AdminService {
+    rpc CreateTenant (CreateTenantRequest) returns (CreateTenantResponse);
+    rpc RegisterMcpServer (RegisterMcpServerRequest) returns (RegisterMcpServerResponse);
+    rpc DiscoverMcpTools (DiscoverMcpToolsRequest) returns (DiscoverMcpToolsResponse);
+}
+
+message CreateTenantRequest {
+    string id = 1;
+    string name = 2;
+    string plan = 3;
+}
+
+message CreateTenantResponse {
+    string id = 1;
+    string name = 2;
+    string plan = 3;
+    string created_at = 4;
+}
+
+message RegisterMcpServerRequest {
+    string tenant_id = 1;
+    string server_key = 2;
+    string name = 3;
+    string owner_team = 4;
+    string transport = 5;
+    string source = 6;
+    string trust_level = 7;
+    string endpoint = 8;
+}
+
+message RegisterMcpServerResponse {
+    string server_id = 1;
+    string server_key = 2;
+    string status = 3;
+}
+
+message McpToolManifestItem {
+    string tool_key = 1;
+    string name = 2;
+    string description = 3;
+    string input_schema_json = 4; // JSON string
+    string risk = 5;
+    bool mutates_state = 6;
+    bool approval_required = 7;
+}
+
+message DiscoverMcpToolsRequest {
+    string tenant_id = 1;
+    string server_key = 2;
+    repeated McpToolManifestItem tools = 3;
+}
+
+message McpToolStatusResponse {
+    string server_key = 1;
+    string tool_key = 2;
+    string status = 3;
+}
+
+message DiscoverMcpToolsResponse {
+    repeated McpToolStatusResponse tools = 1;
+}

@@ -1,11 +1,11 @@
 # Rust build output
-/gateway/target/
+**/target/
 /target/
 
 # cargo-fuzz corpora and crash artifacts (TEST-002, #1162)
-/gateway/fuzz/target/
-/gateway/fuzz/corpus/
-/gateway/fuzz/artifacts/
+/src/fuzz/target/
+/src/fuzz/corpus/
+/src/fuzz/artifacts/
 
 # MkDocs documentation site build output
 /site/

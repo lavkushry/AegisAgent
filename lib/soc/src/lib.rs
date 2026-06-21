@@ -1,0 +1,13 @@
+pub mod backtest;
+pub mod baseline;
+pub mod correlate;
+pub mod detect;
+pub mod events;
+pub mod ingest;
+pub mod mcp_inspect;
+pub mod narrate;
+pub mod notify;
+pub mod qdrant;
+pub mod respond;
+pub mod rule_dsl;
+pub mod webhook_export;

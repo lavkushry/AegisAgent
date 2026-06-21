@@ -1,91 +1,116 @@
 ```markdown
 # AegisAgent Development Patterns
 
-> Auto-generated skill from repository analysis
+> Auto-generated skill from repository analysis — updated for Qdrant-inspired architecture
 
 ## Overview
-This skill teaches you the core development patterns, coding conventions, and workflows used in the AegisAgent Rust codebase. You'll learn how to structure files, write and organize code, follow commit message conventions, and set up or run tests as practiced in this repository.
+This skill teaches the core architecture, coding conventions, and workflows used in AegisAgent.
+AegisAgent follows a **Qdrant-inspired layered Cargo workspace** with dual-protocol serving
+(REST via Axum + gRPC via tonic). **Read `docs/ARCHITECTURE.md` first** — it is the source of truth.
+
+## Architecture (Qdrant-Inspired)
+
+### Workspace Layout
+```
+AegisAgent/
+├── Cargo.toml                    # workspace root
+├── config/config.yaml            # YAML config
+├── src/                          # THIN binary crate (handlers + startup only)
+│   ├── handlers/                 # REST handlers (Axum, port 8080)
+│   ├── grpc/                     # gRPC service impls (tonic, port 6334)
+│   ├── axum_app.rs               # REST route wiring
+│   ├── tonic_app.rs              # gRPC service wiring
+│   └── main.rs                   # CLI + dual-server startup
+├── lib/
+│   ├── common/ (aegis-common)    # errors, crypto, metrics — NO domain logic
+│   ├── api/ (aegis-api)          # proto/ defs + generated code + REST models
+│   │   └── proto/*.proto         # SOURCE OF TRUTH for API types
+│   ├── storage/ (aegis-storage)  # StorageBackend trait + SQLite impl
+│   ├── policy/ (aegis-policy)    # Cedar engine, trust chain, risk
+│   └── soc/ (aegis-soc)         # detection, correlation, response
+└── sdk-python/ sdk-go/ sdk-typescript/
+```
+
+### Dependency Rule (downward only — NEVER upward)
+```
+common ← api ← storage/policy ← soc ← binary
+```
+
+### Dual Protocol (Qdrant Pattern)
+- **REST** (Axum) on port 8080, **gRPC** (tonic + protobuf) on port 6334
+- Both share the same `AppState` and call the same `lib/` service methods
+- **Every new endpoint MUST be implemented on both REST and gRPC**
+- **Protobuf is the source of truth** for API types — define `.proto` messages first
 
 ## Coding Conventions
 
 ### File Naming
-- Use **camelCase** for file names.
-  - Example: `agentCore.rs`, `userSession.rs`
+- Use **snake_case** for Rust file names (e.g., `agent_service.rs`, `trust_chain.rs`)
+- Proto files: `aegis.proto`, `soc.proto`, `admin.proto`
 
 ### Import Style
-- Use **relative imports** for referencing modules within the project.
-  - Example:
-    ```rust
-    mod utils;
-    use crate::utils::parseConfig;
-    ```
+- Use `crate::` for binary-crate imports, crate name for cross-crate imports:
+  ```rust
+  use aegis_common::errors::AegisError;
+  use aegis_api::models::AuthorizeRequest;
+  use aegis_storage::traits::StorageBackend;
+  ```
 
-### Export Style
-- Use **named exports** to expose specific functions, structs, or modules.
-  - Example:
-    ```rust
-    pub fn initialize_agent() { ... }
-    pub struct AgentConfig { ... }
-    ```
+### Handler Pattern (both REST and gRPC)
+```rust
+// THREE steps only: parse → service call → respond
+// REST (src/handlers/):
+let request = parse_or_400(&body)?;
+let result = state.storage.some_method(&request).await?;
+Json(result)
+
+// gRPC (src/grpc/):
+let req = request.into_inner();
+let result = self.state.storage.some_method(&req.into()).await
+    .map_err(|e| tonic::Status::internal(e.to_string()))?;
+Ok(tonic::Response::new(result.into()))
+```
+
+### Error Handling
+- All lib functions return `Result<T, AegisError>` (from `aegis-common`)
+- REST: `AegisError` → `IntoResponse` (HTTP status)
+- gRPC: `AegisError` → `tonic::Status`
+- **Never use `.unwrap()`/`.expect()`** in production paths
 
 ### Commit Messages
-- Follow the **Conventional Commits** format.
-- Prefixes used: `fix`, `feat`
-- Example:
-  ```
-  feat: add user authentication middleware
-  fix: resolve panic on agent shutdown
-  ```
+- Follow **Conventional Commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
 
 ## Workflows
 
-### Creating a New Feature
-**Trigger:** When adding a new capability or module.
-**Command:** `/new-feature`
+### Creating a New API Endpoint
+1. Define the proto message in `lib/api/proto/aegis.proto`
+2. Run `cargo build -p aegis-api` to regenerate code
+3. Add REST model mirror in `lib/api/src/models.rs` if needed
+4. Add `StorageBackend` trait method in `lib/storage/src/traits.rs`
+5. Implement on `SqliteBackend` in `lib/storage/src/sqlite/`
+6. Create REST handler in `src/handlers/`
+7. Create gRPC service impl in `src/grpc/`
+8. Wire both in `axum_app.rs` and `tonic_app.rs`
+9. Write tests in the lib crate + gRPC integration test
 
-1. Create a new file using camelCase (e.g., `sessionManager.rs`).
-2. Implement your feature using relative imports for dependencies.
-3. Export public functions or structs using named exports.
-4. Write or update tests in a corresponding `*.test.*` file.
-5. Commit changes with a message starting with `feat:` and a concise description.
-
-### Fixing a Bug
-**Trigger:** When resolving a defect or issue.
-**Command:** `/fix-bug`
-
-1. Locate the problematic code.
-2. Apply the fix, ensuring code style and conventions are followed.
-3. Update or add tests in the appropriate `*.test.*` file.
-4. Commit with a message starting with `fix:` and a clear summary.
+### Creating a New DB Operation
+1. Add trait method to `StorageBackend`
+2. Implement on `SqliteBackend`
+3. Write unit test inside `lib/storage/`
+4. Call from handler/gRPC via `state.storage.method()`
 
 ### Writing and Running Tests
-**Trigger:** When validating code correctness.
-**Command:** `/run-tests`
+```bash
+# All workspace tests
+cargo test --workspace
 
-1. Create or update test files using the `*.test.*` naming pattern (e.g., `agentCore.test.rs`).
-2. Write tests according to Rust's test module conventions.
-3. Run tests using the standard Rust test runner:
-   ```
-   cargo test
-   ```
-4. Review output and address any failures.
+# Single crate
+cargo test -p aegis-storage
 
-## Testing Patterns
-
-- Test files follow the `*.test.*` naming convention (e.g., `module.test.rs`).
-- Testing framework is not explicitly defined; use Rust's built-in test framework.
-- Example test structure:
-  ```rust
-  #[cfg(test)]
-  mod tests {
-      use super::*;
-
-      #[test]
-      fn test_agent_initialization() {
-          // Test logic here
-      }
-  }
-  ```
+# Lint
+cargo fmt --all -- --check
+cargo clippy --workspace -- -D warnings
+```
 
 ## Commands
 | Command        | Purpose                                   |
