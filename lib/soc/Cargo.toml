@@ -1,0 +1,31 @@
+[package]
+name = "aegis-soc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aegis-common = { path = "../common" }
+aegis-api = { path = "../api" }
+aegis-storage = { path = "../storage" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+serde_yml = "0.0.12"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+qdrant-client = "=1.10.2"
+tokio = { workspace = true }
+futures-util = "0.3"
+sqlx = { workspace = true }
+sha2 = { workspace = true }
+hex = "=0.4.3"
+fastembed = { version = "4", optional = true }
+async-trait = "0.1.89"
+
+[features]
+default = []
+local-embeddings = ["dep:fastembed"]
+
+[dev-dependencies]
+axum = { workspace = true }

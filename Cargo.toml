@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "src",
+    "src/canon",
+    "lib/common",
+    "lib/api",
+    "lib/storage",
+    "lib/policy",
+    "lib/soc",
+]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "v5", "serde"] }
+tokio = { version = "1.38", features = ["full"] }
+tracing = "0.1"
+sqlx = { version = "0.8.1", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "json"] }
+thiserror = "1.0"
+sha2 = "0.10"
+hmac = "0.12"
+axum = { version = "0.7.5", features = ["macros", "ws"] }
+cedar-policy = "3.2.1"
+utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }

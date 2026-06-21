@@ -1,0 +1,20 @@
+[package]
+name = "aegis-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aegis-common = { path = "../common" }
+aegis-api = { path = "../api" }
+aegis-canon = { path = "../../src/canon" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sqlx = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+async-trait = "0.1.89"
+hex = "=0.4.3"

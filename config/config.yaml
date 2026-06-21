@@ -1,0 +1,30 @@
+log_level: INFO
+
+storage:
+  backend: sqlite
+  sqlite:
+    path: ./aegis.db
+    busy_timeout_ms: 5000
+    max_connections: 10
+
+gateway:
+  host: "127.0.0.1"
+  port: 8080
+  tls:
+    enabled: false
+    cert_path: null
+    key_path: null
+
+policy:
+  cedar_path: ./policies.cedar
+  auto_reload_interval_secs: 0
+
+soc:
+  event_channel_capacity: 10000
+  heartbeat_flush_interval_secs: 30
+  audit_batch_size: 100
+
+performance:
+  rate_limit_per_tenant: 1000
+  heartbeat_debounce_secs: 30
+  pool_health_sample_interval_secs: 30

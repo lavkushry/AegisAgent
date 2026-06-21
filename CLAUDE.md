@@ -86,9 +86,36 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 - **Native TLS Support via Rustls** (#1209): optional TLS support when `AEGIS_TLS_CERT` and `AEGIS_TLS_KEY` environment variables are set. Implements same-port TCP multiplexing: peeks incoming streams to route TLS traffic (Client Hello `0x16`) to Rustls, and redirects plain HTTP to HTTPS using an HTTP `308 Permanent Redirect` response. Enforces a minimum of TLS 1.2 and supports HTTP/1.1 and HTTP/2.
 - Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
 
-**Next:** real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard), PostgreSQL backend, Kubernetes/Helm packaging.
+**Next:** PostgreSQL backend (#1194), Kubernetes/Helm packaging, local fastembed for CPU-local embedding generation.
 
 Baseline: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, 3-SDK parity.
+
+## Architecture & Performance Roadmap
+
+### Storage Architecture (June 2026 evaluation)
+
+AegisAgent uses a **two-layer storage model**:
+
+| Layer | Current | Production target |
+|---|---|---|
+| Relational (approvals, receipts, decisions, audit) | SQLite + WAL + `SQLITE_BUSY` retry | PostgreSQL (#1194, MVCC, concurrent writes) |
+| Semantic / vector index | Qdrant (external) via `gateway/src/qdrant.rs` | Qdrant (unchanged — already the right tool) |
+
+**Why not etcd for metadata?**
+etcd is a distributed consensus KV store optimized for Kubernetes-style operator metadata (leader election, config fan-out). AegisAgent's approval integrity requires ACID transactions with FK constraints and relational joins (decisions ↔ alerts ↔ receipts ↔ agents). etcd's KV model cannot express that without building a custom transaction layer on top, adding complexity with no throughput benefit at this scale.
+
+**Why not a pluggable flat-file store (Qdrant Gridstore / ChromaDB style)?**
+Gridstore is a byte-aligned float32 vector segment store, SIMD-accelerated for ANN search — not a relational store. It is the right choice *for the vector layer* (already satisfied by Qdrant). The approval/receipt layer needs FK integrity and `JOIN`s; a flat-file store loses all of that. The hybrid architecture (Qdrant for vectors, SQLite/PG for relational) is the correct layering.
+
+**Current SQLite scalability ceiling:**
+SQLite serializes writes through a single WAL journal. Under high concurrent `/v1/authorize` load, `SQLITE_BUSY` contention is the primary bottleneck. Mitigations already in place: `retry_on_busy` in `db.rs` (#1399), `busy_timeout` set at pool init. The right fix at scale is PostgreSQL (#1194).
+
+### Performance Quick Wins (priority order)
+
+1. **Local embeddings (`--features fastembed`):** Every `/v1/authorize` call that hits the semantic index is currently blocked on a network round-trip to an external embedding API. Compiling with `fastembed` makes embedding CPU-local, removing the external dependency and the network latency entirely. Highest impact, lowest risk change.
+2. **PostgreSQL backend (#1194):** Removes SQLite write serialization; enables true concurrent writes (MVCC), connection pooling (pgBouncer), native JSON operators, and HA replication.
+3. **JCS-1 canonicalization caching:** The `aegis-jcs-1` canonicalization runs on every `/v1/authorize` hot path. Memoizing on `(action_hash, request_id)` for idempotent repeat calls avoids redundant CPU work.
+4. **Kubernetes / Helm packaging:** Enables horizontal gateway scaling once the PostgreSQL backend is in place (shared DB, stateless gateway pods).
 
 ## Commands
 

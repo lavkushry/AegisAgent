@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package aegis;
+
+service AegisService {
+    rpc Authorize (AuthorizeRequest) returns (AuthorizeResponse);
+    rpc RegisterAgent (RegisterAgentRequest) returns (RegisterAgentResponse);
+    rpc Approve (ApproveRequest) returns (ApproveResponse);
+}
+
+message AuthorizeAgentContext {
+    string id = 1;
+    string environment = 2;
+}
+
+message AuthorizeUserContext {
+    string id = 1;
+    string role = 2;
+}
+
+message AuthorizeToolCall {
+    string tool = 1;
+    string action = 2;
+    string resource = 3;
+    bool mutates_state = 4;
+    string parameters_json = 5; // JSON string
+}
+
+message AuthorizeDynamicContext {
+    string source_trust = 1;
+    bool contains_sensitive_data = 2;
+}
+
+message AuthorizeTraceContext {
+    string run_id = 1;
+    string trace_id = 2;
+    string parent_run_id = 3;
+    string root_trust_level = 4;
+}
+
+message ApprovalCallback {
+    string url = 1;
+    string secret = 2;
+}
+
+message AuthorizeRequest {
+    string tenant_id = 1;
+    string request_id = 2;
+    AuthorizeAgentContext agent = 3;
+    AuthorizeUserContext user = 4;
+    AuthorizeToolCall tool_call = 5;
+    AuthorizeDynamicContext context = 6;
+    AuthorizeTraceContext trace = 7;
+    ApprovalCallback callback = 8;
+    string nonce = 9;
+    string timestamp = 10; // RFC3339 string
+    bool dry_run = 11;
+}
+
+message ApprovalResponseInfo {
+    string approval_id = 1;
+    string status = 2;
+    string approver_group = 3;
+    string expires_at = 4; // RFC3339 string
+    string action_hash = 5;
+}
+
+message AuthorizeResponse {
+    string decision_id = 1;
+    string decision = 2;
+    int32 risk_score = 3;
+    string risk_level = 4;
+    int32 composite_risk_score = 5;
+    string reason = 6;
+    repeated string matched_policies = 7;
+    ApprovalResponseInfo approval = 8;
+    repeated string redacted_fields = 9;
+    string root_trust_level = 10;
+    bool dry_run = 11;
+}
+
+message RegisterAgentRequest {
+    string tenant_id = 1;
+    string agent_key = 2;
+    string name = 3;
+    string owner_team = 4;
+    string environment = 5;
+    string framework = 6;
+    string model_provider = 7;
+    string model_name = 8;
+    string risk_tier = 9;
+    string purpose = 10;
+    string signing_key = 11;
+    repeated string allowed_environments = 12;
+}
+
+message RegisterAgentResponse {
+    string id = 1;
+    string agent_key = 2;
+    string agent_token = 3;
+}
+
+message ApproveRequest {
+    string tenant_id = 1;
+    string approval_id = 2;
+    string approver_user_id = 3;
+    string reason = 4;
+}
+
+message ApproveResponse {
+    string status = 1;
+    string approval_id = 2;
+}
