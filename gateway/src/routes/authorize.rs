@@ -109,7 +109,7 @@ pub async fn authorize_action(
     let started_at = std::time::Instant::now();
 
     // Parse JSON from raw bytes — keeping bytes for HMAC signature verification (#1403).
-    let payload: AuthorizeRequest = match serde_json::from_slice(&body) {
+    let mut payload: AuthorizeRequest = match serde_json::from_slice(&body) {
         Ok(p) => p,
         Err(_) => return StatusError::bad_request("Invalid JSON body").into_response(),
     };
@@ -395,6 +395,75 @@ pub async fn authorize_action(
             }),
         )
             .into_response();
+    }
+
+    // Admission webhook (#1143, API-004): optional pre-authorize hook letting
+    // an external system pass, reject, or mutate this request before any
+    // risk/MCP/Cedar evaluation below. Fully opt-in — `state.admission_webhook`
+    // is `None` (no extra network call) unless AEGIS_ADMISSION_WEBHOOK_URL is set.
+    if let Some(ref webhook) = state.admission_webhook {
+        match webhook.call(&payload).await {
+            crate::admission::AdmissionOutcome::Pass => {}
+            crate::admission::AdmissionOutcome::Mutate(new_params) => {
+                payload.tool_call.parameters = new_params;
+            }
+            crate::admission::AdmissionOutcome::Reject(reason) => {
+                let decision_id = Uuid::new_v4();
+                let matched_policies = vec!["admission_webhook_reject".to_string()];
+                let risk_score = 100;
+                let risk_level = "critical".to_string();
+
+                let audit_event_type = if mcp_server_key_from_tool(&normalized_tool).is_some() {
+                    "mcp_tool_called"
+                } else {
+                    "tool_call_intercepted"
+                };
+
+                let composite_risk_score = match write_decision_and_audit(
+                    &state.pool,
+                    &state.events,
+                    &state.metrics,
+                    &state.audit_batch,
+                    &tenant_id,
+                    &agent_id,
+                    &payload,
+                    decision_id,
+                    "deny",
+                    risk_score,
+                    &reason,
+                    &matched_policies,
+                    audit_event_type,
+                    started_at,
+                    dry_run,
+                )
+                .await
+                {
+                    Ok(score) => score,
+                    Err(e) => {
+                        error!("Failed to write admission-webhook denial: {:?}", e);
+                        return StatusError::internal("Database error").into_response();
+                    }
+                };
+
+                return (
+                    StatusCode::OK,
+                    Json(AuthorizeResponse {
+                        decision_id,
+                        decision: "deny".to_string(),
+                        risk_score,
+                        risk_level,
+                        composite_risk_score,
+                        reason,
+                        matched_policies,
+                        approval: None,
+                        redacted_fields: vec![],
+                        root_trust_level: root_trust_level.clone(),
+                        dry_run,
+                    }),
+                )
+                    .into_response();
+            }
+        }
     }
 
     // Map risk levels based on DB registered action, falling back to policy engine defaults.
@@ -1325,6 +1394,153 @@ mod tests {
         assert_eq!(json["message"], "Database error");
     }
 
+    /// #1143 (API-004, AC #3): a `reject` admission-webhook decision denies
+    /// the request before it ever reaches Cedar, carrying the webhook's own
+    /// reason through to the response.
+    #[tokio::test]
+    async fn authorize_action_denied_by_admission_webhook_reject() {
+        use axum::{routing::post, Json as AxumJson, Router};
+
+        let app = Router::new().route(
+            "/admit",
+            post(|| async {
+                AxumJson(serde_json::json!({
+                    "decision": "reject",
+                    "reason": "blocked by external policy"
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (state, tenant_id, agent_token) = setup_state_with_admission_webhook(
+            "admission_reject",
+            &format!("http://{addr}/admit"),
+            true,
+        )
+        .await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        assert_eq!(response.decision, "deny");
+        assert_eq!(response.reason, "blocked by external policy");
+        assert_eq!(response.matched_policies, vec!["admission_webhook_reject"]);
+    }
+
+    /// #1143 (API-004, AC #3): a `mutate` admission-webhook decision replaces
+    /// `tool_call.parameters` before Cedar evaluation — proven here by
+    /// mutating `base_branch` from a non-"main" value to `"main"`, which
+    /// flips the production-GitHub-merge policy from allow to
+    /// `require_approval` (see `policies.cedar`). The bound approval's
+    /// enriched `tool_call` (#1326) is asserted to carry the *mutated*
+    /// parameters, not the agent's original ones.
+    #[tokio::test]
+    async fn authorize_action_mutated_by_admission_webhook_before_cedar() {
+        use axum::{routing::post, Json as AxumJson, Router};
+
+        let app = Router::new().route(
+            "/admit",
+            post(|| async {
+                AxumJson(serde_json::json!({
+                    "decision": "mutate",
+                    "parameters": {"base_branch": "main"}
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (state, tenant_id, agent_token) = setup_state_with_admission_webhook(
+            "admission_mutate",
+            &format!("http://{addr}/admit"),
+            true,
+        )
+        .await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/42".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "develop"});
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(
+            response.decision, "require_approval",
+            "mutated base_branch=main must trigger the production-merge approval policy"
+        );
+
+        let approval = response.approval.expect("approval info should be present");
+        let status_response = get_approval(
+            State(state),
+            TenantId(tenant_id.to_string()),
+            Path(approval.approval_id),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(status_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            status_json["tool_call"]["parameters"]["base_branch"], "main",
+            "the bound approval must carry the mutated parameters, not the agent's original ones"
+        );
+    }
+
+    /// #1143 (API-004): a `pass` admission-webhook decision must leave the
+    /// decision byte-for-byte identical to the same request with no
+    /// admission webhook configured at all — proving `pass` is a true no-op.
+    #[tokio::test]
+    async fn authorize_action_unaffected_by_admission_webhook_pass() {
+        use axum::{routing::post, Json as AxumJson, Router};
+
+        let app = Router::new().route(
+            "/admit",
+            post(|| async { AxumJson(serde_json::json!({"decision": "pass"})) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (state_with_webhook, tenant_id, agent_token) = setup_state_with_admission_webhook(
+            "admission_pass",
+            &format!("http://{addr}/admit"),
+            true,
+        )
+        .await;
+        let response_with_webhook = call_authorize(
+            state_with_webhook,
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+
+        let (state_baseline, tenant_id_baseline, agent_token_baseline) =
+            setup_state("admission_pass_baseline").await;
+        let response_baseline = call_authorize(
+            state_baseline,
+            &tenant_id_baseline,
+            &agent_token_baseline,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+
+        assert_eq!(response_with_webhook.decision, response_baseline.decision);
+        assert_eq!(
+            response_with_webhook.risk_score,
+            response_baseline.risk_score
+        );
+    }
+
     #[tokio::test]
     async fn test_rate_limiter() {
         let limiter = RateLimiter::new(2.0, 10.0);
@@ -1390,6 +1606,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1441,6 +1658,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -5591,6 +5809,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -5783,6 +6002,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 

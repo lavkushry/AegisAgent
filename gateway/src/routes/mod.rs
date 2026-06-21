@@ -477,6 +477,13 @@ pub struct AppState {
     pub github_checks_client: Option<std::sync::Arc<crate::gh_checks::GhChecksClient>>,
     /// Optional Qdrant exporter for semantic audit log vector indexing.
     pub qdrant_exporter: Option<Arc<crate::qdrant::QdrantExporter>>,
+    /// Optional pre-authorize admission webhook (#1143, API-004). When
+    /// `Some`, every `/v1/authorize` call is sent to the configured
+    /// `AEGIS_ADMISSION_WEBHOOK_URL` before Cedar evaluation, which may pass,
+    /// reject, or mutate the request's `tool_call.parameters`. `None` (the
+    /// default) makes `/v1/authorize` byte-for-byte unchanged from
+    /// pre-#1143 behavior — no extra network call at all.
+    pub admission_webhook: Option<Arc<crate::admission::AdmissionWebhookClient>>,
     /// Abort handles for fire-and-forget background tasks (event drain,
     /// audit-batch writer, periodic jobs) (#1152). `AbortHandle::is_finished()`
     /// is a zero-I/O signal that a task panicked and permanently stopped
@@ -1069,6 +1076,7 @@ pub mod benchutil {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1305,6 +1313,57 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
+            background_task_handles: Vec::new(),
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `admission_webhook` set to a real [`crate::admission::AdmissionWebhookClient`]
+    /// pointed at `url`, for testing the #1143 pre-authorize hook end-to-end
+    /// through `authorize_action`.
+    pub(crate) async fn setup_state_with_admission_webhook(
+        test_name: &str,
+        url: &str,
+        fail_open: bool,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+            None,
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+            qdrant_exporter: None,
+            admission_webhook: Some(Arc::new(crate::admission::AdmissionWebhookClient::new(
+                url.to_string(),
+                5,
+                fail_open,
+            ))),
             background_task_handles: Vec::new(),
         });
 
@@ -1348,6 +1407,7 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1445,6 +1505,7 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1499,6 +1560,7 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 

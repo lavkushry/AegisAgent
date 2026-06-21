@@ -13,6 +13,7 @@
 //! `routes::authorize_action`, and the `db`/`policy`/`events`/`models`
 //! helpers used to seed a test database.
 
+pub mod admission;
 pub mod audit_batch;
 pub mod backtest;
 pub mod baseline;
