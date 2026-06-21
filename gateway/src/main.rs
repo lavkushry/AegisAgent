@@ -207,6 +207,20 @@ fn panic_response(
     }
 }
 
+/// Error handler for the load-shed layer (#911): `tower::load_shed::LoadShedLayer`
+/// wraps `tower::limit::ConcurrencyLimitLayer`, so the only error this ever
+/// sees in practice is `tower::load_shed::error::Overloaded` once
+/// `AEGIS_MAX_CONCURRENT_REQUESTS` in-flight requests are already being
+/// served — converted to a structured `503` instead of axum's bare-string
+/// default. `BoxError` is intentionally treated as a catch-all "unavailable"
+/// rather than propagating the inner debug string, which could leak
+/// implementation details.
+async fn handle_overload_error(_err: tower::BoxError) -> impl IntoResponse {
+    StatusError::service_unavailable(
+        "Server is at capacity (AEGIS_MAX_CONCURRENT_REQUESTS); try again shortly",
+    )
+}
+
 /// GET /metrics — Prometheus text exposition of process-wide security counters.
 /// Bound only on the existing 127.0.0.1 listener; no new bind, no public exposure.
 /// Labels are omitted to avoid leaking tenant/agent identifiers.
@@ -1443,6 +1457,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(30);
     info!("Global request timeout: {}s", request_timeout_secs);
 
+    // #911: max in-flight requests before the load-shed layer rejects new
+    // ones with 503 instead of queuing them indefinitely.
+    let max_concurrent_requests: usize = std::env::var("AEGIS_MAX_CONCURRENT_REQUESTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    info!(
+        "Max concurrent requests (load shed): {}",
+        max_concurrent_requests
+    );
+
     // Construct Axum router with middleware layers
     let app = Router::new()
         .merge(SwaggerUi::new("/v1/docs").url("/v1/docs/openapi.json", routes::ApiDoc::openapi()))
@@ -1473,6 +1498,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Middleware stack (outermost = first to run):
         // 1. CORS — must be outermost to handle preflight OPTIONS
         .layer(cors_layer())
+        // 1b. Load shed (#911): once AEGIS_MAX_CONCURRENT_REQUESTS requests
+        // are already in flight, reject new ones immediately with 503
+        // instead of queuing (which would just push back the same overload
+        // onto the timeout layer further in). LoadShedLayer only sheds when
+        // wrapped around something that signals backpressure via
+        // `poll_ready` — that's the concurrency limiter's job here; axum
+        // handlers alone are always immediately `Ready`. HandleErrorLayer
+        // converts the resulting `Overloaded` error into a structured 503
+        // (`Router::layer` requires `Error = Infallible`).
+        //
+        // Deliberately `GlobalConcurrencyLimitLayer`, not the plain
+        // `ServiceBuilder::concurrency_limit()` convenience (which wraps
+        // `ConcurrencyLimitLayer`): for a `.route(path, get(handler))`
+        // registration, axum defers the handler->Route conversion and
+        // re-applies every outer `.layer()` fresh on each incoming request
+        // (`axum::boxed::Map::call_with_state`) rather than once at startup.
+        // `ConcurrencyLimitLayer::layer()` allocates a brand new
+        // `Arc<Semaphore>` on every call, so under that path every request
+        // would see its own private, always-free permit and shedding would
+        // never trigger. `GlobalConcurrencyLimitLayer` stores one
+        // `Arc<Semaphore>` on the layer value itself and only ever clones
+        // that `Arc` from `.layer()`, so the permit count stays shared no
+        // matter how many times axum reapplies the layer.
+        .layer(
+            tower::ServiceBuilder::new()
+                .layer(axum::error_handling::HandleErrorLayer::new(
+                    handle_overload_error,
+                ))
+                .load_shed()
+                .layer(tower::limit::GlobalConcurrencyLimitLayer::new(
+                    max_concurrent_requests,
+                )),
+        )
         // 2. X-Request-ID propagation — correlates logs across SDK ↔ gateway
         .layer(middleware::from_fn(request_id_middleware))
         // 3. Content-Type validation — rejects non-JSON bodies on POST/PUT/PATCH
@@ -1943,6 +2001,76 @@ mod tests {
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(format!("{}-shm", db_path));
         let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+
+    /// #911: a load-shed layer wrapping a concurrency-limit-of-1 must reject
+    /// a second concurrent request with `503` instead of queuing it behind
+    /// the first — proving the layer combination actually sheds load rather
+    /// than (as `LoadShedLayer` alone would, with no concurrency limiter to
+    /// signal backpressure) being a silent no-op. Deliberately registers the
+    /// route via `get(handler)` (not `route_service`) and applies the layer
+    /// via `Router::layer` — that combination is what defeats a plain
+    /// `ConcurrencyLimitLayer` (axum re-applies outer layers fresh per
+    /// request for handler-based routes, see the comment on the production
+    /// middleware stack), so this guards the specific regression rather than
+    /// just the generic tower mechanism.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn load_shed_layer_returns_503_when_concurrency_limit_exceeded() {
+        use axum::routing::get;
+        use std::sync::Arc as StdArc;
+        use tokio::sync::Notify;
+        use tower::ServiceExt;
+
+        // Signaled by the handler itself once it has actually started
+        // running, so the test never has to guess a sleep duration long
+        // enough for the spawned first request to reach the handler.
+        let entered = StdArc::new(Notify::new());
+        let entered_clone = entered.clone();
+
+        let app = Router::new()
+            .route(
+                "/slow",
+                get(move || {
+                    let entered = entered_clone.clone();
+                    async move {
+                        entered.notify_one();
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        "slow"
+                    }
+                }),
+            )
+            .layer(
+                tower::ServiceBuilder::new()
+                    .layer(axum::error_handling::HandleErrorLayer::new(
+                        handle_overload_error,
+                    ))
+                    .load_shed()
+                    .layer(tower::limit::GlobalConcurrencyLimitLayer::new(1)),
+            );
+
+        let first = app
+            .clone()
+            .oneshot(Request::builder().uri("/slow").body(Body::empty()).unwrap());
+        let first_handle = tokio::spawn(first);
+
+        // Wait for the handler to actually start (and thus hold the sole
+        // concurrency permit) before firing the second request.
+        entered.notified().await;
+
+        let second_response = app
+            .clone()
+            .oneshot(Request::builder().uri("/slow").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(second_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(second_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["reason"], "ServiceUnavailable");
+
+        let first_response = first_handle.await.unwrap().unwrap();
+        assert_eq!(first_response.status(), StatusCode::OK);
     }
 
     /// Builds a tiny router with a fixed-body GET route, a fixed-body POST
