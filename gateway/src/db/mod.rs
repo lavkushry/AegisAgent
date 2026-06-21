@@ -1225,6 +1225,72 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 4);
     }
 
+    /// #1164 (TEST-004, AC #2): a pool with `max_connections(1)` whose only
+    /// connection is held open returns `Err(PoolTimedOut)` once
+    /// `acquire_timeout` elapses, rather than hanging indefinitely or
+    /// panicking. Wrapped in an outer `tokio::time::timeout` so the test
+    /// itself fails loudly (instead of hanging the suite) if that contract
+    /// is ever broken.
+    #[tokio::test]
+    async fn pool_acquire_times_out_gracefully_when_exhausted_not_panic() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        use std::time::Duration;
+
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/pool_exhausted_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let connection_options = sqlx::sqlite::SqliteConnectOptions::from_str(&db_url)
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(200))
+            .connect_with(connection_options)
+            .await
+            .unwrap();
+
+        // Hold the only connection open so the pool has zero capacity left.
+        let _held_connection = pool.acquire().await.unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query("SELECT 1").fetch_one(&pool),
+        )
+        .await
+        .expect("a second acquire must resolve (err or ok) well within 2s, not hang");
+
+        match result {
+            Err(sqlx::Error::PoolTimedOut) => {}
+            Err(e) => panic!("expected PoolTimedOut, got error: {e:?}"),
+            Ok(_) => panic!("expected PoolTimedOut, got Ok"),
+        }
+    }
+
+    /// #1164 (TEST-004, AC #3): opening a file that isn't a valid SQLite
+    /// database (simulating WAL/page corruption) returns a graceful `Err`
+    /// from `init_db` rather than panicking. The caller (`main()`) logs this
+    /// via `tracing::error!` before propagating, satisfying "detects and
+    /// logs error".
+    #[tokio::test]
+    async fn init_db_returns_error_not_panic_on_corrupted_database_file() {
+        std::fs::create_dir_all("target").unwrap();
+        let db_path = format!("target/corrupted_{}.db", Uuid::new_v4().simple());
+        // A real SQLite file starts with the 16-byte magic header
+        // "SQLite format 3\0". Garbage bytes here are reliably rejected by
+        // SQLite as "file is not a database" without needing to construct a
+        // byte-exact corrupted page layout.
+        std::fs::write(&db_path, b"not a sqlite database, just garbage bytes").unwrap();
+
+        let db_url = format!("sqlite://{}", db_path);
+        let result = init_db(&db_url).await;
+
+        assert!(result.is_err(), "expected init_db to return Err, got Ok");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
     #[tokio::test]
     async fn composite_hot_path_indexes_exist() {
         let pool = setup_pool("composite_indexes").await;
