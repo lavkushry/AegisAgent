@@ -18,6 +18,7 @@ use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
+use gateway::admission;
 use gateway::audit_batch;
 use gateway::db;
 use gateway::error::StatusError;
@@ -1378,6 +1379,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("AEGIS_GITHUB_APP_TOKEN is not set. GitHub check runs are disabled.");
     }
 
+    // Optional pre-authorize admission webhook (#1143, API-004). When
+    // AEGIS_ADMISSION_WEBHOOK_URL is unset, every /v1/authorize call is
+    // unaffected — no extra network call at all.
+    let admission_webhook = admission::AdmissionWebhookClient::from_env().map(Arc::new);
+    if admission_webhook.is_none() {
+        info!("AEGIS_ADMISSION_WEBHOOK_URL is not set. Admission webhooks are disabled.");
+    } else {
+        info!("AEGIS_ADMISSION_WEBHOOK_URL set: admission webhooks are enabled.");
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -1399,6 +1410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         github_pr_commenter,
         github_checks_client,
         qdrant_exporter,
+        admission_webhook,
         background_task_handles,
     });
 
@@ -1876,6 +1888,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -2092,6 +2105,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -2415,6 +2429,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: vec![("doomed_task", doomed_abort_handle)],
         });
 
