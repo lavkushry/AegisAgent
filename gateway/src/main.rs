@@ -1010,7 +1010,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Database setup (local SQLite file)
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://aegis.db".into());
     info!("Initializing SQLite database pool at: {} ...", db_url);
-    let pool = db::init_db(&db_url).await?;
+    // #1164 (TEST-004, AC #3): a corrupted/unreadable database file must be
+    // logged before the startup error propagates, not just silently bubble
+    // up via `?` — this is the only place `init_db`'s error is first seen.
+    let pool = db::init_db(&db_url).await.map_err(|e| {
+        tracing::error!("Failed to initialize database pool at {}: {:?}", db_url, e);
+        e
+    })?;
 
     // Load Cedar Policy engine from file
     let policy_path =
@@ -2171,6 +2177,38 @@ mod tests {
         assert!(parsed["global_queue_depth"].as_u64().is_some());
         let utilization = parsed["scheduler_utilization"].as_f64().unwrap();
         assert!((0.0..=1.0).contains(&utilization));
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1164 (TEST-004, AC #1): when the DB pool is closed (simulating the
+    /// database becoming unreachable), `/health` must degrade to `503` with
+    /// `db: "down"` instead of panicking or hanging — fail-closed, matching
+    /// the readiness-probe contract Kubernetes relies on.
+    #[tokio::test]
+    async fn health_returns_503_when_db_pool_closed() {
+        use tower::ServiceExt;
+
+        let (app, state, db_url) = probe_test_app("health_pool_closed").await;
+        state.pool.close().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "unhealthy");
+        assert_eq!(parsed["db"], "down");
 
         cleanup_db(&db_url);
     }

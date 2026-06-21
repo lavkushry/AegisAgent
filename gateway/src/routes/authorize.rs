@@ -1298,6 +1298,33 @@ mod tests {
         );
     }
 
+    /// #1164 (TEST-004, AC #1): when the DB pool is closed (simulating the
+    /// database becoming unreachable), `authorize_action`'s agent-token
+    /// lookup must surface as a graceful `500` (`StatusError::internal`)
+    /// rather than panicking — fail-closed, and the caller gets a clean
+    /// error instead of a crashed worker.
+    #[tokio::test]
+    async fn authorize_action_returns_500_when_db_pool_closed() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_pool_closed").await;
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let headers = agent_headers(&agent_token, &tenant_id);
+
+        state.pool.close().await;
+
+        let response = authorize_action(
+            State(state),
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["message"], "Database error");
+    }
+
     #[tokio::test]
     async fn test_rate_limiter() {
         let limiter = RateLimiter::new(2.0, 10.0);
