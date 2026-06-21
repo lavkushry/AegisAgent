@@ -30,6 +30,7 @@ use gateway::metrics;
 use gateway::policy;
 use gateway::qdrant;
 use gateway::routes;
+use gateway::splunk_export;
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
@@ -239,6 +240,21 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
          # HELP db_pool_connections_idle Number of SQLite pool connections currently idle\n\
          # TYPE db_pool_connections_idle gauge\n\
          db_pool_connections_idle {idle}\n"
+    ));
+    // #1286: Splunk HEC export connection health — advisory only, mirrors
+    // the pool gauges above (read directly from live process state, no
+    // separate sampling). Reports zero values when Splunk export is not
+    // configured at all, same as an export job that simply hasn't run yet.
+    let splunk_health = splunk_export::global_health();
+    body.push_str(&format!(
+        "# HELP splunk_hec_export_consecutive_failures Consecutive failed Splunk HEC batch dispatches\n\
+         # TYPE splunk_hec_export_consecutive_failures gauge\n\
+         splunk_hec_export_consecutive_failures {}\n\
+         # HELP splunk_hec_export_last_success_unix_secs Unix timestamp of the last successful Splunk HEC batch dispatch (0 if never)\n\
+         # TYPE splunk_hec_export_last_success_unix_secs gauge\n\
+         splunk_hec_export_last_success_unix_secs {}\n",
+        splunk_health.consecutive_failures(),
+        splunk_health.last_success_unix_secs(),
     ));
     (
         StatusCode::OK,
@@ -1262,13 +1278,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #1286: optional Splunk HTTP Event Collector export — only spawned when
+    // both AEGIS_SPLUNK_HEC_URL and AEGIS_SPLUNK_HEC_TOKEN are configured.
+    // Gated on is_leader like the other maintenance jobs above, since
+    // multiple gateway instances sharing one DB must not each forward the
+    // same events to Splunk redundantly.
+    let splunk_export_abort_handle = splunk_export::SplunkHecConfig::from_env().map(|config| {
+        info!(
+            "Splunk HEC export enabled (batch interval: {}s)",
+            config.batch_interval_secs
+        );
+        tokio::spawn(jobs::run_splunk_export_job(
+            pool.clone(),
+            config,
+            is_leader.clone(),
+        ))
+        .abort_handle()
+    });
+
     // #1152: zero-I/O liveness tracking for the fire-and-forget background
     // tasks above — `AbortHandle::is_finished()` reports whether a task
     // panicked and stopped running, surfaced on GET /readyz. `drain_handle`
     // and `audit_batch_handle` themselves stay owned by this function (they
     // are awaited further down during graceful shutdown); abort handles are
     // a non-owning, freely cloneable view that doesn't interfere with that.
-    let background_task_handles = vec![
+    let mut background_task_handles = vec![
         ("event_drain", drain_abort_handle),
         ("audit_batch_writer", audit_batch_abort_handle),
         ("leader_election_loop", leader_election_abort_handle),
@@ -1281,6 +1315,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("vacuum_job", vacuum_abort_handle),
         ("pool_health_sampler", pool_health_sampler_abort_handle),
     ];
+    if let Some(handle) = splunk_export_abort_handle {
+        background_task_handles.push(("splunk_export_job", handle));
+    }
 
     // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
     let approval_ttl_secs: i64 = std::env::var("AEGIS_APPROVAL_TTL_SECS")
@@ -2630,6 +2667,34 @@ mod tests {
         assert!(text.contains("# TYPE db_pool_connections_active gauge"));
         assert!(text.contains("# TYPE db_pool_connections_idle gauge"));
         assert!(text.contains("# TYPE db_pool_acquire_wait_seconds gauge"));
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1286: `GET /metrics` exposes Splunk HEC export connection-health
+    /// gauges even when Splunk export isn't configured (advisory zero values).
+    #[tokio::test]
+    async fn metrics_endpoint_exposes_splunk_hec_export_gauges() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("metrics_splunk_gauges").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("# TYPE splunk_hec_export_consecutive_failures gauge"));
+        assert!(text.contains("# TYPE splunk_hec_export_last_success_unix_secs gauge"));
 
         cleanup_db(&db_url);
     }

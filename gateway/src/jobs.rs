@@ -205,6 +205,156 @@ pub async fn run_vacuum_job(pool: SqlitePool, interval_secs: u64, is_leader: Arc
     }
 }
 
+/// #1286: periodic Splunk HTTP Event Collector (HEC) export. `is_leader`-gated
+/// like the other maintenance jobs above — multiple gateway instances sharing
+/// one DB must not each forward the same events to Splunk redundantly.
+///
+/// Loops over every tenant (`db::list_all_tenant_ids`) and queries each one's
+/// new decisions/alerts/incidents via the existing tenant-scoped
+/// `list_decisions_since`/`list_soc_alerts_since`/`list_soc_incidents_since`
+/// — every query stays tenant-filtered even though the job itself is
+/// cross-tenant by nature (it's an ops-wide SIEM forwarder, not anything
+/// exposed via a tenant-facing API). Per-tenant rowid cursors are in-memory
+/// only (reset on restart) — seeded at "current max" the first time a tenant
+/// is seen, so a restart never re-floods Splunk with full history, only ever
+/// missing whatever arrived in the gap between shutdown and the next tick
+/// after startup. All three source types are batched into a single HTTP POST
+/// per tick (`splunk_export::dispatch_batch`); cursors only advance after a
+/// successful dispatch, so a failed POST retries the exact same window next
+/// tick instead of silently dropping events.
+pub async fn run_splunk_export_job(
+    pool: SqlitePool,
+    config: crate::splunk_export::SplunkHecConfig,
+    is_leader: Arc<AtomicBool>,
+) {
+    use crate::splunk_export::{self, SplunkHecConfig};
+    use std::collections::HashMap;
+
+    let SplunkHecConfig {
+        batch_interval_secs,
+        ..
+    } = &config;
+    let client = reqwest::Client::new();
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(*batch_interval_secs));
+    let mut decision_cursors: HashMap<String, i64> = HashMap::new();
+    let mut alert_cursors: HashMap<String, i64> = HashMap::new();
+    let mut incident_cursors: HashMap<String, i64> = HashMap::new();
+
+    loop {
+        interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("splunk export job: standby (not leader)");
+            continue;
+        }
+
+        let tenant_ids = match db::list_all_tenant_ids(&pool).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                error!("splunk export: failed to list tenants: {:?}", e);
+                continue;
+            }
+        };
+
+        let mut events = Vec::new();
+        let mut decision_advances = Vec::new();
+        let mut alert_advances = Vec::new();
+        let mut incident_advances = Vec::new();
+
+        for tenant_id in &tenant_ids {
+            if !decision_cursors.contains_key(tenant_id) {
+                let seed = db::max_decision_rowid(&pool, tenant_id).await.unwrap_or(0);
+                decision_cursors.insert(tenant_id.clone(), seed);
+            }
+            let since = decision_cursors[tenant_id];
+            match db::list_decisions_since(&pool, tenant_id, since).await {
+                Ok(rows) if !rows.is_empty() => {
+                    let max_seen = rows.iter().map(|(_, rowid)| *rowid).max().unwrap_or(since);
+                    events.extend(
+                        rows.iter()
+                            .map(|(rec, _)| splunk_export::decision_to_hec_event(rec)),
+                    );
+                    decision_advances.push((tenant_id.clone(), max_seen));
+                }
+                Ok(_) => {}
+                Err(e) => error!(
+                    "splunk export: failed to list decisions for tenant {}: {:?}",
+                    tenant_id, e
+                ),
+            }
+
+            if !alert_cursors.contains_key(tenant_id) {
+                let seed = db::max_soc_alert_rowid(&pool, tenant_id).await.unwrap_or(0);
+                alert_cursors.insert(tenant_id.clone(), seed);
+            }
+            let since = alert_cursors[tenant_id];
+            match db::list_soc_alerts_since(&pool, tenant_id, since, None, None).await {
+                Ok(rows) if !rows.is_empty() => {
+                    let max_seen = rows.iter().map(|(_, rowid)| *rowid).max().unwrap_or(since);
+                    events.extend(
+                        rows.iter()
+                            .map(|(rec, _)| splunk_export::alert_to_hec_event(rec)),
+                    );
+                    alert_advances.push((tenant_id.clone(), max_seen));
+                }
+                Ok(_) => {}
+                Err(e) => error!(
+                    "splunk export: failed to list alerts for tenant {}: {:?}",
+                    tenant_id, e
+                ),
+            }
+
+            if !incident_cursors.contains_key(tenant_id) {
+                let seed = db::max_soc_incident_rowid(&pool, tenant_id)
+                    .await
+                    .unwrap_or(0);
+                incident_cursors.insert(tenant_id.clone(), seed);
+            }
+            let since = incident_cursors[tenant_id];
+            match db::list_soc_incidents_since(&pool, tenant_id, since, None, None, None, None)
+                .await
+            {
+                Ok(rows) if !rows.is_empty() => {
+                    let max_seen = rows.iter().map(|(_, rowid)| *rowid).max().unwrap_or(since);
+                    events.extend(
+                        rows.iter()
+                            .map(|(rec, _)| splunk_export::incident_to_hec_event(rec)),
+                    );
+                    incident_advances.push((tenant_id.clone(), max_seen));
+                }
+                Ok(_) => {}
+                Err(e) => error!(
+                    "splunk export: failed to list incidents for tenant {}: {:?}",
+                    tenant_id, e
+                ),
+            }
+        }
+
+        if events.is_empty() {
+            continue;
+        }
+
+        match splunk_export::dispatch_batch(&client, &config, &events).await {
+            Ok(()) => {
+                for (tenant_id, rowid) in decision_advances {
+                    decision_cursors.insert(tenant_id, rowid);
+                }
+                for (tenant_id, rowid) in alert_advances {
+                    alert_cursors.insert(tenant_id, rowid);
+                }
+                for (tenant_id, rowid) in incident_advances {
+                    incident_cursors.insert(tenant_id, rowid);
+                }
+                splunk_export::global_health().record_success();
+                debug!("splunk export: delivered {} events", events.len());
+            }
+            Err(e) => {
+                warn!("splunk export: batch dispatch failed, will retry next tick: {e}");
+                splunk_export::global_health().record_failure();
+            }
+        }
+    }
+}
+
 /// Default interval between DB connection-pool health samples (REL-004, #1150).
 pub const DEFAULT_POOL_HEALTH_SAMPLE_INTERVAL_SECS: u64 = 30;
 
@@ -620,6 +770,206 @@ mod tests {
         assert!(
             page_count_after < page_count_before,
             "leader instance must vacuum once leadership is held ({page_count_before} -> {page_count_after})"
+        );
+
+        handle.abort();
+    }
+
+    // ── #1286: Splunk HEC export job ────────────────────────────────────
+
+    async fn register_decision_agent(pool: &SqlitePool, tenant_id: &str) {
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', ?, 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
+        )
+        .bind(tenant_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// #1286: the job must batch newly authorized decisions into a single HEC
+    /// POST against a real local server, advance its cursor so the same
+    /// decision is never re-sent, and pick up a second decision on a later
+    /// tick.
+    #[tokio::test]
+    async fn run_splunk_export_job_delivers_decisions_to_mock_hec_endpoint() {
+        use crate::db::test_utils::graph_perf_decision;
+        use axum::{routing::post, Router};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+        let app = Router::new().route(
+            "/services/collector/event",
+            post(move |body: String| {
+                let received_clone = received_clone.clone();
+                async move {
+                    received_clone.lock().await.push(body);
+                    "ok"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let pool = setup_pool("splunk_export_job").await;
+        db::register_tenant(&pool, "tenant_splunk", "Splunk Tenant", "developer")
+            .await
+            .unwrap();
+        register_decision_agent(&pool, "tenant_splunk").await;
+
+        let config = crate::splunk_export::SplunkHecConfig {
+            url: format!("http://{addr}"),
+            token: "test-hec-token".to_string(),
+            batch_interval_secs: 1,
+        };
+        let is_leader = Arc::new(AtomicBool::new(true));
+        let handle = tokio::spawn(crate::jobs::run_splunk_export_job(
+            pool.clone(),
+            config,
+            is_leader.clone(),
+        ));
+
+        // The job's first tick only seeds each tenant's cursor at "current
+        // max" (so a restart never re-floods Splunk with full history) — it
+        // never exports anything that already existed before that first
+        // tick. Wait for that seeding tick, then insert the decision under
+        // test so it lands strictly after the seeded cursor.
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        db::insert_decision(&pool, &graph_perf_decision("dec_splunk_1", "tenant_splunk"))
+            .await
+            .unwrap();
+
+        let mut batches = Vec::new();
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let snapshot = received.lock().await.clone();
+            if !snapshot.is_empty() {
+                batches = snapshot;
+                break;
+            }
+        }
+        assert_eq!(
+            batches.len(),
+            1,
+            "expected exactly one delivered batch so far"
+        );
+        assert!(batches[0].contains("dec_splunk_1"));
+        assert!(batches[0].contains("aegis:decision"));
+        // input_json must never be forwarded to the third-party SIEM.
+        assert!(!batches[0].contains("input_json"));
+
+        db::insert_decision(&pool, &graph_perf_decision("dec_splunk_2", "tenant_splunk"))
+            .await
+            .unwrap();
+
+        let mut second_batch_seen = false;
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let snapshot = received.lock().await.clone();
+            if snapshot.len() >= 2 {
+                second_batch_seen = true;
+                assert!(snapshot[1].contains("dec_splunk_2"));
+                assert!(
+                    !snapshot[1].contains("dec_splunk_1"),
+                    "already-delivered decision must not be re-sent"
+                );
+                break;
+            }
+        }
+        assert!(
+            second_batch_seen,
+            "expected a second delivered batch for the new decision"
+        );
+
+        handle.abort();
+    }
+
+    /// #1286: like the other maintenance jobs, a standby instance must never
+    /// dispatch to Splunk while `is_leader` is false.
+    #[tokio::test]
+    async fn run_splunk_export_job_is_gated_by_is_leader() {
+        use crate::db::test_utils::graph_perf_decision;
+        use axum::{routing::post, Router};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let hit_count = Arc::new(Mutex::new(0u32));
+        let hit_count_clone = hit_count.clone();
+        let app = Router::new().route(
+            "/services/collector/event",
+            post(move || {
+                let hit_count_clone = hit_count_clone.clone();
+                async move {
+                    *hit_count_clone.lock().await += 1;
+                    "ok"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let pool = setup_pool("splunk_export_job_gated").await;
+        db::register_tenant(
+            &pool,
+            "tenant_splunk_gated",
+            "Splunk Gated Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
+        register_decision_agent(&pool, "tenant_splunk_gated").await;
+
+        let config = crate::splunk_export::SplunkHecConfig {
+            url: format!("http://{addr}"),
+            token: "test-hec-token".to_string(),
+            batch_interval_secs: 1,
+        };
+        let is_leader = Arc::new(AtomicBool::new(false));
+        let handle = tokio::spawn(crate::jobs::run_splunk_export_job(
+            pool.clone(),
+            config,
+            is_leader.clone(),
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert_eq!(
+            *hit_count.lock().await,
+            0,
+            "standby instance must not dispatch to Splunk while not leader"
+        );
+
+        is_leader.store(true, Ordering::Relaxed);
+        // Same cursor-seeding caveat as the happy-path test above: the first
+        // leader tick only seeds the cursor, so insert the decision under
+        // test after giving it time to pass.
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        db::insert_decision(
+            &pool,
+            &graph_perf_decision("dec_splunk_gated_1", "tenant_splunk_gated"),
+        )
+        .await
+        .unwrap();
+
+        let mut dispatched = false;
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            if *hit_count.lock().await >= 1 {
+                dispatched = true;
+                break;
+            }
+        }
+        assert!(
+            dispatched,
+            "leader instance must dispatch once leadership is held"
         );
 
         handle.abort();

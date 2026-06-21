@@ -40,5 +40,6 @@ pub mod risk_escalation;
 pub mod routes;
 pub mod rule_dsl;
 pub mod sign;
+pub mod splunk_export;
 pub mod trust_chain;
 pub mod webhook_export;
