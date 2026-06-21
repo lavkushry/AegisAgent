@@ -205,6 +205,47 @@ pub async fn run_vacuum_job(pool: SqlitePool, interval_secs: u64, is_leader: Arc
     }
 }
 
+/// Default interval between debounced heartbeat flushes (#1511).
+pub const DEFAULT_HEARTBEAT_FLUSH_INTERVAL_SECS: u64 = 30;
+
+/// Drains every pending `(tenant_id, agent_id)` heartbeat from `debouncer`
+/// and persists each as a `db::touch_agent_last_seen` write. Pulled out as
+/// its own function (rather than inlined in the loop below) so graceful
+/// shutdown can call it once more after the periodic loop stops, ensuring no
+/// buffered heartbeat is silently dropped on shutdown.
+pub async fn flush_heartbeats(pool: &SqlitePool, debouncer: &crate::routes::HeartbeatDebouncer) {
+    let pending = debouncer.drain();
+    for (tenant_id, agent_id) in pending {
+        if let Err(e) = db::touch_agent_last_seen(pool, &tenant_id, &agent_id).await {
+            warn!(
+                "heartbeat flush failed for tenant={} agent={}: {:?}",
+                tenant_id, agent_id, e
+            );
+        }
+    }
+}
+
+/// Run [`flush_heartbeats`] on a fixed interval until the process exits.
+/// Intended to be `tokio::spawn`ed once at startup.
+///
+/// Deliberately **not** `is_leader`-gated, unlike the maintenance jobs above:
+/// heartbeats are inherently per-instance-observed activity (each gateway
+/// instance only ever buffers touches from requests it personally handled),
+/// and the write itself is idempotent/commutative — every instance sharing
+/// one DB must flush its own buffered touches, or that instance's agents'
+/// `last_seen_at` would never advance at all.
+pub async fn run_heartbeat_flush_job(
+    pool: SqlitePool,
+    debouncer: Arc<crate::routes::HeartbeatDebouncer>,
+    interval_secs: u64,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        flush_heartbeats(&pool, &debouncer).await;
+    }
+}
+
 /// #1286: periodic Splunk HTTP Event Collector (HEC) export. `is_leader`-gated
 /// like the other maintenance jobs above — multiple gateway instances sharing
 /// one DB must not each forward the same events to Splunk redundantly.
@@ -971,6 +1012,61 @@ mod tests {
             dispatched,
             "leader instance must dispatch once leadership is held"
         );
+
+        handle.abort();
+    }
+
+    // ── #1511: heartbeat flush job ──────────────────────────────────────
+
+    /// #1511: a heartbeat buffered via `HeartbeatDebouncer::touch` is not
+    /// written to the DB until `run_heartbeat_flush_job`'s periodic tick —
+    /// and, unlike the maintenance jobs above, flushing happens **regardless**
+    /// of `is_leader`, since each instance must flush the touches it
+    /// personally buffered.
+    #[tokio::test]
+    async fn run_heartbeat_flush_job_writes_buffered_touch_on_first_tick() {
+        let pool = setup_pool("heartbeat_flush_job").await;
+        db::register_tenant(&pool, "tenant_hb", "Heartbeat Tenant", "developer")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_hb', 'tenant_hb', 'agent_hb', 'token_hb', 'Heartbeat Agent', 'dev', 'low', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let debouncer = Arc::new(crate::routes::HeartbeatDebouncer::new());
+        debouncer.touch("tenant_hb", "agent_hb");
+
+        // Deliberately never set to true — proves the flush isn't gated on
+        // leadership the way the other jobs in this file are.
+        let handle = tokio::spawn(crate::jobs::run_heartbeat_flush_job(
+            pool.clone(),
+            debouncer.clone(),
+            1,
+        ));
+
+        let mut flushed = false;
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            if debouncer.pending_count() == 0 {
+                flushed = true;
+                break;
+            }
+        }
+        assert!(
+            flushed,
+            "expected the first tick to drain the buffered touch"
+        );
+
+        let (last_seen_at,): (Option<String>,) =
+            sqlx::query_as("SELECT last_seen_at FROM agents WHERE id = 'agent_hb'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(last_seen_at.is_some());
 
         handle.abort();
     }

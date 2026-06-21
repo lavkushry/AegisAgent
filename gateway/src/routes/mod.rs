@@ -28,7 +28,7 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -474,6 +474,67 @@ impl RiskWeightsCache {
     }
 }
 
+/// #1511: debounces `db::touch_agent_last_seen` writes off the `/v1/authorize`
+/// hot path. That write previously ran inline on every single call, competing
+/// for the SQLite WAL write lock with the real decision write
+/// (`insert_decision`) on every request. The heartbeat doesn't need
+/// millisecond precision, so `touch` just records *that* `(tenant_id,
+/// agent_id)` was active — non-blocking, in-memory, no DB I/O — and a
+/// periodic background job (`jobs::run_heartbeat_flush_job`) drains the set
+/// and issues the real `last_seen_at` writes on a fixed interval (default
+/// 30s). `last_seen_at` accuracy degrades from real-time to roughly that
+/// interval, which is an explicitly accepted tradeoff.
+///
+/// Unlike the `is_leader`-gated maintenance jobs (vacuum, archival, etc.),
+/// flushing is **not** leader-gated: heartbeats are inherently
+/// per-instance-observed activity (each gateway instance only ever sees the
+/// touches from requests it personally handled), and the write itself is
+/// idempotent/commutative — whichever instance's flush lands last simply
+/// reflects the most recent observed activity, with no conflict between
+/// instances sharing one DB.
+#[derive(Default)]
+pub struct HeartbeatDebouncer {
+    dirty: Mutex<HashSet<(String, String)>>,
+}
+
+impl HeartbeatDebouncer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that `(tenant_id, agent_id)` was active "now". Non-blocking:
+    /// only touches an in-memory set, never the database.
+    pub fn touch(&self, tenant_id: &str, agent_id: &str) {
+        let mut dirty = match self.dirty.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        dirty.insert((tenant_id.to_string(), agent_id.to_string()));
+    }
+
+    /// Atomically remove and return every pending `(tenant_id, agent_id)`
+    /// pair. Draining (rather than just reading) means a `touch` that lands
+    /// concurrently with a flush is preserved for the *next* flush instead
+    /// of being lost.
+    pub fn drain(&self) -> Vec<(String, String)> {
+        let mut dirty = match self.dirty.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        std::mem::take(&mut *dirty).into_iter().collect()
+    }
+
+    /// Number of distinct agents with a pending (not-yet-flushed) heartbeat.
+    /// Test/diagnostic use only.
+    pub fn pending_count(&self) -> usize {
+        let dirty = match self.dirty.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        dirty.len()
+    }
+}
+
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
@@ -505,6 +566,12 @@ pub struct AppState {
     /// TTL cache for per-tenant composite-risk-score weights (#1513). See
     /// [`RiskWeightsCache`].
     pub risk_weight_cache: RiskWeightsCache,
+    /// Debounces `last_seen_at` heartbeat writes off the `/v1/authorize` hot
+    /// path (#1511). `Arc`-shared with `jobs::run_heartbeat_flush_job`
+    /// (mirrors how `audit_writer_unhealthy` is shared with the audit-batch
+    /// writer task) so the periodic flush job can drain the same in-memory
+    /// set the request handlers write into. See [`HeartbeatDebouncer`].
+    pub heartbeat_debouncer: Arc<HeartbeatDebouncer>,
     /// Set to `true` once startup initialization (DB pool, migrations, policy
     /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
     /// so orchestrators can distinguish "still starting" from "ready".
@@ -1161,6 +1228,7 @@ pub mod benchutil {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1399,6 +1467,7 @@ pub(crate) mod test_helpers {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1446,6 +1515,7 @@ pub(crate) mod test_helpers {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1495,6 +1565,7 @@ pub(crate) mod test_helpers {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1593,6 +1664,7 @@ pub(crate) mod test_helpers {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1650,6 +1722,7 @@ pub(crate) mod test_helpers {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),

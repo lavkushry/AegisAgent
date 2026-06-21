@@ -1515,9 +1515,12 @@ mod tests {
         let agent_id = agent.id.clone();
         assert!(agent.last_seen_at.is_none());
 
-        // last_seen_at: populated by a successful authorize call.
+        // last_seen_at: populated by a successful authorize call. #1511: the
+        // write itself is debounced (in-memory only on the hot path), so the
+        // periodic flush job's logic must run once before it lands in the DB.
         let request = mcp_authorize_request("filesystem", "read_file");
         let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+        crate::jobs::flush_heartbeats(&state.pool, &state.heartbeat_debouncer).await;
         let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
             .await
             .unwrap()

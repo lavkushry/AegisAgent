@@ -342,9 +342,11 @@ pub async fn authorize_action(
             }
         }
 
-        // Heartbeat (#0080): record this contact as the agent's most recent activity.
-        // Best-effort — never fails the request. Skipped for dry-run (#1281).
-        let _ = db::touch_agent_last_seen(&state.pool, &tenant_id, &agent_id).await;
+        // Heartbeat (#0080): record this contact as the agent's most recent
+        // activity. #1511: debounced — this only touches an in-memory set
+        // (no DB write on the hot path); `jobs::run_heartbeat_flush_job`
+        // periodically flushes it to `last_seen_at`. Skipped for dry-run (#1281).
+        state.heartbeat_debouncer.touch(&tenant_id, &agent_id);
     } // !dry_run (idempotency + heartbeat)
 
     // Check Rate Limiting (TASK-0012)
@@ -1730,6 +1732,7 @@ mod tests {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1783,6 +1786,7 @@ mod tests {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -5402,6 +5406,76 @@ mod tests {
         assert_eq!(cache.get("tenant_a", t0), None);
     }
 
+    /// #1511: `touch` only records membership in-memory (no DB I/O); `drain`
+    /// atomically empties the set and returns every distinct pair exactly
+    /// once, even when the same pair was touched multiple times.
+    #[test]
+    fn heartbeat_debouncer_dedups_and_drains_exactly_once() {
+        let debouncer = HeartbeatDebouncer::new();
+        assert_eq!(debouncer.pending_count(), 0);
+
+        debouncer.touch("tenant_a", "agent_1");
+        debouncer.touch("tenant_a", "agent_1"); // duplicate touch, deduped
+        debouncer.touch("tenant_a", "agent_2");
+        debouncer.touch("tenant_b", "agent_1"); // same agent_id, different tenant
+        assert_eq!(debouncer.pending_count(), 3);
+
+        let mut drained = debouncer.drain();
+        drained.sort();
+        assert_eq!(
+            drained,
+            vec![
+                ("tenant_a".to_string(), "agent_1".to_string()),
+                ("tenant_a".to_string(), "agent_2".to_string()),
+                ("tenant_b".to_string(), "agent_1".to_string()),
+            ]
+        );
+
+        // Draining empties the set — a second drain returns nothing.
+        assert_eq!(debouncer.pending_count(), 0);
+        assert!(debouncer.drain().is_empty());
+    }
+
+    /// #1511: a successful `/v1/authorize` call no longer writes
+    /// `last_seen_at` inline — it only buffers the touch in memory. The DB
+    /// row is unaffected until `jobs::flush_heartbeats` runs (the periodic
+    /// job in production), at which point it lands exactly as before.
+    #[tokio::test]
+    async fn authorize_debounces_heartbeat_until_flushed() {
+        let (state, tenant_id, agent_token) = setup_state("heartbeat_debounce").await;
+        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+
+        let agent_before = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(agent_before.last_seen_at.is_none());
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        // The touch is buffered, not yet written.
+        assert_eq!(state.heartbeat_debouncer.pending_count(), 1);
+        let agent_after_call = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(agent_after_call.last_seen_at.is_none());
+
+        // Flushing (what the periodic job does) writes it through.
+        crate::jobs::flush_heartbeats(&state.pool, &state.heartbeat_debouncer).await;
+        assert_eq!(state.heartbeat_debouncer.pending_count(), 0);
+        let agent_after_flush = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(agent_after_flush.last_seen_at.is_some());
+    }
+
     async fn register_ship_action(state: &Arc<AppState>, tenant_id: &str, risk: &str) {
         let req = RegisterToolRequest {
             skill_key: "deployer".to_string(),
@@ -6071,6 +6145,7 @@ mod tests {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -6266,6 +6341,7 @@ mod tests {
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),

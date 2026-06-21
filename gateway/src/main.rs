@@ -1296,6 +1296,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .abort_handle()
     });
 
+    // #1511: debounces the `last_seen_at` heartbeat write off the
+    // `/v1/authorize` hot path — see `routes::HeartbeatDebouncer` for why
+    // this is `Arc`-shared with (not leader-gated, unlike the maintenance
+    // jobs above) `jobs::run_heartbeat_flush_job`.
+    let heartbeat_debouncer = Arc::new(routes::HeartbeatDebouncer::new());
+    let heartbeat_flush_interval_secs: u64 = std::env::var("AEGIS_HEARTBEAT_FLUSH_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_HEARTBEAT_FLUSH_INTERVAL_SECS);
+    let heartbeat_flush_abort_handle = tokio::spawn(jobs::run_heartbeat_flush_job(
+        pool.clone(),
+        heartbeat_debouncer.clone(),
+        heartbeat_flush_interval_secs,
+    ))
+    .abort_handle();
+
     // #1152: zero-I/O liveness tracking for the fire-and-forget background
     // tasks above — `AbortHandle::is_finished()` reports whether a task
     // panicked and stopped running, surfaced on GET /readyz. `drain_handle`
@@ -1314,6 +1330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("approval_cleanup_job", approval_cleanup_abort_handle),
         ("vacuum_job", vacuum_abort_handle),
         ("pool_health_sampler", pool_health_sampler_abort_handle),
+        ("heartbeat_flush_job", heartbeat_flush_abort_handle),
     ];
     if let Some(handle) = splunk_export_abort_handle {
         background_task_handles.push(("splunk_export_job", handle));
@@ -1484,6 +1501,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         skill_cache,
         replay_nonce_cache,
         risk_weight_cache,
+        heartbeat_debouncer: heartbeat_debouncer.clone(),
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: audit_writer_unhealthy.clone(),
         audit_batch,
@@ -1775,6 +1793,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!("AegisAgent HTTP server stopped. Draining background event channel...");
+
+    // #1511: flush any heartbeats buffered since the last periodic tick so
+    // graceful shutdown never silently drops a pending last_seen_at write.
+    jobs::flush_heartbeats(&state.pool, &state.heartbeat_debouncer).await;
+
     drop(state);
 
     // Wait for the drain task to finish with a timeout (default 10s)
@@ -2007,6 +2030,7 @@ mod tests {
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
+            heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2297,6 +2321,7 @@ mod tests {
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
+            heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2624,6 +2649,7 @@ mod tests {
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
+            heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
