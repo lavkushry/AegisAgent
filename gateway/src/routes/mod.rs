@@ -784,7 +784,11 @@ pub(crate) fn receipt_body_value(rec: &ActionReceiptRecord) -> Value {
     })
 }
 
-pub(crate) fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
+/// `pub` (not `pub(crate)`) so `benches/receipt_hash_benchmark.rs` (#1165,
+/// TEST-005) can exercise the real receipt-hashing code path in-process,
+/// matching the established pattern from `benches/authorize_benchmark.rs`
+/// (TASK-1313)'s `lib.rs` re-export.
+pub fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
     sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
 }
 

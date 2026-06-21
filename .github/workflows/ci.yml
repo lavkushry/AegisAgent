@@ -67,6 +67,25 @@ jobs:
             --baseline gateway/benches/baseline.json \
             --estimates gateway/target/criterion/authorize_action/allow_readonly_filesystem_read_file/new/estimates.json \
             --threshold 0.25
+      # ── TEST-005 (#1165): canonicalization / receipt-hash regression gates ──
+      # `cargo bench` above (no --bench filter) already ran canon_benchmark
+      # and receipt_hash_benchmark too; these reuse the same regression-check
+      # script at the issue's own 20% threshold against their checked-in
+      # baselines (benches/baseline_canon.json, benches/baseline_receipt_hash.json).
+      - name: Check canonicalization benchmark regression (>20% mean latency)
+        if: matrix.rust == 'stable'
+        run: |
+          python3 gateway/scripts/check_bench_regression.py \
+            --baseline gateway/benches/baseline_canon.json \
+            --estimates gateway/target/criterion/canonicalization/canonicalize_json_nested_mixed_types/new/estimates.json \
+            --threshold 0.20
+      - name: Check receipt-hash benchmark regression (>20% mean latency)
+        if: matrix.rust == 'stable'
+        run: |
+          python3 gateway/scripts/check_bench_regression.py \
+            --baseline gateway/benches/baseline_receipt_hash.json \
+            --estimates gateway/target/criterion/receipt_hash/compute_receipt_hash_mid_chain/new/estimates.json \
+            --threshold 0.20
 
   # ── CI-004 (#1173): Rust code coverage gate (blocking, threshold 70%) ────────
   # Runs once on stable (not the full beta/MSRV matrix — instrumented builds

@@ -419,3 +419,60 @@ SKIP_GATEWAY_START=1 AEGIS_URL=http://127.0.0.1:8081 \
 # Important: set high rate limits so the built-in token-bucket doesn't cap the test
 # AEGIS_RATE_LIMIT_CAPACITY=10000000 AEGIS_RATE_LIMIT_REFILL_RATE=10000000
 ```
+
+---
+
+## Canonicalization & receipt-hash micro-benchmarks (TEST-005, #1165)
+
+`authorize_benchmark` (TASK-1313) measures the *entire* `/v1/authorize`
+handler at ~6.7ms mean, dominated by SQLite writes — it doesn't isolate the
+cost of canonicalization or receipt-chain hashing, the two primitives every
+decision and every receipt link hashes through. Two new benchmarks isolate
+just those costs, in-process, no DB/HTTP overhead:
+
+- `gateway/benches/canon_benchmark.rs` — `aegis_canon::canonicalize_json`
+  (recursive key-sort) and `aegis_canon::canonical_value_string`
+  (canonicalize + compact-serialize) against three payload shapes: a small
+  flat object, a nested object mixing strings/numbers/booleans/null/arrays,
+  and a 200-element array.
+- `gateway/benches/receipt_hash_benchmark.rs` — `gateway::routes::compute_receipt_hash`
+  (canonicalize the receipt body, then SHA-256) against a chain-head receipt
+  (`prev_receipt_hash` empty) and a mid-chain receipt (`prev_receipt_hash` a
+  real 64-hex-char hash) — the steady-state case for a long-lived tenant.
+
+### Measured results (sample_size=100, this sandbox)
+
+| Benchmark                                              | Mean latency |
+| ------------------------------------------------------- | ------------ |
+| `canonicalize_json/flat_tool_call`                      | **1.23 µs**  |
+| `canonical_value_string/flat_tool_call`                 | **1.91 µs**  |
+| `canonicalize_json/nested_mixed_types`                  | **5.22 µs**  |
+| `canonical_value_string/nested_mixed_types`             | **7.26 µs**  |
+| `canonicalize_json/large_array` (200 elements)          | **327 µs**   |
+| `canonical_value_string/large_array` (200 elements)     | **423 µs**   |
+| `compute_receipt_hash/chain_head`                       | **14.0 µs**  |
+| `compute_receipt_hash/mid_chain`                        | **14.4 µs**  |
+
+All comfortably sub-millisecond for realistic `tool_call.parameters` shapes —
+canonicalization and receipt hashing are not the bottleneck in the
+end-to-end `/v1/authorize` cost (SQLite I/O dominates, see above).
+
+### CI regression gate (AC#4: fail if >20% regression)
+
+Reuses the same `gateway/scripts/check_bench_regression.py` script
+TASK-1313's gate uses (mean-vs-baseline, see that script's own
+mean-vs-p99-approximation honesty note), at the issue's own 20% threshold
+instead of TASK-1313's 25%, against two new checked-in baselines:
+
+- `gateway/benches/baseline_canon.json` →
+  `canonicalization/canonicalize_json_nested_mixed_types`
+- `gateway/benches/baseline_receipt_hash.json` →
+  `receipt_hash/compute_receipt_hash_mid_chain`
+
+Both run as additional steps in the `gateway` CI job, after the existing
+`cargo bench` invocation (which already runs every `[[bench]]` target,
+including these two — no separate bench invocation needed). As with
+TASK-1313's baseline, CI hardware will differ from this sandbox; these
+baselines establish the mechanism and a starting point, and should be
+re-captured from an actual CI run before being relied on for real
+regressions.

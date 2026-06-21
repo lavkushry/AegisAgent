@@ -1,0 +1,8 @@
+{
+  "_comment": "TEST-005 (#1165): checked-in baseline for the canonicalization criterion benchmark regression gate (gateway/scripts/check_bench_regression.py). Captured from a local run of `cargo bench --manifest-path gateway/Cargo.toml --bench canon_benchmark` on this sandbox (default sample_size=100, see benches/canon_benchmark.rs). 'mean_ns' is criterion's mean.point_estimate (nanoseconds, from estimates.json) for canonicalization/canonicalize_json_nested_mixed_types. CI hardware will differ from this sandbox, so this baseline should be re-captured from a CI run before the regression gate is relied upon for real PRs; it establishes the mechanism and a starting point.",
+  "benchmark": "canonicalization/canonicalize_json_nested_mixed_types",
+  "mean_ns": 5218.01213723099,
+  "mean_ms": 0.00521801213723099,
+  "sample_size": 100,
+  "captured_at": "2026-06-21"
+}
