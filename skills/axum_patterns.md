@@ -1,3 +1,9 @@
+---
+globs:
+  - "gateway/src/**/*.rs"
+  - "src/**/*.rs"
+---
+
 # AI Skill: Axum API Patterns & Handlers (`skills/axum_patterns.md`)
 
 This skill defines the HTTP handler structures, routing, state sharing, request extraction, and error response mappings when writing endpoints in Axum.

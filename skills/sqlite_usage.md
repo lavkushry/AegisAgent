@@ -1,3 +1,10 @@
+---
+globs:
+  - "gateway/src/db.rs"
+  - "lib/storage/**/*.rs"
+  - "gateway/migrations/**/*"
+---
+
 # AI Skill: SQLite Database Usage & SQLx (`skills/sqlite_usage.md`)
 
 This skill defines the configurations, transaction management guidelines, compile-time query verifications, and migrations when using SQLx with SQLite.

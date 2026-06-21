@@ -1,3 +1,12 @@
+---
+globs:
+  - "**/*.rs"
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.go"
+  - "**/*.md"
+---
+
 # AI Skill: Token Budget Advisor (`skills/token_budget_advisor.md`)
 
 This skill defines the methodology for proactively managing context window consumption, estimating prompt token costs, and dynamically determining the response depth for AegisAgent development tasks.

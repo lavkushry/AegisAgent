@@ -1,3 +1,11 @@
+---
+globs:
+  - "**/*.rs"
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.go"
+---
+
 # AI Skill: Automated Compliance Measurement (`skills/skill_comply.md`)
 
 This skill defines the self-audit and compliance verification checklist that AI developer agents must execute before completing a task.

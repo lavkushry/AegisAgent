@@ -521,12 +521,9 @@ pub async fn authorize_action(
             }
             use aegis_storage::traits::StorageBackend;
             let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-            storage.get_skill_action(
-                &tenant_id,
-                &normalized_tool,
-                &normalized_action,
-            )
-            .await
+            storage
+                .get_skill_action(&tenant_id, &normalized_tool, &normalized_action)
+                .await
         },
         async {
             match mcp_server_key.as_deref() {
@@ -642,7 +639,9 @@ pub async fn authorize_action(
 
         use aegis_storage::traits::StorageBackend;
         let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-        match storage.get_mcp_tool_by_key(&tenant_id, server_key, &normalized_action).await
+        match storage
+            .get_mcp_tool_by_key(&tenant_id, server_key, &normalized_action)
+            .await
         {
             Ok(Some(tool)) => {
                 risk_level = tool.risk.clone();

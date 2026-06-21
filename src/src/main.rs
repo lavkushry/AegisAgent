@@ -104,7 +104,10 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "up"
     };
     let dead_background_tasks: Vec<&str> = {
-        let lock = state.background_task_handles.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = state
+            .background_task_handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         lock.iter()
             .filter(|(_, handle)| handle.is_finished())
             .map(|(name, _)| *name)
@@ -2686,7 +2689,10 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: std::sync::Mutex::new(vec![("doomed_task", doomed_abort_handle)]),
+            background_task_handles: std::sync::Mutex::new(vec![(
+                "doomed_task",
+                doomed_abort_handle,
+            )]),
         });
 
         let app = Router::new()

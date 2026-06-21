@@ -1,3 +1,10 @@
+---
+globs:
+  - "sdk-python/**/*"
+  - "sdk-typescript/**/*"
+  - "sdk-go/**/*"
+---
+
 # AI Skill: SDK Interception & Polling Validation (`skills/sdk_testing.md`)
 
 This skill describes how to verify client-side tool call interceptions, mock network layers, and test approval loops in the Python SDK.

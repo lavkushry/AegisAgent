@@ -1,3 +1,12 @@
+---
+globs:
+  - "**/*.rs"
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.go"
+  - "**/*.md"
+---
+
 # AI Skill: Prompt & Rule Optimizer (`skills/prompt_optimizer.md`)
 
 This skill provides developer agents with optimization guidelines for composing clean prompt payloads, standardizing tool-call contexts, and authoring concise AWS Cedar rules.

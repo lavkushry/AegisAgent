@@ -1,3 +1,8 @@
+---
+globs:
+  - "**/*.rs"
+---
+
 # AI Skill: Rust Coding Standards (`skills/rust_standards.md`)
 
 This skill defines the coding standards, async idioms, serialization rules, and error handling conventions for writing Rust code in the AegisAgent gateway.

@@ -1,3 +1,8 @@
+---
+globs:
+  - "**/*.cedar"
+---
+
 # AI Skill: Cedar Policy Authoring & Validation (`skills/cedar_policy_authoring.md`)
 
 This skill outlines how to write, modify, and test policies using AWS Cedar within the AegisAgent gateway, incorporating context trust labeling and MCP tool manifest verification.

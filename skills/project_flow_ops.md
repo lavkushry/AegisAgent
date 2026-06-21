@@ -1,3 +1,12 @@
+---
+globs:
+  - "**/*.rs"
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.go"
+  - "**/*.md"
+---
+
 # AI Skill: Project Flow & Release Operations (`skills/project_flow_ops.md`)
 
 This skill defines the development lifecycles, git branch policies, testing workflows, compilation checks, and deployment validation steps for AegisAgent.

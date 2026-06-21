@@ -29,7 +29,10 @@ use crate::sign;
 
 use super::*;
 
-async fn reload_policies_helper(state: &Arc<AppState>, tenant_id: &str) -> Result<(), aegis_common::errors::AegisError> {
+async fn reload_policies_helper(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+) -> Result<(), aegis_common::errors::AegisError> {
     use aegis_storage::traits::StorageBackend;
     let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
     let db_policies = storage.list_policies(tenant_id).await?;
@@ -60,24 +63,28 @@ pub(crate) async fn record_policy_audit_log(
     let policy_id = policy_id.to_string();
     let policy_key = policy_key.to_string();
     let action = action.to_string();
-    if let Err(e) = storage.append_policy_audit_log_entry_atomic(tenant_id, Box::new(move |prev_hash| {
-        let mut rec = PolicyAuditLogRecord {
-            id: Uuid::new_v4().to_string(),
-            tenant_id: tenant_id_str,
-            policy_id,
-            policy_key,
-            action,
-            changed_by: None,
-            body_hash,
-            diff_summary,
-            prev_hash,
-            entry_hash: String::new(),
-            created_at: Utc::now(),
-        };
-        rec.entry_hash = compute_policy_audit_log_entry_hash(&rec);
-        rec
-    }))
-    .await
+    if let Err(e) = storage
+        .append_policy_audit_log_entry_atomic(
+            tenant_id,
+            Box::new(move |prev_hash| {
+                let mut rec = PolicyAuditLogRecord {
+                    id: Uuid::new_v4().to_string(),
+                    tenant_id: tenant_id_str,
+                    policy_id,
+                    policy_key,
+                    action,
+                    changed_by: None,
+                    body_hash,
+                    diff_summary,
+                    prev_hash,
+                    entry_hash: String::new(),
+                    created_at: Utc::now(),
+                };
+                rec.entry_hash = compute_policy_audit_log_entry_hash(&rec);
+                rec
+            }),
+        )
+        .await
     {
         error!("Failed to append policy_audit_log entry: {:?}", e);
     }
@@ -130,7 +137,8 @@ pub async fn create_policy(
             if let Err(e) = reload_policies_helper(&state, &tenant_id).await {
                 error!("Failed to reload policies after create: {:?}", e);
                 let _ = storage.delete_policy(&tenant_id, &record.id).await;
-                return StatusError::internal("Failed to hot-reload policy changes").into_response();
+                return StatusError::internal("Failed to hot-reload policy changes")
+                    .into_response();
             }
             record_policy_audit_log(
                 &state.pool,
@@ -221,7 +229,8 @@ pub async fn update_policy(
                 error!("Failed to reload policies after update: {:?}", e);
                 // Roll back DB record to prior state
                 let _ = storage.update_policy(&previous).await;
-                return StatusError::internal("Failed to hot-reload policy changes").into_response();
+                return StatusError::internal("Failed to hot-reload policy changes")
+                    .into_response();
             }
             let diff_summary = if changed_fields.is_empty() {
                 format!(
@@ -322,7 +331,8 @@ pub async fn rollback_policy(
                 error!("Failed to reload policies after rollback: {:?}", e);
                 // Restore current back to live
                 let _ = storage.update_policy(&current).await;
-                return StatusError::internal("Failed to hot-reload policy changes").into_response();
+                return StatusError::internal("Failed to hot-reload policy changes")
+                    .into_response();
             }
 
             let audit_record = AuditEventRecord {
@@ -405,7 +415,8 @@ pub async fn delete_policy(
                 if let Some(ref policy) = existing {
                     let _ = storage.insert_policy(policy).await;
                 }
-                return StatusError::internal("Failed to hot-reload policy changes").into_response();
+                return StatusError::internal("Failed to hot-reload policy changes")
+                    .into_response();
             }
             if let Some(policy) = existing {
                 record_policy_audit_log(
@@ -450,7 +461,10 @@ pub async fn list_policy_audit_log(
 
     use aegis_storage::traits::StorageBackend;
     let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-    match storage.list_policy_audit_log(&tenant_id, limit, offset).await {
+    match storage
+        .list_policy_audit_log(&tenant_id, limit, offset)
+        .await
+    {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(e) => {
             error!("Failed to list policy audit log: {:?}", e);

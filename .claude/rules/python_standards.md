@@ -1,3 +1,8 @@
+---
+globs:
+  - "sdk-python/**/*.py"
+---
+
 # AI Skill: Python Coding Standards (`skills/python_standards.md`)
 
 This skill defines the coding style, typing conventions, and test mock guidelines for the Python SDK and example scripts.

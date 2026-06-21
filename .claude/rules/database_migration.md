@@ -1,3 +1,10 @@
+---
+globs:
+  - "gateway/src/db.rs"
+  - "lib/storage/**/*.rs"
+  - "gateway/migrations/**/*"
+---
+
 # AI Skill: SQLite Database Migration & Management (`skills/database_migration.md`)
 
 This skill describes how to manage the SQLite database schema, run migrations using SQLx, handle database concurrency, enforce tenancy index constraints, and use compile-time checked queries.

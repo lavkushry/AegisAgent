@@ -1,3 +1,11 @@
+---
+globs:
+  - "**/*.rs"
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.go"
+---
+
 # AI Skill: Test-Driven Development (TDD) Workflow (`skills/tdd_workflow.md`)
 
 This skill defines the mandatory Red-Green-Refactor methodology, test coverage expectations, and validation loops for implementing new features or fixing bugs in the AegisAgent codebase.

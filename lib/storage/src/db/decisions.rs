@@ -637,7 +637,7 @@ pub async fn count_decisions_by_outcome(
                 COUNT(CASE WHEN decision = 'allow' THEN 1 END),
                 COUNT(CASE WHEN decision = 'deny' THEN 1 END),
                 COUNT(CASE WHEN decision = 'require_approval' THEN 1 END)
-         FROM decisions WHERE tenant_id = ?"
+         FROM decisions WHERE tenant_id = ?",
     )
     .bind(tenant_id)
     .fetch_one(pool)

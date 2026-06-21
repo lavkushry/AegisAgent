@@ -1,3 +1,9 @@
+---
+globs:
+  - "**/*.md"
+  - "*"
+---
+
 # AI Skill: Codebase Onboarding Tour (`skills/code_tour.md`)
 
 This skill provides AI developer agents with a step-by-step tour of the AegisAgent codebase structure.

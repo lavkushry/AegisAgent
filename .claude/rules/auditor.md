@@ -1,3 +1,13 @@
+---
+globs:
+  - "gateway/src/policy.rs"
+  - "gateway/policies.cedar"
+  - "policies.cedar"
+  - "SECURITY.md"
+  - "lib/policy/**/*"
+  - "lib/storage/**/*"
+---
+
 # Persona: SecurityAuditorAgent
 # Active Scope: /gateway/src/policy.rs, /gateway/policies.cedar, /policy-templates, /skills
 # Key Tasks: Verify SQL query parameterization, audit multi-tenant isolation, write Cedar policies.

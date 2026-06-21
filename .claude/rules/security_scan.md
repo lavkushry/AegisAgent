@@ -1,3 +1,12 @@
+---
+globs:
+  - "gateway/src/**/*.rs"
+  - "src/**/*.rs"
+  - "lib/storage/**/*.rs"
+  - "lib/policy/**/*.rs"
+  - "SECURITY.md"
+---
+
 # AI Skill: Security Audit & Scan Runbook (`skills/security_scan.md`)
 
 This skill defines the procedures and verification steps for performing security audits, scanning code, and validating dependencies when modifying the AegisAgent codebase.

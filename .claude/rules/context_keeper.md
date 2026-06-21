@@ -1,3 +1,12 @@
+---
+globs:
+  - "**/*.rs"
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.go"
+  - "**/*.md"
+---
+
 # AI Skill: Context Keeper & Session State Management (`skills/context_keeper.md`)
 
 This skill describes how AI developer agents maintain codebase context and project progress across multi-turn sessions using the `.claude/PRPs/` folder structure.

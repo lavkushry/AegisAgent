@@ -1,3 +1,9 @@
+---
+globs:
+  - "docs/**/*"
+  - "*.md"
+---
+
 # AI Skill: Architectural Planning & Blueprint Generation (`skills/blueprint.md`)
 
 This skill defines the format and validation guidelines for creating step-by-step implementation blueprints when modifying the AegisAgent codebase.
