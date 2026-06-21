@@ -34,7 +34,7 @@ impl RateLimiter {
         let (ref mut map, ref mut order) = *lock;
         let now = Instant::now();
 
-        let mut bucket = map.get(tenant_id).cloned().unwrap_or_else(|| TokenBucket {
+        let mut bucket = map.get(tenant_id).cloned().unwrap_or(TokenBucket {
             tokens: self.capacity,
             last_refreshed: now,
         });
@@ -70,9 +70,12 @@ impl RateLimiter {
     }
 }
 
+type QuotaMap = HashMap<String, (u64, Instant)>;
+type QuotaQueue = VecDeque<String>;
+
 #[derive(Debug)]
 pub struct QuotaManager {
-    quotas: Mutex<(HashMap<String, (u64, Instant)>, VecDeque<String>)>,
+    quotas: Mutex<(QuotaMap, QuotaQueue)>,
     pub limit: u64,
     pub window_secs: u64,
 }
@@ -95,7 +98,7 @@ impl QuotaManager {
         let (ref mut map, ref mut order) = *lock;
         let now = Instant::now();
 
-        let (mut count, mut window_start) = map.get(tenant_id).cloned().unwrap_or_else(|| (0, now));
+        let (mut count, mut window_start) = map.get(tenant_id).cloned().unwrap_or((0, now));
 
         if now.duration_since(window_start).as_secs() >= self.window_secs {
             count = 0;
@@ -129,9 +132,12 @@ impl QuotaManager {
     }
 }
 
+type AttemptMap = HashMap<String, (u64, Instant)>;
+type AttemptQueue = VecDeque<String>;
+
 #[derive(Debug)]
 pub struct ApprovalAttemptTracker {
-    attempts: Mutex<(HashMap<String, (u64, Instant)>, VecDeque<String>)>,
+    attempts: Mutex<(AttemptMap, AttemptQueue)>,
     pub limit: u64,
     pub window_secs: u64,
 }
