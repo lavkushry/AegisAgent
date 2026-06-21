@@ -27,6 +27,7 @@ use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
+use aegis_storage::traits::StorageBackend;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -539,6 +540,7 @@ impl HeartbeatDebouncer {
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
+    pub storage: Arc<dyn StorageBackend>,
     pub policy_engine: PolicyEngine,
     pub events: EventSink,
     /// Process-wide security counters exposed on GET /metrics. Shared
@@ -722,7 +724,7 @@ where
         // Extract AppState to verify tenant existence in DB
         let app_state = <Arc<AppState> as axum::extract::FromRef<S>>::from_ref(state);
 
-        match db::get_tenant_by_id(&app_state.pool, &tenant_id).await {
+        match app_state.storage.get_tenant_by_id(&tenant_id).await {
             Ok(Some(_)) => Ok(TenantId(tenant_id)),
             Ok(None) => Err(StatusError::not_found(format!(
                 "Tenant '{}' not found",
@@ -1030,7 +1032,7 @@ pub(crate) fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
 /// audit-write call site in this codebase, since a failed audit write must
 /// never block the admin action it's describing.
 pub(crate) async fn write_admin_action_audit_event(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn StorageBackend,
     tenant_id: &str,
     action: &str,
     agent_id: Option<&str>,
@@ -1056,7 +1058,7 @@ pub(crate) async fn write_admin_action_audit_event(
         approval_id: None,
         created_at: Utc::now(),
     };
-    if let Err(e) = db::insert_audit_event(pool, &audit).await {
+    if let Err(e) = storage.insert_audit_event(&audit).await {
         error!("Failed to write admin_action audit event ({action}): {e:?}");
     }
 }
@@ -1217,7 +1219,8 @@ pub mod benchutil {
         let (events, _events_rx) = EventSink::channel(100_000, metrics.clone());
 
         let state = Arc::new(AppState {
-            pool,
+            pool: pool.clone(),
+            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -1457,6 +1460,7 @@ pub(crate) mod test_helpers {
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
             pool: state_raw.pool.clone(),
+            storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
             metrics: state_raw.metrics.clone(),
@@ -1505,6 +1509,7 @@ pub(crate) mod test_helpers {
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
             pool: state_raw.pool.clone(),
+            storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
             metrics: state_raw.metrics.clone(),
@@ -1555,6 +1560,7 @@ pub(crate) mod test_helpers {
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
             pool: state_raw.pool.clone(),
+            storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
             metrics: state_raw.metrics.clone(),
@@ -1653,7 +1659,8 @@ pub(crate) mod test_helpers {
         let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
         let (events, events_rx) = EventSink::channel(capacity, metrics.clone());
         let state = Arc::new(AppState {
-            pool,
+            pool: pool.clone(),
+            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -1712,6 +1719,7 @@ pub(crate) mod test_helpers {
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
             pool: state_raw.pool.clone(),
+            storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
             metrics: state_raw.metrics.clone(),

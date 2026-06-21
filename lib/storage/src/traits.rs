@@ -25,7 +25,13 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         agent_key: &str,
     ) -> Result<Option<AgentRecord>, AegisError>;
-    async fn list_agents(&self, tenant_id: &str) -> Result<Vec<AgentRecord>, AegisError>;
+    async fn list_agents(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<AgentRecord>, AegisError>;
     async fn get_agent_by_id(
         &self,
         tenant_id: &str,
@@ -41,7 +47,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         &self,
         record: &SkillRecord,
         actions: &[SkillActionRecord],
-    ) -> Result<(), AegisError>;
+    ) -> Result<String, AegisError>;
     async fn insert_skill_action(&self, record: &SkillActionRecord) -> Result<(), AegisError>;
     async fn get_skill_action(
         &self,
@@ -54,7 +60,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         agent_id: &str,
         status: &str,
-    ) -> Result<(), AegisError>;
+    ) -> Result<bool, AegisError>;
     async fn set_agent_frozen_reason(
         &self,
         tenant_id: &str,
@@ -73,6 +79,12 @@ pub trait StorageBackend: Send + Sync + 'static {
         agent_id: &str,
     ) -> Result<(), AegisError>;
     async fn is_agent_active(&self, tenant_id: &str, agent_id: &str) -> Result<bool, AegisError>;
+    async fn maybe_escalate_agent_risk_tier(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        current_tier: &str,
+    ) -> Result<Option<(String, String)>, AegisError>;
     async fn grant_agent_tool_permission(
         &self,
         tenant_id: &str,
@@ -106,8 +118,8 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn list_approvals_in_range(
         &self,
         tenant_id: &str,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
     ) -> Result<Vec<ApprovalRecord>, AegisError>;
     async fn get_approval_by_decision_id(
         &self,
@@ -123,6 +135,8 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn list_pending_approvals(
         &self,
         tenant_id: &str,
+        limit: i64,
+        offset: i64,
     ) -> Result<Vec<ApprovalRecord>, AegisError>;
     async fn get_approval_by_id(
         &self,
@@ -165,6 +179,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         request_id: &str,
     ) -> Result<Option<DecisionRecord>, AegisError>;
     async fn insert_decision(&self, record: &DecisionRecord) -> Result<(), AegisError>;
+    async fn insert_agent_risk_score(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        decision_id: &str,
+        score: i32,
+        reason: &str,
+    ) -> Result<(), AegisError>;
     async fn list_decisions(
         &self,
         tenant_id: &str,
@@ -172,6 +194,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         decision_filter: Option<&str>,
         limit: i64,
         cursor: Option<i64>,
+        q: Option<&str>,
     ) -> Result<(Vec<DecisionRecord>, Option<i64>), AegisError>;
     async fn get_decision_count_24h_for_agent(
         &self,
@@ -195,7 +218,12 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         server_key: &str,
     ) -> Result<Option<McpServerRecord>, AegisError>;
-    async fn list_mcp_servers(&self, tenant_id: &str) -> Result<Vec<McpServerRecord>, AegisError>;
+    async fn list_mcp_servers(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<McpServerRecord>, AegisError>;
     async fn update_mcp_server(
         &self,
         tenant_id: &str,
@@ -223,6 +251,19 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         server_key: &str,
     ) -> Result<Option<McpManifestSnapshotRecord>, AegisError>;
+    async fn list_mcp_manifest_snapshots(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        limit: i64,
+    ) -> Result<Vec<McpManifestSnapshotRecord>, AegisError>;
+    async fn set_mcp_tool_status(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        tool_key: &str,
+        status: &str,
+    ) -> Result<bool, AegisError>;
     async fn discover_mcp_tools(
         &self,
         tenant_id: &str,
@@ -235,6 +276,17 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         server_key: &str,
     ) -> Result<Vec<McpToolRecord>, AegisError>;
+    async fn set_mcp_server_manifest_hash(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        manifest_hash: &str,
+    ) -> Result<(), AegisError>;
+    async fn touch_mcp_server_discovery(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+    ) -> Result<(), AegisError>;
     async fn get_mcp_tool_by_key(
         &self,
         tenant_id: &str,
@@ -274,8 +326,24 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn list_action_receipts_in_range(
         &self,
         tenant_id: &str,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+    ) -> Result<Vec<ActionReceiptRecord>, AegisError>;
+    async fn get_action_receipt_by_id(
+        &self,
+        tenant_id: &str,
+        receipt_id: &str,
+    ) -> Result<Option<ActionReceiptRecord>, AegisError>;
+    async fn list_action_receipts_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ActionReceiptRecord>, Option<i64>), AegisError>;
+    async fn list_action_receipts_chain_order(
+        &self,
+        tenant_id: &str,
     ) -> Result<Vec<ActionReceiptRecord>, AegisError>;
     async fn get_action_receipt_by_decision_id(
         &self,
@@ -292,6 +360,11 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
     ) -> Result<Option<ActionReceiptRecord>, AegisError>;
     async fn insert_action_receipt(&self, record: &ActionReceiptRecord) -> Result<(), AegisError>;
+    async fn append_action_receipt_atomic(
+        &self,
+        tenant_id: &str,
+        record: ActionReceiptRecord,
+    ) -> Result<ActionReceiptRecord, AegisError>;
     async fn count_receipts(&self, tenant_id: &str) -> Result<i64, AegisError>;
 
     // SOC (alerts, incidents, baseline, hourly counts)
@@ -315,6 +388,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         agent_id: Option<&str>,
         severity: Option<&str>,
         status: Option<&str>,
+        kind: Option<&str>,
         limit: i64,
         cursor: Option<i64>,
     ) -> Result<(Vec<SocIncidentRecord>, Option<i64>), AegisError>;
@@ -360,6 +434,8 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn insert_tenant(&self, record: &TenantRecord) -> Result<(), AegisError>;
     async fn list_tenants(&self) -> Result<Vec<TenantRecord>, AegisError>;
     async fn delete_tenant_by_id(&self, tenant_id: &str) -> Result<bool, AegisError>;
+    async fn export_tenant_data(&self, tenant_id: &str) -> Result<TenantExport, AegisError>;
+    async fn delete_tenant_data(&self, tenant_id: &str) -> Result<(), AegisError>;
     async fn set_tenant_auto_respond(
         &self,
         tenant_id: &str,
@@ -447,6 +523,27 @@ pub trait StorageBackend: Send + Sync + 'static {
         &self,
         records: &[AuditEventRecord],
     ) -> Result<(), AegisError>;
+    async fn get_audit_events_in_range(
+        &self,
+        tenant_id: &str,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<Vec<AuditEventRecord>, AegisError>;
+    async fn get_audit_events_by_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<AuditEventRecord>, AegisError>;
+    async fn get_audit_event_decision_id(
+        &self,
+        tenant_id: &str,
+        event_id: &str,
+    ) -> Result<Option<String>, AegisError>;
+    async fn list_audit_events_by_decision_ids(
+        &self,
+        tenant_id: &str,
+        decision_ids: &[String],
+    ) -> Result<Vec<AuditEventRecord>, AegisError>;
 
     // API Keys
     async fn get_api_key_by_id(
@@ -458,6 +555,74 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn insert_api_key(&self, record: &ApiKeyRecord) -> Result<(), AegisError>;
     async fn revoke_api_key(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
     async fn is_active_api_key(&self, tenant_id: &str, key_hash: &str) -> Result<bool, AegisError>;
+    async fn create_api_key(
+        &self,
+        tenant_id: &str,
+        name: &str,
+    ) -> Result<(String, String), AegisError>;
+    async fn list_soc_incidents_in_range(
+        &self,
+        tenant_id: &str,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<Vec<SocIncidentRecord>, AegisError>;
+    async fn get_tenant_stats(&self, tenant_id: &str) -> Result<TenantStats, AegisError>;
+    async fn get_db_stats(&self) -> Result<DbStats, AegisError>;
+    async fn upsert_detection_rule(
+        &self,
+        tenant_id: &str,
+        rule_key: &str,
+        name: &str,
+        severity: &str,
+        condition: &str,
+        summary_template: &str,
+        enabled: bool,
+    ) -> Result<DetectionRuleRecord, AegisError>;
+    async fn list_detection_rules(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<DetectionRuleRecord>, AegisError>;
+    async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
+    async fn list_soc_alerts_by_source_event_ids(
+        &self,
+        tenant_id: &str,
+        event_ids: &[String],
+    ) -> Result<Vec<SocAlertRecord>, AegisError>;
+    async fn list_decisions_by_run_id(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<DecisionRecord>, AegisError>;
+    async fn list_decisions_in_range(
+        &self,
+        tenant_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<DecisionRecord>, AegisError>;
+    async fn list_soc_alerts_since(
+        &self,
+        tenant_id: &str,
+        since_rowid: i64,
+        severity: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Result<Vec<(SocAlertRecord, i64)>, AegisError>;
+    async fn list_soc_incidents_since(
+        &self,
+        tenant_id: &str,
+        since_rowid: i64,
+        status_filter: Option<&str>,
+        severity: Option<&str>,
+        agent_id: Option<&str>,
+        kind: Option<&str>,
+    ) -> Result<Vec<(SocIncidentRecord, i64)>, AegisError>;
+    async fn list_decisions_since(
+        &self,
+        tenant_id: &str,
+        since_rowid: i64,
+    ) -> Result<Vec<(DecisionRecord, i64)>, AegisError>;
+    async fn max_decision_rowid(&self, tenant_id: &str) -> Result<i64, AegisError>;
+    async fn max_soc_alert_rowid(&self, tenant_id: &str) -> Result<i64, AegisError>;
+    async fn max_soc_incident_rowid(&self, tenant_id: &str) -> Result<i64, AegisError>;
 
     // General & System
     async fn health_check(&self) -> Result<(), AegisError>;

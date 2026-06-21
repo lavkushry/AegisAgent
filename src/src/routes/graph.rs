@@ -204,7 +204,11 @@ pub async fn get_graph_for_run(
 ) -> impl IntoResponse {
     use crate::graph::{EvidenceGraph, GraphNode, NodeType};
 
-    let decisions = match db::list_decisions_by_run_id(&state.pool, &tenant_id, &run_id).await {
+    let decisions = match state
+        .storage
+        .list_decisions_by_run_id(&tenant_id, &run_id)
+        .await
+    {
         Ok(decisions) => decisions,
         Err(e) => {
             error!("Failed to list decisions for run {}: {:?}", run_id, e);
@@ -221,7 +225,7 @@ pub async fn get_graph_for_run(
 
     let agent_id = decisions[0].agent_id.clone();
     let agent_node_id = format!("agent:{agent_id}");
-    if let Ok(Some(agent)) = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+    if let Ok(Some(agent)) = state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
         seen.insert(agent_node_id.clone());
         graph.add_node(GraphNode::new(
             agent_node_id.clone(),
@@ -234,14 +238,16 @@ pub async fn get_graph_for_run(
     // #1316: batch-fetch approvals/receipts for every decision in this run in
     // 2 indexed queries total, instead of up to 2 per decision (N+1).
     let decision_ids: Vec<String> = decisions.iter().map(|d| d.id.clone()).collect();
-    let approvals_by_decision =
-        db::list_approvals_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
-            .await
-            .unwrap_or_default();
-    let receipts_by_decision =
-        db::list_action_receipts_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
-            .await
-            .unwrap_or_default();
+    let approvals_by_decision = state
+        .storage
+        .list_approvals_by_decision_ids(&tenant_id, &decision_ids)
+        .await
+        .unwrap_or_default();
+    let receipts_by_decision = state
+        .storage
+        .list_action_receipts_by_decision_ids(&tenant_id, &decision_ids)
+        .await
+        .unwrap_or_default();
 
     for decision in &decisions {
         add_decision_subgraph(
@@ -269,7 +275,11 @@ pub async fn get_graph_for_incident(
 ) -> impl IntoResponse {
     use crate::graph::{EdgeType, EvidenceGraph, GraphEdge, GraphNode, NodeType};
 
-    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+    let incident = match state
+        .storage
+        .get_incident_by_id(&tenant_id, &incident_id)
+        .await
+    {
         Ok(Some(incident)) => incident,
         Ok(None) => {
             return StatusError::not_found("Incident not found").into_response();
@@ -293,7 +303,10 @@ pub async fn get_graph_for_incident(
     ));
 
     let agent_node_id = format!("agent:{}", incident.agent_id);
-    if let Ok(Some(agent)) = db::get_agent_by_id(&state.pool, &tenant_id, &incident.agent_id).await
+    if let Ok(Some(agent)) = state
+        .storage
+        .get_agent_by_id(&tenant_id, &incident.agent_id)
+        .await
     {
         if seen.insert(agent_node_id.clone()) {
             graph.add_node(GraphNode::new(
@@ -320,17 +333,22 @@ pub async fn get_graph_for_incident(
     let mut decisions_for_incident: Vec<DecisionRecord> = Vec::new();
     let mut linked_decision_ids: Vec<String> = Vec::new();
     for event_id in &event_ids {
-        let decision_id =
-            match db::get_audit_event_decision_id(&state.pool, &tenant_id, event_id).await {
-                Ok(Some(id)) => id,
-                _ => continue,
-            };
+        let decision_id = match state
+            .storage
+            .get_audit_event_decision_id(&tenant_id, event_id)
+            .await
+        {
+            Ok(Some(id)) => id,
+            _ => continue,
+        };
         linked_decision_ids.push(decision_id.clone());
 
         let decision_node_id = format!("decision:{decision_id}");
         if !seen.contains(&decision_node_id) {
-            if let Ok(Some(decision)) =
-                db::get_decision_by_id(&state.pool, &tenant_id, &decision_id).await
+            if let Ok(Some(decision)) = state
+                .storage
+                .get_decision_by_id(&tenant_id, &decision_id)
+                .await
             {
                 decisions_for_incident.push(decision);
             }
@@ -341,14 +359,16 @@ pub async fn get_graph_for_incident(
         .iter()
         .map(|d| d.id.clone())
         .collect();
-    let approvals_by_decision =
-        db::list_approvals_by_decision_ids(&state.pool, &tenant_id, &decision_ids_to_fetch)
-            .await
-            .unwrap_or_default();
-    let receipts_by_decision =
-        db::list_action_receipts_by_decision_ids(&state.pool, &tenant_id, &decision_ids_to_fetch)
-            .await
-            .unwrap_or_default();
+    let approvals_by_decision = state
+        .storage
+        .list_approvals_by_decision_ids(&tenant_id, &decision_ids_to_fetch)
+        .await
+        .unwrap_or_default();
+    let receipts_by_decision = state
+        .storage
+        .list_action_receipts_by_decision_ids(&tenant_id, &decision_ids_to_fetch)
+        .await
+        .unwrap_or_default();
 
     for decision in &decisions_for_incident {
         add_decision_subgraph(
@@ -404,7 +424,7 @@ pub async fn get_graph_for_agent(
 
     let depth = params.depth.unwrap_or(3).clamp(1, 5);
 
-    let agent = match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+    let agent = match state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
         Ok(Some(agent)) => agent,
         Ok(None) => {
             return StatusError::not_found("Agent not found").into_response();
@@ -427,30 +447,35 @@ pub async fn get_graph_for_agent(
         agent.created_at.to_rfc3339(),
     ));
 
-    let decisions = db::list_decisions(
-        &state.pool,
-        &tenant_id,
-        GRAPH_AGENT_DECISION_LIMIT,
-        0,
-        Some(&agent_id),
-        None,
-    )
-    .await
-    .unwrap_or_default();
+    let decisions = state
+        .storage
+        .list_decisions(
+            &tenant_id,
+            Some(agent_id.as_str()),
+            None,
+            GRAPH_AGENT_DECISION_LIMIT,
+            None,
+            None,
+        )
+        .await
+        .unwrap_or_default()
+        .0;
 
     // #1316: batch-fetch approvals/receipts for every decision in this
     // agent's graph in 2 indexed queries total, instead of up to 2 per
     // decision (N+1) — up to 100 unindexed queries for a 50-decision agent
     // graph before this change.
     let decision_ids: Vec<String> = decisions.iter().map(|d| d.id.clone()).collect();
-    let approvals_by_decision =
-        db::list_approvals_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
-            .await
-            .unwrap_or_default();
-    let receipts_by_decision =
-        db::list_action_receipts_by_decision_ids(&state.pool, &tenant_id, &decision_ids)
-            .await
-            .unwrap_or_default();
+    let approvals_by_decision = state
+        .storage
+        .list_approvals_by_decision_ids(&tenant_id, &decision_ids)
+        .await
+        .unwrap_or_default();
+    let receipts_by_decision = state
+        .storage
+        .list_action_receipts_by_decision_ids(&tenant_id, &decision_ids)
+        .await
+        .unwrap_or_default();
 
     for decision in &decisions {
         add_decision_subgraph(
@@ -465,17 +490,20 @@ pub async fn get_graph_for_agent(
     }
 
     if depth >= 3 {
-        let incidents = db::list_soc_incidents(
-            &state.pool,
-            &tenant_id,
-            GRAPH_AGENT_DECISION_LIMIT,
-            0,
-            None,
-            None,
-            Some(&agent_id),
-        )
-        .await
-        .unwrap_or_default();
+        let incidents = state
+            .storage
+            .list_soc_incidents(
+                &tenant_id,
+                Some(&agent_id),
+                None,
+                None,
+                None,
+                GRAPH_AGENT_DECISION_LIMIT,
+                None,
+            )
+            .await
+            .unwrap_or_default()
+            .0;
 
         for incident in &incidents {
             let incident_node_id = format!("incident:{}", incident.id);

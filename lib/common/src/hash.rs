@@ -10,6 +10,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 pub struct ReceiptSigner {
     signing_key: SigningKey,
+    key_id: Option<String>,
 }
 
 impl ReceiptSigner {
@@ -22,7 +23,19 @@ impl ReceiptSigner {
             .map_err(|_| format!("secret key must be {SECRET_KEY_LENGTH} bytes"))?;
         Ok(Self {
             signing_key: SigningKey::from_bytes(&arr),
+            key_id: None,
         })
+    }
+
+    pub fn from_env_value(value: &str) -> Result<Self, String> {
+        match value.trim().split_once(':') {
+            Some((key_id, hex_secret)) if !key_id.is_empty() => {
+                let mut signer = Self::from_secret_hex(hex_secret)?;
+                signer.key_id = Some(key_id.to_string());
+                Ok(signer)
+            }
+            _ => Self::from_secret_hex(value),
+        }
     }
 
     pub fn sign_hash(&self, receipt_hash: &str) -> String {
@@ -32,6 +45,10 @@ impl ReceiptSigner {
 
     pub fn public_key_hex(&self) -> String {
         hex::encode(self.signing_key.verifying_key().to_bytes())
+    }
+
+    pub fn key_id(&self) -> Option<&str> {
+        self.key_id.as_deref()
     }
 }
 
@@ -70,7 +87,7 @@ pub fn global_signer() -> Option<&'static ReceiptSigner> {
     GLOBAL_SIGNER
         .get_or_init(|| match std::env::var("AEGIS_RECEIPT_SIGNING_KEY") {
             Ok(hex_key) if !hex_key.trim().is_empty() => {
-                match ReceiptSigner::from_secret_hex(&hex_key) {
+                match ReceiptSigner::from_env_value(&hex_key) {
                     Ok(signer) => Some(signer),
                     Err(e) => {
                         warn!(

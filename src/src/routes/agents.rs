@@ -26,6 +26,7 @@ use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
+use aegis_storage::traits::StorageBackend;
 
 use super::*;
 
@@ -35,7 +36,11 @@ pub async fn register_agent(
     Json(payload): Json<RegisterAgentRequest>,
 ) -> impl IntoResponse {
     // Check if agent already exists
-    match db::get_agent_by_key(&state.pool, &tenant_id, &payload.agent_key).await {
+    match state
+        .storage
+        .get_agent_by_key(&tenant_id, &payload.agent_key)
+        .await
+    {
         Ok(Some(agent)) => {
             info!(
                 "Agent already registered: {} — rotating token",
@@ -53,8 +58,10 @@ pub async fn register_agent(
             // plaintext credential instead of "[REDACTED]" — the previous
             // token's hash cannot be reversed (see #1366).
             let new_token = format!("agent_tok_{}", Uuid::new_v4().simple());
-            if let Err(e) =
-                db::rotate_agent_token(&state.pool, &tenant_id, &agent.id, &new_token).await
+            if let Err(e) = state
+                .storage
+                .rotate_agent_token(&tenant_id, &agent.id, &new_token)
+                .await
             {
                 error!("Failed to rotate agent token: {:?}", e);
                 return StatusError::internal("Database error").into_response();
@@ -114,7 +121,7 @@ pub async fn register_agent(
         updated_at: Utc::now(),
     };
 
-    if let Err(e) = db::insert_agent(&state.pool, &agent_record).await {
+    if let Err(e) = state.storage.insert_agent(&agent_record).await {
         error!("Failed to insert agent: {:?}", e);
         return StatusError::internal("Database insert failed").into_response();
     }
@@ -140,7 +147,7 @@ pub async fn register_agent(
         approval_id: None,
         created_at: Utc::now(),
     };
-    let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+    let _ = state.storage.insert_audit_event(&audit_record).await;
 
     (
         StatusCode::CREATED,
@@ -161,14 +168,10 @@ pub async fn list_agents(
     let (limit, offset) = parse_pagination(raw_query.as_deref());
     let status_filter = super::parse_filter(raw_query.as_deref(), "status");
 
-    match db::list_agents(
-        &state.pool,
-        &tenant_id,
-        limit,
-        offset,
-        status_filter.as_deref(),
-    )
-    .await
+    match state
+        .storage
+        .list_agents(&tenant_id, limit, offset, status_filter.as_deref())
+        .await
     {
         Ok(agents) => (StatusCode::OK, Json(agents)).into_response(),
         Err(e) => {
@@ -187,7 +190,7 @@ pub async fn get_agent_risk_scoreboard(
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    let board = match db::get_agent_risk_scoreboard(&state.pool, &tenant_id).await {
+    let board = match state.storage.get_agent_risk_scoreboard(&tenant_id).await {
         Ok(board) => board,
         Err(e) => {
             error!("Failed to get agent risk scoreboard: {:?}", e);
@@ -224,7 +227,7 @@ pub async fn get_agent(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_agent_by_id(&state.pool, &tenant_id, &id).await {
+    match state.storage.get_agent_by_id(&tenant_id, &id).await {
         Ok(Some(agent)) => (StatusCode::OK, Json(agent)).into_response(),
         Ok(None) => StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
@@ -240,7 +243,7 @@ pub async fn patch_agent(
     Path(id): Path<String>,
     Json(payload): Json<PatchAgentRequest>,
 ) -> impl IntoResponse {
-    let mut agent = match db::get_agent_by_id(&state.pool, &tenant_id, &id).await {
+    let mut agent = match state.storage.get_agent_by_id(&tenant_id, &id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
@@ -280,7 +283,7 @@ pub async fn patch_agent(
         agent.status = status;
     }
 
-    match db::update_agent(&state.pool, &agent).await {
+    match state.storage.update_agent(&agent).await {
         Ok(_) => (StatusCode::OK, Json(agent)).into_response(),
         Err(e) => {
             error!("Failed to update agent: {:?}", e);
@@ -294,10 +297,14 @@ pub async fn delete_agent(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match db::set_agent_status(&state.pool, &tenant_id, &id, "deleted").await {
+    match state
+        .storage
+        .set_agent_status(&tenant_id, &id, "deleted")
+        .await
+    {
         Ok(true) => {
             write_admin_action_audit_event(
-                &state.pool,
+                state.storage.as_ref(),
                 &tenant_id,
                 "agent_deleted",
                 Some(&id),
@@ -325,19 +332,36 @@ pub async fn register_tool(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterToolRequest>,
 ) -> impl IntoResponse {
-    // Insert skill
-    let skill_id = match db::insert_skill(
-        &state.pool,
-        &tenant_id,
-        &payload.skill_key,
-        &payload.name,
-        &payload.r#type,
-        payload.auth_type.as_deref(),
-        payload.owner_team.as_deref(),
-        payload.default_risk.as_deref(),
-    )
-    .await
-    {
+    let skill_id = Uuid::new_v4().to_string();
+    let skill_record = SkillRecord {
+        id: skill_id.clone(),
+        tenant_id: tenant_id.clone(),
+        skill_key: payload.skill_key.clone(),
+        name: payload.name.clone(),
+        r#type: payload.r#type.clone(),
+        auth_type: payload.auth_type.clone(),
+        owner_team: payload.owner_team.clone(),
+        default_risk: payload.default_risk.clone(),
+        created_at: Utc::now(),
+    };
+
+    let mut actions = Vec::new();
+    for action in &payload.actions {
+        actions.push(SkillActionRecord {
+            id: Uuid::new_v4().to_string(),
+            skill_id: skill_id.clone(),
+            action_key: action.action_key.clone(),
+            description: action.description.clone(),
+            risk: action.risk.clone(),
+            mutates_state: action.mutates_state,
+            data_access: action.data_access.clone(),
+            approval_required: action.approval_required,
+            default_decision: action.default_decision.clone(),
+            created_at: Utc::now(),
+        });
+    }
+
+    let skill_id = match state.storage.insert_skill(&skill_record, &actions).await {
         Ok(id) => id,
         Err(e) => {
             error!("Failed to register skill: {:?}", e);
@@ -345,26 +369,9 @@ pub async fn register_tool(
         }
     };
 
-    // Insert skill actions
-    for action in payload.actions {
-        if let Err(e) = db::insert_skill_action(
-            &state.pool,
-            &skill_id,
-            &action.action_key,
-            action.description.as_deref(),
-            &action.risk,
-            action.mutates_state,
-            action.data_access.as_deref(),
-            action.approval_required,
-            &action.default_decision,
-        )
-        .await
-        {
-            error!("Failed to register skill action: {:?}", e);
-            return StatusError::internal("Failed to register skill action").into_response();
-        }
-        // #899: a (re-)registration may tighten this action's settings, so drop any
-        // cached entry — the next authorize re-reads the fresh row (fail-closed).
+    // #899: a (re-)registration may tighten this action's settings, so drop any
+    // cached entry — the next authorize re-reads the fresh row (fail-closed).
+    for action in &payload.actions {
         state.skill_cache.invalidate(&SkillActionCache::cache_key(
             &tenant_id,
             &payload.skill_key,
@@ -392,7 +399,9 @@ pub async fn freeze_agent(
         set_agent_operational_status(state.clone(), tenant_id.clone(), agent_id.clone(), "frozen")
             .await;
     if resp.status() == StatusCode::OK {
-        let _ = db::set_agent_frozen_reason(&state.pool, &tenant_id, &agent_id, reason.as_deref())
+        let _ = state
+            .storage
+            .set_agent_frozen_reason(&tenant_id, &agent_id, reason.as_deref())
             .await;
     }
     resp
@@ -443,9 +452,12 @@ pub(crate) async fn rotate_and_audit_agent_token(
     tenant_id: &str,
     agent_id: &str,
     reason: &str,
-) -> Result<String, sqlx::Error> {
+) -> Result<String, aegis_common::errors::AegisError> {
     let new_token = format!("agent_tok_{}", Uuid::new_v4().simple());
-    db::rotate_agent_token(&state.pool, tenant_id, agent_id, &new_token).await?;
+    state
+        .storage
+        .rotate_agent_token(tenant_id, agent_id, &new_token)
+        .await?;
 
     let audit = AuditEventRecord {
         id: Uuid::new_v4().to_string(),
@@ -457,7 +469,7 @@ pub(crate) async fn rotate_and_audit_agent_token(
         trace_id: None,
         span_id: None,
         skill: None,
-        action: None,
+        action: Some("agent_token_rotated".to_string()),
         resource: None,
         event_json: serde_json::to_string(&json!({ "reason": reason })).unwrap_or_default(),
         input_hash: None,
@@ -466,7 +478,7 @@ pub(crate) async fn rotate_and_audit_agent_token(
         approval_id: None,
         created_at: Utc::now(),
     };
-    let _ = db::insert_audit_event(&state.pool, &audit).await;
+    let _ = state.storage.insert_audit_event(&audit).await;
 
     Ok(new_token)
 }
@@ -482,7 +494,7 @@ pub async fn rotate_agent_token(
     Path(agent_id): Path<String>,
     body: Option<Json<RotateTokenRequest>>,
 ) -> impl IntoResponse {
-    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+    match state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
             return StatusError::not_found("Agent not found").into_response();
@@ -533,7 +545,7 @@ pub async fn report_leaked_agent_token(
     Path(agent_id): Path<String>,
     Json(payload): Json<ReportLeakedTokenRequest>,
 ) -> impl IntoResponse {
-    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+    match state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
             return StatusError::not_found("Agent not found").into_response();
@@ -544,7 +556,7 @@ pub async fn report_leaked_agent_token(
         }
     }
 
-    let auto_rotate_enabled = match db::get_tenant_by_id(&state.pool, &tenant_id).await {
+    let auto_rotate_enabled = match state.storage.get_tenant_by_id(&tenant_id).await {
         Ok(Some(tenant)) => tenant.auto_rotate_token_on_leak_enabled,
         Ok(None) => true,
         Err(e) => {
@@ -576,7 +588,7 @@ pub async fn report_leaked_agent_token(
             trace_id: None,
             span_id: None,
             skill: None,
-            action: None,
+            action: Some("agent_token_leak_detected_no_rotation".to_string()),
             resource: None,
             event_json: serde_json::to_string(&json!({ "reason": payload.reason }))
                 .unwrap_or_default(),
@@ -586,7 +598,7 @@ pub async fn report_leaked_agent_token(
             approval_id: None,
             created_at: Utc::now(),
         };
-        let _ = db::insert_audit_event(&state.pool, &audit).await;
+        let _ = state.storage.insert_audit_event(&audit).await;
         None
     };
 
@@ -627,7 +639,11 @@ pub(crate) async fn set_agent_operational_status(
     agent_id: String,
     status: &str,
 ) -> axum::response::Response {
-    match db::set_agent_status(&state.pool, &tenant_id, &agent_id, status).await {
+    match state
+        .storage
+        .set_agent_status(&tenant_id, &agent_id, status)
+        .await
+    {
         Ok(true) => {
             let audit = AuditEventRecord {
                 id: Uuid::new_v4().to_string(),
@@ -639,7 +655,7 @@ pub(crate) async fn set_agent_operational_status(
                 trace_id: None,
                 span_id: None,
                 skill: None,
-                action: None,
+                action: Some(format!("agent_{}", status)),
                 resource: None,
                 event_json: serde_json::to_string(&json!({
                     "agent_id": agent_id,
@@ -652,7 +668,7 @@ pub(crate) async fn set_agent_operational_status(
                 approval_id: None,
                 created_at: Utc::now(),
             };
-            let _ = db::insert_audit_event(&state.pool, &audit).await;
+            let _ = state.storage.insert_audit_event(&audit).await;
             info!(agent_id = %agent_id, status = %status, "Agent status changed");
             (
                 StatusCode::OK,
@@ -680,7 +696,7 @@ pub async fn grant_agent_tool_permission(
     Path(agent_id): Path<String>,
     Json(payload): Json<crate::models::GrantToolPermissionRequest>,
 ) -> impl IntoResponse {
-    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+    match state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
         Ok(None) => return StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("DB error checking agent for permission grant: {:?}", e);
@@ -689,7 +705,9 @@ pub async fn grant_agent_tool_permission(
         Ok(Some(_)) => {}
     }
 
-    match db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, &payload.tool_key)
+    match state
+        .storage
+        .grant_agent_tool_permission(&tenant_id, &agent_id, &payload.tool_key)
         .await
     {
         Ok(_permission) => (
@@ -717,7 +735,7 @@ pub async fn list_agent_tool_permissions(
     TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
+    match state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
         Ok(None) => return StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("DB error checking agent for permission list: {:?}", e);
@@ -726,7 +744,11 @@ pub async fn list_agent_tool_permissions(
         Ok(Some(_)) => {}
     }
 
-    match db::get_agent_tool_permissions(&state.pool, &tenant_id, &agent_id).await {
+    match state
+        .storage
+        .get_agent_tool_permissions(&tenant_id, &agent_id)
+        .await
+    {
         Ok(perms) => (StatusCode::OK, Json(json!({ "permissions": perms }))).into_response(),
         Err(e) => {
             error!("Failed to list tool permissions: {:?}", e);
@@ -744,10 +766,14 @@ pub async fn revoke_agent_tool_permission(
     TenantId(tenant_id): TenantId,
     Path((agent_id, tool_key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match db::revoke_agent_tool_permission(&state.pool, &tenant_id, &agent_id, &tool_key).await {
+    match state
+        .storage
+        .revoke_agent_tool_permission(&tenant_id, &agent_id, &tool_key)
+        .await
+    {
         Ok(true) => {
             write_admin_action_audit_event(
-                &state.pool,
+                state.storage.as_ref(),
                 &tenant_id,
                 "agent_tool_permission_revoked",
                 Some(&agent_id),

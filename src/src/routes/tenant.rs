@@ -36,8 +36,9 @@ pub async fn get_tenant_risk_weights(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match db::get_risk_weights(&state.pool, &tenant_id).await {
-        Ok(weights) => (StatusCode::OK, Json(weights)).into_response(),
+    match state.storage.get_tenant_risk_weights(&tenant_id).await {
+        Ok(Some(weights)) => (StatusCode::OK, Json(weights)).into_response(),
+        Ok(None) => (StatusCode::OK, Json(RiskWeights::from_env())).into_response(),
         Err(e) => {
             error!("Failed to get tenant risk weights: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -52,7 +53,11 @@ pub async fn put_tenant_risk_weights(
     TenantId(tenant_id): TenantId,
     Json(weights): Json<RiskWeights>,
 ) -> impl IntoResponse {
-    match db::upsert_risk_weights(&state.pool, &tenant_id, &weights).await {
+    match state
+        .storage
+        .put_tenant_risk_weights(&tenant_id, &weights)
+        .await
+    {
         Ok(_) => {
             // #1513: drop the cached entry so the next `/v1/authorize` call
             // picks up this override immediately instead of waiting out the
@@ -73,8 +78,22 @@ pub async fn get_tenant_risk_escalation_config(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match db::get_risk_escalation_config(&state.pool, &tenant_id).await {
-        Ok(config) => (StatusCode::OK, Json(config)).into_response(),
+    match state
+        .storage
+        .get_tenant_risk_escalation_config(&tenant_id)
+        .await
+    {
+        Ok(Some((threshold, window))) => {
+            let config = RiskEscalationConfig {
+                denial_threshold: threshold as i64,
+                window_minutes: window as i64,
+            };
+            (StatusCode::OK, Json(config)).into_response()
+        }
+        Ok(None) => {
+            let config = RiskEscalationConfig::default();
+            (StatusCode::OK, Json(config)).into_response()
+        }
         Err(e) => {
             error!("Failed to get tenant risk escalation config: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -95,7 +114,15 @@ pub async fn put_tenant_risk_escalation_config(
         return StatusError::bad_request("denial_threshold and window_minutes must each be >= 1")
             .into_response();
     }
-    match db::upsert_risk_escalation_config(&state.pool, &tenant_id, &config).await {
+    match state
+        .storage
+        .put_tenant_risk_escalation_config(
+            &tenant_id,
+            config.denial_threshold as i32,
+            config.window_minutes as i32,
+        )
+        .await
+    {
         Ok(_) => (StatusCode::OK, Json(config)).into_response(),
         Err(e) => {
             error!("Failed to upsert tenant risk escalation config: {:?}", e);
@@ -112,7 +139,11 @@ pub async fn create_api_key(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<CreateApiKeyRequest>,
 ) -> impl IntoResponse {
-    match db::create_api_key(&state.pool, &tenant_id, &payload.name).await {
+    match state
+        .storage
+        .create_api_key(&tenant_id, &payload.name)
+        .await
+    {
         Ok((id, key)) => (StatusCode::CREATED, Json(json!({"id": id, "key": key}))).into_response(),
         Err(e) => {
             error!("Failed to create API key: {:?}", e);
@@ -127,7 +158,7 @@ pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match db::list_api_keys(&state.pool, &tenant_id).await {
+    match state.storage.list_api_keys(&tenant_id).await {
         Ok(keys) => (StatusCode::OK, Json(keys)).into_response(),
         Err(e) => {
             error!("Failed to list API keys: {:?}", e);
@@ -142,7 +173,7 @@ pub async fn revoke_api_key(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match db::revoke_api_key(&state.pool, &tenant_id, &id).await {
+    match state.storage.revoke_api_key(&tenant_id, &id).await {
         Ok(true) => (StatusCode::OK, Json(json!({"message": "API key revoked"}))).into_response(),
         Ok(false) => StatusError::not_found("API key not found").into_response(),
         Err(e) => {
@@ -161,7 +192,7 @@ pub async fn get_tenant(
         return StatusError::not_found("Tenant not found").into_response();
     }
 
-    match db::get_tenant_by_id(&state.pool, &tenant_id).await {
+    match state.storage.get_tenant_by_id(&tenant_id).await {
         Ok(Some(tenant)) => (StatusCode::OK, Json(tenant)).into_response(),
         Ok(None) => StatusError::not_found("Tenant not found").into_response(),
         Err(e) => {
@@ -224,7 +255,10 @@ pub async fn get_evidence_pack(
         None => None,
     };
 
-    let receipts = match db::list_action_receipts_in_range(&state.pool, &tenant_id, from, to).await
+    let receipts = match state
+        .storage
+        .list_action_receipts_in_range(&tenant_id, from, to)
+        .await
     {
         Ok(rows) => rows,
         Err(e) => {
@@ -232,7 +266,10 @@ pub async fn get_evidence_pack(
             return StatusError::internal("Database error").into_response();
         }
     };
-    let audit_events = match db::get_audit_events_in_range(&state.pool, &tenant_id, from, to).await
+    let audit_events = match state
+        .storage
+        .get_audit_events_in_range(&tenant_id, from, to)
+        .await
     {
         Ok(rows) => rows,
         Err(e) => {
@@ -240,21 +277,29 @@ pub async fn get_evidence_pack(
             return StatusError::internal("Database error").into_response();
         }
     };
-    let approvals = match db::list_approvals_in_range(&state.pool, &tenant_id, from, to).await {
+    let approvals = match state
+        .storage
+        .list_approvals_in_range(&tenant_id, from, to)
+        .await
+    {
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load approvals for evidence pack: {:?}", e);
             return StatusError::internal("Database error").into_response();
         }
     };
-    let incidents = match db::list_soc_incidents_in_range(&state.pool, &tenant_id, from, to).await {
+    let incidents = match state
+        .storage
+        .list_soc_incidents_in_range(&tenant_id, from, to)
+        .await
+    {
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load incidents for evidence pack: {:?}", e);
             return StatusError::internal("Database error").into_response();
         }
     };
-    let policies = match db::list_policies(&state.pool, &tenant_id).await {
+    let policies = match state.storage.list_policies(&tenant_id).await {
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load policies for evidence pack: {:?}", e);
@@ -386,7 +431,7 @@ pub async fn export_tenant(
         return StatusError::not_found("Tenant not found").into_response();
     }
 
-    match db::export_tenant_data(&state.pool, &tenant_id).await {
+    match state.storage.export_tenant_data(&tenant_id).await {
         Ok(export) => (StatusCode::OK, Json(export)).into_response(),
         Err(e) => {
             error!("Failed to export tenant data: {:?}", e);
@@ -408,7 +453,7 @@ pub async fn delete_tenant(
         return StatusError::not_found("Tenant not found").into_response();
     }
 
-    match db::delete_tenant_data(&state.pool, &tenant_id).await {
+    match state.storage.delete_tenant_data(&tenant_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             error!("Failed to delete tenant data: {:?}", e);
@@ -421,7 +466,7 @@ pub async fn create_tenant(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTenantRequest>,
 ) -> impl IntoResponse {
-    match db::get_tenant_by_id(&state.pool, &payload.id).await {
+    match state.storage.get_tenant_by_id(&payload.id).await {
         Ok(Some(_)) => {
             return StatusError::conflict("Tenant already exists").into_response();
         }
@@ -432,18 +477,16 @@ pub async fn create_tenant(
         _ => {}
     }
 
-    match db::register_tenant(&state.pool, &payload.id, &payload.name, &payload.plan).await {
-        Ok(()) => {
-            let record = TenantRecord {
-                id: payload.id.clone(),
-                name: payload.name.clone(),
-                plan: payload.plan.clone(),
-                created_at: Utc::now(),
-                auto_respond_enabled: true,
-                auto_rotate_token_on_leak_enabled: true,
-            };
-            (StatusCode::CREATED, Json(record)).into_response()
-        }
+    let record = TenantRecord {
+        id: payload.id.clone(),
+        name: payload.name.clone(),
+        plan: payload.plan.clone(),
+        created_at: Utc::now(),
+        auto_respond_enabled: true,
+        auto_rotate_token_on_leak_enabled: true,
+    };
+    match state.storage.insert_tenant(&record).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(e) => {
             error!("Failed to register tenant: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -455,7 +498,7 @@ pub async fn get_tenant_stats(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match db::get_tenant_stats(&state.pool, &tenant_id).await {
+    match state.storage.get_tenant_stats(&tenant_id).await {
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
         Err(e) => {
             error!("Failed to get tenant stats: {:?}", e);
@@ -469,7 +512,7 @@ pub async fn get_tenant_stats(
 /// tenant-scoped (reflects the single SQLite file shared by all tenants);
 /// intended for ops dashboards on the local-only gateway listener.
 pub async fn get_db_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match db::get_db_stats(&state.pool).await {
+    match state.storage.get_db_stats().await {
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
         Err(e) => {
             error!("Failed to get db stats: {:?}", e);
@@ -512,7 +555,7 @@ pub async fn create_db_backup(
         return StatusError::conflict("Backup file already exists").into_response();
     }
 
-    match db::backup_database_to(&state.pool, &dest_path_str).await {
+    match state.storage.backup_database_to(&dest_path_str).await {
         Ok(()) => {
             let size_bytes = std::fs::metadata(&dest_path)
                 .map(|m| m.len() as i64)

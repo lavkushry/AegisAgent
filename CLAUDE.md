@@ -41,13 +41,13 @@ AegisAgent uses a **two-layer storage model**:
 
 ```bash
 # Gateway (Rust)
-cargo check  --manifest-path gateway/Cargo.toml
-cargo test   --manifest-path gateway/Cargo.toml        # 587 tests
-cargo fmt    --manifest-path gateway/Cargo.toml -- --check
-cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
-cargo deny --manifest-path gateway/Cargo.toml check licenses   # #1174, blocks GPL/AGPL
-cargo llvm-cov --manifest-path gateway/Cargo.toml --fail-under-lines 70   # coverage gate
-CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml   # binds 127.0.0.1:8080
+cargo check  --manifest-path src/Cargo.toml
+cargo test   --manifest-path src/Cargo.toml        # 637 tests
+cargo fmt    --manifest-path src/Cargo.toml -- --check
+cargo clippy --manifest-path src/Cargo.toml -- -D warnings
+cargo deny --manifest-path src/Cargo.toml check licenses   # #1174, blocks GPL/AGPL
+cargo llvm-cov --manifest-path src/Cargo.toml --fail-under-lines 70   # coverage gate
+CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path src/Cargo.toml   # binds 127.0.0.1:8080
 
 # SDK + Demos (Python)
 python3 -m pip install -e sdk-python/
@@ -78,7 +78,7 @@ cd e2e && npm ci && AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright tes
 
 ## Where Things Live
 
-* `gateway/src/`: Routing (`routes.rs`), database (`db.rs`), policy engine (`policy.rs`), models (`models.rs`), gateway daemon (`main.rs`), SOC emitter (`events.rs`), detection (`detect.rs`), correlation (`correlate.rs`), webhook (`notify.rs`), response engine (`respond.rs`), ingestion (`ingest.rs`), baselining (`baseline.rs`), RCA narrator (`narrate.rs`), background tasks (`jobs.rs`), metrics (`metrics.rs`), signing (`sign.rs`), and scanner (`mcp_inspect.rs`).
+* `src/`: Routing (`routes/` folder), database (`db` modules/traits under `lib/storage`), policy engine (modules under `lib/policy`), models (`lib/api`), gateway daemon (`main.rs`, `grpc.rs`, etc.), SOC features under `lib/soc/` (detection, correlation, etc.).
 * `sdk-python/aegisagent/`: Canonicalization (`canon.py`), decorator (`decorator.py`), client (`client.py`), receipts (`receipts.py`), verify CLI (`verify_receipts.py`).
 * `sdk-go/`: `canon/canon.go`, `aegis/client.go`, `aegis/protect.go`, `aegis/receipts.go`.
 * `sdk-typescript/src/`: `canon.ts`, `client.ts`, `protect.ts`.

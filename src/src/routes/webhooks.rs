@@ -424,17 +424,18 @@ pub async fn create_webhook_subscription(
 
     let secret_hash = payload.secret.as_ref().map(|s| sha256_hex(s.as_bytes()));
     let delivery_secret = format!("whsec_{}", Uuid::new_v4().simple());
-    match db::insert_webhook_subscription(
-        &state.pool,
-        &tenant_id,
-        &payload.url,
-        secret_hash.as_deref(),
-        &payload.event_types,
-        &delivery_secret,
-        &min_severity,
-        &format,
-    )
-    .await
+    match state
+        .storage
+        .insert_webhook_subscription(
+            &tenant_id,
+            &payload.url,
+            secret_hash.as_deref(),
+            &payload.event_types,
+            &delivery_secret,
+            &min_severity,
+            &format,
+        )
+        .await
     {
         Ok(record) => (
             StatusCode::CREATED,
@@ -468,7 +469,7 @@ pub async fn list_webhook_subscriptions(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match db::list_webhook_subscriptions(&state.pool, &tenant_id).await {
+    match state.storage.list_webhook_subscriptions(&tenant_id).await {
         Ok(subs) => (StatusCode::OK, Json(subs)).into_response(),
         Err(e) => {
             error!("Failed to list webhook subscriptions: {:?}", e);
@@ -483,7 +484,11 @@ pub async fn delete_webhook_subscription(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match db::delete_webhook_subscription(&state.pool, &tenant_id, &id).await {
+    match state
+        .storage
+        .delete_webhook_subscription(&tenant_id, &id)
+        .await
+    {
         Ok(true) => (
             StatusCode::OK,
             Json(json!({"message": "Webhook subscription successfully deleted"})),

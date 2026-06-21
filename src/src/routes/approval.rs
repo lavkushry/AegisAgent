@@ -49,7 +49,7 @@ const ADMIN_BYPASS_HEADER: &str = "X-Aegis-Admin-Key";
 /// `active` API key for `tenant_id`. Fails closed (`false`) on any missing
 /// header, malformed value, or DB error.
 pub(crate) async fn has_admin_bypass(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn StorageBackend,
     tenant_id: &str,
     headers: &HeaderMap,
 ) -> bool {
@@ -63,7 +63,8 @@ pub(crate) async fn has_admin_bypass(
         return false;
     }
     let key_hash = db::hash_token(key);
-    db::is_active_api_key(pool, tenant_id, &key_hash)
+    storage
+        .is_active_api_key(tenant_id, &key_hash)
         .await
         .unwrap_or(false)
 }
@@ -89,7 +90,7 @@ pub(crate) async fn approval_callback_rate_limit_guard(
     addr: SocketAddr,
     headers: &HeaderMap,
 ) -> Option<axum::response::Response> {
-    if has_admin_bypass(&state.pool, tenant_id, headers).await {
+    if has_admin_bypass(&*state.storage, tenant_id, headers).await {
         return None;
     }
 
@@ -153,7 +154,9 @@ pub(crate) async fn conflict_response_for_failed_transition(
     approval_id: &Uuid,
     expired_tamper_kind: &str,
 ) -> axum::response::Response {
-    let approval = db::get_approval_by_id(&state.pool, tenant_id, &approval_id.to_string())
+    let approval = state
+        .storage
+        .get_approval_by_id(tenant_id, &approval_id.to_string())
         .await
         .ok()
         .flatten();
@@ -161,7 +164,7 @@ pub(crate) async fn conflict_response_for_failed_transition(
     match approval {
         Some(approval) if approval.status == "created" && approval_is_expired(&approval) => {
             emit_tamper_attempt_receipt(
-                &state.pool,
+                &*state.storage,
                 &state.events,
                 tenant_id,
                 None,
@@ -187,7 +190,11 @@ pub async fn get_approval(
     TenantId(tenant_id): TenantId,
     Path(approval_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
+    match state
+        .storage
+        .get_approval_by_id(&tenant_id, &approval_id.to_string())
+        .await
+    {
         Ok(Some(app)) => {
             let edited_call: Option<AuthorizeToolCall> = app
                 .edited_skill_call
@@ -199,7 +206,9 @@ pub async fn get_approval(
             // approving. Additive fields only; existing consumers are unaffected.
             let tool_call: Option<AuthorizeToolCall> =
                 serde_json::from_str(&app.original_skill_call).ok();
-            let agent_id = db::get_decision_by_id(&state.pool, &tenant_id, &app.decision_id)
+            let agent_id = state
+                .storage
+                .get_decision_by_id(&tenant_id, &app.decision_id)
                 .await
                 .ok()
                 .flatten()
@@ -254,24 +263,28 @@ pub async fn consume_approval(
     // JSON body is optional; old callers that POST with no body still work.
     body: Option<Json<ConsumeApprovalBody>>,
 ) -> impl IntoResponse {
-    let consumed =
-        match db::consume_approval(&state.pool, &tenant_id, &approval_id.to_string()).await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to consume approval: {:?}", e);
-                return StatusError::internal("Database error").into_response();
-            }
-        };
+    let consumed = match state
+        .storage
+        .consume_approval(&tenant_id, &approval_id.to_string())
+        .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to consume approval: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
 
     if !consumed {
         // A consume of an already-used / expired / not-approved approval is an
         // attack on the evidence chain (replay / T-D): record it as a tamper-attempt
         // receipt so the chain itself captures the attempt. Hashes only, no payloads.
-        let bound_approval =
-            db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
-                .await
-                .ok()
-                .flatten();
+        let bound_approval = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
+            .await
+            .ok()
+            .flatten();
         let bound_hash = bound_approval
             .as_ref()
             .map(|a| a.original_call_hash.clone());
@@ -279,7 +292,7 @@ pub async fn consume_approval(
         // The approval record does not carry the agent id; the SOC event uses the
         // "unknown" placeholder (the violation tag + approval id are the evidence).
         emit_tamper_attempt_receipt(
-            &state.pool,
+            &*state.storage,
             &state.events,
             &tenant_id,
             None,
@@ -297,7 +310,9 @@ pub async fn consume_approval(
     }
 
     // Return the bound action hash so the SDK can re-verify before executing.
-    let action_hash = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+    let action_hash = state
+        .storage
+        .get_approval_by_id(&tenant_id, &approval_id.to_string())
         .await
         .ok()
         .flatten()
@@ -359,17 +374,20 @@ pub(crate) async fn approve_approval_inner(
 ) -> axum::response::Response {
     // Load the approval first so we can fail closed on stale or already-decided
     // requests instead of blindly transitioning to APPROVED.
-    let approval =
-        match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
-            Ok(Some(app)) => app,
-            Ok(None) => {
-                return StatusError::not_found("Approval request not found").into_response();
-            }
-            Err(e) => {
-                error!("Database lookup error: {:?}", e);
-                return StatusError::internal("Database error").into_response();
-            }
-        };
+    let approval = match state
+        .storage
+        .get_approval_by_id(&tenant_id, &approval_id.to_string())
+        .await
+    {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return StatusError::not_found("Approval request not found").into_response();
+        }
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
 
     // Only a pending approval may be approved (no re-deciding an APPROVED/REJECTED/EDITED one).
     if approval.status != "created" {
@@ -382,7 +400,7 @@ pub(crate) async fn approve_approval_inner(
     // tamper-attempt receipt (hashes only) before refusing.
     if approval_is_expired(&approval) {
         emit_tamper_attempt_receipt(
-            &state.pool,
+            &*state.storage,
             &state.events,
             &tenant_id,
             None,
@@ -403,16 +421,17 @@ pub(crate) async fn approve_approval_inner(
     // source of truth: it only matches a still-`created`, non-expired row, so
     // a concurrent decision or last-instant expiry between the pre-checks
     // above and this write is caught here rather than silently overwritten.
-    let updated = match db::update_approval_status(
-        &state.pool,
-        &tenant_id,
-        &approval_id.to_string(),
-        "APPROVED",
-        &payload.approver_user_id,
-        payload.reason.as_deref(),
-        None,
-    )
-    .await
+    let updated = match state
+        .storage
+        .update_approval_status(
+            &tenant_id,
+            &approval_id.to_string(),
+            "APPROVED",
+            &payload.approver_user_id,
+            payload.reason.as_deref(),
+            None,
+        )
+        .await
     {
         Ok(updated) => updated,
         Err(e) => {
@@ -456,7 +475,7 @@ pub(crate) async fn approve_approval_inner(
         approval_id: Some(approval.id.clone()),
         created_at: Utc::now(),
     };
-    let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+    let _ = state.storage.insert_audit_event(&audit_record).await;
 
     (
         StatusCode::OK,
@@ -492,32 +511,36 @@ pub(crate) async fn reject_approval_inner(
     payload: ApproveRequest,
 ) -> axum::response::Response {
     // 404 if the approval doesn't exist for this tenant.
-    let approval =
-        match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
-            Ok(Some(app)) => app,
-            Ok(None) => {
-                return StatusError::not_found("Approval request not found").into_response();
-            }
-            Err(e) => {
-                error!("Database lookup error: {:?}", e);
-                return StatusError::internal("Database error").into_response();
-            }
-        };
+    let approval = match state
+        .storage
+        .get_approval_by_id(&tenant_id, &approval_id.to_string())
+        .await
+    {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return StatusError::not_found("Approval request not found").into_response();
+        }
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
 
     // Atomically transition to REJECTED (#1300). Previously this handler had
     // NO status/expiry guard at all and would unconditionally overwrite an
     // already-decided approval's status — the UPDATE itself is now the
     // source of truth: it only matches a still-`created`, non-expired row.
-    let updated = match db::update_approval_status(
-        &state.pool,
-        &tenant_id,
-        &approval_id.to_string(),
-        "REJECTED",
-        &payload.approver_user_id,
-        payload.reason.as_deref(),
-        None,
-    )
-    .await
+    let updated = match state
+        .storage
+        .update_approval_status(
+            &tenant_id,
+            &approval_id.to_string(),
+            "REJECTED",
+            &payload.approver_user_id,
+            payload.reason.as_deref(),
+            None,
+        )
+        .await
     {
         Ok(updated) => updated,
         Err(e) => {
@@ -563,7 +586,7 @@ pub(crate) async fn reject_approval_inner(
         approval_id: Some(approval_id.to_string()),
         created_at: Utc::now(),
     };
-    let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+    let _ = state.storage.insert_audit_event(&audit_record).await;
 
     (
         StatusCode::OK,
@@ -600,17 +623,20 @@ pub(crate) async fn edit_approval_inner(
 ) -> axum::response::Response {
     // Load the approval first so we can fail closed on stale or already-decided
     // requests instead of blindly transitioning to EDITED (#0131).
-    let approval =
-        match db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string()).await {
-            Ok(Some(app)) => app,
-            Ok(None) => {
-                return StatusError::not_found("Approval request not found").into_response();
-            }
-            Err(e) => {
-                error!("Database lookup error: {:?}", e);
-                return StatusError::internal("Database error").into_response();
-            }
-        };
+    let approval = match state
+        .storage
+        .get_approval_by_id(&tenant_id, &approval_id.to_string())
+        .await
+    {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return StatusError::not_found("Approval request not found").into_response();
+        }
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
 
     // Only a pending approval may be edited (no editing an APPROVED/REJECTED/
     // already-EDITED/consumed one).
@@ -629,16 +655,17 @@ pub(crate) async fn edit_approval_inner(
     // UPDATE itself is the source of truth: it only matches a still-`created`,
     // non-expired row, closing the TOCTOU window between the pre-check above
     // and this write.
-    let updated = match db::update_approval_edit(
-        &state.pool,
-        &tenant_id,
-        &approval_id.to_string(),
-        &payload.approver_user_id,
-        payload.reason.as_deref(),
-        &edited_call_str,
-        &new_action_hash,
-    )
-    .await
+    let updated = match state
+        .storage
+        .update_approval_edit(
+            &tenant_id,
+            &approval_id.to_string(),
+            &payload.approver_user_id,
+            payload.reason.as_deref(),
+            &edited_call_str,
+            &new_action_hash,
+        )
+        .await
     {
         Ok(updated) => updated,
         Err(e) => {
@@ -683,7 +710,7 @@ pub(crate) async fn edit_approval_inner(
         approval_id: Some(approval.id.clone()),
         created_at: Utc::now(),
     };
-    let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+    let _ = state.storage.insert_audit_event(&audit_record).await;
 
     (
         StatusCode::OK,
@@ -703,16 +730,25 @@ pub async fn list_approvals(
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
 
-    match db::list_pending_approvals(&state.pool, &tenant_id, limit, offset).await {
+    match state
+        .storage
+        .list_pending_approvals(&tenant_id, limit, offset)
+        .await
+    {
         Ok(approvals) => {
             // #1326: batch-fetch the originating decisions once (not one query
             // per approval) purely to surface `agent_id` — a human approver
             // needs to know which agent is asking, not just an action hash.
             let decision_ids: Vec<String> =
                 approvals.iter().map(|a| a.decision_id.clone()).collect();
-            let decisions_by_id = db::list_decisions_by_ids(&state.pool, &tenant_id, &decision_ids)
+            let decisions_by_id = state
+                .storage
+                .list_decisions_by_ids(&tenant_id, &decision_ids)
                 .await
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .map(|d| (d.id.clone(), d))
+                .collect::<std::collections::HashMap<_, _>>();
             let mapped: Vec<serde_json::Value> = approvals
                 .into_iter()
                 .map(|app| {

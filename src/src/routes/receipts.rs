@@ -35,7 +35,11 @@ pub async fn verify_receipt(
     TenantId(tenant_id): TenantId,
     Path(receipt_id): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_action_receipt_by_id(&state.pool, &tenant_id, &receipt_id).await {
+    match state
+        .storage
+        .get_action_receipt_by_id(&tenant_id, &receipt_id)
+        .await
+    {
         Ok(Some(rec)) => {
             // Hash (chain) integrity — UNCHANGED. This is the byte-parity-locked check.
             let recomputed = compute_receipt_hash(&rec);
@@ -93,7 +97,11 @@ pub async fn list_receipts(
         Err(resp) => return *resp,
     };
 
-    match db::list_action_receipts_cursor(&state.pool, &tenant_id, limit, offset, cursor).await {
+    match state
+        .storage
+        .list_action_receipts_cursor(&tenant_id, limit, offset, cursor)
+        .await
+    {
         Ok((receipts, next_cursor)) => paginated_response(&receipts, next_cursor),
         Err(e) => {
             error!("Failed to list receipts: {:?}", e);
@@ -108,7 +116,11 @@ pub async fn get_receipt(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_action_receipt_by_id(&state.pool, &tenant_id, &id).await {
+    match state
+        .storage
+        .get_action_receipt_by_id(&tenant_id, &id)
+        .await
+    {
         Ok(Some(receipt)) => (StatusCode::OK, Json(receipt)).into_response(),
         Ok(None) => StatusError::not_found("Receipt not found").into_response(),
         Err(e) => {

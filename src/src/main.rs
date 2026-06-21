@@ -58,7 +58,7 @@ fn build_hash() -> &'static str {
 /// `503 unhealthy` (fail-closed, so an orchestrator won't route traffic to a
 /// gateway that can't reach its store).
 async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match db::health_check(&state.pool).await {
+    match state.storage.health_check().await {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({
@@ -119,7 +119,7 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "down"
     };
 
-    match db::health_check(&state.pool).await {
+    match state.storage.health_check().await {
         Ok(()) if dead_background_tasks.is_empty() => (
             StatusCode::OK,
             Json(json!({
@@ -235,8 +235,8 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
     // pool at scrape time — no separate sampling/storage needed for these two
     // (unlike `db_pool_acquire_wait_seconds`, which needs a timed probe and is
     // rendered as part of `render_prometheus` above).
-    let idle = state.pool.num_idle() as u32;
-    let active = state.pool.size().saturating_sub(idle);
+    let idle = state.storage.get_pool().num_idle() as u32;
+    let active = state.storage.get_pool().size().saturating_sub(idle);
     body.push_str(&format!(
         "# HELP db_pool_connections_active Number of SQLite pool connections currently checked out\n\
          # TYPE db_pool_connections_active gauge\n\
@@ -1492,7 +1492,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
-        pool,
+        pool: pool.clone(),
+        storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
         policy_engine,
         events,
         metrics,
@@ -1824,7 +1825,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // #1511: flush any heartbeats buffered since the last periodic tick so
     // graceful shutdown never silently drops a pending last_seen_at write.
-    jobs::flush_heartbeats(&state.pool, &state.heartbeat_debouncer).await;
+    jobs::flush_heartbeats(state.storage.get_pool(), &state.heartbeat_debouncer).await;
 
     drop(state);
 
@@ -2045,7 +2046,8 @@ mod tests {
         let (events, _events_rx) =
             events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
-            pool,
+            pool: pool.clone(),
+            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -2336,7 +2338,8 @@ mod tests {
         let (events, _events_rx) =
             events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
-            pool,
+            pool: pool.clone(),
+            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -2459,7 +2462,7 @@ mod tests {
         use tower::ServiceExt;
 
         let (app, state, db_url) = probe_test_app("health_pool_closed").await;
-        state.pool.close().await;
+        state.storage.get_pool().close().await;
 
         let response = app
             .oneshot(
@@ -2664,7 +2667,8 @@ mod tests {
         assert!(doomed_abort_handle.is_finished());
 
         let state = Arc::new(routes::AppState {
-            pool,
+            pool: pool.clone(),
+            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
             metrics,

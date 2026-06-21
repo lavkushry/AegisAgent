@@ -24,6 +24,7 @@ use super::compute_receipt_hash;
 /// signer is configured (`global_signer() == None`), both fields stay NULL and
 /// the receipt is emitted unsigned (hermetic default). We sign the hash, never a
 /// payload (redaction preserved).
+#[allow(dead_code)]
 pub(crate) fn apply_receipt_signature(receipt: &mut ActionReceiptRecord) {
     if let Some(signer) = sign::global_signer() {
         receipt.signature = Some(signer.sign_hash(&receipt.receipt_hash));
@@ -35,7 +36,7 @@ pub(crate) fn apply_receipt_signature(receipt: &mut ActionReceiptRecord) {
 /// Emit a hash-chained, verifiable receipt for a finalized decision. Non-fatal:
 /// a receipt write failure is logged but does not change the authorization result.
 pub(crate) async fn emit_action_receipt(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn aegis_storage::traits::StorageBackend,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -45,40 +46,36 @@ pub(crate) async fn emit_action_receipt(
     // Build the head-referencing receipt inside one atomic transaction (T-D
     // hardening): the chain head is read and the new link inserted under a single
     // write lock, so concurrent authorizes for this tenant cannot fork the chain.
-    let result = db::append_action_receipt_atomic(pool, tenant_id, |prev_receipt_hash| {
-        let mut receipt = ActionReceiptRecord {
-            id: Uuid::new_v4().to_string(),
-            tenant_id: tenant_id.to_string(),
-            decision_id: Some(decision_id.to_string()),
-            ts: Utc::now().to_rfc3339(),
-            agent_id: Some(agent_id.to_string()),
-            user_id: payload.user.as_ref().map(|u| u.id.clone()),
-            run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
-            trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
-            tool: Some(payload.tool_call.tool.clone()),
-            action: Some(payload.tool_call.action.clone()),
-            resource: payload.tool_call.resource.clone(),
-            source_trust: payload.context.source_trust.clone(),
-            decision: decision.to_string(),
-            approver: None,
-            action_hash: Some(hash_tool_call(&payload.tool_call)),
-            prev_receipt_hash,
-            receipt_hash: String::new(),
-            // Self-describing scheme tag; additive, not folded into receipt_hash.
-            canon_version: CANON_VERSION.to_string(),
-            signature: None,
-            signer_public_key: None,
-            signer_key_id: None,
-            created_at: Utc::now(),
-        };
-        // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
-        receipt.receipt_hash = compute_receipt_hash(&receipt);
-        apply_receipt_signature(&mut receipt);
-        receipt
-    })
-    .await;
+    let receipt = ActionReceiptRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.to_string(),
+        decision_id: Some(decision_id.to_string()),
+        ts: Utc::now().to_rfc3339(),
+        agent_id: Some(agent_id.to_string()),
+        user_id: payload.user.as_ref().map(|u| u.id.clone()),
+        run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
+        trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
+        tool: Some(payload.tool_call.tool.clone()),
+        action: Some(payload.tool_call.action.clone()),
+        resource: payload.tool_call.resource.clone(),
+        source_trust: payload.context.source_trust.clone(),
+        decision: decision.to_string(),
+        approver: None,
+        action_hash: Some(hash_tool_call(&payload.tool_call)),
+        prev_receipt_hash: String::new(),
+        receipt_hash: String::new(),
+        // Self-describing scheme tag; additive, not folded into receipt_hash.
+        canon_version: CANON_VERSION.to_string(),
+        signature: None,
+        signer_public_key: None,
+        signer_key_id: None,
+        created_at: Utc::now(),
+    };
 
-    if let Err(e) = result {
+    if let Err(e) = storage
+        .append_action_receipt_atomic(tenant_id, receipt)
+        .await
+    {
         error!("Failed to write action receipt: {:?}", e);
     }
 }
@@ -98,7 +95,7 @@ pub(crate) const TAMPER_DECISION: &str = "tamper_attempt";
 /// does not change the caller's response.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_tamper_attempt_receipt(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn aegis_storage::traits::StorageBackend,
     events: &EventSink,
     tenant_id: &str,
     agent_id: Option<&str>,
@@ -109,40 +106,36 @@ pub(crate) async fn emit_tamper_attempt_receipt(
 ) {
     let kind_owned = kind.to_string();
     let action_hash_for_receipt = action_hash.clone();
-    let result = db::append_action_receipt_atomic(pool, tenant_id, |prev_receipt_hash| {
-        let mut receipt = ActionReceiptRecord {
-            id: Uuid::new_v4().to_string(),
-            tenant_id: tenant_id.to_string(),
-            decision_id: None,
-            ts: Utc::now().to_rfc3339(),
-            agent_id: None,
-            user_id: None,
-            run_id: None,
-            trace_id: None,
-            // `tool`/`resource` carry only the violation tag + approval id (no payload).
-            tool: Some(kind_owned.clone()),
-            action: Some(TAMPER_DECISION.to_string()),
-            resource: Some(format!("approval:{}", approval_id)),
-            source_trust: "malicious_suspected".to_string(),
-            decision: TAMPER_DECISION.to_string(),
-            approver: None,
-            action_hash: action_hash_for_receipt,
-            prev_receipt_hash,
-            receipt_hash: String::new(),
-            canon_version: CANON_VERSION.to_string(),
-            signature: None,
-            signer_public_key: None,
-            signer_key_id: None,
-            created_at: Utc::now(),
-        };
-        // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
-        receipt.receipt_hash = compute_receipt_hash(&receipt);
-        apply_receipt_signature(&mut receipt);
-        receipt
-    })
-    .await;
+    let receipt = ActionReceiptRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.to_string(),
+        decision_id: None,
+        ts: Utc::now().to_rfc3339(),
+        agent_id: None,
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        // `tool`/`resource` carry only the violation tag + approval id (no payload).
+        tool: Some(kind_owned.clone()),
+        action: Some(TAMPER_DECISION.to_string()),
+        resource: Some(format!("approval:{}", approval_id)),
+        source_trust: "malicious_suspected".to_string(),
+        decision: TAMPER_DECISION.to_string(),
+        approver: None,
+        action_hash: action_hash_for_receipt,
+        prev_receipt_hash: String::new(),
+        receipt_hash: String::new(),
+        canon_version: CANON_VERSION.to_string(),
+        signature: None,
+        signer_public_key: None,
+        signer_key_id: None,
+        created_at: Utc::now(),
+    };
 
-    if let Err(e) = result {
+    if let Err(e) = storage
+        .append_action_receipt_atomic(tenant_id, receipt)
+        .await
+    {
         error!("Failed to write tamper-attempt receipt: {:?}", e);
         return;
     }
@@ -172,7 +165,7 @@ pub(crate) async fn emit_tamper_attempt_receipt(
         approval_id: Some(approval_id.to_string()),
         created_at: Utc::now(),
     };
-    if let Err(e) = db::insert_audit_event(pool, &audit_record).await {
+    if let Err(e) = storage.insert_audit_event(&audit_record).await {
         error!("Failed to write tamper-attempt audit event: {:?}", e);
     }
 

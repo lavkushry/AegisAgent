@@ -33,9 +33,7 @@ async fn reload_policies_helper(
     state: &Arc<AppState>,
     tenant_id: &str,
 ) -> Result<(), aegis_common::errors::AegisError> {
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-    let db_policies = storage.list_policies(tenant_id).await?;
+    let db_policies = state.storage.list_policies(tenant_id).await?;
     state
         .policy_engine
         .reload_tenant_policies(tenant_id, &db_policies)
@@ -48,7 +46,7 @@ async fn reload_policies_helper(
 /// `body_hash`, never stored verbatim. Best-effort: a failure here is logged
 /// but never blocks the policy operation that triggered it.
 pub(crate) async fn record_policy_audit_log(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn aegis_storage::traits::StorageBackend,
     tenant_id: &str,
     policy_id: &str,
     policy_key: &str,
@@ -56,8 +54,6 @@ pub(crate) async fn record_policy_audit_log(
     body: &str,
     diff_summary: String,
 ) {
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(pool.clone());
     let tenant_id_str = tenant_id.to_string();
     let body_hash = format!("sha256:{}", sha256_hex(body.as_bytes()));
     let policy_id = policy_id.to_string();
@@ -94,9 +90,7 @@ pub async fn list_policies(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-    match storage.list_policies(&tenant_id).await {
+    match state.storage.list_policies(&tenant_id).await {
         Ok(policies) => (StatusCode::OK, Json(policies)).into_response(),
         Err(e) => {
             error!("Failed to list policies: {:?}", e);
@@ -129,19 +123,17 @@ pub async fn create_policy(
         created_at: Utc::now(),
     };
 
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-    match storage.insert_policy(&record).await {
+    match state.storage.insert_policy(&record).await {
         Ok(_) => {
             // Trigger hot-reload
             if let Err(e) = reload_policies_helper(&state, &tenant_id).await {
                 error!("Failed to reload policies after create: {:?}", e);
-                let _ = storage.delete_policy(&tenant_id, &record.id).await;
+                let _ = state.storage.delete_policy(&tenant_id, &record.id).await;
                 return StatusError::internal("Failed to hot-reload policy changes")
                     .into_response();
             }
             record_policy_audit_log(
-                &state.pool,
+                state.storage.as_ref(),
                 &tenant_id,
                 &record.id,
                 &record.policy_key,
@@ -168,9 +160,7 @@ pub async fn update_policy(
     Path(id): Path<String>,
     Json(payload): Json<UpdatePolicyRequest>,
 ) -> impl IntoResponse {
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-    let mut record = match storage.get_policy_by_id(&tenant_id, &id).await {
+    let mut record = match state.storage.get_policy_by_id(&tenant_id, &id).await {
         Ok(Some(p)) => p,
         Ok(None) => return StatusError::not_found("Policy not found").into_response(),
         Err(e) => {
@@ -218,17 +208,17 @@ pub async fn update_policy(
     record.version += 1;
 
     // Best-effort: a DB error archiving the previous version never blocks the update.
-    if let Err(e) = storage.insert_policy_version(&previous).await {
+    if let Err(e) = state.storage.insert_policy_version(&previous).await {
         error!("Failed to archive previous policy version: {:?}", e);
     }
 
-    match storage.update_policy(&record).await {
+    match state.storage.update_policy(&record).await {
         Ok(_) => {
             // Trigger hot-reload
             if let Err(e) = reload_policies_helper(&state, &tenant_id).await {
                 error!("Failed to reload policies after update: {:?}", e);
                 // Roll back DB record to prior state
-                let _ = storage.update_policy(&previous).await;
+                let _ = state.storage.update_policy(&previous).await;
                 return StatusError::internal("Failed to hot-reload policy changes")
                     .into_response();
             }
@@ -246,7 +236,7 @@ pub async fn update_policy(
                 )
             };
             record_policy_audit_log(
-                &state.pool,
+                state.storage.as_ref(),
                 &tenant_id,
                 &record.id,
                 &record.policy_key,
@@ -278,9 +268,7 @@ pub async fn rollback_policy(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-    let mut record = match storage.get_policy_by_id(&tenant_id, &id).await {
+    let mut record = match state.storage.get_policy_by_id(&tenant_id, &id).await {
         Ok(Some(p)) => p,
         Ok(None) => return StatusError::not_found("Policy not found").into_response(),
         Err(e) => {
@@ -289,7 +277,7 @@ pub async fn rollback_policy(
         }
     };
 
-    let versions = match storage.list_policy_versions(&tenant_id, &id).await {
+    let versions = match state.storage.list_policy_versions(&tenant_id, &id).await {
         Ok(v) => v,
         Err(e) => {
             error!("Failed to list policy versions for rollback: {:?}", e);
@@ -307,7 +295,7 @@ pub async fn rollback_policy(
     // Archive the CURRENT live row before overwriting it, so rollback itself
     // is reversible and doesn't lose the version being rolled back from.
     let current = record.clone();
-    if let Err(e) = storage.insert_policy_version(&current).await {
+    if let Err(e) = state.storage.insert_policy_version(&current).await {
         error!(
             "Failed to archive current policy version before rollback: {:?}",
             e
@@ -324,13 +312,13 @@ pub async fn rollback_policy(
     record.status = previous_version.status.clone();
     record.version += 1;
 
-    match storage.update_policy(&record).await {
+    match state.storage.update_policy(&record).await {
         Ok(_) => {
             // Trigger hot-reload
             if let Err(e) = reload_policies_helper(&state, &tenant_id).await {
                 error!("Failed to reload policies after rollback: {:?}", e);
                 // Restore current back to live
-                let _ = storage.update_policy(&current).await;
+                let _ = state.storage.update_policy(&current).await;
                 return StatusError::internal("Failed to hot-reload policy changes")
                     .into_response();
             }
@@ -362,12 +350,12 @@ pub async fn rollback_policy(
                 approval_id: None,
                 created_at: Utc::now(),
             };
-            if let Err(e) = storage.insert_audit_event(&audit_record).await {
+            if let Err(e) = state.storage.insert_audit_event(&audit_record).await {
                 error!("Failed to write policy_rolled_back audit event: {:?}", e);
             }
 
             record_policy_audit_log(
-                &state.pool,
+                state.storage.as_ref(),
                 &tenant_id,
                 &record.id,
                 &record.policy_key,
@@ -394,11 +382,9 @@ pub async fn delete_policy(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
     // #1312: fetch the policy before deleting so the transparency-log entry
     // can record its `policy_key` and a hash of the deleted body.
-    let existing = match storage.get_policy_by_id(&tenant_id, &id).await {
+    let existing = match state.storage.get_policy_by_id(&tenant_id, &id).await {
         Ok(p) => p,
         Err(e) => {
             error!("Failed to lookup policy for delete: {:?}", e);
@@ -406,21 +392,21 @@ pub async fn delete_policy(
         }
     };
 
-    match storage.delete_policy(&tenant_id, &id).await {
+    match state.storage.delete_policy(&tenant_id, &id).await {
         Ok(true) => {
             // Trigger hot-reload
             if let Err(e) = reload_policies_helper(&state, &tenant_id).await {
                 error!("Failed to reload policies after delete: {:?}", e);
                 // Re-insert the deleted policy
                 if let Some(ref policy) = existing {
-                    let _ = storage.insert_policy(policy).await;
+                    let _ = state.storage.insert_policy(policy).await;
                 }
                 return StatusError::internal("Failed to hot-reload policy changes")
                     .into_response();
             }
             if let Some(policy) = existing {
                 record_policy_audit_log(
-                    &state.pool,
+                    state.storage.as_ref(),
                     &tenant_id,
                     &policy.id,
                     &policy.policy_key,
@@ -459,9 +445,8 @@ pub async fn list_policy_audit_log(
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
 
-    use aegis_storage::traits::StorageBackend;
-    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-    match storage
+    match state
+        .storage
         .list_policy_audit_log(&tenant_id, limit, offset)
         .await
     {
@@ -526,9 +511,7 @@ pub async fn reload_global_policies(
                 approval_id: None,
                 created_at: Utc::now(),
             };
-            use aegis_storage::traits::StorageBackend;
-            let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-            let _ = storage.insert_audit_event(&audit).await;
+            let _ = state.storage.insert_audit_event(&audit).await;
 
             (
                 StatusCode::OK,

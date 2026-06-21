@@ -20,14 +20,14 @@ AegisAgent/
 ├── config/config.yaml            # YAML configuration (Qdrant pattern)
 ├── src/                          # binary crate (THIN — route wiring + startup only)
 │   └── src/
-│       ├── main.rs               # CLI (clap), config load, dual-server startup
-│       ├── settings.rs           # YAML config deserialization
-│       ├── axum_app.rs           # REST Router::new() + route wiring (port 8080)
-│       ├── tonic_app.rs          # gRPC Server::builder() + service wiring (port 6334)
-│       ├── handlers/             # REST handlers (parse → service → respond)
-│       ├── grpc/                 # gRPC service impls (tonic::Request → service → tonic::Response)
-│       ├── middleware.rs         # ETag, compression, TLS
-│       └── startup.rs            # graceful shutdown (both servers)
+│       ├── main.rs               # CLI (clap), config load, Axum router, dual-server startup, graceful shutdown
+│       ├── grpc.rs               # gRPC service implementations (Tonic server)
+│       ├── routes/               # REST handlers (parse → service → respond)
+│       ├── admission.rs          # Admission webhook clients
+│       ├── jobs.rs               # Periodic background cron jobs
+│       ├── gh_checks.rs          # GitHub Checks API client
+│       └── gh_comment.rs         # GitHub App PR commenter logic
+│   └── Cargo.toml                # gateway binary manifest
 ├── lib/
 │   ├── common/ (aegis-common)    # shared types, errors, crypto — NO domain logic
 │   ├── api/ (aegis-api)          # protobuf definitions + generated code + OpenAPI models
@@ -119,12 +119,12 @@ Both the binary (REST handlers + gRPC services) and the library crates import fr
 
 ## 5. Dual-Protocol Handler Pattern — REST (Axum) + gRPC (tonic)
 
-Both REST handlers (`src/handlers/`) and gRPC service impls (`src/grpc/`) call the **same service layer**.
+Both REST handlers (`src/routes/`) and gRPC service impls (`src/grpc.rs`) call the **same service layer**.
 Neither contains business logic — they are thin protocol adapters.
 
 ### REST Handler (Axum):
 ```rust
-// src/handlers/authorize.rs
+// src/routes/authorize.rs
 pub async fn authorize_action(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -139,7 +139,7 @@ pub async fn authorize_action(
 
 ### gRPC Service Impl (tonic):
 ```rust
-// src/grpc/aegis_service.rs
+// src/grpc.rs
 #[tonic::async_trait]
 impl aegis_proto::aegis_service_server::AegisService for AegisGrpcService {
     async fn authorize(

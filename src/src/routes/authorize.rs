@@ -62,8 +62,10 @@ pub(crate) async fn idempotent_replay_response(
 
     let mut approval = None;
     if record.decision == "require_approval" {
-        if let Ok(Some(app)) =
-            db::get_approval_by_decision_id(&state.pool, tenant_id, &record.id).await
+        if let Ok(Some(app)) = state
+            .storage
+            .get_approval_by_decision_id(tenant_id, &record.id)
+            .await
         {
             approval = Some(ApprovalResponseInfo {
                 approval_id: Uuid::parse_str(&app.id).unwrap_or(Uuid::nil()),
@@ -146,7 +148,11 @@ pub async fn authorize_action(
                 .into_response()
         }
     };
-    let agent = match db::get_agent_by_token(&state.pool, &runtime_tenant_id, auth_header).await {
+    let agent = match state
+        .storage
+        .get_agent_by_token(&runtime_tenant_id, auth_header)
+        .await
+    {
         Ok(Some(a)) => a,
         Ok(None) => {
             return StatusError::unauthorized("Invalid or quarantined agent token").into_response()
@@ -222,19 +228,18 @@ pub async fn authorize_action(
     // read it previously would have skipped — an acceptable cost for lower
     // latency on the much more common allowed path.
     let (permission_result, idempotency_result) = tokio::join!(
-        db::agent_tool_permission_status(
-            &state.pool,
-            &tenant_id,
-            &agent_id,
-            &payload.tool_call.tool,
-        ),
+        state
+            .storage
+            .agent_tool_permission_status(&tenant_id, &agent_id, &payload.tool_call.tool,),
         async {
             if dry_run {
                 return Ok(None);
             }
             match payload.request_id.as_deref().filter(|r| !r.is_empty()) {
                 Some(request_id) => {
-                    db::get_decision_by_request_id(&state.pool, &tenant_id, &agent_id, request_id)
+                    state
+                        .storage
+                        .get_decision_by_request_id(&tenant_id, &agent_id, request_id)
                         .await
                 }
                 None => Ok(None),
@@ -246,7 +251,7 @@ pub async fn authorize_action(
     // has any explicit tool bindings, only those tools may be called. No
     // bindings = unrestricted (backwards-compatible with pre-#1390 agents).
     match permission_result {
-        Ok(Some(false)) => {
+        Ok(false) => {
             warn!(
                 "Tool permission denied: agent={} tenant={} tool={}",
                 agent_id, tenant_id, payload.tool_call.tool
@@ -263,7 +268,7 @@ pub async fn authorize_action(
             )
                 .into_response();
         }
-        Ok(_) => {} // None = unrestricted; Some(true) = permitted
+        Ok(true) => {}
         Err(e) => {
             error!("DB error checking tool permissions: {:?}", e);
             return StatusError::internal("Database error").into_response();
@@ -378,7 +383,7 @@ pub async fn authorize_action(
         };
 
         let composite_risk_score = match write_decision_and_audit(
-            &state.pool,
+            state.storage.as_ref(),
             &state.events,
             &state.metrics,
             &state.audit_batch,
@@ -446,7 +451,7 @@ pub async fn authorize_action(
                 };
 
                 let composite_risk_score = match write_decision_and_audit(
-                    &state.pool,
+                    state.storage.as_ref(),
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
@@ -519,18 +524,18 @@ pub async fn authorize_action(
             if cached_action_meta.is_some() {
                 return Ok(None);
             }
-            use aegis_storage::traits::StorageBackend;
-            let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-            storage
+            state
+                .storage
                 .get_skill_action(&tenant_id, &normalized_tool, &normalized_action)
                 .await
         },
         async {
             match mcp_server_key.as_deref() {
                 Some(server_key) => {
-                    use aegis_storage::traits::StorageBackend;
-                    let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-                    storage.get_mcp_server_by_key(&tenant_id, server_key).await
+                    state
+                        .storage
+                        .get_mcp_server_by_key(&tenant_id, server_key)
+                        .await
                 }
                 None => Ok(None),
             }
@@ -586,7 +591,7 @@ pub async fn authorize_action(
                 risk_score = 100;
 
                 let composite_risk_score = match write_decision_and_audit(
-                    &state.pool,
+                    state.storage.as_ref(),
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
@@ -637,9 +642,8 @@ pub async fn authorize_action(
             }
         }
 
-        use aegis_storage::traits::StorageBackend;
-        let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-        match storage
+        match state
+            .storage
             .get_mcp_tool_by_key(&tenant_id, server_key, &normalized_action)
             .await
         {
@@ -657,7 +661,7 @@ pub async fn authorize_action(
                     let matched_policies = vec!["mcp_tool_status".to_string()];
 
                     let composite_risk_score = match write_decision_and_audit(
-                        &state.pool,
+                        state.storage.as_ref(),
                         &state.events,
                         &state.metrics,
                         &state.audit_batch,
@@ -713,7 +717,7 @@ pub async fn authorize_action(
                 risk_score = 100;
 
                 let composite_risk_score = match write_decision_and_audit(
-                    &state.pool,
+                    state.storage.as_ref(),
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
@@ -766,9 +770,7 @@ pub async fn authorize_action(
 
     // Ensure policies for the tenant are loaded into the engine.
     if !state.policy_engine.has_tenant(&tenant_id) {
-        use aegis_storage::traits::StorageBackend;
-        let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
-        let db_policies = match storage.list_policies(&tenant_id).await {
+        let db_policies = match state.storage.list_policies(&tenant_id).await {
             Ok(p) => p,
             Err(e) => {
                 error!("Failed to fetch policies for reloading: {:?}", e);
@@ -893,7 +895,7 @@ pub async fn authorize_action(
     }
 
     let composite_risk_score = match write_decision_and_audit(
-        &state.pool,
+        state.storage.as_ref(),
         &state.events,
         &state.metrics,
         &state.audit_batch,
@@ -978,7 +980,7 @@ pub async fn authorize_action(
     // Skipped for dry-run (#1281) — no decision was persisted to chain from.
     if !dry_run {
         emit_action_receipt(
-            &state.pool,
+            state.storage.as_ref(),
             &tenant_id,
             &agent_id,
             &payload,
@@ -995,7 +997,11 @@ pub async fn authorize_action(
     // but never changes the returned decision. Dry-run must never actually
     // quarantine the agent for a hypothetical decision (#1281).
     if !dry_run && decision_str == "quarantine" {
-        match db::set_agent_status(&state.pool, &tenant_id, &agent_id, "quarantined").await {
+        match state
+            .storage
+            .set_agent_status(&tenant_id, &agent_id, "quarantined")
+            .await
+        {
             Ok(_) => {
                 info!(
                     agent_id = %agent_id,
@@ -1071,7 +1077,7 @@ pub async fn authorize_action(
             created_at: Utc::now(),
         };
 
-        if let Err(e) = db::insert_approval(&state.pool, &approval_record).await {
+        if let Err(e) = state.storage.insert_approval(&approval_record).await {
             error!("Failed to create approval request: {:?}", e);
             return StatusError::internal("Failed to create approval request").into_response();
         }
@@ -1096,7 +1102,7 @@ pub async fn authorize_action(
             approval_id: Some(approval_id.to_string()),
             created_at: Utc::now(),
         };
-        let _ = db::insert_audit_event(&state.pool, &audit_app_record).await;
+        let _ = state.storage.insert_audit_event(&audit_app_record).await;
 
         approval_info = Some(ApprovalResponseInfo {
             approval_id,
@@ -1115,13 +1121,10 @@ pub async fn authorize_action(
     // guaranteeing the very next call from this agent sees the tightened
     // tier. Never escalate for a hypothetical dry-run decision (#1281).
     if !dry_run && decision_str == "deny" {
-        match crate::risk_escalation::maybe_escalate_agent_risk_tier(
-            &state.pool,
-            &tenant_id,
-            &agent_id,
-            &agent.risk_tier,
-        )
-        .await
+        match state
+            .storage
+            .maybe_escalate_agent_risk_tier(&tenant_id, &agent_id, &agent.risk_tier)
+            .await
         {
             Ok(Some((old_tier, new_tier))) => {
                 info!(
@@ -1153,7 +1156,7 @@ pub async fn authorize_action(
                     approval_id: None,
                     created_at: Utc::now(),
                 };
-                let _ = db::insert_audit_event(&state.pool, &audit).await;
+                let _ = state.storage.insert_audit_event(&audit).await;
 
                 // Emit SOC event out-of-band (Law 3 — never blocks authorize path).
                 state.events.emit(AseEvent {
@@ -1752,6 +1755,7 @@ mod tests {
         let policy_engine1 = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
             pool: state_raw.pool.clone(),
+            storage: state_raw.storage.clone(),
             policy_engine: policy_engine1,
             events: state_raw.events.clone(),
             metrics: state_raw.metrics.clone(),
@@ -1806,6 +1810,7 @@ mod tests {
         let policy_engine2 = PolicyEngine::init("policies.cedar").await.unwrap();
         let state_quota = Arc::new(AppState {
             pool: state_raw.pool.clone(),
+            storage: state_raw.storage.clone(),
             policy_engine: policy_engine2,
             events: state_raw.events.clone(),
             metrics: state_raw.metrics.clone(),
@@ -4757,7 +4762,7 @@ mod tests {
         let (state, tenant_id, agent_token) = setup_state_with_audit_batch_writer(
             "audit_batch_non_critical",
             100,
-            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(1000),
         )
         .await;
 
@@ -4783,7 +4788,7 @@ mod tests {
 
         // Once the flush-interval timer fires, the batch writer flushes the
         // buffered row to the table.
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
             .await
             .unwrap();
@@ -6164,7 +6169,8 @@ mod tests {
         // Capacity 1: one emit fills it completely (capacity() == 0 afterwards).
         let (events, _events_rx) = EventSink::channel(1, metrics.clone());
         let state = Arc::new(AppState {
-            pool,
+            pool: pool.clone(),
+            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -6360,7 +6366,8 @@ mod tests {
         let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
         let (events, _events_rx) = EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(AppState {
-            pool,
+            pool: pool.clone(),
+            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
             metrics,

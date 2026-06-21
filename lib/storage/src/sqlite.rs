@@ -50,8 +50,14 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn list_agents(&self, tenant_id: &str) -> Result<Vec<AgentRecord>, AegisError> {
-        db::list_agents(&self.pool, tenant_id, 1000, 0, None)
+    async fn list_agents(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<AgentRecord>, AegisError> {
+        db::list_agents(&self.pool, tenant_id, limit, offset, status_filter)
             .await
             .map_err(AegisError::Database)
     }
@@ -91,7 +97,7 @@ impl StorageBackend for SqliteStorage {
         &self,
         record: &SkillRecord,
         actions: &[SkillActionRecord],
-    ) -> Result<(), AegisError> {
+    ) -> Result<String, AegisError> {
         let skill_id = db::insert_skill(
             &self.pool,
             &record.tenant_id,
@@ -120,7 +126,7 @@ impl StorageBackend for SqliteStorage {
             .await
             .map_err(AegisError::Database)?;
         }
-        Ok(())
+        Ok(skill_id)
     }
 
     async fn insert_skill_action(&self, record: &SkillActionRecord) -> Result<(), AegisError> {
@@ -155,10 +161,9 @@ impl StorageBackend for SqliteStorage {
         tenant_id: &str,
         agent_id: &str,
         status: &str,
-    ) -> Result<(), AegisError> {
+    ) -> Result<bool, AegisError> {
         db::set_agent_status(&self.pool, tenant_id, agent_id, status)
             .await
-            .map(|_| ())
             .map_err(AegisError::Database)
     }
 
@@ -198,6 +203,21 @@ impl StorageBackend for SqliteStorage {
         db::is_agent_active(&self.pool, tenant_id, agent_id)
             .await
             .map_err(AegisError::Database)
+    }
+
+    async fn maybe_escalate_agent_risk_tier(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        current_tier: &str,
+    ) -> Result<Option<(String, String)>, AegisError> {
+        crate::risk_escalation::maybe_escalate_agent_risk_tier(
+            &self.pool,
+            tenant_id,
+            agent_id,
+            current_tier,
+        )
+        .await
     }
 
     async fn grant_agent_tool_permission(
@@ -258,10 +278,10 @@ impl StorageBackend for SqliteStorage {
     async fn list_approvals_in_range(
         &self,
         tenant_id: &str,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
     ) -> Result<Vec<ApprovalRecord>, AegisError> {
-        db::list_approvals_in_range(&self.pool, tenant_id, Some(start), Some(end))
+        db::list_approvals_in_range(&self.pool, tenant_id, start, end)
             .await
             .map_err(AegisError::Database)
     }
@@ -295,8 +315,10 @@ impl StorageBackend for SqliteStorage {
     async fn list_pending_approvals(
         &self,
         tenant_id: &str,
+        limit: i64,
+        offset: i64,
     ) -> Result<Vec<ApprovalRecord>, AegisError> {
-        db::list_pending_approvals(&self.pool, tenant_id, 1000, 0)
+        db::list_pending_approvals(&self.pool, tenant_id, limit, offset)
             .await
             .map_err(AegisError::Database)
     }
@@ -388,7 +410,20 @@ impl StorageBackend for SqliteStorage {
     }
 
     async fn insert_decision(&self, record: &DecisionRecord) -> Result<(), AegisError> {
-        db::insert_decision(&self.pool, record)
+        db::retry_on_busy(3, || db::insert_decision(&self.pool, record))
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn insert_agent_risk_score(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        decision_id: &str,
+        score: i32,
+        reason: &str,
+    ) -> Result<(), AegisError> {
+        db::insert_agent_risk_score(&self.pool, tenant_id, agent_id, decision_id, score, reason)
             .await
             .map_err(AegisError::Database)
     }
@@ -400,6 +435,7 @@ impl StorageBackend for SqliteStorage {
         decision_filter: Option<&str>,
         limit: i64,
         cursor: Option<i64>,
+        q: Option<&str>,
     ) -> Result<(Vec<DecisionRecord>, Option<i64>), AegisError> {
         db::list_decisions_cursor(
             &self.pool,
@@ -409,7 +445,7 @@ impl StorageBackend for SqliteStorage {
             cursor,
             agent_id,
             decision_filter,
-            None,
+            q,
         )
         .await
         .map_err(AegisError::Database)
@@ -462,8 +498,13 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn list_mcp_servers(&self, tenant_id: &str) -> Result<Vec<McpServerRecord>, AegisError> {
-        db::list_mcp_servers(&self.pool, tenant_id, 1000, 0)
+    async fn list_mcp_servers(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<McpServerRecord>, AegisError> {
+        db::list_mcp_servers(&self.pool, tenant_id, limit, offset)
             .await
             .map_err(AegisError::Database)
     }
@@ -541,6 +582,29 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_mcp_manifest_snapshots(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        limit: i64,
+    ) -> Result<Vec<McpManifestSnapshotRecord>, AegisError> {
+        db::list_mcp_manifest_snapshots(&self.pool, tenant_id, server_key, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn set_mcp_tool_status(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        tool_key: &str,
+        status: &str,
+    ) -> Result<bool, AegisError> {
+        db::set_mcp_tool_status(&self.pool, tenant_id, server_key, tool_key, status)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn discover_mcp_tools(
         &self,
         tenant_id: &str,
@@ -559,6 +623,27 @@ impl StorageBackend for SqliteStorage {
         server_key: &str,
     ) -> Result<Vec<McpToolRecord>, AegisError> {
         db::list_mcp_tools(&self.pool, tenant_id, server_key)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn set_mcp_server_manifest_hash(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        manifest_hash: &str,
+    ) -> Result<(), AegisError> {
+        db::set_mcp_server_manifest_hash(&self.pool, tenant_id, server_key, manifest_hash)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn touch_mcp_server_discovery(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+    ) -> Result<(), AegisError> {
+        db::touch_mcp_server_discovery(&self.pool, tenant_id, server_key)
             .await
             .map_err(AegisError::Database)
     }
@@ -650,10 +735,41 @@ impl StorageBackend for SqliteStorage {
     async fn list_action_receipts_in_range(
         &self,
         tenant_id: &str,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
     ) -> Result<Vec<ActionReceiptRecord>, AegisError> {
-        db::list_action_receipts_in_range(&self.pool, tenant_id, Some(start), Some(end))
+        db::list_action_receipts_in_range(&self.pool, tenant_id, start, end)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_action_receipt_by_id(
+        &self,
+        tenant_id: &str,
+        receipt_id: &str,
+    ) -> Result<Option<ActionReceiptRecord>, AegisError> {
+        db::get_action_receipt_by_id(&self.pool, tenant_id, receipt_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_action_receipts_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ActionReceiptRecord>, Option<i64>), AegisError> {
+        db::list_action_receipts_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_action_receipts_chain_order(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<ActionReceiptRecord>, AegisError> {
+        db::list_action_receipts_chain_order(&self.pool, tenant_id)
             .await
             .map_err(AegisError::Database)
     }
@@ -691,6 +807,25 @@ impl StorageBackend for SqliteStorage {
         db::insert_action_receipt(&self.pool, record)
             .await
             .map_err(AegisError::Database)
+    }
+
+    async fn append_action_receipt_atomic(
+        &self,
+        tenant_id: &str,
+        mut record: ActionReceiptRecord,
+    ) -> Result<ActionReceiptRecord, AegisError> {
+        db::append_action_receipt_atomic(&self.pool, tenant_id, move |prev_receipt_hash| {
+            record.prev_receipt_hash = prev_receipt_hash;
+            record.receipt_hash = db::compute_receipt_hash(&record);
+            if let Some(signer) = aegis_common::hash::global_signer() {
+                record.signature = Some(signer.sign_hash(&record.receipt_hash));
+                record.signer_public_key = Some(signer.public_key_hex());
+                record.signer_key_id = signer.key_id().map(str::to_string);
+            }
+            record
+        })
+        .await
+        .map_err(AegisError::Database)
     }
 
     async fn count_receipts(&self, tenant_id: &str) -> Result<i64, AegisError> {
@@ -735,11 +870,12 @@ impl StorageBackend for SqliteStorage {
         agent_id: Option<&str>,
         severity: Option<&str>,
         status: Option<&str>,
+        kind: Option<&str>,
         limit: i64,
         cursor: Option<i64>,
     ) -> Result<(Vec<SocIncidentRecord>, Option<i64>), AegisError> {
         db::list_soc_incidents_cursor(
-            &self.pool, tenant_id, limit, 0, status, severity, agent_id, None, cursor,
+            &self.pool, tenant_id, limit, 0, status, severity, agent_id, kind, cursor,
         )
         .await
         .map_err(AegisError::Database)
@@ -850,6 +986,18 @@ impl StorageBackend for SqliteStorage {
 
     async fn delete_tenant_by_id(&self, tenant_id: &str) -> Result<bool, AegisError> {
         db::delete_tenant_by_id(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn export_tenant_data(&self, tenant_id: &str) -> Result<TenantExport, AegisError> {
+        db::export_tenant_data(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_tenant_data(&self, tenant_id: &str) -> Result<(), AegisError> {
+        db::delete_tenant_data(&self.pool, tenant_id)
             .await
             .map_err(AegisError::Database)
     }
@@ -1043,6 +1191,47 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn get_audit_events_in_range(
+        &self,
+        tenant_id: &str,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<Vec<AuditEventRecord>, AegisError> {
+        db::get_audit_events_in_range(&self.pool, tenant_id, from, to)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_audit_events_by_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<AuditEventRecord>, AegisError> {
+        db::get_audit_events_by_run(&self.pool, tenant_id, run_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_audit_event_decision_id(
+        &self,
+        tenant_id: &str,
+        event_id: &str,
+    ) -> Result<Option<String>, AegisError> {
+        db::get_audit_event_decision_id(&self.pool, tenant_id, event_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_audit_events_by_decision_ids(
+        &self,
+        tenant_id: &str,
+        decision_ids: &[String],
+    ) -> Result<Vec<AuditEventRecord>, AegisError> {
+        db::list_audit_events_by_decision_ids(&self.pool, tenant_id, decision_ids)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // API Keys
     async fn get_api_key_by_id(
         &self,
@@ -1074,6 +1263,171 @@ impl StorageBackend for SqliteStorage {
 
     async fn is_active_api_key(&self, tenant_id: &str, key_hash: &str) -> Result<bool, AegisError> {
         db::is_active_api_key(&self.pool, tenant_id, key_hash)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn create_api_key(
+        &self,
+        tenant_id: &str,
+        name: &str,
+    ) -> Result<(String, String), AegisError> {
+        db::create_api_key(&self.pool, tenant_id, name)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_soc_incidents_in_range(
+        &self,
+        tenant_id: &str,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<Vec<SocIncidentRecord>, AegisError> {
+        db::list_soc_incidents_in_range(&self.pool, tenant_id, from, to)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_tenant_stats(&self, tenant_id: &str) -> Result<TenantStats, AegisError> {
+        db::get_tenant_stats(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_db_stats(&self) -> Result<DbStats, AegisError> {
+        db::get_db_stats(&self.pool)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn upsert_detection_rule(
+        &self,
+        tenant_id: &str,
+        rule_key: &str,
+        name: &str,
+        severity: &str,
+        condition: &str,
+        summary_template: &str,
+        enabled: bool,
+    ) -> Result<DetectionRuleRecord, AegisError> {
+        db::upsert_detection_rule(
+            &self.pool,
+            tenant_id,
+            rule_key,
+            name,
+            severity,
+            condition,
+            summary_template,
+            enabled,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_detection_rules(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<DetectionRuleRecord>, AegisError> {
+        db::list_detection_rules(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError> {
+        db::delete_detection_rule(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_soc_alerts_by_source_event_ids(
+        &self,
+        tenant_id: &str,
+        event_ids: &[String],
+    ) -> Result<Vec<SocAlertRecord>, AegisError> {
+        db::list_soc_alerts_by_source_event_ids(&self.pool, tenant_id, event_ids)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_decisions_by_run_id(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<DecisionRecord>, AegisError> {
+        db::list_decisions_by_run_id(&self.pool, tenant_id, run_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_decisions_in_range(
+        &self,
+        tenant_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<DecisionRecord>, AegisError> {
+        db::list_decisions_in_range(&self.pool, tenant_id, from, to)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_soc_alerts_since(
+        &self,
+        tenant_id: &str,
+        since_rowid: i64,
+        severity: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Result<Vec<(SocAlertRecord, i64)>, AegisError> {
+        db::list_soc_alerts_since(&self.pool, tenant_id, since_rowid, severity, agent_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_soc_incidents_since(
+        &self,
+        tenant_id: &str,
+        since_rowid: i64,
+        status_filter: Option<&str>,
+        severity: Option<&str>,
+        agent_id: Option<&str>,
+        kind: Option<&str>,
+    ) -> Result<Vec<(SocIncidentRecord, i64)>, AegisError> {
+        db::list_soc_incidents_since(
+            &self.pool,
+            tenant_id,
+            since_rowid,
+            status_filter,
+            severity,
+            agent_id,
+            kind,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_decisions_since(
+        &self,
+        tenant_id: &str,
+        since_rowid: i64,
+    ) -> Result<Vec<(DecisionRecord, i64)>, AegisError> {
+        db::list_decisions_since(&self.pool, tenant_id, since_rowid)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn max_decision_rowid(&self, tenant_id: &str) -> Result<i64, AegisError> {
+        db::max_decision_rowid(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn max_soc_alert_rowid(&self, tenant_id: &str) -> Result<i64, AegisError> {
+        db::max_soc_alert_rowid(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn max_soc_incident_rowid(&self, tenant_id: &str) -> Result<i64, AegisError> {
+        db::max_soc_incident_rowid(&self.pool, tenant_id)
             .await
             .map_err(AegisError::Database)
     }

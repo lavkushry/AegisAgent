@@ -31,6 +31,8 @@ use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
+use aegis_common::errors::AegisError;
+use aegis_storage::traits::StorageBackend;
 
 use super::*;
 
@@ -59,7 +61,11 @@ pub async fn get_timeline(
     TenantId(tenant_id): TenantId,
     Path(run_id): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_audit_events_by_run(&state.pool, &tenant_id, &run_id).await {
+    match state
+        .storage
+        .get_audit_events_by_run(&tenant_id, &run_id)
+        .await
+    {
         Ok(events) => (StatusCode::OK, Json(events)).into_response(),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
@@ -89,14 +95,10 @@ pub async fn get_audit_events(
         Err(resp) => return *resp,
     };
     let q = parse_filter(raw_query.as_deref(), "q").and_then(|raw| sanitize_fts5_query(&raw));
-    match db::get_all_audit_events_cursor(
-        &state.pool,
-        &tenant_id,
-        decision_id.as_deref(),
-        cursor,
-        q.as_deref(),
-    )
-    .await
+    match state
+        .storage
+        .get_audit_events(&tenant_id, decision_id.as_deref(), cursor, q.as_deref())
+        .await
     {
         Ok((events, next_cursor)) => paginated_response(&events, next_cursor),
         Err(e) => {
@@ -122,7 +124,7 @@ pub async fn list_decisions(
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let (limit, _offset) = parse_pagination(raw_query.as_deref());
     let cursor = match parse_cursor(raw_query.as_deref()) {
         Ok(c) => c,
         Err(resp) => return *resp,
@@ -131,17 +133,17 @@ pub async fn list_decisions(
     let decision = parse_filter(raw_query.as_deref(), "decision");
     let q = parse_filter(raw_query.as_deref(), "q").and_then(|raw| sanitize_fts5_query(&raw));
 
-    match db::list_decisions_cursor(
-        &state.pool,
-        &tenant_id,
-        limit,
-        offset,
-        cursor,
-        agent_id.as_deref(),
-        decision.as_deref(),
-        q.as_deref(),
-    )
-    .await
+    match state
+        .storage
+        .list_decisions(
+            &tenant_id,
+            agent_id.as_deref(),
+            decision.as_deref(),
+            limit,
+            cursor,
+            q.as_deref(),
+        )
+        .await
     {
         Ok((decisions, next_cursor)) => paginated_response(&decisions, next_cursor),
         Err(e) => {
@@ -157,7 +159,7 @@ pub async fn get_decision(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_decision_by_id(&state.pool, &tenant_id, &id).await {
+    match state.storage.get_decision_by_id(&tenant_id, &id).await {
         Ok(Some(decision)) => (StatusCode::OK, Json(decision)).into_response(),
         Ok(None) => StatusError::not_found("Decision not found").into_response(),
         Err(e) => {
@@ -180,17 +182,18 @@ pub async fn upsert_detection_rule(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<UpsertDetectionRuleRequest>,
 ) -> impl IntoResponse {
-    match db::upsert_detection_rule(
-        &state.pool,
-        &tenant_id,
-        &payload.rule_key,
-        &payload.name,
-        &payload.severity,
-        &payload.condition,
-        &payload.summary_template,
-        payload.enabled,
-    )
-    .await
+    match state
+        .storage
+        .upsert_detection_rule(
+            &tenant_id,
+            &payload.rule_key,
+            &payload.name,
+            &payload.severity,
+            &payload.condition,
+            &payload.summary_template,
+            payload.enabled,
+        )
+        .await
     {
         Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(e) => {
@@ -205,7 +208,7 @@ pub async fn list_detection_rules(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match db::list_detection_rules(&state.pool, &tenant_id).await {
+    match state.storage.list_detection_rules(&tenant_id).await {
         Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
@@ -231,9 +234,9 @@ pub struct EffectiveDetectionRule {
 /// `condition` fails to parse/validate are skipped (same as `drain`).
 /// Shared by `get_soc_rules` (#1282) and `backtest_soc_rule` (#1283).
 pub(crate) async fn effective_detection_rules(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn StorageBackend,
     tenant_id: &str,
-) -> Result<Vec<EffectiveDetectionRule>, sqlx::Error> {
+) -> Result<Vec<EffectiveDetectionRule>, AegisError> {
     let mut rules: Vec<EffectiveDetectionRule> = crate::rule_dsl::default_rules()
         .into_iter()
         .map(|rule| EffectiveDetectionRule {
@@ -242,7 +245,7 @@ pub(crate) async fn effective_detection_rules(
         })
         .collect();
 
-    let records = db::list_detection_rules(pool, tenant_id).await?;
+    let records = storage.list_detection_rules(tenant_id).await?;
     for record in records.into_iter().filter(|r| r.enabled) {
         if let Ok(rule) = crate::rule_dsl::yaml_rule_from_condition(
             &record.rule_key,
@@ -267,7 +270,7 @@ pub async fn get_soc_rules(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match effective_detection_rules(&state.pool, &tenant_id).await {
+    match effective_detection_rules(state.storage.as_ref(), &tenant_id).await {
         Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
@@ -301,7 +304,7 @@ pub async fn backtest_soc_rule(
         .and_then(|b| b.from)
         .unwrap_or_else(|| to - Duration::days(7));
 
-    let rules = match effective_detection_rules(&state.pool, &tenant_id).await {
+    let rules = match effective_detection_rules(state.storage.as_ref(), &tenant_id).await {
         Ok(rules) => rules,
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
@@ -314,7 +317,11 @@ pub async fn backtest_soc_rule(
             .into_response();
     };
 
-    let decisions = match db::list_decisions_in_range(&state.pool, &tenant_id, from, to).await {
+    let decisions = match state
+        .storage
+        .list_decisions_in_range(&tenant_id, from, to)
+        .await
+    {
         Ok(decisions) => decisions,
         Err(e) => {
             error!("Failed to list decisions for backtest: {:?}", e);
@@ -354,17 +361,18 @@ pub async fn create_soc_rule(
         return StatusError::bad_request(format!("Invalid detection rule: {e}")).into_response();
     }
 
-    match db::upsert_detection_rule(
-        &state.pool,
-        &tenant_id,
-        &payload.rule_key,
-        &payload.name,
-        &payload.severity,
-        &payload.condition,
-        &payload.summary_template,
-        payload.enabled,
-    )
-    .await
+    match state
+        .storage
+        .upsert_detection_rule(
+            &tenant_id,
+            &payload.rule_key,
+            &payload.name,
+            &payload.severity,
+            &payload.condition,
+            &payload.summary_template,
+            payload.enabled,
+        )
+        .await
     {
         Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(e) => {
@@ -394,7 +402,7 @@ pub async fn delete_detection_rule(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match db::delete_detection_rule(&state.pool, &tenant_id, &id).await {
+    match state.storage.delete_detection_rule(&tenant_id, &id).await {
         Ok(true) => (
             StatusCode::OK,
             Json(json!({"message": "Detection rule successfully deleted"})),
@@ -423,7 +431,7 @@ pub async fn list_alerts(
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let (limit, _offset) = parse_pagination(raw_query.as_deref());
     let cursor = match parse_cursor(raw_query.as_deref()) {
         Ok(c) => c,
         Err(resp) => return *resp,
@@ -437,7 +445,7 @@ pub async fn list_alerts(
     // backfill; combine with a plain `GET /v1/alerts` call for that).
     if parse_filter(raw_query.as_deref(), "watch").as_deref() == Some("true") {
         return Sse::new(alerts_watch_stream(
-            state.pool.clone(),
+            Arc::clone(&state.storage),
             tenant_id,
             severity,
             agent_id,
@@ -446,16 +454,16 @@ pub async fn list_alerts(
         .into_response();
     }
 
-    match db::list_soc_alerts_cursor(
-        &state.pool,
-        &tenant_id,
-        limit,
-        offset,
-        severity.as_deref(),
-        agent_id.as_deref(),
-        cursor,
-    )
-    .await
+    match state
+        .storage
+        .list_soc_alerts(
+            &tenant_id,
+            agent_id.as_deref(),
+            severity.as_deref(),
+            limit,
+            cursor,
+        )
+        .await
     {
         Ok((alerts, next_cursor)) => paginated_response(&alerts, next_cursor),
         Err(e) => {
@@ -473,14 +481,14 @@ pub async fn list_alerts(
 /// `Sse::keep_alive` (applied by the caller) handles the heartbeat-ping
 /// acceptance criterion independently of this polling loop.
 fn alerts_watch_stream(
-    pool: sqlx::SqlitePool,
+    storage: Arc<dyn StorageBackend>,
     tenant_id: String,
     severity: Option<String>,
     agent_id: Option<String>,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Event>(32);
     tokio::spawn(async move {
-        let mut since_rowid = match db::max_soc_alert_rowid(&pool, &tenant_id).await {
+        let mut since_rowid = match storage.max_soc_alert_rowid(&tenant_id).await {
             Ok(rowid) => rowid,
             Err(e) => {
                 error!("alerts watch: failed to establish starting rowid: {:?}", e);
@@ -490,14 +498,14 @@ fn alerts_watch_stream(
         let mut interval = tokio::time::interval(SOC_WATCH_POLL_INTERVAL);
         loop {
             interval.tick().await;
-            let new_alerts = match db::list_soc_alerts_since(
-                &pool,
-                &tenant_id,
-                since_rowid,
-                severity.as_deref(),
-                agent_id.as_deref(),
-            )
-            .await
+            let new_alerts = match storage
+                .list_soc_alerts_since(
+                    &tenant_id,
+                    since_rowid,
+                    severity.as_deref(),
+                    agent_id.as_deref(),
+                )
+                .await
             {
                 Ok(alerts) => alerts,
                 Err(e) => {
@@ -539,7 +547,7 @@ pub async fn list_incidents(
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let (limit, _offset) = parse_pagination(raw_query.as_deref());
     let cursor = match parse_cursor(raw_query.as_deref()) {
         Ok(c) => c,
         Err(resp) => return *resp,
@@ -555,7 +563,7 @@ pub async fn list_incidents(
     // SOC broadcast pipeline).
     if parse_filter(raw_query.as_deref(), "watch").as_deref() == Some("true") {
         return Sse::new(incidents_watch_stream(
-            state.pool.clone(),
+            Arc::clone(&state.storage),
             tenant_id,
             status_filter,
             severity,
@@ -566,18 +574,18 @@ pub async fn list_incidents(
         .into_response();
     }
 
-    match db::list_soc_incidents_cursor(
-        &state.pool,
-        &tenant_id,
-        limit,
-        offset,
-        status_filter.as_deref(),
-        severity.as_deref(),
-        agent_id.as_deref(),
-        kind.as_deref(),
-        cursor,
-    )
-    .await
+    match state
+        .storage
+        .list_soc_incidents(
+            &tenant_id,
+            agent_id.as_deref(),
+            severity.as_deref(),
+            status_filter.as_deref(),
+            kind.as_deref(),
+            limit,
+            cursor,
+        )
+        .await
     {
         Ok((incidents, next_cursor)) => paginated_response(&incidents, next_cursor),
         Err(e) => {
@@ -591,7 +599,7 @@ pub async fn list_incidents(
 /// [`alerts_watch_stream`]'s doc comment for the shared design rationale.
 #[allow(clippy::too_many_arguments)]
 fn incidents_watch_stream(
-    pool: sqlx::SqlitePool,
+    storage: Arc<dyn StorageBackend>,
     tenant_id: String,
     status_filter: Option<String>,
     severity: Option<String>,
@@ -600,7 +608,7 @@ fn incidents_watch_stream(
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Event>(32);
     tokio::spawn(async move {
-        let mut since_rowid = match db::max_soc_incident_rowid(&pool, &tenant_id).await {
+        let mut since_rowid = match storage.max_soc_incident_rowid(&tenant_id).await {
             Ok(rowid) => rowid,
             Err(e) => {
                 error!(
@@ -613,16 +621,16 @@ fn incidents_watch_stream(
         let mut interval = tokio::time::interval(SOC_WATCH_POLL_INTERVAL);
         loop {
             interval.tick().await;
-            let new_incidents = match db::list_soc_incidents_since(
-                &pool,
-                &tenant_id,
-                since_rowid,
-                status_filter.as_deref(),
-                severity.as_deref(),
-                agent_id.as_deref(),
-                kind.as_deref(),
-            )
-            .await
+            let new_incidents = match storage
+                .list_soc_incidents_since(
+                    &tenant_id,
+                    since_rowid,
+                    status_filter.as_deref(),
+                    severity.as_deref(),
+                    agent_id.as_deref(),
+                    kind.as_deref(),
+                )
+                .await
             {
                 Ok(incidents) => incidents,
                 Err(e) => {
@@ -662,7 +670,11 @@ pub async fn get_incident(
     TenantId(tenant_id): TenantId,
     Path(incident_id): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+    match state
+        .storage
+        .get_incident_by_id(&tenant_id, &incident_id)
+        .await
+    {
         Ok(Some(incident)) => (StatusCode::OK, Json(incident)).into_response(),
         Ok(None) => StatusError::not_found("Incident not found").into_response(),
         Err(e) => {
@@ -683,7 +695,7 @@ pub async fn soc_summary(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> impl IntoResponse {
-    match db::soc_summary(&state.pool, &tenant_id).await {
+    match state.storage.get_soc_summary(&tenant_id).await {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(e) => {
             error!("Failed to compute SOC summary: {:?}", e);
@@ -756,7 +768,11 @@ pub async fn close_incident(
     // First verify the incident exists for this tenant (provides a meaningful 404
     // rather than a silent no-op when the id is simply wrong or belongs to another
     // tenant — CWE-284 isolation).
-    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+    let incident = match state
+        .storage
+        .get_incident_by_id(&tenant_id, &incident_id)
+        .await
+    {
         Ok(Some(inc)) => inc,
         Ok(None) => {
             return StatusError::not_found("Incident not found").into_response();
@@ -782,7 +798,11 @@ pub async fn close_incident(
     }
 
     // Atomically flip status → 'closed' and stamp closed_at.
-    let did_close = match db::close_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+    let did_close = match state
+        .storage
+        .close_soc_incident(&tenant_id, &incident_id)
+        .await
+    {
         Ok(b) => b,
         Err(e) => {
             error!("Failed to close incident {}: {:?}", incident_id, e);
@@ -793,7 +813,11 @@ pub async fn close_incident(
     if !did_close {
         // Race: incident was closed between the get and the update. Treat as
         // idempotent — re-fetch to return the correct closed_at.
-        return match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+        return match state
+            .storage
+            .get_incident_by_id(&tenant_id, &incident_id)
+            .await
+        {
             Ok(Some(inc)) => (
                 StatusCode::OK,
                 Json(json!({
@@ -809,7 +833,11 @@ pub async fn close_incident(
     }
 
     // Re-fetch to pick up the DB-stamped `closed_at` timestamp.
-    let closed_at = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+    let closed_at = match state
+        .storage
+        .get_incident_by_id(&tenant_id, &incident_id)
+        .await
+    {
         Ok(Some(inc)) => inc.closed_at,
         Ok(None) => None,
         Err(e) => {
@@ -859,7 +887,7 @@ pub async fn close_incident(
         approval_id: None,
         created_at: Utc::now(),
     };
-    let _ = db::insert_audit_event(&state.pool, &audit).await;
+    let _ = state.storage.insert_audit_event(&audit).await;
 
     info!(incident_id = %incident_id, "SOC incident closed");
 
@@ -891,7 +919,11 @@ pub async fn narrate_incident(
     TenantId(tenant_id): TenantId,
     Path(incident_id): Path<String>,
 ) -> impl IntoResponse {
-    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+    let incident = match state
+        .storage
+        .get_incident_by_id(&tenant_id, &incident_id)
+        .await
+    {
         Ok(Some(inc)) => inc,
         Ok(None) => {
             return StatusError::not_found("Incident not found").into_response();
@@ -939,7 +971,11 @@ pub async fn get_incident_evidence_pack(
     TenantId(tenant_id): TenantId,
     Path(incident_id): Path<String>,
 ) -> impl IntoResponse {
-    let incident = match db::get_soc_incident(&state.pool, &tenant_id, &incident_id).await {
+    let incident = match state
+        .storage
+        .get_incident_by_id(&tenant_id, &incident_id)
+        .await
+    {
         Ok(Some(inc)) => inc,
         Ok(None) => {
             return StatusError::not_found("Incident not found").into_response();
@@ -953,21 +989,26 @@ pub async fn get_incident_evidence_pack(
     let event_ids: Vec<String> =
         serde_json::from_str(&incident.source_event_ids).unwrap_or_default();
 
-    let alerts =
-        match db::list_soc_alerts_by_source_event_ids(&state.pool, &tenant_id, &event_ids).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                error!("Failed to load alerts for evidence pack: {:?}", e);
-                return StatusError::internal("Database error").into_response();
-            }
-        };
+    let alerts = match state
+        .storage
+        .list_soc_alerts_by_source_event_ids(&tenant_id, &event_ids)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load alerts for evidence pack: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
 
     // Resolve event_ids -> decision_ids (#1272's established linkage),
     // de-duplicated, preserving the order encountered.
     let mut decision_ids: Vec<String> = Vec::new();
     for event_id in &event_ids {
-        if let Ok(Some(decision_id)) =
-            db::get_audit_event_decision_id(&state.pool, &tenant_id, event_id).await
+        if let Ok(Some(decision_id)) = state
+            .storage
+            .get_audit_event_decision_id(&tenant_id, event_id)
+            .await
         {
             if !decision_ids.contains(&decision_id) {
                 decision_ids.push(decision_id);
@@ -975,12 +1016,10 @@ pub async fn get_incident_evidence_pack(
         }
     }
 
-    let receipts = match db::list_action_receipts_by_decision_ids(
-        &state.pool,
-        &tenant_id,
-        &decision_ids,
-    )
-    .await
+    let receipts = match state
+        .storage
+        .list_action_receipts_by_decision_ids(&tenant_id, &decision_ids)
+        .await
     {
         Ok(map) => map.into_values().collect::<Vec<_>>(),
         Err(e) => {
@@ -989,14 +1028,17 @@ pub async fn get_incident_evidence_pack(
         }
     };
 
-    let audit_events =
-        match db::list_audit_events_by_decision_ids(&state.pool, &tenant_id, &decision_ids).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                error!("Failed to load audit events for evidence pack: {:?}", e);
-                return StatusError::internal("Database error").into_response();
-            }
-        };
+    let audit_events = match state
+        .storage
+        .list_audit_events_by_decision_ids(&tenant_id, &decision_ids)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load audit events for evidence pack: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
 
     // Same hermetic-by-default narrator as `narrate_incident` — no network
     // call unless AEGIS_NARRATOR=claude is explicitly configured.

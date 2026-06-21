@@ -56,7 +56,7 @@ pub(crate) fn is_high_risk_for_audit(risk_level: &str, mutates_state: bool) -> b
 /// these weights only change via the rare, operator-driven
 /// `PUT /v1/tenants/risk-weights` (which calls `RiskWeightsCache::invalidate`).
 async fn get_cached_risk_weights(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn aegis_storage::traits::StorageBackend,
     cache: &super::RiskWeightsCache,
     tenant_id: &str,
 ) -> crate::risk::RiskWeights {
@@ -64,8 +64,11 @@ async fn get_cached_risk_weights(
     if let Some(weights) = cache.get(tenant_id, now) {
         return weights;
     }
-    let weights = db::get_risk_weights(pool, tenant_id)
+    let weights = storage
+        .get_tenant_risk_weights(tenant_id)
         .await
+        .ok()
+        .flatten()
         .unwrap_or_default();
     cache.insert(tenant_id, weights, now);
     weights
@@ -73,7 +76,7 @@ async fn get_cached_risk_weights(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_decision_and_audit(
-    pool: &sqlx::SqlitePool,
+    storage: &dyn aegis_storage::traits::StorageBackend,
     events: &EventSink,
     metrics: &SecurityMetrics,
     audit_batch: &crate::audit_batch::AuditBatchSink,
@@ -89,13 +92,13 @@ pub(crate) async fn write_decision_and_audit(
     audit_event_type: &str,
     started_at: std::time::Instant,
     dry_run: bool,
-) -> Result<i32, sqlx::Error> {
+) -> Result<i32, aegis_common::errors::AegisError> {
     // #1289: advisory composite risk score (Law 1 — never gates `decision`,
     // computed only for display/audit metadata). Per-tenant weight overrides
     // fall back to env-configured defaults inside `db::get_risk_weights`,
     // read through the #1513 TTL cache to avoid a DB read on every call.
     let composite_risk_score = {
-        let weights = get_cached_risk_weights(pool, risk_weight_cache, tenant_id).await;
+        let weights = get_cached_risk_weights(storage, risk_weight_cache, tenant_id).await;
         let is_mcp_call =
             super::mcp_server_key_from_tool(&normalize_tool_identifier(&payload.tool_call.tool))
                 .is_some();
@@ -160,20 +163,20 @@ pub(crate) async fn write_decision_and_audit(
 
     // #1399: retry on transient SQLITE_BUSY/LOCKED before treating the audit
     // write as failed (fail-closed only after retries are exhausted).
-    db::retry_on_busy(3, || db::insert_decision(pool, &decision_record)).await?;
+    storage.insert_decision(&decision_record).await?;
 
     // TASK-0089 (#935): best-effort historical risk-score sample, so
     // operators can see an agent's risk trend over time. Never blocks the
     // decision response.
-    if let Err(e) = db::insert_agent_risk_score(
-        pool,
-        tenant_id,
-        agent_id,
-        &decision_id.to_string(),
-        risk_score,
-        reason,
-    )
-    .await
+    if let Err(e) = storage
+        .insert_agent_risk_score(
+            tenant_id,
+            agent_id,
+            &decision_id.to_string(),
+            risk_score,
+            reason,
+        )
+        .await
     {
         error!("Failed to record agent risk score: {:?}", e);
     }
@@ -202,9 +205,12 @@ pub(crate) async fn write_decision_and_audit(
     // wait on a batch flush); everything else goes through the non-blocking
     // batch sink.
     if decision == "deny" && risk_level_for_score(risk_score) == "critical" {
-        db::insert_audit_event(pool, &audit_record).await?;
+        storage.insert_audit_event(&audit_record).await?;
     } else {
-        audit_batch.emit(pool, audit_record).await?;
+        audit_batch
+            .emit(storage.get_pool(), audit_record)
+            .await
+            .map_err(aegis_common::errors::AegisError::Database)?;
     }
 
     // Phase 0 keystone: feed the async SOC stream. Non-blocking — the inline

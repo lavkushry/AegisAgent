@@ -35,30 +35,46 @@ pub async fn register_mcp_server(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterMcpServerRequest>,
 ) -> impl IntoResponse {
-    let server_id = match db::upsert_mcp_server(
-        &state.pool,
-        &tenant_id,
-        &payload.server_key,
-        &payload.name,
-        payload.owner_team.as_deref(),
-        &payload.transport,
-        payload.source.as_deref(),
-        &payload.trust_level,
-        &payload.endpoint,
-    )
-    .await
-    {
-        Ok(id) => id,
+    let server_id = Uuid::new_v4().to_string();
+    let record = McpServerRecord {
+        id: server_id.clone(),
+        tenant_id: tenant_id.clone(),
+        server_key: payload.server_key.clone(),
+        name: payload.name.clone(),
+        owner_team: payload.owner_team.clone(),
+        transport: payload.transport.clone(),
+        source: payload.source.clone(),
+        trust_level: payload.trust_level.clone(),
+        endpoint: payload.endpoint.clone(),
+        version: None,
+        status: "active".to_string(),
+        manifest_hash: String::new(),
+        last_discovery_at: None,
+        inspection_enabled: false,
+        created_at: Utc::now(),
+    };
+
+    match state.storage.register_mcp_server(&record).await {
+        Ok(_) => {}
         Err(e) => {
             error!("Failed to register MCP server: {:?}", e);
             return StatusError::internal("Database error").into_response();
         }
     };
 
+    let final_server = match state
+        .storage
+        .get_mcp_server_by_key(&tenant_id, &payload.server_key)
+        .await
+    {
+        Ok(Some(s)) => s,
+        _ => record,
+    };
+
     (
         StatusCode::CREATED,
         Json(RegisterMcpServerResponse {
-            server_id,
+            server_id: final_server.id,
             server_key: payload.server_key,
             status: "active".to_string(),
         }),
@@ -72,7 +88,11 @@ pub async fn discover_mcp_tools(
     Path(server_key): Path<String>,
     Json(payload): Json<DiscoverMcpToolsRequest>,
 ) -> impl IntoResponse {
-    let server = match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+    let server = match state
+        .storage
+        .get_mcp_server_by_key(&tenant_id, &server_key)
+        .await
+    {
         Ok(Some(server)) => server,
         Ok(None) => return StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
@@ -81,55 +101,23 @@ pub async fn discover_mcp_tools(
         }
     };
 
-    let skill_key = format!("mcp:{}", server_key);
-    let skill_id = match db::insert_skill(
-        &state.pool,
-        &tenant_id,
-        &skill_key,
-        &server.name,
-        "mcp",
-        None,
-        server.owner_team.as_deref(),
-        None,
-    )
-    .await
+    let new_manifest_hash = compute_mcp_manifest_hash(&payload.tools);
+
+    let tools = match state
+        .storage
+        .discover_mcp_tools(&tenant_id, &server_key, &payload.tools, &new_manifest_hash)
+        .await
     {
-        Ok(id) => id,
+        Ok(t) => t,
         Err(e) => {
-            error!("Failed to register MCP skill manifest: {:?}", e);
-            return StatusError::internal("Failed to register MCP skill manifest").into_response();
+            error!("Failed to discover MCP tools: {:?}", e);
+            return StatusError::internal("Failed to register MCP tools").into_response();
         }
     };
 
+    let skill_key = format!("mcp:{}", server_key);
     let mut registered = 0usize;
     for tool in &payload.tools {
-        if let Err(e) = db::upsert_mcp_tool(&state.pool, &tenant_id, &server.id, tool).await {
-            error!("Failed to upsert MCP tool manifest: {:?}", e);
-            return StatusError::internal("Failed to register MCP tool manifest").into_response();
-        }
-
-        let default_decision = if tool.approval_required {
-            "require_approval"
-        } else {
-            "policy"
-        };
-        if let Err(e) = db::insert_skill_action(
-            &state.pool,
-            &skill_id,
-            &tool.tool_key,
-            tool.description.as_deref(),
-            &tool.risk,
-            tool.mutates_state,
-            None,
-            tool.approval_required,
-            default_decision,
-        )
-        .await
-        {
-            error!("Failed to upsert MCP skill action: {:?}", e);
-            return StatusError::internal("Failed to register MCP skill action").into_response();
-        }
-        // #899: re-discovery may change this tool's settings — invalidate the cache.
         state.skill_cache.invalidate(&SkillActionCache::cache_key(
             &tenant_id,
             &skill_key,
@@ -155,7 +143,7 @@ pub async fn discover_mcp_tools(
             approval_id: None,
             created_at: Utc::now(),
         };
-        let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+        let _ = state.storage.insert_audit_event(&audit_record).await;
         registered += 1;
     }
 
@@ -166,146 +154,149 @@ pub async fn discover_mcp_tools(
     // any DB error here is logged and never blocks the discovery response, and the
     // SOC emit is non-blocking (`try_send`). Carries the server key + hashes only —
     // never any tool payload.
-    let new_manifest_hash = compute_mcp_manifest_hash(&payload.tools);
-
-    // TASK-0090 (#936): record a historical snapshot of every discovered
-    // manifest so a drift alert can be diffed against prior versions.
-    // Best-effort: a DB error here never blocks the discovery response.
     let manifest_json = serde_json::to_string(&payload.tools).unwrap_or_default();
-    if let Err(e) = db::insert_mcp_manifest_snapshot(
-        &state.pool,
-        &tenant_id,
-        &server_key,
-        &new_manifest_hash,
-        &manifest_json,
-    )
-    .await
+    let snapshot_rec = McpManifestSnapshotRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.clone(),
+        server_key: server_key.clone(),
+        manifest_hash: new_manifest_hash.clone(),
+        manifest_json,
+        created_at: Utc::now(),
+    };
+    if let Err(e) = state
+        .storage
+        .insert_mcp_manifest_snapshot(&snapshot_rec)
+        .await
     {
         error!("Failed to record MCP manifest snapshot: {:?}", e);
     }
 
-    match db::get_mcp_server_manifest_hash(&state.pool, &tenant_id, &server_key).await {
-        Ok(pinned) => {
-            if !pinned.is_empty() && pinned != new_manifest_hash {
-                // #1336: diff against the manifest pinned just before this discovery
-                // (the second-most-recent snapshot — the most recent is the one just
-                // inserted above for this discovery) to classify drift severity and
-                // describe what changed, instead of a single generic "drift" signal.
-                let old_tools: Vec<McpToolManifestItem> =
-                    db::list_mcp_manifest_snapshots(&state.pool, &tenant_id, &server_key, 2)
-                        .await
-                        .ok()
-                        .and_then(|snapshots| snapshots.into_iter().nth(1))
-                        .and_then(|snapshot| serde_json::from_str(&snapshot.manifest_json).ok())
-                        .unwrap_or_default();
+    let pinned = server.manifest_hash.clone();
+    if !pinned.is_empty() && pinned != new_manifest_hash {
+        // #1336: diff against the manifest pinned just before this discovery
+        // (the second-most-recent snapshot — the most recent is the one just
+        // inserted above for this discovery) to classify drift severity and
+        // describe what changed, instead of a single generic "drift" signal.
+        let old_tools: Vec<McpToolManifestItem> = state
+            .storage
+            .list_mcp_manifest_snapshots(&tenant_id, &server_key, 2)
+            .await
+            .ok()
+            .and_then(|snapshots| snapshots.into_iter().nth(1))
+            .and_then(|snapshot| serde_json::from_str(&snapshot.manifest_json).ok())
+            .unwrap_or_default();
 
-                let (classification, diff) = classify_manifest_drift(&old_tools, &payload.tools);
-                let severity = severity_for_manifest_drift(classification);
+        let (classification, diff) = classify_manifest_drift(&old_tools, &payload.tools);
+        let severity = severity_for_manifest_drift(classification);
 
-                state.events.emit(AseEvent {
-                    event_id: Uuid::new_v4().to_string(),
-                    occurred_at: Utc::now().to_rfc3339(),
+        state.events.emit(AseEvent {
+            event_id: Uuid::new_v4().to_string(),
+            occurred_at: Utc::now().to_rfc3339(),
+            tenant_id: tenant_id.clone(),
+            kind: "mcp_manifest_drift".to_string(),
+            agent_id: "system".to_string(),
+            // Not a deny — drift is a server-integrity flag, not an authorize
+            // decision (kept out of the deny-storm correlation, design law 1).
+            decision: "flag".to_string(),
+            tool: format!("mcp:{}", server_key),
+            action: "discover".to_string(),
+            resource: Some(server_key.clone()),
+            // #1336: encodes the severity classification (high/medium/low)
+            // via the same risk-score buckets `risk_score_for_level` uses,
+            // decoded back to a severity by `detect::mcp_manifest_drift`.
+            risk_score: risk_score_for_level(severity),
+            reason: format!(
+                "MCP tool-manifest drift on server '{}' ({}): pinned {} != observed {} — {}",
+                server_key, classification, pinned, new_manifest_hash, diff
+            ),
+            run_id: None,
+            trace_id: None,
+            matched_policies: Vec::new(),
+            redacted_fields: vec![],
+            schema_version: 1,
+        });
+
+        // Fail-closed response (Phase 4): drift is a tool-hijack signal, so
+        // auto-quarantine the server. The inline authorize gate above then
+        // denies every tool call until an operator verifies the new manifest
+        // out-of-band and explicitly restores the server. Best-effort: a DB
+        // error is logged and never blocks the discovery response.
+        match state
+            .storage
+            .update_mcp_server(
+                &tenant_id,
+                &server_key,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("quarantined"),
+                None,
+            )
+            .await
+        {
+            Ok(Some(_updated_server)) => {
+                // #1332: record a dedicated, queryable audit event (distinct
+                // from the manual `mcp_server_quarantined` event written by
+                // `update_mcp_server_quarantine`) carrying the drift details
+                // that triggered the auto-quarantine.
+                let audit_record = AuditEventRecord {
+                    id: Uuid::new_v4().to_string(),
                     tenant_id: tenant_id.clone(),
-                    kind: "mcp_manifest_drift".to_string(),
-                    agent_id: "system".to_string(),
-                    // Not a deny — drift is a server-integrity flag, not an authorize
-                    // decision (kept out of the deny-storm correlation, design law 1).
-                    decision: "flag".to_string(),
-                    tool: format!("mcp:{}", server_key),
-                    action: "discover".to_string(),
-                    resource: Some(server_key.clone()),
-                    // #1336: encodes the severity classification (high/medium/low)
-                    // via the same risk-score buckets `risk_score_for_level` uses,
-                    // decoded back to a severity by `detect::mcp_manifest_drift`.
-                    risk_score: risk_score_for_level(severity),
-                    reason: format!(
-                        "MCP tool-manifest drift on server '{}' ({}): pinned {} != observed {} — {}",
-                        server_key, classification, pinned, new_manifest_hash, diff
-                    ),
+                    event_type: "mcp_server_auto_quarantined".to_string(),
+                    agent_id: None,
+                    user_id: None,
                     run_id: None,
                     trace_id: None,
-                    matched_policies: Vec::new(),
-                    redacted_fields: vec![],
-                    schema_version: 1,
-                });
-
-                // Fail-closed response (Phase 4): drift is a tool-hijack signal, so
-                // auto-quarantine the server. The inline authorize gate above then
-                // denies every tool call until an operator verifies the new manifest
-                // out-of-band and explicitly restores the server. Best-effort: a DB
-                // error is logged and never blocks the discovery response.
-                match db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, "quarantined")
-                    .await
-                {
-                    Ok(_) => {
-                        // #1332: record a dedicated, queryable audit event (distinct
-                        // from the manual `mcp_server_quarantined` event written by
-                        // `update_mcp_server_quarantine`) carrying the drift details
-                        // that triggered the auto-quarantine.
-                        let audit_record = AuditEventRecord {
-                            id: Uuid::new_v4().to_string(),
-                            tenant_id: tenant_id.clone(),
-                            event_type: "mcp_server_auto_quarantined".to_string(),
-                            agent_id: None,
-                            user_id: None,
-                            run_id: None,
-                            trace_id: None,
-                            span_id: None,
-                            skill: Some(format!("mcp:{}", server_key)),
-                            action: None,
-                            resource: Some(server_key.clone()),
-                            event_json: serde_json::to_string(&json!({
-                                "server_key": server_key,
-                                "owner_team": server.owner_team,
-                                "classification": classification,
-                                "severity": severity,
-                                "pinned_manifest_hash": pinned,
-                                "observed_manifest_hash": new_manifest_hash,
-                                "diff": diff,
-                            }))
-                            .unwrap_or_default(),
-                            input_hash: None,
-                            output_hash: None,
-                            decision_id: None,
-                            approval_id: None,
-                            created_at: Utc::now(),
-                        };
-                        let _ = db::insert_audit_event(&state.pool, &audit_record).await;
-                    }
-                    Err(e) => {
-                        error!("Failed to auto-quarantine drifted MCP server: {:?}", e);
-                    }
-                }
+                    span_id: None,
+                    skill: Some(format!("mcp:{}", server_key)),
+                    action: None,
+                    resource: Some(server_key.clone()),
+                    event_json: serde_json::to_string(&json!({
+                        "server_key": server_key,
+                        "owner_team": server.owner_team,
+                        "classification": classification,
+                        "severity": severity,
+                        "pinned_manifest_hash": pinned,
+                        "observed_manifest_hash": new_manifest_hash,
+                        "diff": diff,
+                    }))
+                    .unwrap_or_default(),
+                    input_hash: None,
+                    output_hash: None,
+                    decision_id: None,
+                    approval_id: None,
+                    created_at: Utc::now(),
+                };
+                let _ = state.storage.insert_audit_event(&audit_record).await;
             }
-            if pinned != new_manifest_hash {
-                if let Err(e) = db::set_mcp_server_manifest_hash(
-                    &state.pool,
-                    &tenant_id,
-                    &server_key,
-                    &new_manifest_hash,
-                )
-                .await
-                {
-                    error!("Failed to pin MCP manifest hash: {:?}", e);
-                }
+            Ok(None) => {}
+            Err(e) => {
+                error!("Failed to auto-quarantine drifted MCP server: {:?}", e);
             }
         }
-        Err(e) => error!("Failed to read pinned MCP manifest hash: {:?}", e),
+    }
+    if pinned != new_manifest_hash {
+        if let Err(e) = state
+            .storage
+            .set_mcp_server_manifest_hash(&tenant_id, &server_key, &new_manifest_hash)
+            .await
+        {
+            error!("Failed to pin MCP manifest hash: {:?}", e);
+        }
     }
 
     // DB-007 (#932): record discovery timestamp regardless of drift outcome.
     // Best-effort: a DB error here never blocks the discovery response.
-    if let Err(e) = db::touch_mcp_server_discovery(&state.pool, &tenant_id, &server_key).await {
+    if let Err(e) = state
+        .storage
+        .touch_mcp_server_discovery(&tenant_id, &server_key)
+        .await
+    {
         error!("Failed to record MCP discovery timestamp: {:?}", e);
     }
-
-    let tools = match db::list_mcp_tools(&state.pool, &tenant_id, &server_key).await {
-        Ok(tools) => tools,
-        Err(e) => {
-            error!("Failed to list MCP tools after discovery: {:?}", e);
-            return StatusError::internal("Database error").into_response();
-        }
-    };
 
     (
         StatusCode::OK,
@@ -324,7 +315,11 @@ pub async fn get_mcp_tool_manifest(
     TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+    match state
+        .storage
+        .get_mcp_server_by_key(&tenant_id, &server_key)
+        .await
+    {
         Ok(Some(_)) => {}
         Ok(None) => return StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
@@ -333,7 +328,7 @@ pub async fn get_mcp_tool_manifest(
         }
     }
 
-    match db::list_mcp_tools(&state.pool, &tenant_id, &server_key).await {
+    match state.storage.list_mcp_tools(&tenant_id, &server_key).await {
         Ok(tools) => (
             StatusCode::OK,
             Json(json!({"server_key": server_key, "tools": tools})),
@@ -355,7 +350,11 @@ pub async fn get_mcp_manifest_history(
     TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+    match state
+        .storage
+        .get_mcp_server_by_key(&tenant_id, &server_key)
+        .await
+    {
         Ok(Some(_)) => {}
         Ok(None) => return StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
@@ -364,7 +363,11 @@ pub async fn get_mcp_manifest_history(
         }
     }
 
-    match db::list_mcp_manifest_snapshots(&state.pool, &tenant_id, &server_key, 20).await {
+    match state
+        .storage
+        .list_mcp_manifest_snapshots(&tenant_id, &server_key, 20)
+        .await
+    {
         Ok(snapshots) => (
             StatusCode::OK,
             Json(json!({"server_key": server_key, "snapshots": snapshots})),
@@ -400,7 +403,11 @@ async fn update_mcp_tool_status(
     tool_key: String,
     status: &str,
 ) -> axum::response::Response {
-    match db::set_mcp_tool_status(&state.pool, &tenant_id, &server_key, &tool_key, status).await {
+    match state
+        .storage
+        .set_mcp_tool_status(&tenant_id, &server_key, &tool_key, status)
+        .await
+    {
         Ok(true) => {
             let audit_record = AuditEventRecord {
                 id: Uuid::new_v4().to_string(),
@@ -426,7 +433,7 @@ async fn update_mcp_tool_status(
                 approval_id: None,
                 created_at: Utc::now(),
             };
-            let _ = db::insert_audit_event(&state.pool, &audit_record).await;
+            let _ = state.storage.insert_audit_event(&audit_record).await;
 
             (
                 StatusCode::OK,
@@ -471,8 +478,23 @@ pub(crate) async fn update_mcp_server_quarantine(
     server_key: String,
     status: &str,
 ) -> axum::response::Response {
-    match db::set_mcp_server_status(&state.pool, &tenant_id, &server_key, status).await {
-        Ok(true) => {
+    match state
+        .storage
+        .update_mcp_server(
+            &tenant_id,
+            &server_key,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(status),
+            None,
+        )
+        .await
+    {
+        Ok(Some(_)) => {
             let audit = AuditEventRecord {
                 id: Uuid::new_v4().to_string(),
                 tenant_id: tenant_id.clone(),
@@ -496,7 +518,7 @@ pub(crate) async fn update_mcp_server_quarantine(
                 approval_id: None,
                 created_at: Utc::now(),
             };
-            let _ = db::insert_audit_event(&state.pool, &audit).await;
+            let _ = state.storage.insert_audit_event(&audit).await;
             info!(server_key = %server_key, status = %status, "MCP server status changed");
             (
                 StatusCode::OK,
@@ -504,7 +526,7 @@ pub(crate) async fn update_mcp_server_quarantine(
             )
                 .into_response()
         }
-        Ok(false) => StatusError::not_found("MCP server not found").into_response(),
+        Ok(None) => StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to update MCP server status: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -519,7 +541,11 @@ pub async fn list_mcp_servers(
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
 
-    match db::list_mcp_servers(&state.pool, &tenant_id, limit, offset).await {
+    match state
+        .storage
+        .list_mcp_servers(&tenant_id, limit, offset)
+        .await
+    {
         Ok(servers) => (StatusCode::OK, Json(servers)).into_response(),
         Err(e) => {
             error!("Failed to list MCP servers: {:?}", e);
@@ -533,7 +559,11 @@ pub async fn get_mcp_server(
     TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
 ) -> impl IntoResponse {
-    match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+    match state
+        .storage
+        .get_mcp_server_by_key(&tenant_id, &server_key)
+        .await
+    {
         Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
         Ok(None) => StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
@@ -549,7 +579,11 @@ pub async fn update_mcp_server(
     Path(server_key): Path<String>,
     Json(payload): Json<UpdateMcpServerRequest>,
 ) -> impl IntoResponse {
-    match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+    match state
+        .storage
+        .get_mcp_server_by_key(&tenant_id, &server_key)
+        .await
+    {
         Ok(None) => {
             return StatusError::not_found("MCP server not found").into_response();
         }
@@ -560,38 +594,24 @@ pub async fn update_mcp_server(
         _ => {}
     }
 
-    if let Some(enabled) = payload.inspection_enabled {
-        if let Err(e) =
-            db::set_mcp_server_inspection_enabled(&state.pool, &tenant_id, &server_key, enabled)
-                .await
-        {
-            error!("Failed to update MCP server inspection_enabled: {:?}", e);
-            return StatusError::internal("Database error").into_response();
-        }
-    }
-
-    match db::update_mcp_server(
-        &state.pool,
-        &tenant_id,
-        &server_key,
-        payload.name.as_deref(),
-        payload.owner_team.as_ref().map(|o| o.as_deref()),
-        payload.transport.as_deref(),
-        payload.source.as_ref().map(|o| o.as_deref()),
-        payload.trust_level.as_deref(),
-        payload.endpoint.as_deref(),
-        payload.status.as_deref(),
-    )
-    .await
+    match state
+        .storage
+        .update_mcp_server(
+            &tenant_id,
+            &server_key,
+            payload.name.as_deref(),
+            payload.owner_team.as_ref().map(|o| o.as_deref()),
+            payload.transport.as_deref(),
+            payload.source.as_ref().map(|o| o.as_deref()),
+            payload.trust_level.as_deref(),
+            payload.endpoint.as_deref(),
+            payload.status.as_deref(),
+            payload.inspection_enabled,
+        )
+        .await
     {
-        Ok(true) => match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
-            Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
-            _ => StatusError::internal("Failed to fetch updated server").into_response(),
-        },
-        Ok(false) => match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
-            Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
-            _ => StatusError::not_found("MCP server not found").into_response(),
-        },
+        Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
+        Ok(None) => StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to update MCP server: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -635,7 +655,11 @@ pub async fn inspect_mcp_response(
     Path(server_key): Path<String>,
     Json(payload): Json<InspectMcpResponseRequest>,
 ) -> impl IntoResponse {
-    let server = match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
+    let server = match state
+        .storage
+        .get_mcp_server_by_key(&tenant_id, &server_key)
+        .await
+    {
         Ok(Some(server)) => server,
         Ok(None) => {
             return StatusError::not_found("MCP server not found").into_response();
@@ -680,7 +704,7 @@ pub async fn inspect_mcp_response(
                 ),
                 created_at: now.clone(),
             };
-            if let Err(e) = db::insert_soc_alert(&state.pool, &alert).await {
+            if let Err(e) = state.storage.insert_soc_alert(&alert).await {
                 error!("Failed to persist MCP response inspection alert: {:?}", e);
             }
         }
