@@ -40,7 +40,8 @@ message AuthorizeTraceContext {
 
 message ApprovalCallback {
     string url = 1;
-    string secret = 2;
+    // Removed secret per coding guidelines to keep raw secrets out of protobuf payloads
+    // string secret = 2;
 }
 
 message AuthorizeRequest {
@@ -90,14 +91,16 @@ message RegisterAgentRequest {
     string model_name = 8;
     string risk_tier = 9;
     string purpose = 10;
-    string signing_key = 11;
+    // Removed signing_key to prevent exposing sensitive values in protobuf payloads
+    // string signing_key = 11;
     repeated string allowed_environments = 12;
 }
 
 message RegisterAgentResponse {
     string id = 1;
     string agent_key = 2;
-    string agent_token = 3;
+    // Removed agent_token to prevent exposing sensitive values in protobuf payloads
+    // string agent_token = 3;
 }
 
 message ApproveRequest {

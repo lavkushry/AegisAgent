@@ -708,7 +708,9 @@ pub async fn authorize_action(
 
     // Ensure policies for the tenant are loaded into the engine.
     if !state.policy_engine.has_tenant(&tenant_id) {
-        let db_policies = match db::list_policies(&state.pool, &tenant_id).await {
+        use aegis_storage::traits::StorageBackend;
+        let storage = aegis_storage::sqlite::SqliteStorage::new(state.pool.clone());
+        let db_policies = match storage.list_policies(&tenant_id).await {
             Ok(p) => p,
             Err(e) => {
                 error!("Failed to fetch policies for reloading: {:?}", e);
@@ -719,9 +721,17 @@ pub async fn authorize_action(
                     .into_response();
             }
         };
-        let _ = state
+        if let Err(e) = state
             .policy_engine
-            .reload_tenant_policies(&tenant_id, &db_policies);
+            .reload_tenant_policies(&tenant_id, &db_policies)
+        {
+            error!("Failed to reload policies: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to load tenant policies"})),
+            )
+                .into_response();
+        }
     }
 
     // Call policy engine to evaluate Cedar rules. `agent.risk_tier` is the
@@ -1703,7 +1713,7 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -1755,7 +1765,7 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         // First request is allowed through quota
@@ -5906,7 +5916,7 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         register_high_risk_action(state.clone()).await;
@@ -6099,7 +6109,7 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         register_high_risk_action(state.clone()).await;

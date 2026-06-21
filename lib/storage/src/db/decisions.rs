@@ -632,31 +632,18 @@ pub async fn count_decisions_by_outcome(
     pool: &SqlitePool,
     tenant_id: &str,
 ) -> Result<(i64, i64, i64, i64), sqlx::Error> {
-    let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .fetch_one(pool)
-        .await?;
-
-    let (allow,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'allow'")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
-
-    let (deny,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'deny'")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
-
-    let (require_approval,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'require_approval'",
+    let row: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*),
+                COUNT(CASE WHEN decision = 'allow' THEN 1 END),
+                COUNT(CASE WHEN decision = 'deny' THEN 1 END),
+                COUNT(CASE WHEN decision = 'require_approval' THEN 1 END)
+         FROM decisions WHERE tenant_id = ?"
     )
     .bind(tenant_id)
     .fetch_one(pool)
     .await?;
 
-    Ok((total, allow, deny, require_approval))
+    Ok(row)
 }
 
 #[cfg(test)]

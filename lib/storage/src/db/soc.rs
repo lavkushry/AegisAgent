@@ -1468,20 +1468,12 @@ mod tests {
     }
 }
 
-/// Get action count for the last 24 hours for a specific agent.
 pub async fn get_action_count_last_24h(
     pool: &SqlitePool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<i64, sqlx::Error> {
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND agent_id = ? AND created_at >= datetime('now', '-24 hours')"
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .fetch_one(pool)
-    .await?;
-    Ok(row.0)
+    super::decisions::get_decision_count_24h_for_agent(pool, tenant_id, agent_id).await
 }
 
 /// Get agent hourly action counts for the last 7 days.

@@ -478,8 +478,7 @@ pub async fn grant_agent_tool_permission(
     tool_key: &str,
 ) -> Result<aegis_api::models::AgentToolPermission, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
-    let now_str = now.to_rfc3339();
+    let now_str = chrono::Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT OR IGNORE INTO agent_tool_permissions (id, tenant_id, agent_id, tool_key, created_at)
          VALUES (?, ?, ?, ?, ?)",

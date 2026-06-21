@@ -340,7 +340,7 @@ impl StorageBackend for SqliteStorage {
         status: &str,
         approver: &str,
         reason: Option<&str>,
-        _decided_at: Option<DateTime<Utc>>,
+        decided_at: Option<DateTime<Utc>>,
     ) -> Result<bool, AegisError> {
         db::update_approval_status(
             &self.pool,
@@ -349,7 +349,7 @@ impl StorageBackend for SqliteStorage {
             status,
             approver,
             reason,
-            None,
+            decided_at,
         )
         .await
         .map_err(AegisError::Database)

@@ -11,7 +11,7 @@ struct TokenBucket {
 
 #[derive(Debug)]
 pub struct RateLimiter {
-    buckets: Mutex<HashMap<String, TokenBucket>>,
+    buckets: Mutex<(HashMap<String, TokenBucket>, VecDeque<String>)>,
     pub capacity: f64,
     pub refill_rate: f64,
 }
@@ -19,7 +19,7 @@ pub struct RateLimiter {
 impl RateLimiter {
     pub fn new(capacity: f64, refill_rate: f64) -> Self {
         Self {
-            buckets: Mutex::new(HashMap::new()),
+            buckets: Mutex::new((HashMap::new(), VecDeque::new())),
             capacity,
             refill_rate,
         }
@@ -30,22 +30,39 @@ impl RateLimiter {
             return true;
         }
 
-        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let mut lock = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let (ref mut map, ref mut order) = *lock;
         let now = Instant::now();
 
-        let bucket = buckets
-            .entry(tenant_id.to_string())
-            .or_insert_with(|| TokenBucket {
-                tokens: self.capacity,
-                last_refreshed: now,
-            });
+        let mut bucket = map.get(tenant_id).cloned().unwrap_or_else(|| TokenBucket {
+            tokens: self.capacity,
+            last_refreshed: now,
+        });
 
         let elapsed = now.duration_since(bucket.last_refreshed).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * self.refill_rate).min(self.capacity);
         bucket.last_refreshed = now;
 
+        // Touch the key in the LRU order
+        if let Some(pos) = order.iter().position(|k| k == tenant_id) {
+            order.remove(pos);
+        }
+        order.push_back(tenant_id.to_string());
+
+        map.insert(tenant_id.to_string(), bucket.clone());
+
+        // Evict if over limit
+        while map.len() > 10000 {
+            if let Some(evict) = order.pop_front() {
+                map.remove(&evict);
+            } else {
+                break;
+            }
+        }
+
         if bucket.tokens >= 1.0 {
             bucket.tokens -= 1.0;
+            map.insert(tenant_id.to_string(), bucket);
             true
         } else {
             false
@@ -55,7 +72,7 @@ impl RateLimiter {
 
 #[derive(Debug)]
 pub struct QuotaManager {
-    quotas: Mutex<HashMap<String, (u64, Instant)>>,
+    quotas: Mutex<(HashMap<String, (u64, Instant)>, VecDeque<String>)>,
     pub limit: u64,
     pub window_secs: u64,
 }
@@ -63,7 +80,7 @@ pub struct QuotaManager {
 impl QuotaManager {
     pub fn new(limit: u64, window_secs: u64) -> Self {
         Self {
-            quotas: Mutex::new(HashMap::new()),
+            quotas: Mutex::new((HashMap::new(), VecDeque::new())),
             limit,
             window_secs,
         }
@@ -74,20 +91,37 @@ impl QuotaManager {
             return true;
         }
 
-        let mut quotas = self.quotas.lock().unwrap_or_else(|e| e.into_inner());
+        let mut lock = self.quotas.lock().unwrap_or_else(|e| e.into_inner());
+        let (ref mut map, ref mut order) = *lock;
         let now = Instant::now();
 
-        let (count, window_start) = quotas
-            .entry(tenant_id.to_string())
-            .or_insert_with(|| (0, now));
+        let (mut count, mut window_start) = map.get(tenant_id).cloned().unwrap_or_else(|| (0, now));
 
-        if now.duration_since(*window_start).as_secs() >= self.window_secs {
-            *count = 0;
-            *window_start = now;
+        if now.duration_since(window_start).as_secs() >= self.window_secs {
+            count = 0;
+            window_start = now;
         }
 
-        if *count < self.limit {
-            *count += 1;
+        // Touch the key in the LRU order
+        if let Some(pos) = order.iter().position(|k| k == tenant_id) {
+            order.remove(pos);
+        }
+        order.push_back(tenant_id.to_string());
+
+        map.insert(tenant_id.to_string(), (count, window_start));
+
+        // Evict if over limit
+        while map.len() > 10000 {
+            if let Some(evict) = order.pop_front() {
+                map.remove(&evict);
+            } else {
+                break;
+            }
+        }
+
+        if count < self.limit {
+            count += 1;
+            map.insert(tenant_id.to_string(), (count, window_start));
             true
         } else {
             false
@@ -97,7 +131,7 @@ impl QuotaManager {
 
 #[derive(Debug)]
 pub struct ApprovalAttemptTracker {
-    attempts: Mutex<HashMap<String, (u64, Instant)>>,
+    attempts: Mutex<(HashMap<String, (u64, Instant)>, VecDeque<String>)>,
     pub limit: u64,
     pub window_secs: u64,
 }
@@ -105,7 +139,7 @@ pub struct ApprovalAttemptTracker {
 impl ApprovalAttemptTracker {
     pub fn new(limit: u64, window_secs: u64) -> Self {
         Self {
-            attempts: Mutex::new(HashMap::new()),
+            attempts: Mutex::new((HashMap::new(), VecDeque::new())),
             limit,
             window_secs,
         }
@@ -116,10 +150,20 @@ impl ApprovalAttemptTracker {
             return false;
         }
 
-        let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut lock = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let (ref mut map, ref mut order) = *lock;
         let now = Instant::now();
 
-        match attempts.get_mut(approval_id) {
+        // Touch the key in the LRU order if it exists
+        let exists = map.contains_key(approval_id);
+        if exists {
+            if let Some(pos) = order.iter().position(|k| k == approval_id) {
+                order.remove(pos);
+            }
+            order.push_back(approval_id.to_string());
+        }
+
+        match map.get_mut(approval_id) {
             Some((count, window_start)) => {
                 if now.duration_since(*window_start).as_secs() >= self.window_secs {
                     *count = 0;
@@ -138,10 +182,11 @@ impl ApprovalAttemptTracker {
             return;
         }
 
-        let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut lock = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let (ref mut map, ref mut order) = *lock;
         let now = Instant::now();
 
-        let entry = attempts
+        let entry = map
             .entry(approval_id.to_string())
             .or_insert_with(|| (0, now));
 
@@ -151,6 +196,21 @@ impl ApprovalAttemptTracker {
         }
 
         entry.0 += 1;
+
+        // Touch/insert in LRU order
+        if let Some(pos) = order.iter().position(|k| k == approval_id) {
+            order.remove(pos);
+        }
+        order.push_back(approval_id.to_string());
+
+        // Evict if over limit
+        while map.len() > 10000 {
+            if let Some(evict) = order.pop_front() {
+                map.remove(&evict);
+            } else {
+                break;
+            }
+        }
     }
 }
 

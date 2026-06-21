@@ -103,12 +103,13 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
     } else {
         "up"
     };
-    let dead_background_tasks: Vec<&str> = state
-        .background_task_handles
-        .iter()
-        .filter(|(_, handle)| handle.is_finished())
-        .map(|(name, _)| *name)
-        .collect();
+    let dead_background_tasks: Vec<&str> = {
+        let lock = state.background_task_handles.lock().unwrap_or_else(|e| e.into_inner());
+        lock.iter()
+            .filter(|(_, handle)| handle.is_finished())
+            .map(|(name, _)| *name)
+            .collect()
+    };
     let background_tasks_status = if dead_background_tasks.is_empty() {
         "up"
     } else {
@@ -1480,7 +1481,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         github_checks_client,
         qdrant_exporter,
         admission_webhook,
-        background_task_handles,
+        background_task_handles: std::sync::Mutex::new(background_task_handles),
     });
 
     // Read request body size limit (default 1MB)
@@ -1627,11 +1628,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("AEGIS_GRPC_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:6334".to_string());
     if let Ok(grpc_addr) = grpc_bind_addr.parse::<SocketAddr>() {
         let grpc_state = state.clone();
-        tokio::spawn(async move {
+        let grpc_handle = tokio::spawn(async move {
             if let Err(e) = gateway::grpc::start_grpc_server(grpc_state, grpc_addr).await {
                 tracing::error!("gRPC server error: {:?}", e);
             }
         });
+        if let Ok(mut handles) = state.background_task_handles.lock() {
+            handles.push(("grpc_server", grpc_handle.abort_handle()));
+        }
     } else {
         tracing::error!("Failed to parse AEGIS_GRPC_BIND_ADDR: {}", grpc_bind_addr);
     }
@@ -1682,8 +1686,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         // Peek the first byte to see if it's TLS Client Hello (0x16)
                         let mut peek_buf = [0u8; 1];
-                        match socket.peek(&mut peek_buf).await {
-                            Ok(1) if peek_buf[0] == 0x16 => {
+                        let peek_res = tokio::time::timeout(std::time::Duration::from_secs(5), socket.peek(&mut peek_buf)).await;
+                        match peek_res {
+                            Ok(Ok(1)) if peek_buf[0] == 0x16 => {
                                 // TLS Client Hello detected
                                 match tls_acceptor.accept(socket).await {
                                     Ok(tls_stream) => {
@@ -1710,7 +1715,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             }
-                            Ok(1) => {
+                            Ok(Ok(1)) => {
                                 // Plain HTTP detected, redirect to HTTPS
                                 let io = TokioIo::new(socket);
                                 let redirect_service = hyper::service::service_fn(move |req: axum::http::Request<hyper::body::Incoming>| {
@@ -1721,11 +1726,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let path_and_query = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("");
                                     let redirect_url = format!("https://{}{}", host, path_and_query);
 
-                                    let response = axum::http::Response::builder()
+                                    let response = match axum::http::Response::builder()
                                         .status(axum::http::StatusCode::PERMANENT_REDIRECT)
                                         .header(axum::http::header::LOCATION, redirect_url)
                                         .body(Body::empty())
-                                        .unwrap();
+                                    {
+                                        Ok(res) => res,
+                                        Err(e) => {
+                                            tracing::error!("Failed to build redirect response: {:?}", e);
+                                            let mut fallback = axum::http::Response::new(Body::empty());
+                                            *fallback.status_mut() = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+                                            fallback
+                                        }
+                                    };
                                     async move {
                                         Ok::<_, std::convert::Infallible>(response)
                                     }
@@ -1734,7 +1747,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Err(err) = auto::Builder::new(TokioExecutor::new())
                                     .serve_connection(io, redirect_service)
                                     .await
-                                {
+                                  {
                                     tracing::debug!("failed to serve HTTP redirect: {:?}", err);
                                 }
                             }
@@ -2015,7 +2028,7 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         let app = Router::new()
@@ -2302,7 +2315,7 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         let app = Router::new()
@@ -2626,7 +2639,7 @@ mod tests {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: vec![("doomed_task", doomed_abort_handle)],
+            background_task_handles: std::sync::Mutex::new(vec![("doomed_task", doomed_abort_handle)]),
         });
 
         let app = Router::new()

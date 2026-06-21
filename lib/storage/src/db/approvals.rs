@@ -231,21 +231,21 @@ pub async fn update_approval_status(
     status: &str,
     user_id: &str,
     reason: Option<&str>,
-    edited_call: Option<&str>,
+    decided_at: Option<DateTime<Utc>>,
 ) -> Result<bool, sqlx::Error> {
     retry_on_busy(3, || async {
         let now = Utc::now();
+        let dec_at = decided_at.unwrap_or(now);
         let result = sqlx::query(
             "UPDATE approvals
-             SET status = ?, approver_user_id = ?, reason = ?, edited_skill_call = ?, decided_at = ?
+             SET status = ?, approver_user_id = ?, reason = ?, decided_at = ?
              WHERE tenant_id = ? AND id = ? AND status = 'created'
                AND (expires_at IS NULL OR expires_at > ?)",
         )
         .bind(status)
         .bind(user_id)
         .bind(reason)
-        .bind(edited_call)
-        .bind(now)
+        .bind(dec_at)
         .bind(tenant_id)
         .bind(approval_id)
         .bind(now)

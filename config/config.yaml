@@ -9,7 +9,8 @@ storage:
 
 gateway:
   host: "127.0.0.1"
-  port: 8080
+  rest_port: 8080
+  grpc_port: 6334
   tls:
     enabled: false
     cert_path: null

@@ -493,7 +493,7 @@ pub struct AppState {
     /// calling `.abort()` does), so the original `JoinHandle` can still be
     /// owned and awaited elsewhere (e.g. graceful shutdown draining the event
     /// channel). Empty in tests, which never spawn the real background tasks.
-    pub background_task_handles: Vec<(&'static str, tokio::task::AbortHandle)>,
+    pub background_task_handles: std::sync::Mutex<Vec<(&'static str, tokio::task::AbortHandle)>>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -1100,7 +1100,7 @@ pub mod benchutil {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         Ok((state, tenant_id, agent_token))
@@ -1337,7 +1337,7 @@ pub(crate) mod test_helpers {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         (state, tenant_id, agent_token)
@@ -1387,7 +1387,7 @@ pub(crate) mod test_helpers {
                 5,
                 fail_open,
             ))),
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         (state, tenant_id, agent_token)
@@ -1431,7 +1431,7 @@ pub(crate) mod test_helpers {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         (state, tenant_id, agent_token)
@@ -1529,7 +1529,7 @@ pub(crate) mod test_helpers {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         (state, tenant_id, agent_token, events_rx)
@@ -1584,7 +1584,7 @@ pub(crate) mod test_helpers {
             github_checks_client: None,
             qdrant_exporter: None,
             admission_webhook: None,
-            background_task_handles: Vec::new(),
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
         (state, tenant_id, agent_token)
