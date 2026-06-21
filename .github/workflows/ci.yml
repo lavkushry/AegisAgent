@@ -40,16 +40,16 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gateway
+          workspaces: .
           key: ${{ matrix.rust }}
       - name: Check formatting
-        run: cargo fmt --manifest-path gateway/Cargo.toml -- --check
+        run: cargo fmt -- --check
         if: matrix.rust == 'stable'
       - name: Clippy
-        run: cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
         if: matrix.rust == 'stable'
       - name: Tests
-        run: cargo test --manifest-path gateway/Cargo.toml
+        run: cargo test --workspace
       # ── TASK-1313: /v1/authorize latency regression gate ─────────────────
       # Runs the criterion benchmark (reduced sample size, see
       # benches/authorize_benchmark.rs) and compares the mean latency of the
@@ -59,13 +59,13 @@ jobs:
       # approximation this gate makes.
       - name: Authorize latency benchmark
         if: matrix.rust == 'stable'
-        run: cargo bench --manifest-path gateway/Cargo.toml
+        run: cargo bench --workspace
       - name: Check benchmark regression (>25% mean latency)
         if: matrix.rust == 'stable'
         run: |
-          python3 gateway/scripts/check_bench_regression.py \
-            --baseline gateway/benches/baseline.json \
-            --estimates gateway/target/criterion/authorize_action/allow_readonly_filesystem_read_file/new/estimates.json \
+          python3 src/scripts/check_bench_regression.py \
+            --baseline src/benches/baseline.json \
+            --estimates target/criterion/authorize_action/allow_readonly_filesystem_read_file/new/estimates.json \
             --threshold 0.25
       # ── TEST-005 (#1165): canonicalization / receipt-hash regression gates ──
       # `cargo bench` above (no --bench filter) already ran canon_benchmark
@@ -75,16 +75,16 @@ jobs:
       - name: Check canonicalization benchmark regression (>20% mean latency)
         if: matrix.rust == 'stable'
         run: |
-          python3 gateway/scripts/check_bench_regression.py \
-            --baseline gateway/benches/baseline_canon.json \
-            --estimates gateway/target/criterion/canonicalization/canonicalize_json_nested_mixed_types/new/estimates.json \
+          python3 src/scripts/check_bench_regression.py \
+            --baseline src/benches/baseline_canon.json \
+            --estimates target/criterion/canonicalization/canonicalize_json_nested_mixed_types/new/estimates.json \
             --threshold 0.20
       - name: Check receipt-hash benchmark regression (>20% mean latency)
         if: matrix.rust == 'stable'
         run: |
-          python3 gateway/scripts/check_bench_regression.py \
-            --baseline gateway/benches/baseline_receipt_hash.json \
-            --estimates gateway/target/criterion/receipt_hash/compute_receipt_hash_mid_chain/new/estimates.json \
+          python3 src/scripts/check_bench_regression.py \
+            --baseline src/benches/baseline_receipt_hash.json \
+            --estimates target/criterion/receipt_hash/compute_receipt_hash_mid_chain/new/estimates.json \
             --threshold 0.20
 
   # ── CI-004 (#1173): Rust code coverage gate (blocking, threshold 70%) ────────
@@ -105,12 +105,11 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gateway
+          workspaces: .
           key: coverage
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
       - name: Coverage (fails under 70% lines)
-        working-directory: gateway
         run: |
           cargo llvm-cov --summary-only --fail-under-lines 70 | tee coverage-summary.txt
       - name: Publish coverage summary
@@ -118,7 +117,7 @@ jobs:
         run: |
           echo "### Gateway coverage (cargo-llvm-cov)" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat gateway/coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
+          cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   # ── TEST-002 (#1162): canonicalization fuzz smoke gate ───────────────────────
@@ -139,11 +138,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gateway/fuzz
+          workspaces: src/fuzz
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: Fuzz ${{ matrix.target }} for 60 seconds
-        working-directory: gateway
+        working-directory: src
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60
 
   # ── PR-050: Python test matrix (3.9 → 3.12) ──────────────────────────────────
@@ -253,16 +252,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gateway
+          workspaces: .
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install Python SDK
         run: python -m pip install -e "sdk-python[dev]"
       - name: Rust corpus test (canonical_action_matches_shared_corpus)
-        run: cargo test --manifest-path gateway/Cargo.toml canonical_action_matches_shared_corpus -- --exact
+        run: cargo test -p gateway canonical_action_matches_shared_corpus -- --exact
       - name: Rust corpus test (receipt_chain_matches_shared_corpus)
-        run: cargo test --manifest-path gateway/Cargo.toml receipt_chain_matches_shared_corpus -- --exact
+        run: cargo test -p gateway receipt_chain_matches_shared_corpus -- --exact
       - name: Python corpus test
         run: python -m pytest sdk-python/tests/test_canonical_action.py sdk-python/tests/test_receipt_vectors.py -v 2>/dev/null || python -m unittest sdk-python/tests/test_canonical_action.py sdk-python/tests/test_receipt_vectors.py -v
       - name: Summary
@@ -361,7 +360,6 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: cargo audit
-        working-directory: gateway
         # RUSTSEC-2023-0071 (rsa "Marvin Attack" timing side-channel, no fixed
         # upgrade available): transitive via jsonwebtoken's `rust_crypto`
         # feature, which only provides RSA-family JWT algorithms. The gateway
@@ -392,5 +390,5 @@ jobs:
       - uses: actions/checkout@v6
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          manifest-path: gateway/Cargo.toml
+          manifest-path: src/Cargo.toml
           command: check licenses

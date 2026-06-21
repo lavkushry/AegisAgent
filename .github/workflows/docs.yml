@@ -15,9 +15,10 @@ on:
       # a fresh docs/api/openapi.json generated from these route annotations
       # on every push, so a gateway-only change that alters the API surface
       # must redeploy the site even though nothing under docs/ changed.
-      - "gateway/src/**"
-      - "gateway/Cargo.toml"
-      - "gateway/Cargo.lock"
+      - "src/src/**"
+      - "src/Cargo.toml"
+      - "src/Cargo.lock"
+      - "lib/**"
   workflow_dispatch:
 
 permissions:
@@ -38,14 +39,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gateway
+          workspaces: .
           key: export-openapi
       # #1198 (DOC-003): regenerate the static OpenAPI snapshot the Redoc
       # page reads, fresh from route metadata — never a checked-in artifact
       # that can drift from the real API surface. Pure compile-time route
       # metadata (utoipa derive macros): no database, no running gateway.
       - name: Export OpenAPI spec for Redoc
-        working-directory: gateway
+        working-directory: src
         run: cargo run --release --bin export_openapi > ../docs/api/openapi.json
       - name: Build and deploy
         run: mkdocs gh-deploy --force --no-history

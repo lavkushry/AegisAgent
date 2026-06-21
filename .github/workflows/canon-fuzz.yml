@@ -31,15 +31,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gateway/fuzz
+          workspaces: src/fuzz
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: Fuzz ${{ matrix.target }} for 1 hour
-        working-directory: gateway
+        working-directory: src
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-crash-${{ matrix.target }}
-          path: gateway/fuzz/artifacts/${{ matrix.target }}/
+          path: src/fuzz/artifacts/${{ matrix.target }}/

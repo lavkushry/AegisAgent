@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Build gateway image
-        run: docker build -f gateway/Dockerfile -t aegis-gateway:scan .
+        run: docker build -f src/Dockerfile -t aegis-gateway:scan .
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
