@@ -1003,7 +1003,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting AegisAgent Control Plane v{}...", VERSION);
 
-    // Validate JWT secret requirements
+    // Validate JWT secret requirements. AEGIS_JWT_SECRET may be a single
+    // secret or a comma-separated list (#1211: zero-downtime rotation — set
+    // "new_secret,old_secret" during a rotation window, drop the old entry
+    // once it's no longer needed); `jwt_secret_candidates` filters out
+    // empty/"default_secret" entries so only real keys count here.
     let jwt_required = std::env::var("AEGIS_JWT_REQUIRED")
         .map(|v| v == "true")
         .unwrap_or(false);
@@ -1011,11 +1015,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let jwt_secret = std::env::var("AEGIS_JWT_SECRET").map_err(|_| {
             "AEGIS_JWT_SECRET environment variable must be set when AEGIS_JWT_REQUIRED is true."
         })?;
-        if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
+        if routes::jwt_secret_candidates(&jwt_secret).is_empty() {
             return Err("AEGIS_JWT_SECRET cannot be empty or 'default_secret' when AEGIS_JWT_REQUIRED is true.".into());
         }
     } else if let Ok(jwt_secret) = std::env::var("AEGIS_JWT_SECRET") {
-        if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
+        if routes::jwt_secret_candidates(&jwt_secret).is_empty() {
             tracing::warn!("AEGIS_JWT_SECRET is set to an empty or default value ('default_secret'). JWT validation will be disabled for security.");
         }
     } else {

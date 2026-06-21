@@ -1289,6 +1289,86 @@ mod tests {
         std::env::remove_var("AEGIS_JWT_REQUIRED");
     }
 
+    /// #1211: zero-downtime JWT secret rotation. With
+    /// `AEGIS_JWT_SECRET="new_secret,old_secret"`, a token signed under
+    /// EITHER secret must still validate — the rotation window where some
+    /// already-issued tokens were signed with the old secret while new ones
+    /// use the new one.
+    #[tokio::test]
+    async fn test_jwt_secret_rotation_accepts_old_and_new_secrets() {
+        let _guard = get_env_lock().lock().await;
+        use jsonwebtoken::{encode, EncodingKey, Header};
+
+        let new_secret = "new_secret_after_rotation";
+        let old_secret = "old_secret_before_rotation";
+        std::env::set_var("AEGIS_JWT_SECRET", format!("{new_secret},{old_secret}"));
+
+        let claims = Claims {
+            sub: "tenant_rotation".to_string(),
+            tenant_id: Some("tenant_rotation".to_string()),
+            exp: (Utc::now() + Duration::hours(1)).timestamp() as usize,
+        };
+
+        let token_new = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(new_secret.as_bytes()),
+        )
+        .unwrap();
+        let token_old = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(old_secret.as_bytes()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_jwt(&token_new),
+            Some("tenant_rotation".to_string()),
+            "a token signed with the new (first-listed) secret must validate"
+        );
+        assert_eq!(
+            validate_jwt(&token_old),
+            Some("tenant_rotation".to_string()),
+            "a token signed with the old (still-listed) secret must keep validating during the rotation window"
+        );
+
+        // Once the old secret is dropped from the list, its tokens stop validating.
+        std::env::set_var("AEGIS_JWT_SECRET", new_secret);
+        assert_eq!(
+            validate_jwt(&token_old),
+            None,
+            "removing the old secret from the list must reject tokens signed with it"
+        );
+        assert_eq!(
+            validate_jwt(&token_new),
+            Some("tenant_rotation".to_string())
+        );
+
+        std::env::remove_var("AEGIS_JWT_SECRET");
+    }
+
+    #[test]
+    fn jwt_secret_candidates_filters_blank_and_default_entries() {
+        assert_eq!(
+            jwt_secret_candidates("secret_a,secret_b"),
+            vec!["secret_a".to_string(), "secret_b".to_string()]
+        );
+        assert_eq!(
+            jwt_secret_candidates(" secret_a , secret_b "),
+            vec!["secret_a".to_string(), "secret_b".to_string()],
+            "entries are trimmed"
+        );
+        assert_eq!(
+            jwt_secret_candidates("secret_a,,default_secret,secret_b"),
+            vec!["secret_a".to_string(), "secret_b".to_string()],
+            "blank and 'default_secret' entries are dropped"
+        );
+        assert!(jwt_secret_candidates("").is_empty());
+        assert!(jwt_secret_candidates("default_secret").is_empty());
+        assert!(jwt_secret_candidates(" , , ").is_empty());
+    }
+
     #[tokio::test]
     async fn test_hardened_tenant_and_jwt_rules() {
         let _guard = get_env_lock().lock().await;

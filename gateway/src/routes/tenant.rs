@@ -185,8 +185,8 @@ pub struct EvidencePackParams {
 ///   range, row counts, and the canonicalization scheme.
 /// - `receipts.jsonl` — date-filtered `action_receipts` (one JSON object per
 ///   line). Receipts may carry an optional Ed25519 `signature` /
-///   `signer_public_key` — non-repudiation evidence (SOC 2 / EU AI Act
-///   Art. 14).
+///   `signer_public_key` (plus an optional human-readable `signer_key_id`,
+///   #1211) — non-repudiation evidence (SOC 2 / EU AI Act Art. 14).
 /// - `audit_events.jsonl` — date-filtered `audit_events`.
 /// - `policies.json` — the tenant's *current* policy set (not date-filtered;
 ///   documented in `manifest.json`).

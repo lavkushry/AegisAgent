@@ -38,7 +38,7 @@ pub async fn get_action_receipt_by_decision_id(
     decision_id: &str,
 ) -> Result<Option<ActionReceiptRecord>, sqlx::Error> {
     sqlx::query_as::<_, ActionReceiptRecord>(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
          FROM action_receipts
          WHERE tenant_id = ? AND decision_id = ?",
     )
@@ -67,7 +67,7 @@ pub async fn list_action_receipts_by_decision_ids(
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
          FROM action_receipts
          WHERE tenant_id = ? AND decision_id IN ({placeholders})"
     );
@@ -90,7 +90,7 @@ pub async fn list_action_receipts_chain_order(
     tenant_id: &str,
 ) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
     sqlx::query_as::<_, ActionReceiptRecord>(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
          FROM action_receipts
          WHERE tenant_id = ?
          ORDER BY created_at ASC",
@@ -108,7 +108,7 @@ pub async fn list_action_receipts(
 ) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     sqlx::query_as::<_, ActionReceiptRecord>(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
          FROM action_receipts
          WHERE tenant_id = ?
          ORDER BY created_at DESC
@@ -134,7 +134,7 @@ pub async fn list_action_receipts_cursor(
 ) -> Result<(Vec<ActionReceiptRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let rows = sqlx::query(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, created_at, rowid
+        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at, rowid
          FROM action_receipts
          WHERE tenant_id = ?
            AND (? IS NULL OR rowid < ?)
@@ -202,8 +202,8 @@ where
     let record = build(prev);
 
     if let Err(e) = sqlx::query(
-        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -225,6 +225,7 @@ where
     .bind(&record.canon_version)
     .bind(&record.signature)
     .bind(&record.signer_public_key)
+    .bind(&record.signer_key_id)
     .execute(&mut *conn)
     .await
     {
@@ -280,6 +281,7 @@ mod tests {
             canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         };
         rec.receipt_hash = crate::routes::compute_receipt_hash(&rec);
