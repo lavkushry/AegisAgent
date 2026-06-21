@@ -18,7 +18,7 @@
 //!            - approval_credit           (if a prior approval exists)
 //! ```
 
-use aegis_api::models::RiskWeights;
+pub use aegis_api::models::RiskWeights;
 
 /// Per-decision inputs to [`compute_composite_risk_score`]. All fields are
 /// derived from data already available on the `/v1/authorize` hot path —
