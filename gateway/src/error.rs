@@ -31,6 +31,11 @@ pub enum ErrorReason {
     NotImplemented,
     UnsupportedMediaType,
     InternalError,
+    /// The server is temporarily overloaded and cannot accept the request
+    /// right now (#911: Tower load-shed layer). Distinct from `TooManyRequests`
+    /// (a per-tenant rate-limit policy decision) — this is a process-wide
+    /// backpressure signal with no `tenant_id` involved at all.
+    ServiceUnavailable,
     Unknown,
 }
 
@@ -49,6 +54,7 @@ impl ErrorReason {
             ErrorReason::NotImplemented => StatusCode::NOT_IMPLEMENTED,
             ErrorReason::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorReason::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorReason::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorReason::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -144,6 +150,10 @@ impl StatusError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorReason::InternalError, message)
+    }
+
+    pub fn service_unavailable(message: impl Into<String>) -> Self {
+        Self::new(ErrorReason::ServiceUnavailable, message)
     }
 }
 

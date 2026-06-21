@@ -38,7 +38,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
 tower-http = { version = "0.5", features = ["cors", "request-id", "propagate-header", "set-header", "util", "compression-full", "limit", "timeout", "catch-panic"] }
-tower = { version = "0.4", features = ["util"] }
+tower = { version = "0.4", features = ["util", "load-shed", "limit"] }
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
 # Tool-identifier normalization (#1335): both already present transitively
 # (axum -> form_urlencoded -> percent-encoding; cedar-policy-validator ->
