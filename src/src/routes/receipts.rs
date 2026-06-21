@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -61,22 +62,15 @@ pub async fn verify_receipt(
                     "signed": rec.signature.is_some(),
                     "signature_verified": signature_verified,
                     "signer_public_key": rec.signer_public_key,
+                    "signer_key_id": rec.signer_key_id,
                 })),
             )
                 .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Receipt not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Receipt not found").into_response(),
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -103,11 +97,7 @@ pub async fn list_receipts(
         Ok((receipts, next_cursor)) => paginated_response(&receipts, next_cursor),
         Err(e) => {
             error!("Failed to list receipts: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -120,18 +110,10 @@ pub async fn get_receipt(
 ) -> impl IntoResponse {
     match db::get_action_receipt_by_id(&state.pool, &tenant_id, &id).await {
         Ok(Some(receipt)) => (StatusCode::OK, Json(receipt)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Receipt not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Receipt not found").into_response(),
         Err(e) => {
             error!("Failed to get receipt: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -203,11 +185,13 @@ pub async fn verify_receipt_chain(
             }
         };
 
-        // Remove receipt_hash, signature, signer_public_key, and created_at to get canonical body
+        // Remove receipt_hash, signature, signer_public_key, signer_key_id, and
+        // created_at to get canonical body
         let mut body = obj.clone();
         body.remove("receipt_hash");
         body.remove("signature");
         body.remove("signer_public_key");
+        body.remove("signer_key_id");
         body.remove("created_at");
 
         let recomputed = sha256_hex(canonical_value_string(&Value::Object(body)).as_bytes());
@@ -428,6 +412,85 @@ mod tests {
         );
     }
 
+    /// #1211: a signer constructed from a `"key_id:hex_secret"` value
+    /// persists and round-trips its `key_id` through the real DB insert +
+    /// `GET /v1/receipts/:id/verify` response, alongside the existing
+    /// `signer_public_key` — auditors can tell which generation of key
+    /// produced a given receipt without recognizing a raw public-key hex.
+    #[tokio::test]
+    async fn verify_reports_signer_key_id_when_present() {
+        let (state, tenant_id, _agent_token) = setup_state("signed_receipt_key_id").await;
+        let signer = sign::ReceiptSigner::from_env_value(&format!(
+            "rotation-2026-06:{TEST_SIGNING_SECRET_HEX}"
+        ))
+        .unwrap();
+        assert_eq!(signer.key_id(), Some("rotation-2026-06"));
+
+        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
+            let mut r = unsigned_receipt_template(&tenant_id);
+            r.prev_receipt_hash = prev;
+            r.receipt_hash = compute_receipt_hash(&r);
+            r.signature = Some(signer.sign_hash(&r.receipt_hash));
+            r.signer_public_key = Some(signer.public_key_hex());
+            r.signer_key_id = signer.key_id().map(str::to_string);
+            r
+        })
+        .await
+        .expect("signed receipt insert");
+
+        let response = verify_receipt(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(rec.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["signature_verified"].as_bool(), Some(true));
+        assert_eq!(json["signer_key_id"].as_str(), Some("rotation-2026-06"));
+
+        // Also round-trips through a direct DB read, not just the verify response.
+        let fetched = db::get_action_receipt_by_id(&state.pool, &tenant_id, &rec.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.signer_key_id.as_deref(), Some("rotation-2026-06"));
+    }
+
+    /// A receipt signed with no `key_id` prefix (the pre-#1211 plain hex
+    /// secret format) must still verify and report `signer_key_id: null`,
+    /// not break or silently invent a value.
+    #[tokio::test]
+    async fn verify_reports_null_signer_key_id_when_absent() {
+        let (state, tenant_id, _agent_token) = setup_state("signed_receipt_no_key_id").await;
+        let signer = sign::ReceiptSigner::from_env_value(TEST_SIGNING_SECRET_HEX).unwrap();
+        assert_eq!(signer.key_id(), None);
+
+        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
+            let mut r = unsigned_receipt_template(&tenant_id);
+            r.prev_receipt_hash = prev;
+            r.receipt_hash = compute_receipt_hash(&r);
+            r.signature = Some(signer.sign_hash(&r.receipt_hash));
+            r.signer_public_key = Some(signer.public_key_hex());
+            r.signer_key_id = signer.key_id().map(str::to_string);
+            r
+        })
+        .await
+        .expect("signed receipt insert");
+
+        let response = verify_receipt(State(state), TenantId(tenant_id), Path(rec.id))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["signature_verified"].as_bool(), Some(true));
+        assert!(json["signer_key_id"].is_null());
+    }
+
     #[test]
     fn signing_does_not_perturb_receipt_hash() {
         // BYTE-PARITY GUARD: compute_receipt_hash must be identical whether or not
@@ -456,6 +519,7 @@ mod tests {
             canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         };
         let hash_unsigned = compute_receipt_hash(&unsigned);
@@ -468,6 +532,14 @@ mod tests {
         assert_eq!(
             hash_unsigned, hash_signed,
             "signing must not change the receipt hash (byte-parity moat)"
+        );
+
+        // #1211: populating signer_key_id on top must ALSO leave the hash unchanged.
+        unsigned.signer_key_id = Some("rotation-2026-06".to_string());
+        let hash_with_key_id = compute_receipt_hash(&unsigned);
+        assert_eq!(
+            hash_unsigned, hash_with_key_id,
+            "signer_key_id must not change the receipt hash (byte-parity moat)"
         );
     }
 
@@ -508,6 +580,7 @@ mod tests {
                         canon_version: CANON_VERSION.to_string(),
                         signature: None,
                         signer_public_key: None,
+                        signer_key_id: None,
                         created_at: Utc::now(),
                     };
                     rec.receipt_hash = compute_receipt_hash(&rec);
@@ -657,6 +730,7 @@ mod tests {
                     canon_version: CANON_VERSION.to_string(),
                     signature: None,
                     signer_public_key: None,
+                    signer_key_id: None,
                     created_at: Utc::now(),
                 };
                 receipt.receipt_hash = compute_receipt_hash(&receipt);

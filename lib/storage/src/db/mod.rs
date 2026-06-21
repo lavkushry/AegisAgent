@@ -5,6 +5,7 @@ use std::str::FromStr;
 pub mod agents;
 pub mod approvals;
 pub mod decisions;
+pub mod leader;
 pub mod mcp;
 pub mod policies;
 pub mod receipts;
@@ -12,13 +13,15 @@ pub mod soc;
 pub mod tenant;
 pub mod webhooks;
 
-#[cfg(test)]
-pub(crate) mod test_utils;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
 
 // Re-exports
 pub use agents::*;
 pub use approvals::*;
 pub use decisions::*;
+pub use leader::*;
 pub use mcp::*;
 pub use policies::*;
 pub use receipts::*;
@@ -1161,6 +1164,17 @@ pub async fn backup_database_to(pool: &SqlitePool, dest_path: &str) -> Result<()
     Ok(())
 }
 
+/// Reclaim free space left behind by the audit-event archival (#0106) and
+/// approval-cleanup (#0105) jobs' `DELETE`s, and defragment the database
+/// file (#0061). Plain `VACUUM` rebuilds the whole file into a contiguous
+/// copy and requires no other connection hold a transaction open, so this
+/// is run on a periodic schedule (see `jobs::run_vacuum_job`) rather than on
+/// the request hot path. `VACUUM` takes no bind parameters in SQLite.
+pub async fn vacuum_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("VACUUM").execute(pool).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1221,6 +1235,72 @@ mod tests {
         assert!(result.is_err());
         // initial attempt + 3 retries = 4 total
         assert_eq!(attempts.load(Ordering::SeqCst), 4);
+    }
+
+    /// #1164 (TEST-004, AC #2): a pool with `max_connections(1)` whose only
+    /// connection is held open returns `Err(PoolTimedOut)` once
+    /// `acquire_timeout` elapses, rather than hanging indefinitely or
+    /// panicking. Wrapped in an outer `tokio::time::timeout` so the test
+    /// itself fails loudly (instead of hanging the suite) if that contract
+    /// is ever broken.
+    #[tokio::test]
+    async fn pool_acquire_times_out_gracefully_when_exhausted_not_panic() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        use std::time::Duration;
+
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/pool_exhausted_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let connection_options = sqlx::sqlite::SqliteConnectOptions::from_str(&db_url)
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(200))
+            .connect_with(connection_options)
+            .await
+            .unwrap();
+
+        // Hold the only connection open so the pool has zero capacity left.
+        let _held_connection = pool.acquire().await.unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query("SELECT 1").fetch_one(&pool),
+        )
+        .await
+        .expect("a second acquire must resolve (err or ok) well within 2s, not hang");
+
+        match result {
+            Err(sqlx::Error::PoolTimedOut) => {}
+            Err(e) => panic!("expected PoolTimedOut, got error: {e:?}"),
+            Ok(_) => panic!("expected PoolTimedOut, got Ok"),
+        }
+    }
+
+    /// #1164 (TEST-004, AC #3): opening a file that isn't a valid SQLite
+    /// database (simulating WAL/page corruption) returns a graceful `Err`
+    /// from `init_db` rather than panicking. The caller (`main()`) logs this
+    /// via `tracing::error!` before propagating, satisfying "detects and
+    /// logs error".
+    #[tokio::test]
+    async fn init_db_returns_error_not_panic_on_corrupted_database_file() {
+        std::fs::create_dir_all("target").unwrap();
+        let db_path = format!("target/corrupted_{}.db", Uuid::new_v4().simple());
+        // A real SQLite file starts with the 16-byte magic header
+        // "SQLite format 3\0". Garbage bytes here are reliably rejected by
+        // SQLite as "file is not a database" without needing to construct a
+        // byte-exact corrupted page layout.
+        std::fs::write(&db_path, b"not a sqlite database, just garbage bytes").unwrap();
+
+        let db_url = format!("sqlite://{}", db_path);
+        let result = init_db(&db_url).await;
+
+        assert!(result.is_err(), "expected init_db to return Err, got Ok");
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[tokio::test]

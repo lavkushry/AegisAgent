@@ -18,3 +18,7 @@ sha2 = { workspace = true }
 hmac = { workspace = true }
 async-trait = "0.1.89"
 hex = "=0.4.3"
+
+[features]
+default = []
+test-utils = []

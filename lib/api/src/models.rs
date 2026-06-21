@@ -761,6 +761,13 @@ pub struct ActionReceiptRecord {
     /// Lowercase-hex Ed25519 public key of the signer, so a third party can verify
     /// the `signature` without contacting the gateway. NULL when unsigned.
     pub signer_public_key: Option<String>,
+    /// Optional human-readable identifier for the key that produced `signature`
+    /// (#1211, parsed from an optional `"key_id:"` prefix on
+    /// `AEGIS_RECEIPT_SIGNING_KEY`) — audit/operator convenience only.
+    /// Verification never depends on this: `signer_public_key` is embedded
+    /// per-receipt, so receipts stay verifiable after the active key rotates.
+    #[serde(default)]
+    pub signer_key_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

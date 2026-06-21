@@ -41,6 +41,8 @@ pub use aegis_api::models;
 pub use aegis_common::metrics;
 
 // Binary-specific modules
+pub mod admission;
+pub mod error;
 pub mod gh_checks;
 pub mod gh_comment;
 pub mod graph;
@@ -48,3 +50,4 @@ pub mod grpc;
 pub mod jobs;
 pub mod routes;
 pub mod sign;
+pub mod splunk_export;

@@ -18,8 +18,10 @@ use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
+use gateway::admission;
 use gateway::audit_batch;
 use gateway::db;
+use gateway::error::StatusError;
 use gateway::events;
 use gateway::gh_checks;
 use gateway::gh_comment;
@@ -28,6 +30,7 @@ use gateway::metrics;
 use gateway::policy;
 use gateway::qdrant;
 use gateway::routes;
+use gateway::splunk_export;
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
@@ -201,9 +204,22 @@ fn panic_response(
         error!("handler panicked: {}", detail);
         state.metrics.inc_handler_panic();
 
-        let body = Json(json!({"error": "Internal server error"}));
-        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+        StatusError::internal("Internal server error").into_response()
     }
+}
+
+/// Error handler for the load-shed layer (#911): `tower::load_shed::LoadShedLayer`
+/// wraps `tower::limit::ConcurrencyLimitLayer`, so the only error this ever
+/// sees in practice is `tower::load_shed::error::Overloaded` once
+/// `AEGIS_MAX_CONCURRENT_REQUESTS` in-flight requests are already being
+/// served — converted to a structured `503` instead of axum's bare-string
+/// default. `BoxError` is intentionally treated as a catch-all "unavailable"
+/// rather than propagating the inner debug string, which could leak
+/// implementation details.
+async fn handle_overload_error(_err: tower::BoxError) -> impl IntoResponse {
+    StatusError::service_unavailable(
+        "Server is at capacity (AEGIS_MAX_CONCURRENT_REQUESTS); try again shortly",
+    )
 }
 
 /// GET /metrics — Prometheus text exposition of process-wide security counters.
@@ -225,6 +241,21 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
          # TYPE db_pool_connections_idle gauge\n\
          db_pool_connections_idle {idle}\n"
     ));
+    // #1286: Splunk HEC export connection health — advisory only, mirrors
+    // the pool gauges above (read directly from live process state, no
+    // separate sampling). Reports zero values when Splunk export is not
+    // configured at all, same as an export job that simply hasn't run yet.
+    let splunk_health = splunk_export::global_health();
+    body.push_str(&format!(
+        "# HELP splunk_hec_export_consecutive_failures Consecutive failed Splunk HEC batch dispatches\n\
+         # TYPE splunk_hec_export_consecutive_failures gauge\n\
+         splunk_hec_export_consecutive_failures {}\n\
+         # HELP splunk_hec_export_last_success_unix_secs Unix timestamp of the last successful Splunk HEC batch dispatch (0 if never)\n\
+         # TYPE splunk_hec_export_last_success_unix_secs gauge\n\
+         splunk_hec_export_last_success_unix_secs {}\n",
+        splunk_health.consecutive_failures(),
+        splunk_health.last_success_unix_secs(),
+    ));
     (
         StatusCode::OK,
         [(
@@ -233,6 +264,52 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
         )],
         body,
     )
+}
+
+/// First-call-wins approximation of process start, used only to compute the
+/// scheduler utilization ratio on `GET /debug/runtime` — a few milliseconds
+/// of skew between actual process start and the first request doesn't matter
+/// for a debug endpoint, and avoids threading a new field through every
+/// `AppState` construction site (14 across gateway/src, mostly test helpers)
+/// just for this one derived metric.
+static RUNTIME_METRICS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// GET /debug/runtime (#1160) — Tokio runtime introspection, mirroring
+/// Kubernetes' `/debug/pprof` convention for an in-process diagnostics
+/// endpoint. Bound only on the existing 127.0.0.1 listener; no new bind, no
+/// public exposure (same invariant as `/metrics`). Requires the
+/// `tokio_unstable` cfg (set repo-wide via `.cargo/config.toml`) for
+/// per-worker poll/busy-duration counters — `num_alive_tasks`/
+/// `global_queue_depth` alone are stable, but "total polls" and "scheduler
+/// utilization" are not derivable without it.
+async fn debug_runtime_handler() -> impl IntoResponse {
+    let start = *RUNTIME_METRICS_START.get_or_init(std::time::Instant::now);
+    let metrics = tokio::runtime::Handle::current().metrics();
+    let workers_count = metrics.num_workers();
+
+    let mut total_poll_count: u64 = 0;
+    let mut total_busy_duration = std::time::Duration::ZERO;
+    for worker in 0..workers_count {
+        total_poll_count += metrics.worker_poll_count(worker);
+        total_busy_duration += metrics.worker_total_busy_duration(worker);
+    }
+
+    let elapsed = start.elapsed();
+    let scheduler_utilization = if elapsed.is_zero() || workers_count == 0 {
+        0.0
+    } else {
+        (total_busy_duration.as_secs_f64() / (elapsed.as_secs_f64() * workers_count as f64))
+            .clamp(0.0, 1.0)
+    };
+
+    Json(json!({
+        "active_tasks_count": metrics.num_alive_tasks(),
+        "workers_count": workers_count,
+        "total_poll_count": total_poll_count,
+        "global_queue_depth": metrics.global_queue_depth(),
+        "scheduler_utilization": scheduler_utilization,
+        "uptime_secs": elapsed.as_secs_f64(),
+    }))
 }
 
 /// Middleware: propagate or generate X-Request-ID on every request/response.
@@ -297,10 +374,7 @@ async fn content_type_validation_middleware(
             && content_type.contains("application/x-www-form-urlencoded");
 
         if content_length > 0 && !content_type.contains("application/json") && !is_slack_callback {
-            return (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                Json(json!({"error": "Content-Type must be application/json"})),
-            )
+            return StatusError::unsupported_media_type("Content-Type must be application/json")
                 .into_response();
         }
     }
@@ -351,11 +425,7 @@ async fn etag_middleware(request: Request<Body>, next: Next) -> impl IntoRespons
     let bytes = match axum::body::to_bytes(body, ETAG_MAX_BODY_BYTES).await {
         Ok(bytes) => bytes,
         Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Internal server error"})),
-            )
-                .into_response();
+            return StatusError::internal("Internal server error").into_response();
         }
     };
 
@@ -900,9 +970,37 @@ fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
     Ok(key)
 }
 
+/// Self-healthcheck for the distroless runtime image (#1207): no shell, no
+/// `curl`, no package manager in `gcr.io/distroless/cc-debian12` — Docker's
+/// `HEALTHCHECK` directive instead execs this binary with `--healthcheck`,
+/// which GETs the already-running gateway's own `/livez` and exits 0/1.
+async fn check_liveness(bind_addr: &str) -> bool {
+    let url = format!("http://{bind_addr}/livez");
+    matches!(
+        reqwest::Client::new().get(&url).send().await,
+        Ok(resp) if resp.status().is_success()
+    )
+}
 #[tokio::main]
 #[allow(deprecated)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `--healthcheck` short-circuits before any of the normal startup (DB
+    // connect, migrations, tracing) — see `check_liveness` above. Not a
+    // security/identity decision (Semgrep's generic argv rule is about
+    // trusting argv[0] as a path/identity, which this isn't) — it only
+    // selects which of two equally-unprivileged code paths to run; the
+    // healthcheck path itself does nothing but GET its own /livez.
+    // nosemgrep: rust.lang.security.args.args
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        let bind_addr =
+            std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+        std::process::exit(if check_liveness(&bind_addr).await {
+            0
+        } else {
+            1
+        });
+    }
+
     // Initialize tracing with structured JSON logging and log redaction
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -920,7 +1018,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting AegisAgent Control Plane v{}...", VERSION);
 
-    // Validate JWT secret requirements
+    // Validate JWT secret requirements. AEGIS_JWT_SECRET may be a single
+    // secret or a comma-separated list (#1211: zero-downtime rotation — set
+    // "new_secret,old_secret" during a rotation window, drop the old entry
+    // once it's no longer needed); `jwt_secret_candidates` filters out
+    // empty/"default_secret" entries so only real keys count here.
     let jwt_required = std::env::var("AEGIS_JWT_REQUIRED")
         .map(|v| v == "true")
         .unwrap_or(false);
@@ -928,11 +1030,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let jwt_secret = std::env::var("AEGIS_JWT_SECRET").map_err(|_| {
             "AEGIS_JWT_SECRET environment variable must be set when AEGIS_JWT_REQUIRED is true."
         })?;
-        if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
+        if routes::jwt_secret_candidates(&jwt_secret).is_empty() {
             return Err("AEGIS_JWT_SECRET cannot be empty or 'default_secret' when AEGIS_JWT_REQUIRED is true.".into());
         }
     } else if let Ok(jwt_secret) = std::env::var("AEGIS_JWT_SECRET") {
-        if jwt_secret.trim().is_empty() || jwt_secret == "default_secret" {
+        if routes::jwt_secret_candidates(&jwt_secret).is_empty() {
             tracing::warn!("AEGIS_JWT_SECRET is set to an empty or default value ('default_secret'). JWT validation will be disabled for security.");
         }
     } else {
@@ -942,7 +1044,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Database setup (local SQLite file)
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://aegis.db".into());
     info!("Initializing SQLite database pool at: {} ...", db_url);
-    let pool = db::init_db(&db_url).await?;
+    // #1164 (TEST-004, AC #3): a corrupted/unreadable database file must be
+    // logged before the startup error propagates, not just silently bubble
+    // up via `?` — this is the only place `init_db`'s error is first seen.
+    let pool = db::init_db(&db_url).await.map_err(|e| {
+        tracing::error!("Failed to initialize database pool at {}: {:?}", db_url, e);
+        e
+    })?;
 
     // Load Cedar Policy engine from file
     let policy_path =
@@ -1065,8 +1173,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let audit_batch_abort_handle = audit_batch_handle.abort_handle();
 
+    // REL-003 (#1149): SQLite advisory-lock-based leader election so multiple
+    // gateway instances sharing one DB don't all run the maintenance jobs
+    // below concurrently. `is_leader` starts false (fail-safe: no instance
+    // runs maintenance work until the first election tick confirms it).
+    let is_leader = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let instance_id = Uuid::new_v4().to_string();
+    let leader_election_interval_secs: u64 = std::env::var("AEGIS_LEADER_ELECTION_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_LEADER_ELECTION_INTERVAL_SECS);
+    let leader_lease_secs: i64 = std::env::var("AEGIS_LEADER_LEASE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_LEADER_LEASE_SECS);
+    let leader_election_abort_handle = tokio::spawn(jobs::run_leader_election_loop(
+        pool.clone(),
+        instance_id,
+        is_leader.clone(),
+        leader_election_interval_secs,
+        chrono::Duration::seconds(leader_lease_secs),
+    ))
+    .abort_handle();
+
     // #0107: periodic receipt chain integrity check across all tenants. Any
     // broken link or hash mismatch is recorded as a critical SOC alert.
+    // Gated on is_leader (#1149) — see run_leader_election_loop above.
     let receipt_integrity_interval_secs: u64 =
         std::env::var("AEGIS_RECEIPT_INTEGRITY_INTERVAL_SECS")
             .ok()
@@ -1075,11 +1207,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let receipt_integrity_abort_handle = tokio::spawn(jobs::run_receipt_chain_integrity_job(
         pool.clone(),
         receipt_integrity_interval_secs,
+        is_leader.clone(),
     ))
     .abort_handle();
 
     // #0106: periodically archive old audit_events rows into
-    // audit_events_archive to keep the live table bounded.
+    // audit_events_archive to keep the live table bounded. Gated on
+    // is_leader (#1149).
     let audit_archival_interval_secs: u64 = std::env::var("AEGIS_AUDIT_ARCHIVAL_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1092,11 +1226,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool.clone(),
         audit_archival_interval_secs,
         audit_retention_days,
+        is_leader.clone(),
     ))
     .abort_handle();
 
     // #0105: periodically delete stale approvals (decided, or expired and
-    // never decided) to keep the approvals table bounded.
+    // never decided) to keep the approvals table bounded. Gated on is_leader
+    // (#1149).
     let approval_cleanup_interval_secs: u64 = std::env::var("AEGIS_APPROVAL_CLEANUP_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1109,6 +1245,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool.clone(),
         approval_cleanup_interval_secs,
         approval_retention_days,
+        is_leader.clone(),
+    ))
+    .abort_handle();
+
+    // #0061: periodically VACUUM the database to reclaim free space left
+    // behind by the audit-event archival and approval-cleanup jobs' deletes.
+    // Gated on is_leader (#1149).
+    let vacuum_interval_secs: u64 = std::env::var("AEGIS_VACUUM_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_VACUUM_INTERVAL_SECS);
+    let vacuum_abort_handle = tokio::spawn(jobs::run_vacuum_job(
+        pool.clone(),
+        vacuum_interval_secs,
+        is_leader.clone(),
     ))
     .abort_handle();
 
@@ -1126,23 +1277,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #1286: optional Splunk HTTP Event Collector export — only spawned when
+    // both AEGIS_SPLUNK_HEC_URL and AEGIS_SPLUNK_HEC_TOKEN are configured.
+    // Gated on is_leader like the other maintenance jobs above, since
+    // multiple gateway instances sharing one DB must not each forward the
+    // same events to Splunk redundantly.
+    let splunk_export_abort_handle = splunk_export::SplunkHecConfig::from_env().map(|config| {
+        info!(
+            "Splunk HEC export enabled (batch interval: {}s)",
+            config.batch_interval_secs
+        );
+        tokio::spawn(jobs::run_splunk_export_job(
+            pool.clone(),
+            config,
+            is_leader.clone(),
+        ))
+        .abort_handle()
+    });
+
     // #1152: zero-I/O liveness tracking for the fire-and-forget background
     // tasks above — `AbortHandle::is_finished()` reports whether a task
     // panicked and stopped running, surfaced on GET /readyz. `drain_handle`
     // and `audit_batch_handle` themselves stay owned by this function (they
     // are awaited further down during graceful shutdown); abort handles are
     // a non-owning, freely cloneable view that doesn't interfere with that.
-    let background_task_handles = vec![
+    let mut background_task_handles = vec![
         ("event_drain", drain_abort_handle),
         ("audit_batch_writer", audit_batch_abort_handle),
+        ("leader_election_loop", leader_election_abort_handle),
         (
             "receipt_chain_integrity_job",
             receipt_integrity_abort_handle,
         ),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
+        ("vacuum_job", vacuum_abort_handle),
         ("pool_health_sampler", pool_health_sampler_abort_handle),
     ];
+    if let Some(handle) = splunk_export_abort_handle {
+        background_task_handles.push(("splunk_export_job", handle));
+    }
 
     // Read configurable approval TTL from env (default 30 minutes = 1800 seconds)
     let approval_ttl_secs: i64 = std::env::var("AEGIS_APPROVAL_TTL_SECS")
@@ -1274,6 +1448,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("AEGIS_GITHUB_APP_TOKEN is not set. GitHub check runs are disabled.");
     }
 
+    // Optional pre-authorize admission webhook (#1143, API-004). When
+    // AEGIS_ADMISSION_WEBHOOK_URL is unset, every /v1/authorize call is
+    // unaffected — no extra network call at all.
+    let admission_webhook = admission::AdmissionWebhookClient::from_env().map(Arc::new);
+    if admission_webhook.is_none() {
+        info!("AEGIS_ADMISSION_WEBHOOK_URL is not set. Admission webhooks are disabled.");
+    } else {
+        info!("AEGIS_ADMISSION_WEBHOOK_URL set: admission webhooks are enabled.");
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         pool,
@@ -1295,6 +1479,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         github_pr_commenter,
         github_checks_client,
         qdrant_exporter,
+        admission_webhook,
         background_task_handles,
     });
 
@@ -1311,6 +1496,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(30);
     info!("Global request timeout: {}s", request_timeout_secs);
+
+    // #911: max in-flight requests before the load-shed layer rejects new
+    // ones with 503 instead of queuing them indefinitely.
+    let max_concurrent_requests: usize = std::env::var("AEGIS_MAX_CONCURRENT_REQUESTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    info!(
+        "Max concurrent requests (load shed): {}",
+        max_concurrent_requests
+    );
 
     // Construct Axum router with middleware layers
     let app = Router::new()
@@ -1336,10 +1532,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/startupz", get(startupz_handler))
         // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
         .route("/metrics", get(metrics_handler))
+        // Tokio runtime introspection (#1160, 127.0.0.1 only — same listener)
+        .route("/debug/runtime", get(debug_runtime_handler))
         .with_state(state.clone())
         // Middleware stack (outermost = first to run):
         // 1. CORS — must be outermost to handle preflight OPTIONS
         .layer(cors_layer())
+        // 1b. Load shed (#911): once AEGIS_MAX_CONCURRENT_REQUESTS requests
+        // are already in flight, reject new ones immediately with 503
+        // instead of queuing (which would just push back the same overload
+        // onto the timeout layer further in). LoadShedLayer only sheds when
+        // wrapped around something that signals backpressure via
+        // `poll_ready` — that's the concurrency limiter's job here; axum
+        // handlers alone are always immediately `Ready`. HandleErrorLayer
+        // converts the resulting `Overloaded` error into a structured 503
+        // (`Router::layer` requires `Error = Infallible`).
+        //
+        // Deliberately `GlobalConcurrencyLimitLayer`, not the plain
+        // `ServiceBuilder::concurrency_limit()` convenience (which wraps
+        // `ConcurrencyLimitLayer`): for a `.route(path, get(handler))`
+        // registration, axum defers the handler->Route conversion and
+        // re-applies every outer `.layer()` fresh on each incoming request
+        // (`axum::boxed::Map::call_with_state`) rather than once at startup.
+        // `ConcurrencyLimitLayer::layer()` allocates a brand new
+        // `Arc<Semaphore>` on every call, so under that path every request
+        // would see its own private, always-free permit and shedding would
+        // never trigger. `GlobalConcurrencyLimitLayer` stores one
+        // `Arc<Semaphore>` on the layer value itself and only ever clones
+        // that `Arc` from `.layer()`, so the permit count stays shared no
+        // matter how many times axum reapplies the layer.
+        .layer(
+            tower::ServiceBuilder::new()
+                .layer(axum::error_handling::HandleErrorLayer::new(
+                    handle_overload_error,
+                ))
+                .load_shed()
+                .layer(tower::limit::GlobalConcurrencyLimitLayer::new(
+                    max_concurrent_requests,
+                )),
+        )
         // 2. X-Request-ID propagation — correlates logs across SDK ↔ gateway
         .layer(middleware::from_fn(request_id_middleware))
         // 3. Content-Type validation — rejects non-JSON bodies on POST/PUT/PATCH
@@ -1404,7 +1635,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         tracing::error!("Failed to parse AEGIS_GRPC_BIND_ADDR: {}", grpc_bind_addr);
     }
-
     if let Some((cert_path, key_path)) = use_tls {
         info!("Loading TLS certificates from {} ...", cert_path);
         let certs = load_certs(&cert_path)?;
@@ -1784,6 +2014,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1809,7 +2040,7 @@ mod tests {
             .await
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["error"], "Internal server error");
+        assert_eq!(parsed["message"], "Internal server error");
 
         assert_eq!(
             state
@@ -1823,6 +2054,76 @@ mod tests {
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(format!("{}-shm", db_path));
         let _ = std::fs::remove_file(format!("{}-wal", db_path));
+    }
+
+    /// #911: a load-shed layer wrapping a concurrency-limit-of-1 must reject
+    /// a second concurrent request with `503` instead of queuing it behind
+    /// the first — proving the layer combination actually sheds load rather
+    /// than (as `LoadShedLayer` alone would, with no concurrency limiter to
+    /// signal backpressure) being a silent no-op. Deliberately registers the
+    /// route via `get(handler)` (not `route_service`) and applies the layer
+    /// via `Router::layer` — that combination is what defeats a plain
+    /// `ConcurrencyLimitLayer` (axum re-applies outer layers fresh per
+    /// request for handler-based routes, see the comment on the production
+    /// middleware stack), so this guards the specific regression rather than
+    /// just the generic tower mechanism.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn load_shed_layer_returns_503_when_concurrency_limit_exceeded() {
+        use axum::routing::get;
+        use std::sync::Arc as StdArc;
+        use tokio::sync::Notify;
+        use tower::ServiceExt;
+
+        // Signaled by the handler itself once it has actually started
+        // running, so the test never has to guess a sleep duration long
+        // enough for the spawned first request to reach the handler.
+        let entered = StdArc::new(Notify::new());
+        let entered_clone = entered.clone();
+
+        let app = Router::new()
+            .route(
+                "/slow",
+                get(move || {
+                    let entered = entered_clone.clone();
+                    async move {
+                        entered.notify_one();
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        "slow"
+                    }
+                }),
+            )
+            .layer(
+                tower::ServiceBuilder::new()
+                    .layer(axum::error_handling::HandleErrorLayer::new(
+                        handle_overload_error,
+                    ))
+                    .load_shed()
+                    .layer(tower::limit::GlobalConcurrencyLimitLayer::new(1)),
+            );
+
+        let first = app
+            .clone()
+            .oneshot(Request::builder().uri("/slow").body(Body::empty()).unwrap());
+        let first_handle = tokio::spawn(first);
+
+        // Wait for the handler to actually start (and thus hold the sole
+        // concurrency permit) before firing the second request.
+        entered.notified().await;
+
+        let second_response = app
+            .clone()
+            .oneshot(Request::builder().uri("/slow").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(second_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(second_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["reason"], "ServiceUnavailable");
+
+        let first_response = first_handle.await.unwrap().unwrap();
+        assert_eq!(first_response.status(), StatusCode::OK);
     }
 
     /// Builds a tiny router with a fixed-body GET route, a fixed-body POST
@@ -2000,6 +2301,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -2014,6 +2316,7 @@ mod tests {
             .route("/readyz", get(readyz_handler))
             .route("/startupz", get(startupz_handler))
             .route("/metrics", get(metrics_handler))
+            .route("/debug/runtime", get(debug_runtime_handler))
             .with_state(state.clone());
 
         (app, state, db_url)
@@ -2048,6 +2351,102 @@ mod tests {
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["status"], "alive");
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1160: `GET /debug/runtime` returns Tokio runtime introspection
+    /// stats. Asserts presence and basic sanity of the fields the issue's
+    /// acceptance criteria call out (active task count, total polls,
+    /// scheduler utilization) rather than exact values, since those are
+    /// inherently nondeterministic under `#[tokio::test]`.
+    #[tokio::test]
+    async fn debug_runtime_returns_tokio_metrics() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("debug_runtime").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/debug/runtime")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed["active_tasks_count"].as_u64().is_some());
+        assert!(parsed["workers_count"].as_u64().unwrap() >= 1);
+        assert!(parsed["total_poll_count"].as_u64().is_some());
+        assert!(parsed["global_queue_depth"].as_u64().is_some());
+        let utilization = parsed["scheduler_utilization"].as_f64().unwrap();
+        assert!((0.0..=1.0).contains(&utilization));
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1164 (TEST-004, AC #1): when the DB pool is closed (simulating the
+    /// database becoming unreachable), `/health` must degrade to `503` with
+    /// `db: "down"` instead of panicking or hanging — fail-closed, matching
+    /// the readiness-probe contract Kubernetes relies on.
+    #[tokio::test]
+    async fn health_returns_503_when_db_pool_closed() {
+        use tower::ServiceExt;
+
+        let (app, state, db_url) = probe_test_app("health_pool_closed").await;
+        state.pool.close().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "unhealthy");
+        assert_eq!(parsed["db"], "down");
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1207: `check_liveness` is what `--healthcheck` calls inside the
+    /// distroless runtime image (no curl/shell available there) — verifies
+    /// it correctly reports true against a real listening gateway's
+    /// `/livez` and false against an address nothing is listening on.
+    #[tokio::test]
+    async fn check_liveness_true_when_livez_reachable_false_otherwise() {
+        let (app, _state, db_url) = probe_test_app("check_liveness").await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        assert!(check_liveness(&addr.to_string()).await);
+
+        // Bind-then-drop to get a port nothing is listening on, rather than
+        // guessing an arbitrary "probably free" port number.
+        let closed_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_addr = closed_listener.local_addr().unwrap();
+        drop(closed_listener);
+        assert!(!check_liveness(&closed_addr.to_string()).await);
 
         cleanup_db(&db_url);
     }
@@ -2226,6 +2625,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: vec![("doomed_task", doomed_abort_handle)],
         });
 
@@ -2279,6 +2679,34 @@ mod tests {
         assert!(text.contains("# TYPE db_pool_connections_active gauge"));
         assert!(text.contains("# TYPE db_pool_connections_idle gauge"));
         assert!(text.contains("# TYPE db_pool_acquire_wait_seconds gauge"));
+
+        cleanup_db(&db_url);
+    }
+
+    /// #1286: `GET /metrics` exposes Splunk HEC export connection-health
+    /// gauges even when Splunk export isn't configured (advisory zero values).
+    #[tokio::test]
+    async fn metrics_endpoint_exposes_splunk_hec_export_gauges() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("metrics_splunk_gauges").await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("# TYPE splunk_hec_export_consecutive_failures gauge"));
+        assert!(text.contains("# TYPE splunk_hec_export_last_success_unix_secs gauge"));
 
         cleanup_db(&db_url);
     }

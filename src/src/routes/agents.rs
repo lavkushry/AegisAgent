@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -44,11 +45,7 @@ pub async fn register_agent(
                 Ok(id) => id,
                 Err(e) => {
                     error!("Stored agent id is not a valid UUID: {:?}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": "Database error"})),
-                    )
-                        .into_response();
+                    return StatusError::internal("Database error").into_response();
                 }
             };
 
@@ -60,11 +57,7 @@ pub async fn register_agent(
                 db::rotate_agent_token(&state.pool, &tenant_id, &agent.id, &new_token).await
             {
                 error!("Failed to rotate agent token: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
 
             return (
@@ -79,11 +72,7 @@ pub async fn register_agent(
         }
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
         _ => {}
     }
@@ -127,11 +116,7 @@ pub async fn register_agent(
 
     if let Err(e) = db::insert_agent(&state.pool, &agent_record).await {
         error!("Failed to insert agent: {:?}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Database insert failed"})),
-        )
-            .into_response();
+        return StatusError::internal("Database insert failed").into_response();
     }
 
     // Log audit event
@@ -188,11 +173,7 @@ pub async fn list_agents(
         Ok(agents) => (StatusCode::OK, Json(agents)).into_response(),
         Err(e) => {
             error!("Failed to list agents: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -210,11 +191,7 @@ pub async fn get_agent_risk_scoreboard(
         Ok(board) => board,
         Err(e) => {
             error!("Failed to get agent risk scoreboard: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -249,18 +226,10 @@ pub async fn get_agent(
 ) -> impl IntoResponse {
     match db::get_agent_by_id(&state.pool, &tenant_id, &id).await {
         Ok(Some(agent)) => (StatusCode::OK, Json(agent)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Agent not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("Failed to get agent detail: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -273,20 +242,10 @@ pub async fn patch_agent(
 ) -> impl IntoResponse {
     let mut agent = match db::get_agent_by_id(&state.pool, &tenant_id, &id).await {
         Ok(Some(a)) => a,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Agent not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("Failed to lookup agent for patch: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -325,11 +284,7 @@ pub async fn patch_agent(
         Ok(_) => (StatusCode::OK, Json(agent)).into_response(),
         Err(e) => {
             error!("Failed to update agent: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -356,18 +311,10 @@ pub async fn delete_agent(
             )
                 .into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Agent not found"})),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("Failed to delete agent: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -394,11 +341,7 @@ pub async fn register_tool(
         Ok(id) => id,
         Err(e) => {
             error!("Failed to register skill: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to register skill"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to register skill").into_response();
         }
     };
 
@@ -418,11 +361,7 @@ pub async fn register_tool(
         .await
         {
             error!("Failed to register skill action: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to register skill action"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to register skill action").into_response();
         }
         // #899: a (re-)registration may tighten this action's settings, so drop any
         // cached entry — the next authorize re-reads the fresh row (fail-closed).
@@ -546,19 +485,11 @@ pub async fn rotate_agent_token(
     match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Agent not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("Agent not found").into_response();
         }
         Err(e) => {
             error!("Failed to look up agent {}: {:?}", agent_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     }
 
@@ -574,11 +505,7 @@ pub async fn rotate_agent_token(
             .into_response(),
         Err(e) => {
             error!("Failed to rotate token for agent {}: {:?}", agent_id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -609,19 +536,11 @@ pub async fn report_leaked_agent_token(
     match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Agent not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("Agent not found").into_response();
         }
         Err(e) => {
             error!("Failed to look up agent {}: {:?}", agent_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     }
 
@@ -630,11 +549,7 @@ pub async fn report_leaked_agent_token(
         Ok(None) => true,
         Err(e) => {
             error!("Failed to look up tenant {}: {:?}", tenant_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -647,11 +562,7 @@ pub async fn report_leaked_agent_token(
                     "Failed to auto-rotate token for agent {}: {:?}",
                     agent_id, e
                 );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         }
     } else {
@@ -749,18 +660,10 @@ pub(crate) async fn set_agent_operational_status(
             )
                 .into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Agent not found" })),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("Failed to update agent status: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Database error" })),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -778,20 +681,10 @@ pub async fn grant_agent_tool_permission(
     Json(payload): Json<crate::models::GrantToolPermissionRequest>,
 ) -> impl IntoResponse {
     match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Agent not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("DB error checking agent for permission grant: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
         Ok(Some(_)) => {}
     }
@@ -810,11 +703,7 @@ pub async fn grant_agent_tool_permission(
             .into_response(),
         Err(e) => {
             error!("Failed to grant tool permission: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -829,20 +718,10 @@ pub async fn list_agent_tool_permissions(
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
     match db::get_agent_by_id(&state.pool, &tenant_id, &agent_id).await {
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Agent not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("Agent not found").into_response(),
         Err(e) => {
             error!("DB error checking agent for permission list: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
         Ok(Some(_)) => {}
     }
@@ -851,11 +730,7 @@ pub async fn list_agent_tool_permissions(
         Ok(perms) => (StatusCode::OK, Json(json!({ "permissions": perms }))).into_response(),
         Err(e) => {
             error!("Failed to list tool permissions: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -890,18 +765,10 @@ pub async fn revoke_agent_tool_permission(
             )
                 .into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Permission not found"})),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("Permission not found").into_response(),
         Err(e) => {
             error!("Failed to revoke tool permission: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }

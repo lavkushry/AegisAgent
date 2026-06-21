@@ -24,6 +24,7 @@ use tracing::warn;
 /// hex-encoded secret (provisioned out-of-band — never logged, never hashed).
 pub struct ReceiptSigner {
     signing_key: SigningKey,
+    key_id: Option<String>,
 }
 
 impl ReceiptSigner {
@@ -38,7 +39,25 @@ impl ReceiptSigner {
             .map_err(|_| format!("secret key must be {SECRET_KEY_LENGTH} bytes"))?;
         Ok(Self {
             signing_key: SigningKey::from_bytes(&arr),
+            key_id: None,
         })
+    }
+
+    /// Parse `AEGIS_RECEIPT_SIGNING_KEY`'s value, which may optionally carry a
+    /// human-readable key identifier as a `"key_id:hex_secret"` prefix (#1211 —
+    /// rotation audit trail; verification itself never depends on this, since
+    /// `signer_public_key` is embedded per-receipt). Splits on the FIRST `:`
+    /// only, which is unambiguous since hex secrets never contain one. Plain
+    /// `"hex_secret"` with no colon stays backward-compatible (`key_id: None`).
+    pub fn from_env_value(value: &str) -> Result<Self, String> {
+        match value.trim().split_once(':') {
+            Some((key_id, hex_secret)) if !key_id.is_empty() => {
+                let mut signer = Self::from_secret_hex(hex_secret)?;
+                signer.key_id = Some(key_id.to_string());
+                Ok(signer)
+            }
+            _ => Self::from_secret_hex(value),
+        }
     }
 
     /// Sign the UTF-8 bytes of a `receipt_hash` string; return a lowercase-hex
@@ -52,6 +71,13 @@ impl ReceiptSigner {
     /// receipt so a third party can verify without contacting the gateway.
     pub fn public_key_hex(&self) -> String {
         hex::encode(self.signing_key.verifying_key().to_bytes())
+    }
+
+    /// The optional human-readable key identifier parsed from a `"key_id:"`
+    /// prefix on `AEGIS_RECEIPT_SIGNING_KEY` (#1211). `None` when no prefix was
+    /// supplied.
+    pub fn key_id(&self) -> Option<&str> {
+        self.key_id.as_deref()
     }
 }
 
@@ -97,7 +123,7 @@ pub fn global_signer() -> Option<&'static ReceiptSigner> {
     GLOBAL_SIGNER
         .get_or_init(|| match std::env::var("AEGIS_RECEIPT_SIGNING_KEY") {
             Ok(hex_key) if !hex_key.trim().is_empty() => {
-                match ReceiptSigner::from_secret_hex(&hex_key) {
+                match ReceiptSigner::from_env_value(&hex_key) {
                     Ok(signer) => Some(signer),
                     Err(e) => {
                         warn!(
@@ -188,5 +214,35 @@ mod tests {
         assert!(ReceiptSigner::from_secret_hex("aabb").is_err()); // wrong length
                                                                   // The fixed test secret IS valid 32-byte hex.
         assert!(ReceiptSigner::from_secret_hex(TEST_SECRET_HEX).is_ok());
+    }
+
+    #[test]
+    fn from_env_value_without_prefix_has_no_key_id() {
+        let signer = ReceiptSigner::from_env_value(TEST_SECRET_HEX).unwrap();
+        assert_eq!(signer.key_id(), None);
+    }
+
+    #[test]
+    fn from_env_value_parses_key_id_prefix() {
+        let value = format!("v2:{TEST_SECRET_HEX}");
+        let signer = ReceiptSigner::from_env_value(&value).unwrap();
+        assert_eq!(signer.key_id(), Some("v2"));
+        // The key material itself is unaffected by the prefix.
+        let plain = ReceiptSigner::from_secret_hex(TEST_SECRET_HEX).unwrap();
+        assert_eq!(signer.public_key_hex(), plain.public_key_hex());
+    }
+
+    #[test]
+    fn from_env_value_rejects_bad_hex_after_key_id_prefix() {
+        assert!(ReceiptSigner::from_env_value("v2:not-hex").is_err());
+    }
+
+    #[test]
+    fn from_env_value_treats_leading_colon_as_no_key_id() {
+        // An empty key_id before the colon falls back to plain hex parsing,
+        // so a bare value that happens to start with ":" doesn't silently
+        // succeed with a nonsensical empty key_id.
+        let value = format!(":{TEST_SECRET_HEX}");
+        assert!(ReceiptSigner::from_env_value(&value).is_err());
     }
 }

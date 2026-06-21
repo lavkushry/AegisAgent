@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -108,15 +109,9 @@ pub async fn authorize_action(
     let started_at = std::time::Instant::now();
 
     // Parse JSON from raw bytes — keeping bytes for HMAC signature verification (#1403).
-    let payload: AuthorizeRequest = match serde_json::from_slice(&body) {
+    let mut payload: AuthorizeRequest = match serde_json::from_slice(&body) {
         Ok(p) => p,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Invalid JSON body"})),
-            )
-                .into_response()
-        }
+        Err(_) => return StatusError::bad_request("Invalid JSON body").into_response(),
     };
 
     // #1281: dry-run / simulation mode — evaluate but persist nothing. Read
@@ -141,41 +136,24 @@ pub async fn authorize_action(
     // Resolve agent from Bearer agent_token
     let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
         Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing agent token"})),
-            )
-                .into_response()
-        }
+        _ => return StatusError::unauthorized("Missing agent token").into_response(),
     };
 
     let runtime_tenant_id = match get_runtime_tenant_from_headers(&headers) {
         Some(tid) => tid,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Missing X-Aegis-Tenant-ID or X-Tenant-ID header"})),
-            )
+            return StatusError::bad_request("Missing X-Aegis-Tenant-ID or X-Tenant-ID header")
                 .into_response()
         }
     };
     let agent = match db::get_agent_by_token(&state.pool, &runtime_tenant_id, auth_header).await {
         Ok(Some(a)) => a,
         Ok(None) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid or quarantined agent token"})),
-            )
-                .into_response()
+            return StatusError::unauthorized("Invalid or quarantined agent token").into_response()
         }
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -197,11 +175,7 @@ pub async fn authorize_action(
                     "Request signature missing for agent={} tenant={}",
                     agent_id, tenant_id
                 );
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "missing_request_signature"})),
-                )
-                    .into_response();
+                return StatusError::unauthorized("missing_request_signature").into_response();
             }
         };
         if !db::verify_request_signature(signing_key, &body, &sig_header) {
@@ -209,11 +183,7 @@ pub async fn authorize_action(
                 "Request signature invalid for agent={} tenant={}",
                 agent_id, tenant_id
             );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "invalid_request_signature"})),
-            )
-                .into_response();
+            return StatusError::unauthorized("invalid_request_signature").into_response();
         }
     }
 
@@ -272,11 +242,7 @@ pub async fn authorize_action(
         Ok(_) => {} // None = unrestricted; Some(true) = permitted
         Err(e) => {
             error!("DB error checking tool permissions: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     }
 
@@ -301,13 +267,8 @@ pub async fn authorize_action(
                     "Replay protection: rejecting request with stale timestamp for tenant={} agent={} (age={}s)",
                     tenant_id, agent_id, age_secs
                 );
-                return (
-                    StatusCode::CONFLICT,
-                    Json(json!({
-                        "error": "Request timestamp outside the acceptable window",
-                        "reason": "replay_timestamp_expired"
-                    })),
-                )
+                return StatusError::conflict("Request timestamp outside the acceptable window")
+                    .with_details(serde_json::json!({"reason": "replay_timestamp_expired"}))
                     .into_response();
             }
         }
@@ -324,13 +285,8 @@ pub async fn authorize_action(
                 "Replay protection: rejecting duplicate nonce for tenant={} agent={}",
                 tenant_id, agent_id
             );
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": "Duplicate nonce: possible replay attack",
-                    "reason": "replay_nonce_reused"
-                })),
-            )
+            return StatusError::conflict("Duplicate nonce: possible replay attack")
+                .with_details(serde_json::json!({"reason": "replay_nonce_reused"}))
                 .into_response();
         }
     }
@@ -358,11 +314,7 @@ pub async fn authorize_action(
                 Ok(None) => {}
                 Err(e) => {
                     error!("Idempotency lookup failed: {:?}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": "Database error"})),
-                    )
-                        .into_response();
+                    return StatusError::internal("Database error").into_response();
                 }
             }
         }
@@ -374,20 +326,13 @@ pub async fn authorize_action(
 
     // Check Rate Limiting (TASK-0012)
     if !state.rate_limiter.check_rate_limit(&tenant_id) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({"error": "Too many requests. Rate limit exceeded."})),
-        )
+        return StatusError::too_many_requests("Too many requests. Rate limit exceeded.")
             .into_response();
     }
 
     // Check Request Quota (TASK-0013)
     if !state.quota_manager.check_quota(&tenant_id) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({"error": "Request quota exceeded."})),
-        )
-            .into_response();
+        return StatusError::too_many_requests("Request quota exceeded.").into_response();
     }
 
     // Check if the agent is frozen or revoked (TASK-0014)
@@ -429,11 +374,7 @@ pub async fn authorize_action(
             Ok(score) => score,
             Err(e) => {
                 error!("Failed to write agent-frozen denial: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         };
 
@@ -454,6 +395,75 @@ pub async fn authorize_action(
             }),
         )
             .into_response();
+    }
+
+    // Admission webhook (#1143, API-004): optional pre-authorize hook letting
+    // an external system pass, reject, or mutate this request before any
+    // risk/MCP/Cedar evaluation below. Fully opt-in — `state.admission_webhook`
+    // is `None` (no extra network call) unless AEGIS_ADMISSION_WEBHOOK_URL is set.
+    if let Some(ref webhook) = state.admission_webhook {
+        match webhook.call(&payload).await {
+            crate::admission::AdmissionOutcome::Pass => {}
+            crate::admission::AdmissionOutcome::Mutate(new_params) => {
+                payload.tool_call.parameters = new_params;
+            }
+            crate::admission::AdmissionOutcome::Reject(reason) => {
+                let decision_id = Uuid::new_v4();
+                let matched_policies = vec!["admission_webhook_reject".to_string()];
+                let risk_score = 100;
+                let risk_level = "critical".to_string();
+
+                let audit_event_type = if mcp_server_key_from_tool(&normalized_tool).is_some() {
+                    "mcp_tool_called"
+                } else {
+                    "tool_call_intercepted"
+                };
+
+                let composite_risk_score = match write_decision_and_audit(
+                    &state.pool,
+                    &state.events,
+                    &state.metrics,
+                    &state.audit_batch,
+                    &tenant_id,
+                    &agent_id,
+                    &payload,
+                    decision_id,
+                    "deny",
+                    risk_score,
+                    &reason,
+                    &matched_policies,
+                    audit_event_type,
+                    started_at,
+                    dry_run,
+                )
+                .await
+                {
+                    Ok(score) => score,
+                    Err(e) => {
+                        error!("Failed to write admission-webhook denial: {:?}", e);
+                        return StatusError::internal("Database error").into_response();
+                    }
+                };
+
+                return (
+                    StatusCode::OK,
+                    Json(AuthorizeResponse {
+                        decision_id,
+                        decision: "deny".to_string(),
+                        risk_score,
+                        risk_level,
+                        composite_risk_score,
+                        reason,
+                        matched_policies,
+                        approval: None,
+                        redacted_fields: vec![],
+                        root_trust_level: root_trust_level.clone(),
+                        dry_run,
+                    }),
+                )
+                    .into_response();
+            }
+        }
     }
 
     // Map risk levels based on DB registered action, falling back to policy engine defaults.
@@ -492,11 +502,7 @@ pub async fn authorize_action(
             Ok(None) => None,
             Err(e) => {
                 error!("Failed to look up registered action: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         },
     };
@@ -550,11 +556,7 @@ pub async fn authorize_action(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write quarantined-server denial: {:?}", e);
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({"error": "Database error"})),
-                        )
-                            .into_response();
+                        return StatusError::internal("Database error").into_response();
                     }
                 };
 
@@ -579,11 +581,7 @@ pub async fn authorize_action(
             Ok(_) => {}
             Err(e) => {
                 error!("Failed to look up MCP server status: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         }
 
@@ -624,11 +622,7 @@ pub async fn authorize_action(
                         Ok(score) => score,
                         Err(e) => {
                             error!("Failed to write MCP denial decision: {:?}", e);
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({"error": "Database error"})),
-                            )
-                                .into_response();
+                            return StatusError::internal("Database error").into_response();
                         }
                     };
 
@@ -683,11 +677,7 @@ pub async fn authorize_action(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write unknown MCP denial decision: {:?}", e);
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({"error": "Database error"})),
-                        )
-                            .into_response();
+                        return StatusError::internal("Database error").into_response();
                     }
                 };
 
@@ -711,11 +701,7 @@ pub async fn authorize_action(
             }
             Err(e) => {
                 error!("Failed to look up MCP tool: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::internal("Database error").into_response();
             }
         }
     }
@@ -750,10 +736,7 @@ pub async fn authorize_action(
             Ok(d) => d,
             Err(e) => {
                 error!("Policy engine error: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": format!("Policy engine failure: {}", e)})),
-                )
+                return StatusError::internal(format!("Policy engine failure: {}", e))
                     .into_response();
             }
         };
@@ -1021,11 +1004,7 @@ pub async fn authorize_action(
 
         if let Err(e) = db::insert_approval(&state.pool, &approval_record).await {
             error!("Failed to create approval request: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to create approval request"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to create approval request").into_response();
         }
 
         // Write audit event for approval creation
@@ -1318,12 +1297,92 @@ mod tests {
         let (mut parts_invalid, _) = request_invalid.into_parts();
         let res = TenantId::from_request_parts(&mut parts_invalid, &state).await;
         assert!(res.is_err());
-        let (status, _) = res.unwrap_err();
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let err = res.unwrap_err();
+        assert_eq!(err.code, StatusCode::UNAUTHORIZED.as_u16());
 
         // Clean up env vars
         std::env::remove_var("AEGIS_JWT_SECRET");
         std::env::remove_var("AEGIS_JWT_REQUIRED");
+    }
+
+    /// #1211: zero-downtime JWT secret rotation. With
+    /// `AEGIS_JWT_SECRET="new_secret,old_secret"`, a token signed under
+    /// EITHER secret must still validate — the rotation window where some
+    /// already-issued tokens were signed with the old secret while new ones
+    /// use the new one.
+    #[tokio::test]
+    async fn test_jwt_secret_rotation_accepts_old_and_new_secrets() {
+        let _guard = get_env_lock().lock().await;
+        use jsonwebtoken::{encode, EncodingKey, Header};
+
+        let new_secret = "new_secret_after_rotation";
+        let old_secret = "old_secret_before_rotation";
+        std::env::set_var("AEGIS_JWT_SECRET", format!("{new_secret},{old_secret}"));
+
+        let claims = Claims {
+            sub: "tenant_rotation".to_string(),
+            tenant_id: Some("tenant_rotation".to_string()),
+            exp: (Utc::now() + Duration::hours(1)).timestamp() as usize,
+        };
+
+        let token_new = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(new_secret.as_bytes()),
+        )
+        .unwrap();
+        let token_old = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(old_secret.as_bytes()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_jwt(&token_new),
+            Some("tenant_rotation".to_string()),
+            "a token signed with the new (first-listed) secret must validate"
+        );
+        assert_eq!(
+            validate_jwt(&token_old),
+            Some("tenant_rotation".to_string()),
+            "a token signed with the old (still-listed) secret must keep validating during the rotation window"
+        );
+
+        // Once the old secret is dropped from the list, its tokens stop validating.
+        std::env::set_var("AEGIS_JWT_SECRET", new_secret);
+        assert_eq!(
+            validate_jwt(&token_old),
+            None,
+            "removing the old secret from the list must reject tokens signed with it"
+        );
+        assert_eq!(
+            validate_jwt(&token_new),
+            Some("tenant_rotation".to_string())
+        );
+
+        std::env::remove_var("AEGIS_JWT_SECRET");
+    }
+
+    #[test]
+    fn jwt_secret_candidates_filters_blank_and_default_entries() {
+        assert_eq!(
+            jwt_secret_candidates("secret_a,secret_b"),
+            vec!["secret_a".to_string(), "secret_b".to_string()]
+        );
+        assert_eq!(
+            jwt_secret_candidates(" secret_a , secret_b "),
+            vec!["secret_a".to_string(), "secret_b".to_string()],
+            "entries are trimmed"
+        );
+        assert_eq!(
+            jwt_secret_candidates("secret_a,,default_secret,secret_b"),
+            vec!["secret_a".to_string(), "secret_b".to_string()],
+            "blank and 'default_secret' entries are dropped"
+        );
+        assert!(jwt_secret_candidates("").is_empty());
+        assert!(jwt_secret_candidates("default_secret").is_empty());
+        assert!(jwt_secret_candidates(" , , ").is_empty());
     }
 
     #[tokio::test]
@@ -1357,10 +1416,10 @@ mod tests {
         let (mut parts_bad, _) = request_bad_heuristic.into_parts();
         let res_bad = TenantId::from_request_parts(&mut parts_bad, &state).await;
         assert!(res_bad.is_err());
-        let (status, body) = res_bad.unwrap_err();
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let err_bad = res_bad.unwrap_err();
+        assert_eq!(err_bad.code, StatusCode::UNAUTHORIZED.as_u16());
         assert_eq!(
-            body["error"],
+            err_bad.message,
             "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"
         );
 
@@ -1399,8 +1458,182 @@ mod tests {
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(
-            json["error"],
+            json["message"],
             "Missing X-Aegis-Tenant-ID or X-Tenant-ID header"
+        );
+    }
+
+    /// #1164 (TEST-004, AC #1): when the DB pool is closed (simulating the
+    /// database becoming unreachable), `authorize_action`'s agent-token
+    /// lookup must surface as a graceful `500` (`StatusError::internal`)
+    /// rather than panicking — fail-closed, and the caller gets a clean
+    /// error instead of a crashed worker.
+    #[tokio::test]
+    async fn authorize_action_returns_500_when_db_pool_closed() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_pool_closed").await;
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let headers = agent_headers(&agent_token, &tenant_id);
+
+        state.pool.close().await;
+
+        let response = authorize_action(
+            State(state),
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["message"], "Database error");
+    }
+
+    /// #1143 (API-004, AC #3): a `reject` admission-webhook decision denies
+    /// the request before it ever reaches Cedar, carrying the webhook's own
+    /// reason through to the response.
+    #[tokio::test]
+    async fn authorize_action_denied_by_admission_webhook_reject() {
+        use axum::{routing::post, Json as AxumJson, Router};
+
+        let app = Router::new().route(
+            "/admit",
+            post(|| async {
+                AxumJson(serde_json::json!({
+                    "decision": "reject",
+                    "reason": "blocked by external policy"
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (state, tenant_id, agent_token) = setup_state_with_admission_webhook(
+            "admission_reject",
+            &format!("http://{addr}/admit"),
+            true,
+        )
+        .await;
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        assert_eq!(response.decision, "deny");
+        assert_eq!(response.reason, "blocked by external policy");
+        assert_eq!(response.matched_policies, vec!["admission_webhook_reject"]);
+    }
+
+    /// #1143 (API-004, AC #3): a `mutate` admission-webhook decision replaces
+    /// `tool_call.parameters` before Cedar evaluation — proven here by
+    /// mutating `base_branch` from a non-"main" value to `"main"`, which
+    /// flips the production-GitHub-merge policy from allow to
+    /// `require_approval` (see `policies.cedar`). The bound approval's
+    /// enriched `tool_call` (#1326) is asserted to carry the *mutated*
+    /// parameters, not the agent's original ones.
+    #[tokio::test]
+    async fn authorize_action_mutated_by_admission_webhook_before_cedar() {
+        use axum::{routing::post, Json as AxumJson, Router};
+
+        let app = Router::new().route(
+            "/admit",
+            post(|| async {
+                AxumJson(serde_json::json!({
+                    "decision": "mutate",
+                    "parameters": {"base_branch": "main"}
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (state, tenant_id, agent_token) = setup_state_with_admission_webhook(
+            "admission_mutate",
+            &format!("http://{addr}/admit"),
+            true,
+        )
+        .await;
+
+        let mut request = mcp_authorize_request("github", "merge_pull_request");
+        request.tool_call.mutates_state = true;
+        request.tool_call.resource = Some("repo/example/pull/42".to_string());
+        request.tool_call.parameters = serde_json::json!({"base_branch": "develop"});
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(
+            response.decision, "require_approval",
+            "mutated base_branch=main must trigger the production-merge approval policy"
+        );
+
+        let approval = response.approval.expect("approval info should be present");
+        let status_response = get_approval(
+            State(state),
+            TenantId(tenant_id.to_string()),
+            Path(approval.approval_id),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(status_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            status_json["tool_call"]["parameters"]["base_branch"], "main",
+            "the bound approval must carry the mutated parameters, not the agent's original ones"
+        );
+    }
+
+    /// #1143 (API-004): a `pass` admission-webhook decision must leave the
+    /// decision byte-for-byte identical to the same request with no
+    /// admission webhook configured at all — proving `pass` is a true no-op.
+    #[tokio::test]
+    async fn authorize_action_unaffected_by_admission_webhook_pass() {
+        use axum::{routing::post, Json as AxumJson, Router};
+
+        let app = Router::new().route(
+            "/admit",
+            post(|| async { AxumJson(serde_json::json!({"decision": "pass"})) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (state_with_webhook, tenant_id, agent_token) = setup_state_with_admission_webhook(
+            "admission_pass",
+            &format!("http://{addr}/admit"),
+            true,
+        )
+        .await;
+        let response_with_webhook = call_authorize(
+            state_with_webhook,
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+
+        let (state_baseline, tenant_id_baseline, agent_token_baseline) =
+            setup_state("admission_pass_baseline").await;
+        let response_baseline = call_authorize(
+            state_baseline,
+            &tenant_id_baseline,
+            &agent_token_baseline,
+            mcp_authorize_request("filesystem", "read_file"),
+        )
+        .await;
+
+        assert_eq!(response_with_webhook.decision, response_baseline.decision);
+        assert_eq!(
+            response_with_webhook.risk_score,
+            response_baseline.risk_score
         );
     }
 
@@ -1469,6 +1702,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1520,6 +1754,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -3056,7 +3291,7 @@ mod tests {
 
         let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["reason"], "replay_nonce_reused");
+        assert_eq!(parsed["details"]["reason"], "replay_nonce_reused");
     }
 
     /// #1306 AC #3: a request with `nonce` set and a `timestamp` more than 5
@@ -3081,7 +3316,7 @@ mod tests {
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["reason"], "replay_timestamp_expired");
+        assert_eq!(parsed["details"]["reason"], "replay_timestamp_expired");
     }
 
     /// #1306: two requests with different nonces (both fresh timestamps) are
@@ -3183,7 +3418,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["error"], "missing_request_signature");
+        assert_eq!(v["message"], "missing_request_signature");
     }
 
     #[tokio::test]
@@ -3206,7 +3441,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["error"], "invalid_request_signature");
+        assert_eq!(v["message"], "invalid_request_signature");
     }
 
     #[tokio::test]
@@ -3233,7 +3468,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["error"], "invalid_request_signature");
+        assert_eq!(v["message"], "invalid_request_signature");
     }
 
     #[tokio::test]
@@ -5078,7 +5313,7 @@ mod tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "Tenant 'tenant_nonexistent_xyz' not found");
+        assert_eq!(json["message"], "Tenant 'tenant_nonexistent_xyz' not found");
     }
 
     /// #1167: 100 tenants are created concurrently, each with its own agent,
@@ -5670,6 +5905,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -5862,6 +6098,7 @@ mod tests {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 

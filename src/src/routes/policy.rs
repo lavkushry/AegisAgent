@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -93,11 +94,7 @@ pub async fn list_policies(
         Ok(policies) => (StatusCode::OK, Json(policies)).into_response(),
         Err(e) => {
             error!("Failed to list policies: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -109,11 +106,7 @@ pub async fn create_policy(
 ) -> impl IntoResponse {
     // Validate Cedar compilation
     if let Err(e) = cedar_policy::PolicySet::from_str(&payload.body) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("Cedar compilation error: {}", e)})),
-        )
-            .into_response();
+        return StatusError::bad_request(format!("Cedar compilation error: {}", e)).into_response();
     }
 
     let policy_id = Uuid::new_v4().to_string();
@@ -151,11 +144,7 @@ pub async fn create_policy(
         }
         Err(e) => {
             error!("Failed to create policy: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -168,20 +157,10 @@ pub async fn update_policy(
 ) -> impl IntoResponse {
     let mut record = match db::get_policy_by_id(&state.pool, &tenant_id, &id).await {
         Ok(Some(p)) => p,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Policy not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("Policy not found").into_response(),
         Err(e) => {
             error!("Failed to lookup policy for update: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -207,10 +186,7 @@ pub async fn update_policy(
     if let Some(body) = payload.body {
         // Validate Cedar compilation
         if let Err(e) = cedar_policy::PolicySet::from_str(&body) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("Cedar compilation error: {}", e)})),
-            )
+            return StatusError::bad_request(format!("Cedar compilation error: {}", e))
                 .into_response();
         }
         if body != record.body {
@@ -262,11 +238,7 @@ pub async fn update_policy(
         }
         Err(e) => {
             error!("Failed to update policy: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -287,20 +259,10 @@ pub async fn rollback_policy(
 ) -> impl IntoResponse {
     let mut record = match db::get_policy_by_id(&state.pool, &tenant_id, &id).await {
         Ok(Some(p)) => p,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Policy not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("Policy not found").into_response(),
         Err(e) => {
             error!("Failed to lookup policy for rollback: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -308,22 +270,14 @@ pub async fn rollback_policy(
         Ok(v) => v,
         Err(e) => {
             error!("Failed to list policy versions for rollback: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
     let previous_version = match versions.into_iter().next() {
         Some(v) => v,
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "No previous version to roll back to"})),
-            )
-                .into_response()
+            return StatusError::not_found("No previous version to roll back to").into_response()
         }
     };
 
@@ -401,11 +355,7 @@ pub async fn rollback_policy(
         }
         Err(e) => {
             error!("Failed to roll back policy: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -421,11 +371,7 @@ pub async fn delete_policy(
         Ok(p) => p,
         Err(e) => {
             error!("Failed to lookup policy for delete: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -454,18 +400,10 @@ pub async fn delete_policy(
             )
                 .into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Policy not found"})),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("Policy not found").into_response(),
         Err(e) => {
             error!("Failed to delete policy: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -486,11 +424,7 @@ pub async fn list_policy_audit_log(
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(e) => {
             error!("Failed to list policy audit log: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -558,11 +492,7 @@ pub async fn reload_global_policies(
         }
         Err(e) => {
             error!("Failed to reload global policy file: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Failed to reload file: {}", e)})),
-            )
-                .into_response()
+            StatusError::internal(format!("Failed to reload file: {}", e)).into_response()
         }
     }
 }
@@ -1003,7 +933,7 @@ mod tests {
             .await
             .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["error"].as_str().is_some());
+        assert!(json["message"].as_str().is_some());
     }
 
     /// #1302: rolling back a nonexistent policy id returns 404, fail-closed.

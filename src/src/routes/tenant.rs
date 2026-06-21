@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -39,11 +40,7 @@ pub async fn get_tenant_risk_weights(
         Ok(weights) => (StatusCode::OK, Json(weights)).into_response(),
         Err(e) => {
             error!("Failed to get tenant risk weights: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -59,11 +56,7 @@ pub async fn put_tenant_risk_weights(
         Ok(_) => (StatusCode::OK, Json(weights)).into_response(),
         Err(e) => {
             error!("Failed to upsert tenant risk weights: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -78,11 +71,7 @@ pub async fn get_tenant_risk_escalation_config(
         Ok(config) => (StatusCode::OK, Json(config)).into_response(),
         Err(e) => {
             error!("Failed to get tenant risk escalation config: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -97,21 +86,14 @@ pub async fn put_tenant_risk_escalation_config(
     Json(config): Json<RiskEscalationConfig>,
 ) -> impl IntoResponse {
     if config.denial_threshold < 1 || config.window_minutes < 1 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "denial_threshold and window_minutes must each be >= 1"})),
-        )
+        return StatusError::bad_request("denial_threshold and window_minutes must each be >= 1")
             .into_response();
     }
     match db::upsert_risk_escalation_config(&state.pool, &tenant_id, &config).await {
         Ok(_) => (StatusCode::OK, Json(config)).into_response(),
         Err(e) => {
             error!("Failed to upsert tenant risk escalation config: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -128,11 +110,7 @@ pub async fn create_api_key(
         Ok((id, key)) => (StatusCode::CREATED, Json(json!({"id": id, "key": key}))).into_response(),
         Err(e) => {
             error!("Failed to create API key: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -147,11 +125,7 @@ pub async fn list_api_keys(
         Ok(keys) => (StatusCode::OK, Json(keys)).into_response(),
         Err(e) => {
             error!("Failed to list API keys: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -164,18 +138,10 @@ pub async fn revoke_api_key(
 ) -> impl IntoResponse {
     match db::revoke_api_key(&state.pool, &tenant_id, &id).await {
         Ok(true) => (StatusCode::OK, Json(json!({"message": "API key revoked"}))).into_response(),
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "API key not found"})),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("API key not found").into_response(),
         Err(e) => {
             error!("Failed to revoke API key: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -186,27 +152,15 @@ pub async fn get_tenant(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if tenant_id != id {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Tenant not found"})),
-        )
-            .into_response();
+        return StatusError::not_found("Tenant not found").into_response();
     }
 
     match db::get_tenant_by_id(&state.pool, &tenant_id).await {
         Ok(Some(tenant)) => (StatusCode::OK, Json(tenant)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Tenant not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("Tenant not found").into_response(),
         Err(e) => {
             error!("Failed to get tenant: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -231,8 +185,8 @@ pub struct EvidencePackParams {
 ///   range, row counts, and the canonicalization scheme.
 /// - `receipts.jsonl` — date-filtered `action_receipts` (one JSON object per
 ///   line). Receipts may carry an optional Ed25519 `signature` /
-///   `signer_public_key` — non-repudiation evidence (SOC 2 / EU AI Act
-///   Art. 14).
+///   `signer_public_key` (plus an optional human-readable `signer_key_id`,
+///   #1211) — non-repudiation evidence (SOC 2 / EU AI Act Art. 14).
 /// - `audit_events.jsonl` — date-filtered `audit_events`.
 /// - `policies.json` — the tenant's *current* policy set (not date-filtered;
 ///   documented in `manifest.json`).
@@ -250,10 +204,7 @@ pub async fn get_evidence_pack(
     let from = match params.from.as_deref().map(DateTime::parse_from_rfc3339) {
         Some(Ok(dt)) => Some(dt.with_timezone(&Utc)),
         Some(Err(e)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("invalid 'from' timestamp: {e}")})),
-            )
+            return StatusError::bad_request(format!("invalid 'from' timestamp: {e}"))
                 .into_response();
         }
         None => None,
@@ -261,10 +212,7 @@ pub async fn get_evidence_pack(
     let to = match params.to.as_deref().map(DateTime::parse_from_rfc3339) {
         Some(Ok(dt)) => Some(dt.with_timezone(&Utc)),
         Some(Err(e)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("invalid 'to' timestamp: {e}")})),
-            )
+            return StatusError::bad_request(format!("invalid 'to' timestamp: {e}"))
                 .into_response();
         }
         None => None,
@@ -275,11 +223,7 @@ pub async fn get_evidence_pack(
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load receipts for evidence pack: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
     let audit_events = match db::get_audit_events_in_range(&state.pool, &tenant_id, from, to).await
@@ -287,44 +231,28 @@ pub async fn get_evidence_pack(
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load audit events for evidence pack: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
     let approvals = match db::list_approvals_in_range(&state.pool, &tenant_id, from, to).await {
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load approvals for evidence pack: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
     let incidents = match db::list_soc_incidents_in_range(&state.pool, &tenant_id, from, to).await {
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load incidents for evidence pack: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
     let policies = match db::list_policies(&state.pool, &tenant_id).await {
         Ok(rows) => rows,
         Err(e) => {
             error!("Failed to load policies for evidence pack: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -358,11 +286,7 @@ pub async fn get_evidence_pack(
         Ok(bytes) => bytes,
         Err(e) => {
             error!("Failed to build evidence pack zip: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to build evidence pack"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to build evidence pack").into_response();
         }
     };
 
@@ -453,22 +377,14 @@ pub async fn export_tenant(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if tenant_id != id {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Tenant not found"})),
-        )
-            .into_response();
+        return StatusError::not_found("Tenant not found").into_response();
     }
 
     match db::export_tenant_data(&state.pool, &tenant_id).await {
         Ok(export) => (StatusCode::OK, Json(export)).into_response(),
         Err(e) => {
             error!("Failed to export tenant data: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -483,22 +399,14 @@ pub async fn delete_tenant(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if tenant_id != id {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Tenant not found"})),
-        )
-            .into_response();
+        return StatusError::not_found("Tenant not found").into_response();
     }
 
     match db::delete_tenant_data(&state.pool, &tenant_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             error!("Failed to delete tenant data: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -509,19 +417,11 @@ pub async fn create_tenant(
 ) -> impl IntoResponse {
     match db::get_tenant_by_id(&state.pool, &payload.id).await {
         Ok(Some(_)) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({"error": "Tenant already exists"})),
-            )
-                .into_response();
+            return StatusError::conflict("Tenant already exists").into_response();
         }
         Err(e) => {
             error!("Database error checking tenant existence: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
         _ => {}
     }
@@ -540,11 +440,7 @@ pub async fn create_tenant(
         }
         Err(e) => {
             error!("Failed to register tenant: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -557,11 +453,7 @@ pub async fn get_tenant_stats(
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
         Err(e) => {
             error!("Failed to get tenant stats: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -575,11 +467,7 @@ pub async fn get_db_stats(State(state): State<Arc<AppState>>) -> impl IntoRespon
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
         Err(e) => {
             error!("Failed to get db stats: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -598,21 +486,16 @@ pub async fn create_db_backup(
         || filename.file_name().map(|f| f.to_owned()) != Some(filename.as_os_str().to_owned())
         || payload.filename.contains("..")
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "filename must be a bare filename with no path separators"})),
+        return StatusError::bad_request(
+            "filename must be a bare filename with no path separators",
         )
-            .into_response();
+        .into_response();
     }
 
     let backup_dir = std::env::var("AEGIS_BACKUP_DIR").unwrap_or_else(|_| "backups".to_string());
     if let Err(e) = std::fs::create_dir_all(&backup_dir) {
         error!("Failed to create backup directory: {:?}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Failed to create backup directory"})),
-        )
-            .into_response();
+        return StatusError::internal("Failed to create backup directory").into_response();
     }
 
     let dest_path = std::path::Path::new(&backup_dir).join(&payload.filename);
@@ -620,11 +503,7 @@ pub async fn create_db_backup(
 
     // VACUUM INTO refuses to write to an already-existing file.
     if dest_path.exists() {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "Backup file already exists"})),
-        )
-            .into_response();
+        return StatusError::conflict("Backup file already exists").into_response();
     }
 
     match db::backup_database_to(&state.pool, &dest_path_str).await {
@@ -643,11 +522,7 @@ pub async fn create_db_backup(
         }
         Err(e) => {
             error!("Failed to create db backup: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }

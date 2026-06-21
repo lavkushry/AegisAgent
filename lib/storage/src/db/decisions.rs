@@ -1,7 +1,7 @@
 use super::SOC_MAX_LIMIT;
 use aegis_api::models::*;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use sqlx::{FromRow, Row, SqlitePool};
 
 /// #1298 (Compliance Evidence Pack): tenant-scoped `audit_events`, optionally
 /// bounded by a `[from, to]` `created_at` window. Distinct from
@@ -321,6 +321,52 @@ pub async fn list_decisions_by_run_id(
     .bind(SOC_MAX_LIMIT)
     .fetch_all(pool)
     .await
+}
+
+/// #1286: highest `rowid` currently in `decisions` for `tenant_id` — used to
+/// seed a forward-watch cursor at "everything from now on" rather than
+/// replaying full history. Mirrors [`super::soc::max_soc_alert_rowid`].
+pub async fn max_decision_rowid(pool: &SqlitePool, tenant_id: &str) -> Result<i64, sqlx::Error> {
+    let (max_rowid,): (Option<i64>,) =
+        sqlx::query_as("SELECT MAX(rowid) FROM decisions WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(max_rowid.unwrap_or(0))
+}
+
+/// #1286: forward-watch sibling of [`list_decisions_cursor`], mirroring
+/// [`super::soc::list_soc_alerts_since`]'s shape — returns decisions with
+/// `rowid > since_rowid`, oldest-first, capped at `SOC_WATCH_BATCH_LIMIT`,
+/// alongside the highest `rowid` seen in the batch (the caller's next
+/// `since_rowid`). Used by the Splunk HEC export job to poll for newly
+/// authorized decisions to forward.
+pub async fn list_decisions_since(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    since_rowid: i64,
+) -> Result<Vec<(DecisionRecord, i64)>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
+         FROM decisions
+         WHERE tenant_id = ?
+           AND rowid > ?
+         ORDER BY rowid ASC
+         LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(since_rowid)
+    .bind(super::SOC_WATCH_BATCH_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            let record = DecisionRecord::from_row(row)?;
+            let rowid: i64 = row.try_get("rowid")?;
+            Ok((record, rowid))
+        })
+        .collect()
 }
 
 /// #1272: the `decision_id` an audit event was linked to (#1301), tenant-scoped.
@@ -1090,5 +1136,61 @@ mod tests {
                 .await
                 .unwrap();
         assert!(no_match.is_empty());
+    }
+
+    /// #1286: the Splunk HEC export job's forward-watch query — only
+    /// decisions with `rowid > since_rowid` come back, oldest-first, and
+    /// tenant isolation holds (mirrors
+    /// `list_soc_alerts_since_returns_only_newer_rows_ascending`).
+    #[tokio::test]
+    async fn list_decisions_since_returns_only_newer_rows_ascending_and_is_tenant_scoped() {
+        let pool = setup_pool("decisions_since").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_a"))
+            .await
+            .unwrap();
+        let watch_start = max_decision_rowid(&pool, "tenant_a").await.unwrap();
+        assert_eq!(watch_start, 1);
+
+        // Nothing new yet.
+        let none_yet = list_decisions_since(&pool, "tenant_a", watch_start)
+            .await
+            .unwrap();
+        assert!(none_yet.is_empty());
+
+        insert_decision(&pool, &graph_perf_decision("dec_2", "tenant_a"))
+            .await
+            .unwrap();
+        insert_decision(&pool, &graph_perf_decision("dec_cross_tenant", "tenant_b"))
+            .await
+            .unwrap();
+        insert_decision(&pool, &graph_perf_decision("dec_3", "tenant_a"))
+            .await
+            .unwrap();
+
+        let new_decisions = list_decisions_since(&pool, "tenant_a", watch_start)
+            .await
+            .unwrap();
+        assert_eq!(
+            new_decisions.len(),
+            2,
+            "tenant_b's decision must not appear in tenant_a's watch"
+        );
+        assert_eq!(new_decisions[0].0.id, "dec_2");
+        assert_eq!(new_decisions[1].0.id, "dec_3");
+        assert!(new_decisions[1].1 > new_decisions[0].1);
     }
 }

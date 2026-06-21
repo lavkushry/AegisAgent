@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -476,6 +477,13 @@ pub struct AppState {
     pub github_checks_client: Option<std::sync::Arc<crate::gh_checks::GhChecksClient>>,
     /// Optional Qdrant exporter for semantic audit log vector indexing.
     pub qdrant_exporter: Option<Arc<crate::qdrant::QdrantExporter>>,
+    /// Optional pre-authorize admission webhook (#1143, API-004). When
+    /// `Some`, every `/v1/authorize` call is sent to the configured
+    /// `AEGIS_ADMISSION_WEBHOOK_URL` before Cedar evaluation, which may pass,
+    /// reject, or mutate the request's `tool_call.parameters`. `None` (the
+    /// default) makes `/v1/authorize` byte-for-byte unchanged from
+    /// pre-#1143 behavior — no extra network call at all.
+    pub admission_webhook: Option<Arc<crate::admission::AdmissionWebhookClient>>,
     /// Abort handles for fire-and-forget background tasks (event drain,
     /// audit-batch writer, periodic jobs) (#1152). `AbortHandle::is_finished()`
     /// is a zero-I/O signal that a task panicked and permanently stopped
@@ -495,16 +503,35 @@ struct Claims {
     exp: usize,
 }
 
+/// Splits `AEGIS_JWT_SECRET` on `,` for zero-downtime rotation (#1211): during
+/// a rotation window, operators set the value to `"new_secret,old_secret"` so
+/// tokens signed with either are still accepted, then drop the old entry once
+/// every outstanding token has expired or been reissued. A bare single-secret
+/// value (the pre-#1211 format) is just a one-element list, so this stays
+/// backward-compatible. Filters out empty/`"default_secret"` entries so a
+/// stray trailing comma or the documented disable-sentinel doesn't become a
+/// silently-accepted decoding key.
+/// `pub` (not `pub(crate)`) so `main.rs`'s binary target — a separate crate
+/// from this lib, per `lib.rs`'s doc comment — can reuse the same filtering
+/// logic for its startup JWT-secret validation instead of duplicating it.
+pub fn jwt_secret_candidates(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "default_secret")
+        .map(str::to_string)
+        .collect()
+}
+
 pub(crate) fn validate_jwt(token: &str) -> Option<String> {
-    let secret = std::env::var("AEGIS_JWT_SECRET").ok()?;
-    if secret.trim().is_empty() || secret == "default_secret" {
-        return None;
-    }
-    let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+    let raw_secret = std::env::var("AEGIS_JWT_SECRET").ok()?;
+    let candidates = jwt_secret_candidates(&raw_secret);
     let validation = jsonwebtoken::Validation::default();
-    jsonwebtoken::decode::<Claims>(token, &key, &validation)
-        .map(|data| data.claims.tenant_id.unwrap_or(data.claims.sub))
-        .ok()
+    candidates.iter().find_map(|secret| {
+        let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+        jsonwebtoken::decode::<Claims>(token, &key, &validation)
+            .map(|data| data.claims.tenant_id.unwrap_or(data.claims.sub))
+            .ok()
+    })
 }
 
 // Extractor helper to get tenant_id from Bearer token
@@ -517,7 +544,7 @@ where
     S: Send + Sync,
     Arc<AppState>: axum::extract::FromRef<S>,
 {
-    type Rejection = (StatusCode, Json<serde_json::Value>);
+    type Rejection = StatusError;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
@@ -527,16 +554,10 @@ where
             .headers
             .get("Authorization")
             .and_then(|h| h.to_str().ok())
-            .ok_or((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Missing Authorization header"})),
-            ))?;
+            .ok_or(StatusError::unauthorized("Missing Authorization header"))?;
 
         if !auth_header.starts_with("Bearer ") {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Invalid Authorization format"})),
-            ));
+            return Err(StatusError::unauthorized("Invalid Authorization format"));
         }
 
         let token = &auth_header["Bearer ".len()..];
@@ -550,22 +571,14 @@ where
                 .map(|v| v == "true")
                 .unwrap_or(false)
             {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid or expired JWT token"})),
-                ));
+                return Err(StatusError::unauthorized("Invalid or expired JWT token"));
             }
 
             // Fallback to old heuristic
             if token.starts_with("tenant_") {
                 token.to_string()
             } else {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(
-                        json!({"error": "Invalid token. Bearer token must start with 'tenant_' when JWT is not required"}),
-                    ),
-                ));
+                return Err(StatusError::unauthorized("Invalid token. Bearer token must start with 'tenant_' when JWT is not required"));
             }
         };
 
@@ -574,16 +587,13 @@ where
 
         match db::get_tenant_by_id(&app_state.pool, &tenant_id).await {
             Ok(Some(_)) => Ok(TenantId(tenant_id)),
-            Ok(None) => Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": format!("Tenant '{}' not found", tenant_id)})),
-            )),
+            Ok(None) => Err(StatusError::not_found(format!(
+                "Tenant '{}' not found",
+                tenant_id
+            ))),
             Err(e) => {
                 error!("Database error checking tenant: {:?}", e);
-                Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error checking tenant"})),
-                ))
+                Err(StatusError::internal("Database error checking tenant"))
             }
         }
     }
@@ -793,7 +803,11 @@ pub(crate) fn receipt_body_value(rec: &ActionReceiptRecord) -> Value {
     })
 }
 
-pub(crate) fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
+/// `pub` (not `pub(crate)`) so `benches/receipt_hash_benchmark.rs` (#1165,
+/// TEST-005) can exercise the real receipt-hashing code path in-process,
+/// matching the established pattern from `benches/authorize_benchmark.rs`
+/// (TASK-1313)'s `lib.rs` re-export.
+pub fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
     sha256_hex(canonical_value_string(&receipt_body_value(rec)).as_bytes())
 }
 
@@ -964,15 +978,9 @@ pub(crate) fn parse_cursor(
 ) -> Result<Option<i64>, Box<axum::response::Response>> {
     match parse_filter(query, "cursor") {
         None => Ok(None),
-        Some(raw) => decode_cursor(&raw).map(Some).ok_or_else(|| {
-            Box::new(
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "Invalid cursor"})),
-                )
-                    .into_response(),
-            )
-        }),
+        Some(raw) => decode_cursor(&raw)
+            .map(Some)
+            .ok_or_else(|| Box::new(StatusError::bad_request("Invalid cursor").into_response())),
     }
 }
 
@@ -1091,6 +1099,7 @@ pub mod benchutil {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1327,6 +1336,57 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
+            background_task_handles: Vec::new(),
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `admission_webhook` set to a real [`crate::admission::AdmissionWebhookClient`]
+    /// pointed at `url`, for testing the #1143 pre-authorize hook end-to-end
+    /// through `authorize_action`.
+    pub(crate) async fn setup_state_with_admission_webhook(
+        test_name: &str,
+        url: &str,
+        fail_open: bool,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+            None,
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+            qdrant_exporter: None,
+            admission_webhook: Some(Arc::new(crate::admission::AdmissionWebhookClient::new(
+                url.to_string(),
+                5,
+                fail_open,
+            ))),
             background_task_handles: Vec::new(),
         });
 
@@ -1370,6 +1430,7 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1467,6 +1528,7 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1521,6 +1583,7 @@ pub(crate) mod test_helpers {
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
+            admission_webhook: None,
             background_task_handles: Vec::new(),
         });
 
@@ -1651,6 +1714,7 @@ pub(crate) mod test_helpers {
             canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         }
     }

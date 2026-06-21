@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
@@ -50,11 +51,7 @@ pub async fn register_mcp_server(
         Ok(id) => id,
         Err(e) => {
             error!("Failed to register MCP server: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -77,20 +74,10 @@ pub async fn discover_mcp_tools(
 ) -> impl IntoResponse {
     let server = match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(Some(server)) => server,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "MCP server not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to look up MCP server: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -110,11 +97,7 @@ pub async fn discover_mcp_tools(
         Ok(id) => id,
         Err(e) => {
             error!("Failed to register MCP skill manifest: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to register MCP skill manifest"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to register MCP skill manifest").into_response();
         }
     };
 
@@ -122,11 +105,7 @@ pub async fn discover_mcp_tools(
     for tool in &payload.tools {
         if let Err(e) = db::upsert_mcp_tool(&state.pool, &tenant_id, &server.id, tool).await {
             error!("Failed to upsert MCP tool manifest: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to register MCP tool manifest"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to register MCP tool manifest").into_response();
         }
 
         let default_decision = if tool.approval_required {
@@ -148,11 +127,7 @@ pub async fn discover_mcp_tools(
         .await
         {
             error!("Failed to upsert MCP skill action: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to register MCP skill action"})),
-            )
-                .into_response();
+            return StatusError::internal("Failed to register MCP skill action").into_response();
         }
         // #899: re-discovery may change this tool's settings — invalidate the cache.
         state.skill_cache.invalidate(&SkillActionCache::cache_key(
@@ -328,11 +303,7 @@ pub async fn discover_mcp_tools(
         Ok(tools) => tools,
         Err(e) => {
             error!("Failed to list MCP tools after discovery: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 
@@ -355,20 +326,10 @@ pub async fn get_mcp_tool_manifest(
 ) -> impl IntoResponse {
     match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(Some(_)) => {}
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "MCP server not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to look up MCP server: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     }
 
@@ -380,11 +341,7 @@ pub async fn get_mcp_tool_manifest(
             .into_response(),
         Err(e) => {
             error!("Failed to list MCP tools: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -400,20 +357,10 @@ pub async fn get_mcp_manifest_history(
 ) -> impl IntoResponse {
     match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(Some(_)) => {}
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "MCP server not found"})),
-            )
-                .into_response()
-        }
+        Ok(None) => return StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to look up MCP server: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     }
 
@@ -425,11 +372,7 @@ pub async fn get_mcp_manifest_history(
             .into_response(),
         Err(e) => {
             error!("Failed to list MCP manifest snapshots: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -495,18 +438,10 @@ async fn update_mcp_tool_status(
             )
                 .into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "MCP tool not found"})),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("MCP tool not found").into_response(),
         Err(e) => {
             error!("Failed to update MCP tool status: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -569,18 +504,10 @@ pub(crate) async fn update_mcp_server_quarantine(
             )
                 .into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "MCP server not found" })),
-        )
-            .into_response(),
+        Ok(false) => StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to update MCP server status: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Database error" })),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -596,11 +523,7 @@ pub async fn list_mcp_servers(
         Ok(servers) => (StatusCode::OK, Json(servers)).into_response(),
         Err(e) => {
             error!("Failed to list MCP servers: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -612,18 +535,10 @@ pub async fn get_mcp_server(
 ) -> impl IntoResponse {
     match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "MCP server not found"})),
-        )
-            .into_response(),
+        Ok(None) => StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to get MCP server: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -636,19 +551,11 @@ pub async fn update_mcp_server(
 ) -> impl IntoResponse {
     match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "MCP server not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("MCP server not found").into_response();
         }
         Err(e) => {
             error!("Database error getting MCP server: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
         _ => {}
     }
@@ -659,11 +566,7 @@ pub async fn update_mcp_server(
                 .await
         {
             error!("Failed to update MCP server inspection_enabled: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     }
 
@@ -683,27 +586,15 @@ pub async fn update_mcp_server(
     {
         Ok(true) => match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
             Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to fetch updated server"})),
-            )
-                .into_response(),
+            _ => StatusError::internal("Failed to fetch updated server").into_response(),
         },
         Ok(false) => match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
             Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
-            _ => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "MCP server not found"})),
-            )
-                .into_response(),
+            _ => StatusError::not_found("MCP server not found").into_response(),
         },
         Err(e) => {
             error!("Failed to update MCP server: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response()
+            StatusError::internal("Database error").into_response()
         }
     }
 }
@@ -747,19 +638,11 @@ pub async fn inspect_mcp_response(
     let server = match db::get_mcp_server_by_key(&state.pool, &tenant_id, &server_key).await {
         Ok(Some(server)) => server,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "MCP server not found"})),
-            )
-                .into_response();
+            return StatusError::not_found("MCP server not found").into_response();
         }
         Err(e) => {
             error!("Database error getting MCP server: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Database error"})),
-            )
-                .into_response();
+            return StatusError::internal("Database error").into_response();
         }
     };
 

@@ -28,6 +28,7 @@ pub(crate) fn apply_receipt_signature(receipt: &mut ActionReceiptRecord) {
     if let Some(signer) = sign::global_signer() {
         receipt.signature = Some(signer.sign_hash(&receipt.receipt_hash));
         receipt.signer_public_key = Some(signer.public_key_hex());
+        receipt.signer_key_id = signer.key_id().map(str::to_string);
     }
 }
 
@@ -67,6 +68,7 @@ pub(crate) async fn emit_action_receipt(
             canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         };
         // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
@@ -130,6 +132,7 @@ pub(crate) async fn emit_tamper_attempt_receipt(
             canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         };
         // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
