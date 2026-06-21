@@ -49,12 +49,35 @@ pub(crate) fn is_high_risk_for_audit(risk_level: &str, mutates_state: bool) -> b
     mutates_state || risk_level != "low"
 }
 
+/// #1513: read `tenant_id`'s composite-risk-score weights through the TTL
+/// cache, falling through to `db::get_risk_weights` on a miss (absent or
+/// stale entry) and repopulating the cache with the fresh result. Cache hits
+/// avoid a SQLite read on (effectively) every `/v1/authorize` call, since
+/// these weights only change via the rare, operator-driven
+/// `PUT /v1/tenants/risk-weights` (which calls `RiskWeightsCache::invalidate`).
+async fn get_cached_risk_weights(
+    pool: &sqlx::SqlitePool,
+    cache: &super::RiskWeightsCache,
+    tenant_id: &str,
+) -> crate::risk::RiskWeights {
+    let now = std::time::Instant::now();
+    if let Some(weights) = cache.get(tenant_id, now) {
+        return weights;
+    }
+    let weights = db::get_risk_weights(pool, tenant_id)
+        .await
+        .unwrap_or_default();
+    cache.insert(tenant_id, weights, now);
+    weights
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_decision_and_audit(
     pool: &sqlx::SqlitePool,
     events: &EventSink,
     metrics: &SecurityMetrics,
     audit_batch: &crate::audit_batch::AuditBatchSink,
+    risk_weight_cache: &super::RiskWeightsCache,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -69,11 +92,10 @@ pub(crate) async fn write_decision_and_audit(
 ) -> Result<i32, sqlx::Error> {
     // #1289: advisory composite risk score (Law 1 — never gates `decision`,
     // computed only for display/audit metadata). Per-tenant weight overrides
-    // fall back to env-configured defaults inside `db::get_risk_weights`.
+    // fall back to env-configured defaults inside `db::get_risk_weights`,
+    // read through the #1513 TTL cache to avoid a DB read on every call.
     let composite_risk_score = {
-        let weights = db::get_risk_weights(pool, tenant_id)
-            .await
-            .unwrap_or_default();
+        let weights = get_cached_risk_weights(pool, risk_weight_cache, tenant_id).await;
         let is_mcp_call =
             super::mcp_server_key_from_tool(&normalize_tool_identifier(&payload.tool_call.tool))
                 .is_some();

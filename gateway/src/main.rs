@@ -1404,6 +1404,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(10_000);
     let replay_nonce_cache = routes::ReplayNonceCache::new(replay_nonce_cache_capacity);
 
+    // #1513: TTL cache for per-tenant composite-risk-score weights, avoiding
+    // a SQLite read on (effectively) every `/v1/authorize` call for a value
+    // that only changes via the rare, operator-driven
+    // PUT /v1/tenants/risk-weights (which invalidates the relevant entry).
+    let risk_weight_cache_ttl_secs: u64 = std::env::var("AEGIS_RISK_WEIGHTS_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS);
+    let risk_weight_cache =
+        routes::RiskWeightsCache::new(std::time::Duration::from_secs(risk_weight_cache_ttl_secs));
+
     // Opt-in HMAC-SHA256 secret for verifying `X-Hub-Signature-256` on
     // POST /v1/ingest requests with source: "github_webhook" (#1339). When
     // unset, signature verification is skipped (pre-#1339 behavior).
@@ -1472,6 +1483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         approval_attempt_tracker,
         skill_cache,
         replay_nonce_cache,
+        risk_weight_cache,
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: audit_writer_unhealthy.clone(),
         audit_batch,
@@ -1992,6 +2004,9 @@ mod tests {
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
+            risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
+                routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
+            )),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2279,6 +2294,9 @@ mod tests {
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
+            risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
+                routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
+            )),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2603,6 +2621,9 @@ mod tests {
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
+            risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
+                routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
+            )),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
