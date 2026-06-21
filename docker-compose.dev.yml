@@ -1,0 +1,21 @@
+# #1203: local dev compose that auto-seeds demo data on `docker compose -f
+# docker-compose.dev.yml up`, instead of the bare empty-DB gateway the base
+# docker-compose.yml starts (which expects a separate manual
+# `bash scripts/seed-demo.sh` run, e.g. in CI's Docker Compose E2E job).
+#
+# Reuses the base file's gateway + init-data-dir services via `include:`
+# rather than duplicating them, and layers on a one-shot `seed-demo` service
+# that runs scripts/seed-demo-dev.sh once the gateway reports healthy.
+include:
+  - docker-compose.yml
+
+services:
+  seed-demo:
+    image: curlimages/curl:8.11.0
+    network_mode: host
+    depends_on:
+      gateway:
+        condition: service_healthy
+    volumes:
+      - ./scripts/seed-demo-dev.sh:/seed-demo-dev.sh:ro
+    entrypoint: ["sh", "/seed-demo-dev.sh"]
