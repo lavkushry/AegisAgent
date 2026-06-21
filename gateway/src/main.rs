@@ -1216,6 +1216,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #0061: periodically VACUUM the database to reclaim free space left
+    // behind by the audit-event archival and approval-cleanup jobs' deletes.
+    // Gated on is_leader (#1149).
+    let vacuum_interval_secs: u64 = std::env::var("AEGIS_VACUUM_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_VACUUM_INTERVAL_SECS);
+    let vacuum_abort_handle = tokio::spawn(jobs::run_vacuum_job(
+        pool.clone(),
+        vacuum_interval_secs,
+        is_leader.clone(),
+    ))
+    .abort_handle();
+
     // REL-004 (#1150): periodically sample DB connection-pool acquire
     // latency and log a warning when the pool is over 80% busy.
     let pool_health_sample_interval_secs: u64 =
@@ -1246,6 +1260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
+        ("vacuum_job", vacuum_abort_handle),
         ("pool_health_sampler", pool_health_sampler_abort_handle),
     ];
 

@@ -1163,6 +1163,17 @@ pub async fn backup_database_to(pool: &SqlitePool, dest_path: &str) -> Result<()
     Ok(())
 }
 
+/// Reclaim free space left behind by the audit-event archival (#0106) and
+/// approval-cleanup (#0105) jobs' `DELETE`s, and defragment the database
+/// file (#0061). Plain `VACUUM` rebuilds the whole file into a contiguous
+/// copy and requires no other connection hold a transaction open, so this
+/// is run on a periodic schedule (see `jobs::run_vacuum_job`) rather than on
+/// the request hot path. `VACUUM` takes no bind parameters in SQLite.
+pub async fn vacuum_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("VACUUM").execute(pool).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
