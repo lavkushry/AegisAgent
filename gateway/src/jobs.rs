@@ -179,6 +179,32 @@ pub async fn run_approval_cleanup_job(
     }
 }
 
+/// Default interval between database vacuum sweeps (#0061).
+pub const DEFAULT_VACUUM_INTERVAL_SECS: u64 = 86400;
+
+/// Run `db::vacuum_database` on a fixed interval until the process exits,
+/// reclaiming free space left behind by the audit-event archival (#0106) and
+/// approval-cleanup (#0105) jobs' deletes (#0061). Intended to be
+/// `tokio::spawn`ed once at startup. `is_leader` gates the work — see
+/// `run_receipt_chain_integrity_job` — since a full-file `VACUUM` running
+/// concurrently from multiple instances sharing one DB would be wasteful and
+/// lock-contentious.
+pub async fn run_vacuum_job(pool: SqlitePool, interval_secs: u64, is_leader: Arc<AtomicBool>) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("vacuum job: standby (not leader)");
+            continue;
+        }
+        let start = std::time::Instant::now();
+        match db::vacuum_database(&pool).await {
+            Ok(()) => info!("database vacuum completed in {:?}", start.elapsed()),
+            Err(e) => error!("database vacuum job failed: {:?}", e),
+        }
+    }
+}
+
 /// Default interval between DB connection-pool health samples (REL-004, #1150).
 pub const DEFAULT_POOL_HEALTH_SAMPLE_INTERVAL_SECS: u64 = 30;
 
@@ -482,6 +508,117 @@ mod tests {
         assert_eq!(
             archived.0, 0,
             "leader instance must archive the old row once leadership is held"
+        );
+
+        handle.abort();
+    }
+
+    /// Inserts and then deletes `count` audit_events rows with a sizable
+    /// `event_json` payload each, leaving behind free (but un-reclaimed)
+    /// pages for `db::vacuum_database`/`run_vacuum_job` to measurably shrink.
+    async fn churn_audit_events(pool: &SqlitePool, tenant_id: &str, count: usize) {
+        let padding = "x".repeat(2000);
+        for _ in 0..count {
+            let event = crate::models::AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                event_type: "decision".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: None,
+                resource: None,
+                event_json: format!("{{\"padding\":\"{padding}\"}}"),
+                input_hash: None,
+                output_hash: None,
+                decision_id: None,
+                approval_id: None,
+                created_at: Utc::now(),
+            };
+            db::insert_audit_event(pool, &event).await.unwrap();
+        }
+        sqlx::query("DELETE FROM audit_events WHERE tenant_id = ?")
+            .bind(tenant_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// #0061 (TASK-0061): `db::vacuum_database` must actually reclaim free
+    /// space, not just run without error — proven by shrinking `page_count`
+    /// after a bulk insert+delete leaves free pages behind.
+    #[tokio::test]
+    async fn vacuum_database_reclaims_space_after_bulk_delete() {
+        let pool = setup_pool("vacuum_reclaims_space").await;
+        db::register_tenant(&pool, "tenant_vacuum", "Vacuum", "developer")
+            .await
+            .unwrap();
+
+        churn_audit_events(&pool, "tenant_vacuum", 500).await;
+
+        let (page_count_before,): (i64,) = sqlx::query_as("PRAGMA page_count")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        db::vacuum_database(&pool).await.unwrap();
+
+        let (page_count_after,): (i64,) = sqlx::query_as("PRAGMA page_count")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert!(
+            page_count_after < page_count_before,
+            "expected VACUUM to shrink page_count ({page_count_before} -> {page_count_after})"
+        );
+    }
+
+    /// REL-003 (#1149): `run_vacuum_job` must not touch the DB while
+    /// `is_leader` is false ("standby"), and must perform the vacuum once it
+    /// becomes true — proving the gate applies to real work, not just a flag.
+    #[tokio::test]
+    async fn vacuum_job_is_gated_by_is_leader() {
+        let pool = setup_pool("vacuum_job_gated").await;
+        db::register_tenant(&pool, "tenant_vacuum_gated", "Vacuum Gated", "developer")
+            .await
+            .unwrap();
+
+        churn_audit_events(&pool, "tenant_vacuum_gated", 500).await;
+        let (page_count_before,): (i64,) = sqlx::query_as("PRAGMA page_count")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let is_leader = Arc::new(AtomicBool::new(false));
+        let handle = tokio::spawn(run_vacuum_job(
+            pool.clone(),
+            1, // tick every 1s
+            is_leader.clone(),
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let (page_count_standby,): (i64,) = sqlx::query_as("PRAGMA page_count")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            page_count_standby, page_count_before,
+            "standby instance must not vacuum while not leader"
+        );
+
+        is_leader.store(true, Ordering::Relaxed);
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        let (page_count_after,): (i64,) = sqlx::query_as("PRAGMA page_count")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            page_count_after < page_count_before,
+            "leader instance must vacuum once leadership is held ({page_count_before} -> {page_count_after})"
         );
 
         handle.abort();
