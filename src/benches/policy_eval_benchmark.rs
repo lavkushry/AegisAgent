@@ -130,27 +130,9 @@ fn policy_eval_benchmark(c: &mut Criterion) {
     // `sets.get(tenant_id)` cache path instead of the `base_policy_set`
     // fallback.
     let tenant_id = "tenant_with_cached_policy_set";
-    rt.block_on(async {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db_path = dir.path().join("policy_eval_bench.db");
-        let db_url = format!("sqlite://{}", db_path.to_string_lossy());
-        // Leak the tempdir so the SQLite file outlives this closure for the
-        // duration of the benchmark process.
-        std::mem::forget(dir);
-
-        let pool = gateway::db::init_db(&db_url).await.expect("init_db");
-        gateway::db::register_tenant(&pool, tenant_id, "Bench Tenant", "developer")
-            .await
-            .expect("register_tenant");
-
-        // No policy rows inserted: `reload_tenant_policies` will see an empty
-        // `list_policies` result and simply cache a clone of the base set
-        // under `tenant_id`.
-        engine
-            .reload_tenant_policies(&pool, tenant_id)
-            .await
-            .expect("reload_tenant_policies");
-    });
+    engine
+        .reload_tenant_policies(tenant_id, &[])
+        .expect("reload_tenant_policies");
 
     assert!(
         engine.has_tenant(tenant_id),
