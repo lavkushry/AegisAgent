@@ -503,16 +503,35 @@ struct Claims {
     exp: usize,
 }
 
+/// Splits `AEGIS_JWT_SECRET` on `,` for zero-downtime rotation (#1211): during
+/// a rotation window, operators set the value to `"new_secret,old_secret"` so
+/// tokens signed with either are still accepted, then drop the old entry once
+/// every outstanding token has expired or been reissued. A bare single-secret
+/// value (the pre-#1211 format) is just a one-element list, so this stays
+/// backward-compatible. Filters out empty/`"default_secret"` entries so a
+/// stray trailing comma or the documented disable-sentinel doesn't become a
+/// silently-accepted decoding key.
+/// `pub` (not `pub(crate)`) so `main.rs`'s binary target — a separate crate
+/// from this lib, per `lib.rs`'s doc comment — can reuse the same filtering
+/// logic for its startup JWT-secret validation instead of duplicating it.
+pub fn jwt_secret_candidates(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "default_secret")
+        .map(str::to_string)
+        .collect()
+}
+
 pub(crate) fn validate_jwt(token: &str) -> Option<String> {
-    let secret = std::env::var("AEGIS_JWT_SECRET").ok()?;
-    if secret.trim().is_empty() || secret == "default_secret" {
-        return None;
-    }
-    let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+    let raw_secret = std::env::var("AEGIS_JWT_SECRET").ok()?;
+    let candidates = jwt_secret_candidates(&raw_secret);
     let validation = jsonwebtoken::Validation::default();
-    jsonwebtoken::decode::<Claims>(token, &key, &validation)
-        .map(|data| data.claims.tenant_id.unwrap_or(data.claims.sub))
-        .ok()
+    candidates.iter().find_map(|secret| {
+        let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+        jsonwebtoken::decode::<Claims>(token, &key, &validation)
+            .map(|data| data.claims.tenant_id.unwrap_or(data.claims.sub))
+            .ok()
+    })
 }
 
 // Extractor helper to get tenant_id from Bearer token
@@ -1695,6 +1714,7 @@ pub(crate) mod test_helpers {
             canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         }
     }

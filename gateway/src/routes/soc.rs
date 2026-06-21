@@ -1675,6 +1675,7 @@ mod tests {
             canon_version: "aegis-jcs-1".to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         })
         .await

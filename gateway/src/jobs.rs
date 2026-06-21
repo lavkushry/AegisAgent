@@ -339,6 +339,7 @@ mod tests {
             canon_version: CANON_VERSION.to_string(),
             signature: None,
             signer_public_key: None,
+            signer_key_id: None,
             created_at: Utc::now(),
         };
         rec.receipt_hash = compute_receipt_hash(&rec);
@@ -708,6 +709,7 @@ mod chain_proptests {
                 canon_version: CANON_VERSION.to_string(),
                 signature: None,
                 signer_public_key: None,
+                signer_key_id: None,
                 created_at: Utc::now(),
             };
             rec.receipt_hash = compute_receipt_hash(&rec);
