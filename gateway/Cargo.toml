@@ -95,3 +95,11 @@ harness = false
 [[bench]]
 name = "evidence_graph_benchmark"
 harness = false
+
+[[bench]]
+name = "canon_benchmark"
+harness = false
+
+[[bench]]
+name = "receipt_hash_benchmark"
+harness = false

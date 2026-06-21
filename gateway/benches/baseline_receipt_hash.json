@@ -1,0 +1,8 @@
+{
+  "_comment": "TEST-005 (#1165): checked-in baseline for the receipt-hash criterion benchmark regression gate (gateway/scripts/check_bench_regression.py). Captured from a local run of `cargo bench --manifest-path gateway/Cargo.toml --bench receipt_hash_benchmark` on this sandbox (default sample_size=100, see benches/receipt_hash_benchmark.rs). 'mean_ns' is criterion's mean.point_estimate (nanoseconds, from estimates.json) for receipt_hash/compute_receipt_hash_mid_chain. CI hardware will differ from this sandbox, so this baseline should be re-captured from a CI run before the regression gate is relied upon for real PRs; it establishes the mechanism and a starting point.",
+  "benchmark": "receipt_hash/compute_receipt_hash_mid_chain",
+  "mean_ns": 14411.721527170412,
+  "mean_ms": 0.014411721527170412,
+  "sample_size": 100,
+  "captured_at": "2026-06-21"
+}
