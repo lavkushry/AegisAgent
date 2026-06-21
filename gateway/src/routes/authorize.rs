@@ -211,17 +211,41 @@ pub async fn authorize_action(
         }
     }
 
+    // #1510: the agent-to-tool permission check and the idempotency lookup
+    // below are independent reads — neither depends on the other's result —
+    // so run them concurrently instead of serially. The nonce/replay check
+    // between them is pure in-memory logic with no DB dependency, so
+    // interleaving it here doesn't change behavior; each result is still
+    // checked in the original priority order (permission denial, then
+    // replay, then idempotent replay) below. Tradeoff: a permission-denied
+    // call that also carries a `request_id` now does one "wasted" idempotency
+    // read it previously would have skipped — an acceptable cost for lower
+    // latency on the much more common allowed path.
+    let (permission_result, idempotency_result) = tokio::join!(
+        db::agent_tool_permission_status(
+            &state.pool,
+            &tenant_id,
+            &agent_id,
+            &payload.tool_call.tool,
+        ),
+        async {
+            if dry_run {
+                return Ok(None);
+            }
+            match payload.request_id.as_deref().filter(|r| !r.is_empty()) {
+                Some(request_id) => {
+                    db::get_decision_by_request_id(&state.pool, &tenant_id, &agent_id, request_id)
+                        .await
+                }
+                None => Ok(None),
+            }
+        }
+    );
+
     // Agent-to-tool permission check (#1390, opt-in fail-closed): if the agent
     // has any explicit tool bindings, only those tools may be called. No
     // bindings = unrestricted (backwards-compatible with pre-#1390 agents).
-    match db::agent_tool_permission_status(
-        &state.pool,
-        &tenant_id,
-        &agent_id,
-        &payload.tool_call.tool,
-    )
-    .await
-    {
+    match permission_result {
         Ok(Some(false)) => {
             warn!(
                 "Tool permission denied: agent={} tenant={} tool={}",
@@ -302,20 +326,19 @@ pub async fn authorize_action(
     // Idempotency (#0072): a repeat call with the same request_id returns the
     // original decision unchanged instead of re-evaluating Cedar and writing
     // duplicate audit events / approvals / receipts. Dry-run requests never
-    // touch idempotency state (#1281) — skip both the lookup and any replay.
+    // touch idempotency state (#1281) — the lookup itself was already skipped
+    // above (the joined future short-circuits to `Ok(None)` for dry-run).
+    // #1510: `idempotency_result` was already fetched concurrently with the
+    // permission check above, not re-queried here.
     if !dry_run {
-        if let Some(request_id) = payload.request_id.as_deref().filter(|r| !r.is_empty()) {
-            match db::get_decision_by_request_id(&state.pool, &tenant_id, &agent_id, request_id)
-                .await
-            {
-                Ok(Some(record)) => {
-                    return idempotent_replay_response(&state, &tenant_id, record).await;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    error!("Idempotency lookup failed: {:?}", e);
-                    return StatusError::internal("Database error").into_response();
-                }
+        match idempotency_result {
+            Ok(Some(record)) => {
+                return idempotent_replay_response(&state, &tenant_id, record).await;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!("Idempotency lookup failed: {:?}", e);
+                return StatusError::internal("Database error").into_response();
             }
         }
 
@@ -478,16 +501,43 @@ pub async fn authorize_action(
     // registrations, so serve it from the LRU and fall back to the DB on a miss.
     let skill_cache_key =
         SkillActionCache::cache_key(&tenant_id, &normalized_tool, &normalized_action);
-    let action_meta = match state.skill_cache.get(&skill_cache_key) {
+    let cached_action_meta = state.skill_cache.get(&skill_cache_key);
+
+    // #1510: `mcp_server_key` only depends on `normalized_tool`, already
+    // resolved above — it doesn't need the skill-action lookup's result, so
+    // compute it now and run the (at-most-one-DB-call-each) skill-action and
+    // MCP-server lookups concurrently instead of serially. Each is itself
+    // conditional (skill-action only on a cache miss; MCP-server only for an
+    // `mcp:`-prefixed tool), so the "other" branch is a no-op `Ok(None)`.
+    let mcp_server_key = mcp_server_key_from_tool(&normalized_tool).map(str::to_string);
+    let is_mcp_call = mcp_server_key.is_some();
+
+    let (skill_action_result, mcp_server_result) = tokio::join!(
+        async {
+            if cached_action_meta.is_some() {
+                return Ok(None);
+            }
+            db::get_skill_action(
+                &state.pool,
+                &tenant_id,
+                &normalized_tool,
+                &normalized_action,
+            )
+            .await
+        },
+        async {
+            match mcp_server_key.as_deref() {
+                Some(server_key) => {
+                    db::get_mcp_server_by_key(&state.pool, &tenant_id, server_key).await
+                }
+                None => Ok(None),
+            }
+        }
+    );
+
+    let action_meta = match cached_action_meta {
         Some(meta) => Some(meta),
-        None => match db::get_skill_action(
-            &state.pool,
-            &tenant_id,
-            &normalized_tool,
-            &normalized_action,
-        )
-        .await
-        {
+        None => match skill_action_result {
             Ok(Some(meta)) => {
                 // Cache only positive hits; unknown actions keep missing to the DB.
                 state
@@ -510,16 +560,13 @@ pub async fn authorize_action(
         action_default_decision = default_decision;
     }
 
-    let mcp_server_key = mcp_server_key_from_tool(&normalized_tool).map(str::to_string);
-    let is_mcp_call = mcp_server_key.is_some();
-
     if let Some(server_key) = mcp_server_key.as_deref() {
         // Fail-closed server-level gate (Phase 4 response enforcement). A
         // quarantined MCP server — whether quarantined by an operator or
         // auto-quarantined on tool-manifest drift — denies ALL of its tool calls
         // inline, regardless of any tool's prior approved status. Without this,
         // quarantine was recorded but never enforced on the authorize hot path.
-        match db::get_mcp_server_by_key(&state.pool, &tenant_id, server_key).await {
+        match mcp_server_result {
             Ok(Some(server)) if server.status == "quarantined" => {
                 let decision_id = Uuid::new_v4();
                 let reason = format!(
@@ -5217,6 +5264,105 @@ mod tests {
         let disabled = SkillActionCache::new(0);
         disabled.insert(k1.clone(), meta("low"));
         assert_eq!(disabled.get(&k1), None);
+    }
+
+    /// #1510: the agent-tool-permission check and the idempotency lookup now
+    /// run concurrently via `tokio::join!`. A permission-denied call must
+    /// still return FORBIDDEN immediately — and must not write any decision
+    /// row — even though the (now-concurrent) idempotency lookup also ran
+    /// for the same `request_id`.
+    #[tokio::test]
+    async fn authorize_denies_when_tool_permission_revoked_even_with_request_id() {
+        let (state, tenant_id, agent_token) =
+            setup_state("perm_denied_concurrent_idempotency").await;
+        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+
+        // Any explicit binding makes the allow-list exclusive; "filesystem"
+        // (the tool under test below) is deliberately left off it.
+        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+            .await
+            .unwrap();
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.request_id = Some("perm-denied-with-request-id".to_string());
+
+        let response = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["decision"], "deny");
+        assert!(json["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not permitted to call tool"));
+
+        // No decision was ever persisted for this request_id — confirming the
+        // concurrently-fetched (and necessarily empty) idempotency result was
+        // never mistaken for a real replay.
+        assert!(db::get_decision_by_request_id(
+            &state.pool,
+            &tenant_id,
+            &agent_id,
+            "perm-denied-with-request-id"
+        )
+        .await
+        .unwrap()
+        .is_none());
+    }
+
+    /// #1510: the skill-action lookup (on a cache miss) and the MCP-server
+    /// lookup now run concurrently via `tokio::join!`. A quarantined MCP
+    /// server must still deny the call even when the skill-action cache is
+    /// cold for this exact (tenant, tool, action) — exercising both joined
+    /// futures together, not just the MCP-server one in isolation.
+    #[tokio::test]
+    async fn authorize_denies_mcp_call_when_server_quarantined_and_skill_cache_cold() {
+        let (state, tenant_id, agent_token) = setup_state("mcp_quarantine_concurrent_skill").await;
+        let server_key = "quarantine-concurrent-server";
+
+        let _ = register_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(RegisterMcpServerRequest {
+                server_key: server_key.to_string(),
+                name: "Quarantine Concurrent Test Server".to_string(),
+                owner_team: None,
+                transport: "http".to_string(),
+                source: None,
+                trust_level: "semi_trusted".to_string(),
+                endpoint: "http://localhost:5099".to_string(),
+            }),
+        )
+        .await;
+
+        let quarantine_resp = quarantine_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(server_key.to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(quarantine_resp.status(), StatusCode::OK);
+
+        // A never-before-seen action key guarantees a skill-action cache miss.
+        let mut request =
+            mcp_authorize_request(&format!("mcp:{server_key}"), "never_before_seen_action_xyz");
+        request.tool_call.mutates_state = true;
+
+        let response = call_authorize(state, &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "deny");
+        assert!(response.reason.contains("is quarantined"));
     }
 
     /// #1513: `RiskWeightsCache` hits within the TTL, expires once the TTL
