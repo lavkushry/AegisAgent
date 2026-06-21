@@ -78,6 +78,7 @@ pub(crate) async fn write_decision_and_audit(
     metrics: &SecurityMetrics,
     audit_batch: &crate::audit_batch::AuditBatchSink,
     risk_weight_cache: &super::RiskWeightsCache,
+    deferred_write_tracker: &std::sync::Arc<super::DeferredWriteTracker>,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -164,18 +165,36 @@ pub(crate) async fn write_decision_and_audit(
 
     // TASK-0089 (#935): best-effort historical risk-score sample, so
     // operators can see an agent's risk trend over time. Never blocks the
-    // decision response.
-    if let Err(e) = db::insert_agent_risk_score(
-        pool,
-        tenant_id,
-        agent_id,
-        &decision_id.to_string(),
-        risk_score,
-        reason,
-    )
-    .await
+    // decision response. #1512: spawned off the hot path entirely (already
+    // non-fatal — was previously `await`ed inline solely to log a failure),
+    // tracked so graceful shutdown can wait for it instead of dropping it.
+    // Retried on transient SQLITE_BUSY/LOCKED (same helper #1399 uses for
+    // `insert_decision`): once spawned, this write can genuinely run
+    // concurrently with the audit-event write a few lines below (or the
+    // next request's own decision insert) rather than always running
+    // strictly after them as it did when it was awaited inline.
     {
-        error!("Failed to record agent risk score: {:?}", e);
+        let pool = pool.clone();
+        let tenant_id = tenant_id.to_string();
+        let agent_id = agent_id.to_string();
+        let decision_id_str = decision_id.to_string();
+        let reason = reason.to_string();
+        deferred_write_tracker.spawn_tracked(async move {
+            if let Err(e) = db::retry_on_busy(3, || {
+                db::insert_agent_risk_score(
+                    &pool,
+                    &tenant_id,
+                    &agent_id,
+                    &decision_id_str,
+                    risk_score,
+                    &reason,
+                )
+            })
+            .await
+            {
+                error!("Failed to record agent risk score: {:?}", e);
+            }
+        });
     }
 
     let audit_record = AuditEventRecord {

@@ -45,36 +45,45 @@ pub(crate) async fn emit_action_receipt(
     // Build the head-referencing receipt inside one atomic transaction (T-D
     // hardening): the chain head is read and the new link inserted under a single
     // write lock, so concurrent authorizes for this tenant cannot fork the chain.
-    let result = db::append_action_receipt_atomic(pool, tenant_id, |prev_receipt_hash| {
-        let mut receipt = ActionReceiptRecord {
-            id: Uuid::new_v4().to_string(),
-            tenant_id: tenant_id.to_string(),
-            decision_id: Some(decision_id.to_string()),
-            ts: Utc::now().to_rfc3339(),
-            agent_id: Some(agent_id.to_string()),
-            user_id: payload.user.as_ref().map(|u| u.id.clone()),
-            run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
-            trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
-            tool: Some(payload.tool_call.tool.clone()),
-            action: Some(payload.tool_call.action.clone()),
-            resource: payload.tool_call.resource.clone(),
-            source_trust: payload.context.source_trust.clone(),
-            decision: decision.to_string(),
-            approver: None,
-            action_hash: Some(hash_tool_call(&payload.tool_call)),
-            prev_receipt_hash,
-            receipt_hash: String::new(),
-            // Self-describing scheme tag; additive, not folded into receipt_hash.
-            canon_version: CANON_VERSION.to_string(),
-            signature: None,
-            signer_public_key: None,
-            signer_key_id: None,
-            created_at: Utc::now(),
-        };
-        // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
-        receipt.receipt_hash = compute_receipt_hash(&receipt);
-        apply_receipt_signature(&mut receipt);
-        receipt
+    //
+    // #1512: retried on transient SQLITE_BUSY/LOCKED (same `retry_on_busy`
+    // helper #1399 uses for `insert_decision`) — now that this call is
+    // spawned off the hot path rather than awaited inline, it can genuinely
+    // run concurrently with other writers against the same pool (e.g. the
+    // #1512-deferred risk-score insert, or the next request's own decision
+    // write), where it previously never overlapped with anything.
+    let result = db::retry_on_busy(3, || {
+        db::append_action_receipt_atomic(pool, tenant_id, |prev_receipt_hash| {
+            let mut receipt = ActionReceiptRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                decision_id: Some(decision_id.to_string()),
+                ts: Utc::now().to_rfc3339(),
+                agent_id: Some(agent_id.to_string()),
+                user_id: payload.user.as_ref().map(|u| u.id.clone()),
+                run_id: payload.trace.as_ref().map(|t| t.run_id.clone()),
+                trace_id: payload.trace.as_ref().map(|t| t.trace_id.clone()),
+                tool: Some(payload.tool_call.tool.clone()),
+                action: Some(payload.tool_call.action.clone()),
+                resource: payload.tool_call.resource.clone(),
+                source_trust: payload.context.source_trust.clone(),
+                decision: decision.to_string(),
+                approver: None,
+                action_hash: Some(hash_tool_call(&payload.tool_call)),
+                prev_receipt_hash,
+                receipt_hash: String::new(),
+                // Self-describing scheme tag; additive, not folded into receipt_hash.
+                canon_version: CANON_VERSION.to_string(),
+                signature: None,
+                signer_public_key: None,
+                signer_key_id: None,
+                created_at: Utc::now(),
+            };
+            // Hash FIRST (byte-parity-locked), then optionally sign OVER the hash.
+            receipt.receipt_hash = compute_receipt_hash(&receipt);
+            apply_receipt_signature(&mut receipt);
+            receipt
+        })
     })
     .await;
 

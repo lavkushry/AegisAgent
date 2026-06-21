@@ -535,6 +535,68 @@ impl HeartbeatDebouncer {
     }
 }
 
+/// #1512: tracks fire-and-forget background writes spawned off the
+/// `/v1/authorize` hot path (`db::insert_agent_risk_score`,
+/// `emit_action_receipt`) so graceful shutdown can wait for them to finish
+/// instead of silently dropping whatever was in flight when the process
+/// exits. An `Arc<AtomicUsize>` guarded by a `Drop`-based decrement (rather
+/// than decrementing at the end of the spawned future body) so a panic
+/// inside the tracked task still releases its slot during unwind.
+#[derive(Default)]
+pub struct DeferredWriteTracker {
+    in_flight: std::sync::atomic::AtomicUsize,
+}
+
+struct InFlightGuard(Arc<DeferredWriteTracker>);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.0
+            .in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl DeferredWriteTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of tracked tasks currently in flight. Test/diagnostic use and
+    /// graceful-shutdown polling only.
+    pub fn in_flight_count(&self) -> usize {
+        self.in_flight.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Spawn `fut` as a tracked fire-and-forget task: the in-flight counter
+    /// is incremented before spawning and decremented (via `InFlightGuard`'s
+    /// `Drop`) once `fut` finishes, whether it completes normally or the
+    /// task panics.
+    pub fn spawn_tracked<F>(self: &Arc<Self>, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let guard = InFlightGuard(Arc::clone(self));
+        tokio::spawn(async move {
+            fut.await;
+            drop(guard);
+        });
+    }
+
+    /// Poll `in_flight_count()` down to zero, bounded by `timeout`. Used
+    /// during graceful shutdown so the process doesn't exit while a receipt
+    /// or risk-score write is still in flight, without blocking shutdown
+    /// indefinitely if one is somehow stuck.
+    pub async fn drain(&self, timeout: std::time::Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        while self.in_flight_count() > 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+}
+
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
@@ -572,6 +634,12 @@ pub struct AppState {
     /// writer task) so the periodic flush job can drain the same in-memory
     /// set the request handlers write into. See [`HeartbeatDebouncer`].
     pub heartbeat_debouncer: Arc<HeartbeatDebouncer>,
+    /// Tracks fire-and-forget post-decision writes spawned off the
+    /// `/v1/authorize` hot path (#1512): `db::insert_agent_risk_score` and
+    /// `emit_action_receipt`. `Arc`-shared with `main.rs`'s graceful
+    /// shutdown sequence, which drains it before dropping the pool. See
+    /// [`DeferredWriteTracker`].
+    pub deferred_write_tracker: Arc<DeferredWriteTracker>,
     /// Set to `true` once startup initialization (DB pool, migrations, policy
     /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
     /// so orchestrators can distinguish "still starting" from "ready".
@@ -1229,6 +1297,7 @@ pub mod benchutil {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1468,6 +1537,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1516,6 +1586,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1566,6 +1637,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1665,6 +1737,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1723,6 +1796,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),

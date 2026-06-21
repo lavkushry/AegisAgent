@@ -1312,6 +1312,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #1512: tracks fire-and-forget post-decision writes (agent risk-score
+    // sample, action receipt) spawned off the `/v1/authorize` hot path, so
+    // graceful shutdown can wait for them instead of dropping whatever is
+    // still in flight when the process exits.
+    let deferred_write_tracker = Arc::new(routes::DeferredWriteTracker::new());
+
     // #1152: zero-I/O liveness tracking for the fire-and-forget background
     // tasks above — `AbortHandle::is_finished()` reports whether a task
     // panicked and stopped running, surfaced on GET /readyz. `drain_handle`
@@ -1502,6 +1508,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         replay_nonce_cache,
         risk_weight_cache,
         heartbeat_debouncer: heartbeat_debouncer.clone(),
+        deferred_write_tracker: deferred_write_tracker.clone(),
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: audit_writer_unhealthy.clone(),
         audit_batch,
@@ -1798,6 +1805,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // graceful shutdown never silently drops a pending last_seen_at write.
     jobs::flush_heartbeats(&state.pool, &state.heartbeat_debouncer).await;
 
+    // #1512: wait for any in-flight fire-and-forget post-decision writes
+    // (agent risk-score sample, action receipt) so graceful shutdown doesn't
+    // drop one mid-flight. Bounded — these are sub-10ms SQLite writes, so a
+    // short timeout (default 5s) is enough headroom without risking a hang.
+    let deferred_write_drain_timeout = std::env::var("AEGIS_DEFERRED_WRITE_DRAIN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(std::time::Duration::from_secs(5));
+    state
+        .deferred_write_tracker
+        .drain(deferred_write_drain_timeout)
+        .await;
+    if state.deferred_write_tracker.in_flight_count() > 0 {
+        tracing::warn!(
+            "Deferred post-decision writes still in flight after drain timeout; some may be lost."
+        );
+    }
+
     drop(state);
 
     // Wait for the drain task to finish with a timeout (default 10s)
@@ -2031,6 +2057,7 @@ mod tests {
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2322,6 +2349,7 @@ mod tests {
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2650,6 +2678,7 @@ mod tests {
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),

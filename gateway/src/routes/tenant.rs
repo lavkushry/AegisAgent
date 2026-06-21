@@ -1067,6 +1067,13 @@ mod tests {
         )
         .await;
 
+        // #1512: receipt emission is now a tracked fire-and-forget write —
+        // wait for it to land before exporting.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(2))
+            .await;
+
         // Happy path: export own tenant.
         let resp = export_tenant(
             State(state.clone()),
@@ -1125,6 +1132,13 @@ mod tests {
             mcp_authorize_request("github", "read_issue"),
         )
         .await;
+
+        // #1512: receipt emission is now a tracked fire-and-forget write —
+        // wait for it to land before seeding the rest of the fixture.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(2))
+            .await;
 
         // Reuse the decision row created above so the approval's FK is valid.
         let decision_id: String = sqlx::query_scalar(
@@ -1262,6 +1276,13 @@ mod tests {
             mcp_authorize_request("github", "read_issue"),
         )
         .await;
+        // #1512: the receipt is now a tracked fire-and-forget write — it
+        // must land before the backdating UPDATE below, or it would still
+        // be in flight and get a "now" timestamp instead of being backdated.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(2))
+            .await;
         let old_time = Utc::now() - Duration::days(10);
         sqlx::query("UPDATE action_receipts SET created_at = ? WHERE tenant_id = ?")
             .bind(old_time)
@@ -1284,6 +1305,10 @@ mod tests {
             mcp_authorize_request("github", "read_issue"),
         )
         .await;
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(2))
+            .await;
 
         // Narrow the range to exclude the 10-day-old rows but include "now".
         let from = (Utc::now() - Duration::days(1)).to_rfc3339();
