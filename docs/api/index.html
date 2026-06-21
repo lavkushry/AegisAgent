@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AegisAgent Control Plane API Reference</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="../assets/logo.png" />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Static Redoc rendering of the gateway's OpenAPI 3.0 spec (#1198,
+      DOC-003). openapi.json sitting alongside this page is generated fresh
+      from gateway::routes::openapi::ApiDoc (pure compile-time route
+      metadata, no live gateway required) by
+      `cargo run --release --bin export_openapi` in the Docs CI workflow on
+      every merge to main that touches the gateway's route annotations, so
+      this page never drifts from the real API surface. For an always-live
+      (rather than last-merge-to-main) view against a running gateway, see
+      the Swagger UI it serves itself at `GET /v1/docs`.
+    -->
+    <redoc spec-url="openapi.json"></redoc>
+    <script src="https://cdn.redoc.ly/redoc/latest/bundle.js"></script>
+  </body>
+</html>

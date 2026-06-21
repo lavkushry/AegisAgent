@@ -9,6 +9,10 @@
 
 # MkDocs documentation site build output
 /site/
+
+# Generated fresh on every Docs CI run by `export_openapi` (#1198) — never
+# committed, so the rendered API reference can't drift from a stale snapshot.
+/docs/api/openapi.json
 .cache/
 
 # Python caches and build artifacts
