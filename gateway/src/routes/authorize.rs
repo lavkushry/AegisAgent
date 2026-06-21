@@ -357,6 +357,7 @@ pub async fn authorize_action(
             &state.events,
             &state.metrics,
             &state.audit_batch,
+            &state.risk_weight_cache,
             &tenant_id,
             &agent_id,
             &payload,
@@ -424,6 +425,7 @@ pub async fn authorize_action(
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
+                    &state.risk_weight_cache,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -533,6 +535,7 @@ pub async fn authorize_action(
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
+                    &state.risk_weight_cache,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -599,6 +602,7 @@ pub async fn authorize_action(
                         &state.events,
                         &state.metrics,
                         &state.audit_batch,
+                        &state.risk_weight_cache,
                         &tenant_id,
                         &agent_id,
                         &payload,
@@ -654,6 +658,7 @@ pub async fn authorize_action(
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
+                    &state.risk_weight_cache,
                     &tenant_id,
                     &agent_id,
                     &payload,
@@ -813,6 +818,7 @@ pub async fn authorize_action(
         &state.events,
         &state.metrics,
         &state.audit_batch,
+        &state.risk_weight_cache,
         &tenant_id,
         &agent_id,
         &payload,
@@ -1676,6 +1682,7 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1728,6 +1735,7 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -5211,6 +5219,43 @@ mod tests {
         assert_eq!(disabled.get(&k1), None);
     }
 
+    /// #1513: `RiskWeightsCache` hits within the TTL, expires once the TTL
+    /// elapses, is tenant-scoped, and clears on `invalidate`. `Instant + Duration`
+    /// lets the "elapsed" case be tested deterministically without a real sleep.
+    #[test]
+    fn risk_weights_cache_hit_expiry_tenant_scoping_and_invalidate() {
+        let ttl = std::time::Duration::from_secs(60);
+        let cache = RiskWeightsCache::new(ttl);
+        let t0 = std::time::Instant::now();
+        let mut weights = crate::risk::RiskWeights::DEFAULT;
+        weights.environment_weight_mutating = 42;
+
+        // Miss before any insert.
+        assert_eq!(cache.get("tenant_a", t0), None);
+
+        cache.insert("tenant_a", weights, t0);
+
+        // Hit within the TTL.
+        assert_eq!(
+            cache.get("tenant_a", t0 + std::time::Duration::from_secs(1)),
+            Some(weights)
+        );
+
+        // A different tenant never sees tenant_a's cached entry.
+        assert_eq!(cache.get("tenant_b", t0), None);
+
+        // Expired once `now` is past the TTL boundary.
+        assert_eq!(
+            cache.get("tenant_a", t0 + std::time::Duration::from_secs(61)),
+            None
+        );
+
+        // invalidate() clears a still-fresh entry immediately.
+        cache.insert("tenant_a", weights, t0);
+        cache.invalidate("tenant_a");
+        assert_eq!(cache.get("tenant_a", t0), None);
+    }
+
     async fn register_ship_action(state: &Arc<AppState>, tenant_id: &str, risk: &str) {
         let req = RegisterToolRequest {
             skill_key: "deployer".to_string(),
@@ -5879,6 +5924,7 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -6073,6 +6119,7 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -6207,6 +6254,68 @@ mod tests {
 
         assert_eq!(first.decision, second.decision);
         assert_eq!(first.composite_risk_score, second.composite_risk_score);
+    }
+
+    /// #1513: once a tenant's risk weights are cached, a second
+    /// `/v1/authorize` call within the TTL must read the cached value rather
+    /// than re-querying SQLite. Proven by mutating `tenant_risk_weights`
+    /// directly via `db::upsert_risk_weights` (bypassing the cache
+    /// invalidation that only the `PUT /v1/tenants/risk-weights` *route*
+    /// triggers) and asserting the composite risk score is unaffected by
+    /// that change on the very next call.
+    #[tokio::test]
+    async fn authorize_reuses_cached_risk_weights_within_ttl_despite_db_change() {
+        let (state, tenant_id, agent_token) = setup_state("risk_weights_cache_hit").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let first = call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+
+        let mut mutated = crate::risk::RiskWeights::DEFAULT;
+        mutated.context_trust_penalty_trusted_internal_signed = 99;
+        db::upsert_risk_weights(&state.pool, &tenant_id, &mutated)
+            .await
+            .unwrap();
+
+        let second = call_authorize(state, &tenant_id, &agent_token, request).await;
+        assert_eq!(
+            first.composite_risk_score, second.composite_risk_score,
+            "second call must hit the #1513 cache, not re-read the just-mutated DB row"
+        );
+    }
+
+    /// #1513: `PUT /v1/tenants/risk-weights` invalidates the cache, so the
+    /// very next `/v1/authorize` call picks up the new weights immediately
+    /// rather than serving a stale cached value for up to the TTL window.
+    #[tokio::test]
+    async fn authorize_picks_up_new_risk_weights_immediately_after_put_invalidates_cache() {
+        let (state, tenant_id, agent_token) = setup_state("risk_weights_cache_invalidate").await;
+
+        let mut request = mcp_authorize_request("filesystem", "read_file");
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let first = call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
+
+        let mut updated = crate::risk::RiskWeights::DEFAULT;
+        updated.context_trust_penalty_trusted_internal_signed = 99;
+        let put_response = put_tenant_risk_weights(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(updated),
+        )
+        .await
+        .into_response();
+        assert_eq!(put_response.status(), StatusCode::OK);
+
+        let second = call_authorize(state, &tenant_id, &agent_token, request).await;
+        assert!(
+            second.composite_risk_score > first.composite_risk_score,
+            "PUT must invalidate the cache so the next call reads the new (heavier) weights \
+             immediately: first={}, second={}",
+            first.composite_risk_score,
+            second.composite_risk_score
+        );
     }
 
     // ── #1281: Policy Dry-Run / Simulation Mode ─────────────────────────────

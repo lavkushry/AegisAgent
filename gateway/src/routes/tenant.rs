@@ -53,7 +53,13 @@ pub async fn put_tenant_risk_weights(
     Json(weights): Json<crate::risk::RiskWeights>,
 ) -> impl IntoResponse {
     match db::upsert_risk_weights(&state.pool, &tenant_id, &weights).await {
-        Ok(_) => (StatusCode::OK, Json(weights)).into_response(),
+        Ok(_) => {
+            // #1513: drop the cached entry so the next `/v1/authorize` call
+            // picks up this override immediately instead of waiting out the
+            // TTL on a now-stale cached value.
+            state.risk_weight_cache.invalidate(&tenant_id);
+            (StatusCode::OK, Json(weights)).into_response()
+        }
         Err(e) => {
             error!("Failed to upsert tenant risk weights: {:?}", e);
             StatusError::internal("Database error").into_response()

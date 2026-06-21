@@ -407,6 +407,73 @@ impl ReplayNonceCache {
     }
 }
 
+/// #1513: per-tenant TTL cache for [`crate::risk::RiskWeights`]. Risk weights
+/// are operator-configured (`PUT /v1/tenants/risk-weights`) and change only
+/// rarely, yet `db::get_risk_weights` was previously re-read from SQLite on
+/// every single `/v1/authorize` call inside `write_decision_and_audit`. A
+/// plain TTL cache (not an LRU like [`SkillActionCache`]) is sufficient here:
+/// the per-tenant key space is small and bounded by the number of registered
+/// tenants, so unbounded growth isn't a practical concern.
+///
+/// `get`/`insert` take an explicit `now: Instant` (mirroring
+/// [`ReplayNonceCache::check_and_insert`]'s explicit `now` parameter) so TTL
+/// expiry can be tested deterministically without real sleeps.
+pub struct RiskWeightsCache {
+    inner: Mutex<HashMap<String, (crate::risk::RiskWeights, Instant)>>,
+    ttl: std::time::Duration,
+}
+
+/// Default cache TTL: risk weights are operator-configured and change only
+/// rarely, so a 60-second staleness window is an acceptable tradeoff against
+/// eliminating a DB read on (effectively) every `/v1/authorize` call.
+pub const DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS: u64 = 60;
+
+impl RiskWeightsCache {
+    pub fn new(ttl: std::time::Duration) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            ttl,
+        }
+    }
+
+    /// Return a cached value for `tenant_id` if present and not yet stale as
+    /// of `now`. A miss (absent, or older than `ttl`) returns `None` — the
+    /// caller is expected to fall through to `db::get_risk_weights` and
+    /// `insert` the fresh result.
+    pub fn get(&self, tenant_id: &str, now: Instant) -> Option<crate::risk::RiskWeights> {
+        let inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.get(tenant_id).and_then(|(weights, cached_at)| {
+            if now.saturating_duration_since(*cached_at) < self.ttl {
+                Some(*weights)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn insert(&self, tenant_id: &str, weights: crate::risk::RiskWeights, now: Instant) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.insert(tenant_id.to_string(), (weights, now));
+    }
+
+    /// Drop a tenant's cached entry so the next lookup re-reads the DB.
+    /// Called from `PUT /v1/tenants/risk-weights` so an operator-issued
+    /// override takes effect immediately rather than waiting out the TTL.
+    pub fn invalidate(&self, tenant_id: &str) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.remove(tenant_id);
+    }
+}
+
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
@@ -435,6 +502,9 @@ pub struct AppState {
     /// Opt-in replay-protection nonce dedup cache (#1306). See
     /// [`ReplayNonceCache`] for the LRU + timestamp-window approximation.
     pub replay_nonce_cache: ReplayNonceCache,
+    /// TTL cache for per-tenant composite-risk-score weights (#1513). See
+    /// [`RiskWeightsCache`].
+    pub risk_weight_cache: RiskWeightsCache,
     /// Set to `true` once startup initialization (DB pool, migrations, policy
     /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
     /// so orchestrators can distinguish "still starting" from "ready".
@@ -1090,6 +1160,7 @@ pub mod benchutil {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1327,6 +1398,7 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1373,6 +1445,7 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1421,6 +1494,7 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1518,6 +1592,7 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1574,6 +1649,7 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),
