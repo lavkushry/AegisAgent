@@ -105,6 +105,7 @@ pub async fn list_approvals_by_decision_ids(
         .collect())
 }
 
+#[tracing::instrument(name = "approval_create", skip_all)]
 pub async fn insert_approval(
     pool: &SqlitePool,
     record: &ApprovalRecord,

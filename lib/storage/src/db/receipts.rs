@@ -336,6 +336,7 @@ pub fn receipt_body_value(rec: &ActionReceiptRecord) -> serde_json::Value {
     })
 }
 
+#[tracing::instrument(name = "receipt_hash", skip_all)]
 pub fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
     let canonical = aegis_canon::canonical_value_string(&receipt_body_value(rec));
     aegis_common::hash::sha256_hex(canonical.as_bytes())

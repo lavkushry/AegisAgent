@@ -74,6 +74,23 @@ hyper = { version = "1.0", features = ["server"] }
 # Agent-to-gateway mTLS (#1310): extracts the Subject CN from a verified
 # client certificate so it can be mapped to an agent identity.
 x509-parser = "0.18"
+# Distributed tracing (#1156), gated on AEGIS_OTLP_ENDPOINT — unset, this is
+# entirely inert (no exporter built, no extra layer registered, existing
+# json/EnvFilter logging unchanged). The HTTP/protobuf exporter is used
+# instead of `grpc-tonic` so export goes over a plain HTTP POST rather than
+# pulling in a second `tonic` major version alongside the one already used
+# for gateway<->gateway gRPC. `reqwest-blocking-client` (the crate's own
+# default), not `reqwest-client` — `SdkTracerProvider`'s batch processor
+# runs its own dedicated OS thread, not a tokio task, so an async client
+# would panic with "no reactor running"; the blocking client is exactly
+# what that thread needs and doesn't block the gateway's own async runtime.
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client"] }
+# `HeaderExtractor` — pulls the W3C `traceparent` context out of an
+# axum/http `HeaderMap` so a span can be parented to the SDK caller's trace.
+opentelemetry-http = "0.32.0"
+tracing-opentelemetry = "0.33.0"
 
 
 [features]

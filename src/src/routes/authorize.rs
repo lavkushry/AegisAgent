@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, Instrument};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -101,11 +101,17 @@ pub(crate) async fn idempotent_replay_response(
 }
 
 // Authorize Action Handler
+#[tracing::instrument(name = "authorize", skip_all)]
 pub async fn authorize_action(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // #1156: parent this span to the caller's trace, if the SDK sent a W3C
+    // `traceparent` header. A no-op when OTel export isn't configured (the
+    // global propagator stays the no-op default — see `otel::init_tracer_provider`).
+    crate::otel::set_parent_from_headers(&headers);
+
     // #0081: wall-clock time for this evaluation, persisted on the decision row
     // for SOC/perf dashboards. Captured first so it covers agent resolution too.
     let started_at = std::time::Instant::now();
@@ -157,6 +163,10 @@ pub async fn authorize_action(
         match state
             .storage
             .get_agent_by_mtls_cn(&runtime_tenant_id, cn)
+            .instrument(tracing::info_span!(
+                "db_query",
+                db.operation = "get_agent_by_mtls_cn"
+            ))
             .await
         {
             Ok(Some(a)) => a,
@@ -178,6 +188,10 @@ pub async fn authorize_action(
         match state
             .storage
             .get_agent_by_token(&runtime_tenant_id, auth_header)
+            .instrument(tracing::info_span!(
+                "db_query",
+                db.operation = "get_agent_by_token"
+            ))
             .await
         {
             Ok(Some(a)) => a,

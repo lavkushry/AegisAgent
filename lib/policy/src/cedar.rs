@@ -164,6 +164,7 @@ impl PolicyEngine {
     /// (#1296), never from `auth_req` — the request body is client-supplied
     /// and a self-reported tier would let an agent claim a lower tier than
     /// its actual escalated state to dodge the stricter policies below.
+    #[tracing::instrument(name = "cedar_evaluate", skip_all)]
     pub fn authorize(
         &self,
         tenant_id: &str,

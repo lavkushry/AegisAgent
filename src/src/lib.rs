@@ -49,6 +49,7 @@ pub mod graph;
 pub mod grpc;
 pub mod jobs;
 pub mod mtls;
+pub mod otel;
 pub mod routes;
 pub mod sign;
 pub mod splunk_export;
