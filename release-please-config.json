@@ -1,16 +1,16 @@
 {
   "packages": {
-    ".": {
+    "src": {
       "release-type": "rust",
       "component": "aegisagent",
-      "changelog-path": "CHANGELOG.md",
+      "changelog-path": "../CHANGELOG.md",
+      "changelog-host": "github",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "prerelease": true,
       "prerelease-type": "beta",
       "versioning": "default",
       "extra-files": [
-        "src/Cargo.toml",
         "lib/api/Cargo.toml",
         "lib/common/Cargo.toml",
         "lib/policy/Cargo.toml",
