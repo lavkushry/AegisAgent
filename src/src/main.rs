@@ -27,6 +27,7 @@ use gateway::gh_checks;
 use gateway::gh_comment;
 use gateway::jobs;
 use gateway::metrics;
+use gateway::mtls;
 use gateway::policy;
 use gateway::qdrant;
 use gateway::routes;
@@ -974,6 +975,17 @@ fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
     Ok(key)
 }
 
+/// #1310: defensive strip of any client-supplied mTLS-CN header on the
+/// plain-HTTP serving path, which has no TLS handshake to verify a
+/// certificate against and therefore nothing legitimate to put there.
+async fn strip_mtls_cn_header(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    req.headers_mut().remove(mtls::MTLS_CN_HEADER);
+    next.run(req).await
+}
+
 /// Self-healthcheck for the distroless runtime image (#1207): no shell, no
 /// `curl`, no package manager in `gcr.io/distroless/cc-debian12` — Docker's
 /// `HEALTHCHECK` directive instead execs this binary with `--healthcheck`,
@@ -1689,10 +1701,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Ensure a default crypto provider is installed for rustls
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        let mut tls_config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        // #1310: agent-to-gateway mTLS. When AEGIS_MTLS_CA_CERT is set, the
+        // gateway requires every client to present a certificate signed by
+        // that CA (optionally checked against AEGIS_MTLS_CRL_PATH for
+        // revocation) instead of the default no-client-auth TLS config.
+        // Unset (the common case): behavior is unchanged from before this
+        // feature existed, and agents authenticate with bearer tokens.
+        let mtls_ca_cert_path = std::env::var("AEGIS_MTLS_CA_CERT").ok();
+        let mtls_crl_path = std::env::var("AEGIS_MTLS_CRL_PATH").ok();
+        if mtls_crl_path.is_some() && mtls_ca_cert_path.is_none() {
+            tracing::warn!(
+                "AEGIS_MTLS_CRL_PATH is set without AEGIS_MTLS_CA_CERT; mTLS is not enabled, ignoring the CRL path."
+            );
+        }
+
+        let server_config_builder = rustls::ServerConfig::builder();
+        let mut tls_config = if let Some(ca_cert_path) = mtls_ca_cert_path {
+            info!(
+                "mTLS enabled: loading client CA certificate from {} ...",
+                ca_cert_path
+            );
+            let client_cert_verifier =
+                mtls::build_client_cert_verifier(&ca_cert_path, mtls_crl_path.as_deref())?;
+            server_config_builder
+                .with_client_cert_verifier(client_cert_verifier)
+                .with_single_cert(certs, key)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
+        } else {
+            server_config_builder
+                .with_no_client_auth()
+                .with_single_cert(certs, key)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
+        };
 
         // Enforce minimum TLS 1.2 and support HTTP/1.1 and HTTP/2
         tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
@@ -1733,11 +1773,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // TLS Client Hello detected
                                 match tls_acceptor.accept(socket).await {
                                     Ok(tls_stream) => {
+                                        // #1310: extract the verified client cert's Subject CN
+                                        // (if mTLS is configured and the client presented one)
+                                        // BEFORE the stream is consumed by TokioIo, so it can be
+                                        // attributed to an agent identity downstream.
+                                        let mtls_cn = tls_stream
+                                            .get_ref()
+                                            .1
+                                            .peer_certificates()
+                                            .and_then(mtls::extract_cn_from_certs);
                                         let io = TokioIo::new(tls_stream);
                                         let service = hyper::service::service_fn(move |req: axum::http::Request<hyper::body::Incoming>| {
                                             let mut router = app.clone();
                                             let mut req = req.map(Body::new);
                                             req.extensions_mut().insert(axum::extract::ConnectInfo(client_addr));
+                                            // Always strip any client-supplied value first: this
+                                            // header is only ever trustworthy when set here, right
+                                            // after a successful TLS handshake (#1310).
+                                            req.headers_mut().remove(mtls::MTLS_CN_HEADER);
+                                            if let Some(cn) = mtls_cn.as_deref() {
+                                                if let Ok(value) = axum::http::HeaderValue::from_str(cn) {
+                                                    req.headers_mut().insert(mtls::MTLS_CN_HEADER, value);
+                                                }
+                                            }
                                             async move {
                                                 use tower::Service;
                                                 router.call(req).await
@@ -1816,13 +1874,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await;
     } else {
-        // Fallback to plain HTTP serving
+        // Fallback to plain HTTP serving. Unlike the manual TLS accept loop
+        // above, nothing here ever has a verified client certificate to
+        // attribute, so defensively strip any client-supplied mTLS-CN
+        // header before it can reach `authorize_action` (#1310).
         let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
         info!("AegisAgent Listening on http://{}", listener.local_addr()?);
 
+        let plain_http_app = app.layer(axum::middleware::from_fn(strip_mtls_cn_header));
         axum::serve(
             listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
+            plain_http_app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown_signal())
         .await?;

@@ -48,6 +48,7 @@ pub mod gh_comment;
 pub mod graph;
 pub mod grpc;
 pub mod jobs;
+pub mod mtls;
 pub mod routes;
 pub mod sign;
 pub mod splunk_export;

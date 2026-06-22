@@ -117,6 +117,7 @@ pub async fn register_agent(
                 serde_json::to_string(envs).ok()
             }
         }),
+        mtls_cn: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -281,6 +282,9 @@ pub async fn patch_agent(
     }
     if let Some(status) = payload.status {
         agent.status = status;
+    }
+    if let Some(mtls_cn) = payload.mtls_cn {
+        agent.mtls_cn = Some(mtls_cn);
     }
 
     match state.storage.update_agent(&agent).await {
@@ -847,6 +851,7 @@ mod tests {
                 quarantined_at: None,
                 signing_key: None,
                 allowed_environments: None,
+                mtls_cn: None,
                 created_at: Utc::now() - Duration::hours(idx), // older first
                 updated_at: Utc::now(),
             };
@@ -879,6 +884,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -946,6 +952,7 @@ mod tests {
                 quarantined_at: None,
                 signing_key: None,
                 allowed_environments: None,
+                mtls_cn: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
@@ -1085,6 +1092,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1152,6 +1160,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1169,6 +1178,7 @@ mod tests {
             purpose: None,
             risk_tier: None,
             status: Some("frozen".to_string()),
+            mtls_cn: None,
         };
 
         let response = patch_agent(
@@ -1212,11 +1222,79 @@ mod tests {
                 purpose: None,
                 risk_tier: None,
                 status: None,
+                mtls_cn: None,
             }),
         )
         .await
         .into_response();
         assert_eq!(response_404.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #1310: `PATCH /v1/agents/:id` binds a client-certificate Subject CN
+    /// to an agent, and the binding is resolvable via `get_agent_by_mtls_cn`.
+    #[tokio::test]
+    async fn test_patch_agent_route_binds_mtls_cn() {
+        let (state, tenant_id, _agent_token) = setup_state("patch_agent_mtls_cn").await;
+
+        let agent = AgentRecord {
+            id: "patch_agent_mtls_cn_id".to_string(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "patch-agent-mtls-key".to_string(),
+            agent_token: "patch-agent-mtls-token".to_string(),
+            name: "mTLS Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            mtls_cn: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(&state.pool, &agent).await.unwrap();
+
+        let patch_request = PatchAgentRequest {
+            name: None,
+            owner_team: None,
+            owner_email: None,
+            environment: None,
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: None,
+            status: None,
+            mtls_cn: Some("agent-cert-cn-123".to_string()),
+        };
+
+        let response = patch_agent(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("patch_agent_mtls_cn_id".to_string()),
+            Json(patch_request),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let updated: AgentRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated.mtls_cn, Some("agent-cert-cn-123".to_string()));
+
+        let resolved = db::get_agent_by_mtls_cn(&state.pool, &tenant_id, "agent-cert-cn-123")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.id, "patch_agent_mtls_cn_id");
     }
 
     #[tokio::test]
@@ -1245,6 +1323,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1308,6 +1387,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1365,6 +1445,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

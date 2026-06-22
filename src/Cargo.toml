@@ -71,6 +71,9 @@ rustls-pki-types = "1.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 hyper = { version = "1.0", features = ["server"] }
+# Agent-to-gateway mTLS (#1310): extracts the Subject CN from a verified
+# client certificate so it can be mapped to an agent identity.
+x509-parser = "0.18"
 
 
 [features]
@@ -87,6 +90,9 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 tempfile = "3.10"
 # TEST-003 (#1163): property-based tests for receipt chain integrity.
 proptest = "1"
+# mTLS (#1310): generates throwaway CA/leaf certs in unit tests without
+# shelling out to openssl.
+rcgen = "0.14"
 
 [[bench]]
 name = "authorize_benchmark"

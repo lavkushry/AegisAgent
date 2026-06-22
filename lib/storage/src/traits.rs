@@ -25,6 +25,12 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         agent_key: &str,
     ) -> Result<Option<AgentRecord>, AegisError>;
+    /// Resolve an agent by its bound mTLS client-certificate Subject CN (#1310).
+    async fn get_agent_by_mtls_cn(
+        &self,
+        tenant_id: &str,
+        cn: &str,
+    ) -> Result<Option<AgentRecord>, AegisError>;
     async fn list_agents(
         &self,
         tenant_id: &str,

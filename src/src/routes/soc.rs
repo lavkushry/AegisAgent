@@ -1630,6 +1630,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
