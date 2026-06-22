@@ -29,10 +29,10 @@ python3 -m pip install -e "sdk-python[dev]"
 python3 -m unittest discover -s sdk-python/tests
 python3 examples/integrity_demo.py            # no gateway needed
 
-# Rust gateway (requires a Rust toolchain)
-cargo test  --manifest-path gateway/Cargo.toml
-cargo fmt   --manifest-path gateway/Cargo.toml -- --check
-cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
+# Rust gateway (requires a Rust toolchain ≥ 1.88)
+cargo test --workspace
+cargo fmt -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 
 # Optional full local stack
 docker compose up --build
@@ -40,18 +40,34 @@ bash scripts/seed-demo.sh
 python3 examples/github-attack-demo.py
 ```
 
+## Branching and commits
+
+- **Branch from `main`**, target PRs to `main`.
+- **Branch naming**: use `feat/`, `fix/`, `docs/`, `perf/`, `test/`, `refactor/`, `chore/` prefixes.
+  Examples: `feat/receipt-signing`, `fix/approval-expiry-race`, `docs/api-reference`.
+- **Commit messages**: use [Conventional Commits](https://www.conventionalcommits.org/).
+  CI will reject PR titles that don't follow the convention.
+
+  ```
+  feat(gateway): add Ed25519 receipt signing
+  fix(sdk-python): handle empty parameters in canonicalization
+  docs: update API versioning guide
+  perf(gateway): parallelize authorize DB reads with tokio::join!
+  test: add cross-tenant isolation stress test
+  chore(deps): bump sqlx to 0.8.6
+  ```
+
 ## Before you open a PR
 
 Run `make check` (or everything CI checks individually, see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
-- `cargo fmt … --check`, `cargo clippy … -D warnings`, `cargo test …`
+- `cargo fmt -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - `python3 -m black --check sdk-python/ examples/`
 - `python3 -m unittest discover -s sdk-python/tests`
 
 The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has the full
-checklist. Use [Conventional Commits](https://www.conventionalcommits.org/)
-(`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
+checklist.
 
 ## The Four Design Laws
 
@@ -96,6 +112,17 @@ These guarantees are the product. A PR that weakens any of them will not be merg
 - **Trust-provenance is deterministic:** classifiers may only *tighten* a label,
   never loosen it.
 
+## Architecture rules
+
+All code changes must follow [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):
+
+- **Dependencies flow downward only** — `common` ← `api` ← `storage`/`policy` ← `soc` ← `src/`.
+- **`src/` handlers are thin**: parse → service call → respond. No business logic.
+- **Dual protocol**: every endpoint on both REST (Axum) and gRPC (tonic).
+- **Protobuf is source of truth**: new API types → define in `lib/api/proto/*.proto` first.
+- **All DB access** through the `StorageBackend` trait. Never use `SqlitePool` directly.
+- All functions return `Result<T, AegisError>`.
+
 ## Security and multi-tenant rules
 
 - Every SQL query uses parameter binding (no `format!`/f-strings/concatenation).
@@ -112,9 +139,17 @@ not open a public issue.
 
 - Keep Cedar policies fail-closed; avoid broad catch-all `permit` rules.
 - Include tests for allow, deny, and `require_approval` paths.
-- Keep `policies.cedar` and `gateway/policies.cedar` byte-identical.
+- Keep `policies.cedar` and `src/policies.cedar` byte-identical.
 
 ## Good first issues
 
 Issues labeled `good first issue` should include clear repro/implementation
 steps, the tests to run, and the files likely to change.
+
+## Release process
+
+Releases are automated via [release-please](https://github.com/googleapis/release-please).
+Merging conventional-commit PRs into `main` automatically updates the open
+Release PR. When the maintainer merges that Release PR, a new version is tagged,
+the CHANGELOG is updated, and Docker images are published. See
+[`.github/workflows/release-please.yml`](.github/workflows/release-please.yml).

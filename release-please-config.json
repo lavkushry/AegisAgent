@@ -1,0 +1,35 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "component": "aegisagent",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "prerelease": true,
+      "prerelease-type": "beta",
+      "versioning": "default",
+      "extra-files": [
+        "src/Cargo.toml",
+        "lib/api/Cargo.toml",
+        "lib/common/Cargo.toml",
+        "lib/policy/Cargo.toml",
+        "lib/soc/Cargo.toml",
+        "lib/storage/Cargo.toml"
+      ],
+      "changelog-sections": [
+        { "type": "feat", "section": "Added", "hidden": false },
+        { "type": "fix", "section": "Fixed", "hidden": false },
+        { "type": "perf", "section": "Performance", "hidden": false },
+        { "type": "security", "section": "Security", "hidden": false },
+        { "type": "docs", "section": "Documentation", "hidden": false },
+        { "type": "refactor", "section": "Changed", "hidden": false },
+        { "type": "test", "section": "Tests", "hidden": false },
+        { "type": "chore", "section": "Miscellaneous", "hidden": false },
+        { "type": "ci", "section": "CI/CD", "hidden": false },
+        { "type": "build", "section": "Build", "hidden": false }
+      ]
+    }
+  },
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json"
+}

@@ -1,0 +1,39 @@
+# Release Please — automated versioning and changelog generation.
+#
+# On every push to main, release-please maintains an open "Release PR" that
+# accumulates changelog entries from conventional commits. When a maintainer
+# merges that PR, release-please:
+#   1. Tags the merge commit with the next SemVer version (e.g. v0.1.0-beta.1)
+#   2. Creates a GitHub Release with auto-generated notes
+#   3. Updates Cargo.toml versions across all workspace crates
+#   4. Updates CHANGELOG.md with the new release section
+#
+# The release-publish.yml workflow then picks up the new tag to build and
+# publish Docker images and binary artifacts.
+
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.GITHUB_TOKEN }}

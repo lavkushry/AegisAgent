@@ -13,14 +13,17 @@ Closes #
 - [ ] Refactor / cleanup
 - [ ] Docs
 - [ ] Security fix
+- [ ] Performance improvement
+- [ ] CI / build
 
 ## Checklist
 
-- [ ] Tests added/updated; `cargo test --manifest-path gateway/Cargo.toml` and `python3 -m unittest discover -s sdk-python/tests` pass.
-- [ ] `cargo fmt --manifest-path gateway/Cargo.toml -- --check` and `cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings` pass.
+- [ ] Tests added/updated; `cargo test --workspace` and `python3 -m unittest discover -s sdk-python/tests` pass.
+- [ ] `cargo fmt -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 - [ ] `python3 -m black --check sdk-python/ examples/` passes.
 - [ ] No hardcoded secrets; secrets stay out of logs/receipts (hashes only).
 - [ ] Tenant-owned queries bind/filter `tenant_id`; parameterized SQL only.
+- [ ] PR title follows [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, etc.).
 
 ## Integrity invariants (do not weaken)
 

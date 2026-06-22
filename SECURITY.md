@@ -5,9 +5,15 @@ be treated as security-critical infrastructure. We take vulnerabilities seriousl
 
 ## Supported Versions
 
-The project is pre-1.0. Security fixes target the `main` branch until versioned
-releases begin. Once releases begin, the latest minor release will receive
-security fixes.
+| Version | Supported |
+|---|---|
+| `0.1.0-beta.x` | ✅ Current development focus |
+| `main` (unreleased) | ✅ Security fixes applied immediately |
+| Older commits | ❌ No backports — upgrade to latest beta |
+
+Once stable releases begin (`v0.1.0`+), the latest minor release will receive
+security patches. Critical vulnerabilities may receive backports to the
+previous minor.
 
 ## Reporting a Vulnerability
 
@@ -35,8 +41,9 @@ and will credit reporters who wish to be named.
 
 ## Scope
 
-In scope: the Rust gateway, the Python SDK, the default Cedar policy pack, the
-canonicalization scheme, and the action-receipt format/verifier.
+In scope: the Rust gateway, the Python SDK, the Go SDK, the TypeScript SDK,
+the default Cedar policy pack, the canonicalization scheme, and the
+action-receipt format/verifier.
 
 Particularly sensitive areas (a flaw here can break the product's core
 guarantee):
@@ -59,3 +66,5 @@ guarantee):
 - Every database operation is tenant-scoped with parameterized SQL only.
 - Secrets are never logged in audit events, traces, receipts, or demo output;
   receipts store hashes, not raw payloads.
+- All database access uses the `StorageBackend` trait — never raw `SqlitePool`.
+- No `.unwrap()`/`.expect()` in production code paths.

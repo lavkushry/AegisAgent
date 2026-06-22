@@ -7,7 +7,12 @@
 ---
 
 [![CI](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml)
+[![SAST](https://github.com/lavkushry/AegisAgent/actions/workflows/sast.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/sast.yml)
+[![Container Scan](https://github.com/lavkushry/AegisAgent/actions/workflows/container-scan.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/container-scan.yml)
+[![Release](https://img.shields.io/github/v/release/lavkushry/AegisAgent?include_prereleases&label=release)](https://github.com/lavkushry/AegisAgent/releases)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker)](https://github.com/lavkushry/AegisAgent/pkgs/container/aegisagent)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-orange.svg)](Cargo.toml)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](sdk-python/pyproject.toml)
 [![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://lavkushry.github.io/AegisAgent/)
 
@@ -53,6 +58,28 @@ graph TD
 ```
 
 Every decision flows through the **Inline Plane** to enforce permissions, while the **Async SOC Plane** processes security telemetry out-of-band to detect exfiltration, deny-storms, and anomalies without delaying agent execution.
+
+---
+
+## 📥 Installation
+
+### Docker (recommended)
+```bash
+docker pull ghcr.io/lavkushry/aegisagent:latest
+docker run -p 8080:8080 -p 6334:6334 ghcr.io/lavkushry/aegisagent:latest
+```
+
+### From Source
+```bash
+git clone https://github.com/lavkushry/AegisAgent.git
+cd AegisAgent
+cargo build --release
+```
+
+### Python SDK
+```bash
+pip install aegisagent
+```
 
 ---
 

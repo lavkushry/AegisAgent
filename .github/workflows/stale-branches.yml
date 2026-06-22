@@ -1,0 +1,102 @@
+# Stale Branch Cleanup — weekly automated cleanup of abandoned branches.
+#
+# Identifies remote branches with no commits in 90 days and deletes them.
+# Protected branches (main, gh-pages, release/*) are never touched.
+#
+# IMPORTANT: Start with dry_run: true to review what will be deleted.
+# Once satisfied, change to dry_run: false to enable actual deletion.
+
+name: Stale Branch Cleanup
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (log only, don't delete)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      days_before_stale:
+        description: "Days since last commit before a branch is considered stale"
+        required: true
+        default: "90"
+
+permissions:
+  contents: write
+
+env:
+  # Change to 'false' once you've reviewed the dry-run output and are
+  # comfortable with automated deletion.
+  DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+  STALE_DAYS: ${{ github.event.inputs.days_before_stale || '90' }}
+
+jobs:
+  cleanup:
+    name: Clean stale branches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Identify and clean stale branches
+        run: |
+          echo "### 🧹 Stale Branch Cleanup Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Threshold:** ${STALE_DAYS} days" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Dry run:** ${DRY_RUN}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          CUTOFF_DATE=$(date -d "-${STALE_DAYS} days" +%s 2>/dev/null || date -v-${STALE_DAYS}d +%s)
+          DELETED=0
+          SKIPPED=0
+
+          echo "| Branch | Last Commit | Age (days) | Action |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------------|------------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          git fetch --prune origin
+
+          for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/ | grep -v 'HEAD'); do
+            # Strip the origin/ prefix
+            short_name="${branch#origin/}"
+
+            # Skip protected branches
+            if [[ "$short_name" == "main" ]] || \
+               [[ "$short_name" == "gh-pages" ]] || \
+               [[ "$short_name" == release/* ]] || \
+               [[ "$short_name" == "HEAD" ]]; then
+              continue
+            fi
+
+            # Get the last commit date
+            LAST_COMMIT=$(git log -1 --format=%ct "$branch" 2>/dev/null || echo "0")
+            LAST_COMMIT_DATE=$(git log -1 --format=%ci "$branch" 2>/dev/null || echo "unknown")
+            LAST_COMMIT_SHORT=$(echo "$LAST_COMMIT_DATE" | cut -d' ' -f1)
+
+            if [ "$LAST_COMMIT" -lt "$CUTOFF_DATE" ]; then
+              AGE_DAYS=$(( ($(date +%s) - LAST_COMMIT) / 86400 ))
+
+              if [ "$DRY_RUN" = "false" ]; then
+                git push origin --delete "$short_name" 2>/dev/null && \
+                  echo "| \`$short_name\` | $LAST_COMMIT_SHORT | $AGE_DAYS | ❌ Deleted |" >> "$GITHUB_STEP_SUMMARY" || \
+                  echo "| \`$short_name\` | $LAST_COMMIT_SHORT | $AGE_DAYS | ⚠️ Failed |" >> "$GITHUB_STEP_SUMMARY"
+                DELETED=$((DELETED + 1))
+              else
+                echo "| \`$short_name\` | $LAST_COMMIT_SHORT | $AGE_DAYS | 👀 Would delete |" >> "$GITHUB_STEP_SUMMARY"
+                DELETED=$((DELETED + 1))
+              fi
+            else
+              SKIPPED=$((SKIPPED + 1))
+            fi
+          done
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Total stale:** $DELETED | **Active:** $SKIPPED" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,11 +1,14 @@
 version: 2
 updates:
+  # ── Rust workspace crates (gateway + lib/) ─────────────────────────────────
   - package-ecosystem: cargo
-    directory: /gateway
+    directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     labels: ["dependencies", "rust"]
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       # Batch safe minor/patch crate updates into a single PR.
       cargo-minor-patch:
@@ -19,27 +22,59 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
+  # ── Python SDK ─────────────────────────────────────────────────────────────
   - package-ecosystem: pip
     directory: /sdk-python
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       pip-minor-patch:
         update-types: ["minor", "patch"]
 
+  # ── TypeScript SDK ─────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /sdk-typescript
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "typescript"]
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # ── E2E Playwright tests ──────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "e2e"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────────
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci(deps)"
     groups:
       github-actions:
         patterns: ["*"]
 
+  # ── Docker ─────────────────────────────────────────────────────────────────
   - package-ecosystem: docker
-    directory: /gateway
+    directory: /src
     schedule:
       interval: weekly
     labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "chore(deps)"
