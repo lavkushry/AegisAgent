@@ -794,7 +794,9 @@ fn api_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/mcp/servers/:server_key",
-            get(routes::get_mcp_server).put(routes::update_mcp_server),
+            get(routes::get_mcp_server)
+                .put(routes::update_mcp_server)
+                .delete(routes::delete_mcp_server),
         )
         .route(
             "/mcp/servers/:server_key/tools",

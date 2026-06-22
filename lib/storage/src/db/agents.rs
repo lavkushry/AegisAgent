@@ -26,6 +26,11 @@ pub async fn rotate_agent_token(
     Ok(())
 }
 
+/// #1193: also excludes `status = 'deleted'` (alongside the pre-existing
+/// `quarantined` exclusion) — a deleted agent's token must stop resolving
+/// to anything at all, rather than relying on `authorize_action`'s
+/// frozen/revoked status check, which never accounted for "deleted" and so
+/// let a deleted agent's calls proceed unchallenged.
 pub async fn get_agent_by_token(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -33,7 +38,7 @@ pub async fn get_agent_by_token(
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
     let hashed = hash_token(token);
     sqlx::query_as::<_, AgentRecord>(
-        "SELECT * FROM agents WHERE tenant_id = ? AND agent_token = ? AND status != 'quarantined'",
+        "SELECT * FROM agents WHERE tenant_id = ? AND agent_token = ? AND status NOT IN ('quarantined', 'deleted')",
     )
     .bind(tenant_id)
     .bind(hashed)
@@ -80,13 +85,16 @@ pub async fn get_agent_by_key(
 /// Mirrors `get_agent_by_token`'s fail-closed quarantine filter — an mTLS
 /// identity is an authentication path equivalent to a bearer token, so a
 /// quarantined agent must not be reachable through it either.
+/// #1193: same `deleted` exclusion as [`get_agent_by_token`] — this is the
+/// other (mTLS) path to the same `authorize_action`, so it must fail closed
+/// identically for a deleted agent.
 pub async fn get_agent_by_mtls_cn(
     pool: &SqlitePool,
     tenant_id: &str,
     cn: &str,
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
     sqlx::query_as::<_, AgentRecord>(
-        "SELECT * FROM agents WHERE tenant_id = ? AND mtls_cn = ? AND status != 'quarantined'",
+        "SELECT * FROM agents WHERE tenant_id = ? AND mtls_cn = ? AND status NOT IN ('quarantined', 'deleted')",
     )
     .bind(tenant_id)
     .bind(cn)
@@ -604,6 +612,7 @@ pub async fn agent_tool_permission_status(
 mod tests {
     use crate::db::test_utils::*;
     use crate::db::*;
+    use aegis_api::models::AgentRecord;
 
     /// `list_soc_alerts` with `agent_id=Some(...)` returns only alerts matching
     /// that agent — and never another tenant's rows.
@@ -794,5 +803,103 @@ mod tests {
         assert_eq!(board[2].current_avg_risk_score, 0.0);
         assert_eq!(board[2].decision_count_24h, 0);
         assert_eq!(board[2].trend, "stable");
+    }
+
+    fn make_test_agent(
+        id: &str,
+        tenant_id: &str,
+        agent_key: &str,
+        plaintext_token: &str,
+    ) -> AgentRecord {
+        AgentRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            agent_key: agent_key.to_string(),
+            agent_token: hash_token(plaintext_token),
+            name: "Test Agent".to_string(),
+            owner_team: None,
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "low".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            mtls_cn: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// #1193: a deleted agent's token must stop resolving entirely, not
+    /// just continue past `authorize_action`'s frozen/revoked status check
+    /// (which never accounted for "deleted") unchallenged. Regression test
+    /// for the gap discovered while implementing soft-delete for #1193 —
+    /// `get_agent_by_token` already excluded `quarantined` but not `deleted`.
+    #[tokio::test]
+    async fn get_agent_by_token_excludes_deleted_agents() {
+        let pool = setup_pool("agent_token_excludes_deleted").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        let agent = make_test_agent("agent_del", "tenant_a", "agent-del-key", "plaintext-tok");
+        insert_agent(&pool, &agent).await.unwrap();
+
+        // Active: resolves.
+        assert!(get_agent_by_token(&pool, "tenant_a", "plaintext-tok")
+            .await
+            .unwrap()
+            .is_some());
+
+        set_agent_status(&pool, "tenant_a", "agent_del", "deleted")
+            .await
+            .unwrap();
+
+        // Deleted: must no longer resolve via its token.
+        assert!(
+            get_agent_by_token(&pool, "tenant_a", "plaintext-tok")
+                .await
+                .unwrap()
+                .is_none(),
+            "a deleted agent's token must not resolve to an agent"
+        );
+    }
+
+    /// #1193: same gap, mTLS auth path.
+    #[tokio::test]
+    async fn get_agent_by_mtls_cn_excludes_deleted_agents() {
+        let pool = setup_pool("agent_mtls_excludes_deleted").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        let mut agent = make_test_agent("agent_del_mtls", "tenant_a", "agent-del-mtls-key", "tok2");
+        agent.mtls_cn = Some("client.example.com".to_string());
+        insert_agent(&pool, &agent).await.unwrap();
+
+        assert!(
+            get_agent_by_mtls_cn(&pool, "tenant_a", "client.example.com")
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        set_agent_status(&pool, "tenant_a", "agent_del_mtls", "deleted")
+            .await
+            .unwrap();
+
+        assert!(
+            get_agent_by_mtls_cn(&pool, "tenant_a", "client.example.com")
+                .await
+                .unwrap()
+                .is_none(),
+            "a deleted agent's mTLS CN must not resolve to an agent"
+        );
     }
 }

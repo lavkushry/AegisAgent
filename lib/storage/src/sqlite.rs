@@ -519,6 +519,16 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn delete_mcp_server(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+    ) -> Result<bool, AegisError> {
+        db::delete_mcp_server(&self.pool, tenant_id, server_key)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn update_mcp_server(
         &self,
         tenant_id: &str,

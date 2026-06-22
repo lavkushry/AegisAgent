@@ -9,7 +9,7 @@ pub async fn list_policies(
     sqlx::query_as::<_, PolicyRecord>(
         "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
          FROM policies
-         WHERE tenant_id = ?
+         WHERE tenant_id = ? AND deleted_at IS NULL
          ORDER BY created_at DESC",
     )
     .bind(tenant_id)
@@ -25,7 +25,7 @@ pub async fn get_policy_by_id(
     sqlx::query_as::<_, PolicyRecord>(
         "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
          FROM policies
-         WHERE tenant_id = ? AND id = ?",
+         WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
     )
     .bind(tenant_id)
     .bind(policy_id)
@@ -137,16 +137,25 @@ pub async fn list_policy_versions(
     .await
 }
 
+/// #1193: soft delete — marks `deleted_at` instead of removing the row, so
+/// `list_policies`/`get_policy_by_id` (which filter `deleted_at IS NULL`)
+/// stop surfacing it while the data stays recoverable. `deleted_at IS NULL`
+/// in the `WHERE` clause makes this idempotent: a second delete of an
+/// already-deleted policy affects zero rows, matching the existing
+/// "delete non-existent policy returns 404" contract callers rely on.
 pub async fn delete_policy(
     pool: &SqlitePool,
     tenant_id: &str,
     policy_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM policies WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(policy_id)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE policies SET deleted_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
+    )
+    .bind(tenant_id)
+    .bind(policy_id)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -233,4 +242,85 @@ pub async fn list_policy_audit_log(
     .bind(offset)
     .fetch_all(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::register_tenant;
+    use crate::db::test_utils::*;
+
+    fn make_test_policy(id: &str, tenant_id: &str, policy_key: &str) -> PolicyRecord {
+        PolicyRecord {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_key: policy_key.to_string(),
+            name: "Test Policy".to_string(),
+            language: "cedar".to_string(),
+            body: "permit (principal, action, resource);".to_string(),
+            version: 1,
+            status: "active".to_string(),
+            created_by: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    /// #1193: `delete_policy` soft-deletes (sets `deleted_at`) instead of
+    /// removing the row — it must disappear from `list_policies`/
+    /// `get_policy_by_id` while the underlying row still exists.
+    #[tokio::test]
+    async fn delete_policy_soft_deletes_and_hides_from_reads() {
+        let pool = setup_pool("policy_soft_delete").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        let policy = make_test_policy("pol_1", "tenant_a", "allow-all");
+        insert_policy(&pool, &policy).await.unwrap();
+
+        assert!(delete_policy(&pool, "tenant_a", "pol_1").await.unwrap());
+
+        assert!(
+            get_policy_by_id(&pool, "tenant_a", "pol_1")
+                .await
+                .unwrap()
+                .is_none(),
+            "a soft-deleted policy must not be returned by get_policy_by_id"
+        );
+        assert!(
+            list_policies(&pool, "tenant_a").await.unwrap().is_empty(),
+            "a soft-deleted policy must not appear in list_policies"
+        );
+
+        // The row itself must still exist (soft, not hard, delete).
+        let raw: (Option<String>,) =
+            sqlx::query_as("SELECT deleted_at FROM policies WHERE tenant_id = ? AND id = ?")
+                .bind("tenant_a")
+                .bind("pol_1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            raw.0.is_some(),
+            "the row must persist with deleted_at set, not be removed"
+        );
+    }
+
+    /// #1193: deleting an already-deleted policy must be a no-op (affects
+    /// zero rows) rather than erroring or double-counting — this is the
+    /// `deleted_at IS NULL` guard in the `UPDATE`'s `WHERE` clause.
+    #[tokio::test]
+    async fn delete_policy_is_idempotent() {
+        let pool = setup_pool("policy_delete_idempotent").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        let policy = make_test_policy("pol_2", "tenant_a", "allow-all-2");
+        insert_policy(&pool, &policy).await.unwrap();
+
+        assert!(delete_policy(&pool, "tenant_a", "pol_2").await.unwrap());
+        assert!(
+            !delete_policy(&pool, "tenant_a", "pol_2").await.unwrap(),
+            "deleting an already-deleted policy must affect zero rows"
+        );
+    }
 }
