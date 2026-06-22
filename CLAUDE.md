@@ -16,6 +16,7 @@ For the complete feature development records, SDK specifications, and ticket par
 
 * **Baseline**: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, 3-SDK parity.
 * **Agent-to-gateway mTLS (#1310)**: optional mutual-TLS auth, alternative to bearer tokens, gated on `AEGIS_MTLS_CA_CERT` (CRL revocation via `AEGIS_MTLS_CRL_PATH`). Verified client-cert Subject CN maps to an agent via `agents.mtls_cn` (set through `PATCH /v1/agents/:id`); unrecognized CN fails closed (401); unset env var leaves bearer-token auth unchanged. See `src/src/mtls.rs`.
+* **Signed policy bundles (#1280)**: `POST /v1/policies/bundles` uploads an Ed25519-signed, multi-policy Cedar bundle, gated on `AEGIS_POLICY_SIGNING_KEY` (verifying/public key); unset, every request fails closed (501). Signature covers the `aegis-jcs-1`-canonicalized `{policies, version, created_at}` hash; entries upsert by `policy_key`; all-or-nothing Cedar validation before any write. See `src/src/routes/policy.rs`.
 
 ## Architecture & Performance Roadmap
 
