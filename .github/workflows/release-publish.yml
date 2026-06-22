@@ -1,8 +1,9 @@
 # Release Publish — build and publish artifacts after a release is created.
 #
 # Triggered when release-please creates a new GitHub Release (via tag push).
-# Builds a production Docker image, pushes to ghcr.io, generates an SBOM,
-# and attaches artifacts to the GitHub Release.
+# Builds a production Docker image, pushes to ghcr.io, generates SBOMs,
+# signs the image (cosign, keyless), attaches SLSA build provenance, and
+# attaches artifacts to the GitHub Release. #1172.
 
 name: Release Publish
 
@@ -25,6 +26,9 @@ jobs:
   docker:
     name: Docker image (ghcr.io)
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
 
@@ -49,6 +53,7 @@ jobs:
             type=raw,value=latest,enable=${{ !contains(github.ref, 'beta') && !contains(github.ref, 'alpha') && !contains(github.ref, 'rc') }}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -57,7 +62,50 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # ── Generate SBOM and attach to release ────────────────────────────────────
+  # ── Sign the image (cosign, keyless via GitHub OIDC) ───────────────────────
+  cosign:
+    name: Sign image (cosign)
+    runs-on: ubuntu-latest
+    needs: [docker]
+    permissions:
+      id-token: write # mint the OIDC token Fulcio signs against
+      packages: write # push the signature to ghcr.io
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.2
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Signs by digest, not tag — the digest is exactly the image just
+      # built, immune to a tag being retargeted after the fact.
+      - name: Sign image (keyless)
+        run: cosign sign --yes "${{ needs.docker.outputs.image }}@${{ needs.docker.outputs.digest }}"
+
+  # ── SLSA build provenance attestation ───────────────────────────────────────
+  # Runs in an isolated, framework-controlled environment (not this repo's own
+  # runner) so the attestation can't be forged by anything this workflow does
+  # itself — the actual SLSA Level 3 requirement.
+  provenance:
+    name: SLSA provenance
+    needs: [docker]
+    permissions:
+      actions: read # detect the GitHub Actions environment
+      id-token: write # mint the OIDC token Fulcio signs against
+      packages: write # push the attestation to ghcr.io
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.docker.outputs.image }}
+      digest: ${{ needs.docker.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Generate SBOMs and attach to release ───────────────────────────────────
   sbom:
     name: SBOM generation
     runs-on: ubuntu-latest
@@ -65,15 +113,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Generate Rust SBOM (cargo-cyclonedx)
+      - name: Generate Rust dependency SBOM (cargo-cyclonedx)
         run: |
           cargo install cargo-cyclonedx --locked
           cargo cyclonedx --format json --output-file aegisagent-sbom.json
 
-      - name: Upload SBOM to release
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # #1172: SPDX-format SBOM of the actual shipped container image
+      # (OS packages included, not just Rust crates) — complements the
+      # cargo-cyclonedx one above rather than replacing it.
+      - name: Generate image SBOM (syft, SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ needs.docker.outputs.image }}@${{ needs.docker.outputs.digest }}
+          format: spdx-json
+          output-file: aegisagent-image-sbom.spdx.json
+
+      - name: Upload SBOMs to release
         uses: softprops/action-gh-release@v3
         with:
-          files: aegisagent-sbom.json
+          files: |
+            aegisagent-sbom.json
+            aegisagent-image-sbom.spdx.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -81,7 +148,7 @@ jobs:
   summary:
     name: Release summary
     runs-on: ubuntu-latest
-    needs: [docker, sbom]
+    needs: [docker, cosign, provenance, sbom]
     steps:
       - name: Publish summary
         run: |
@@ -89,4 +156,6 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Tag:** \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Docker:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Signed:** image signed with cosign (keyless, Sigstore Fulcio/Rekor)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Provenance:** SLSA Level 3 build provenance attached to the image" >> "$GITHUB_STEP_SUMMARY"
           echo "- **SBOM:** Attached to [release](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }})" >> "$GITHUB_STEP_SUMMARY"
