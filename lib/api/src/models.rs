@@ -45,6 +45,12 @@ pub struct PatchAgentRequest {
     pub purpose: Option<String>,
     pub risk_tier: Option<String>,
     pub status: Option<String>,
+    /// Bind this agent to a client certificate Subject CN for mTLS
+    /// authentication (#1310). `Some` sets/rebinds; omit the field to leave
+    /// the current binding unchanged. Revoke access for a compromised
+    /// certificate via the CA's CRL (`AEGIS_MTLS_CRL_PATH`), not by clearing
+    /// this field.
+    pub mtls_cn: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -329,6 +335,11 @@ pub struct AgentRecord {
     /// `["production","staging"]`. `None` = unrestricted (backwards-compatible).
     #[serde(default)]
     pub allowed_environments: Option<String>,
+    /// Client certificate Subject CN bound to this agent for mTLS
+    /// authentication (#1310). `None` = mTLS not bound; bearer-token auth via
+    /// `agent_token` is the only path (backwards-compatible).
+    #[serde(default)]
+    pub mtls_cn: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

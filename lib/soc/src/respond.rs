@@ -175,6 +175,7 @@ mod tests {
             force_approval: false,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

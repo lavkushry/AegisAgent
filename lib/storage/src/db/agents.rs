@@ -76,6 +76,24 @@ pub async fn get_agent_by_key(
         .await
 }
 
+/// Resolve an agent by its bound mTLS client-certificate Subject CN (#1310).
+/// Mirrors `get_agent_by_token`'s fail-closed quarantine filter — an mTLS
+/// identity is an authentication path equivalent to a bearer token, so a
+/// quarantined agent must not be reachable through it either.
+pub async fn get_agent_by_mtls_cn(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    cn: &str,
+) -> Result<Option<AgentRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRecord>(
+        "SELECT * FROM agents WHERE tenant_id = ? AND mtls_cn = ? AND status != 'quarantined'",
+    )
+    .bind(tenant_id)
+    .bind(cn)
+    .fetch_optional(pool)
+    .await
+}
+
 /// #1145: `?status=` field filtering. When `status_filter` is `None`, the
 /// default soft-delete exclusion (`status != 'deleted'`) applies, matching
 /// pre-#1145 behavior; when set, it's an exact match instead (so explicitly
@@ -198,8 +216,8 @@ pub async fn get_agent_risk_scoreboard(
 
 pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key, allowed_environments)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key, allowed_environments, mtls_cn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -217,6 +235,7 @@ pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(),
     .bind(&record.status)
     .bind(&record.signing_key)
     .bind(&record.allowed_environments)
+    .bind(&record.mtls_cn)
     .execute(pool)
     .await?;
     Ok(())
@@ -244,17 +263,18 @@ pub fn verify_request_signature(signing_key: &str, body: &[u8], sig_header: &str
 
 pub async fn update_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE agents SET 
-            name = ?, 
-            owner_team = ?, 
-            owner_email = ?, 
-            environment = ?, 
-            framework = ?, 
-            model_provider = ?, 
-            model_name = ?, 
-            purpose = ?, 
-            risk_tier = ?, 
-            status = ?, 
+        "UPDATE agents SET
+            name = ?,
+            owner_team = ?,
+            owner_email = ?,
+            environment = ?,
+            framework = ?,
+            model_provider = ?,
+            model_name = ?,
+            purpose = ?,
+            risk_tier = ?,
+            status = ?,
+            mtls_cn = ?,
             updated_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ? AND id = ?",
     )
@@ -268,6 +288,7 @@ pub async fn update_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(),
     .bind(&record.purpose)
     .bind(&record.risk_tier)
     .bind(&record.status)
+    .bind(&record.mtls_cn)
     .bind(&record.tenant_id)
     .bind(&record.id)
     .execute(pool)

@@ -50,6 +50,16 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn get_agent_by_mtls_cn(
+        &self,
+        tenant_id: &str,
+        cn: &str,
+    ) -> Result<Option<AgentRecord>, AegisError> {
+        db::get_agent_by_mtls_cn(&self.pool, tenant_id, cn)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn list_agents(
         &self,
         tenant_id: &str,

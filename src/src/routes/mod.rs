@@ -1379,6 +1379,7 @@ pub mod benchutil {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1459,6 +1460,7 @@ pub mod benchutil {
                 quarantined_at: None,
                 signing_key: None,
                 allowed_environments: None,
+                mtls_cn: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
@@ -1831,6 +1833,7 @@ pub(crate) mod test_helpers {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1936,6 +1939,18 @@ pub(crate) mod test_helpers {
             "Authorization",
             format!("Bearer {}", agent_token).parse().unwrap(),
         );
+        headers.insert("X-Aegis-Tenant-ID", tenant_id.parse().unwrap());
+        headers
+    }
+
+    /// Like [`agent_headers`], but authenticates via the mTLS Subject-CN
+    /// header instead of a bearer token (#1310). Mirrors exactly what the
+    /// TLS accept loop in `main.rs` sets on a request after a verified
+    /// client-cert handshake, so `authorize_action`'s mTLS branch can be
+    /// exercised without standing up a real TCP/TLS listener in tests.
+    pub(crate) fn mtls_headers(cn: &str, tenant_id: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(crate::mtls::MTLS_CN_HEADER, cn.parse().unwrap());
         headers.insert("X-Aegis-Tenant-ID", tenant_id.parse().unwrap());
         headers
     }

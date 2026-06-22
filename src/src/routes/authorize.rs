@@ -135,12 +135,6 @@ pub async fn authorize_action(
         &payload.context.source_trust,
     );
 
-    // Resolve agent from Bearer agent_token
-    let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
-        Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
-        _ => return StatusError::unauthorized("Missing agent token").into_response(),
-    };
-
     let runtime_tenant_id = match get_runtime_tenant_from_headers(&headers) {
         Some(tid) => tid,
         None => {
@@ -148,18 +142,53 @@ pub async fn authorize_action(
                 .into_response()
         }
     };
-    let agent = match state
-        .storage
-        .get_agent_by_token(&runtime_tenant_id, auth_header)
-        .await
+
+    // #1310: mTLS authentication. The TLS accept loop in `main.rs` sets this
+    // internal header to a client certificate's verified Subject CN only
+    // after a successful mTLS handshake against the configured CA, and
+    // strips any client-supplied value otherwise on every serving path — a
+    // client can never set it itself. Checked before bearer-token auth so a
+    // recognized mTLS identity never needs (or falls through to) a token.
+    let agent = if let Some(cn) = headers
+        .get(crate::mtls::MTLS_CN_HEADER)
+        .and_then(|h| h.to_str().ok())
+        .filter(|s| !s.is_empty())
     {
-        Ok(Some(a)) => a,
-        Ok(None) => {
-            return StatusError::unauthorized("Invalid or quarantined agent token").into_response()
+        match state
+            .storage
+            .get_agent_by_mtls_cn(&runtime_tenant_id, cn)
+            .await
+        {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return StatusError::unauthorized("Unrecognized mTLS client certificate")
+                    .into_response()
+            }
+            Err(e) => {
+                error!("Database lookup error: {:?}", e);
+                return StatusError::internal("Database error").into_response();
+            }
         }
-        Err(e) => {
-            error!("Database lookup error: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+    } else {
+        // Resolve agent from Bearer agent_token
+        let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
+            Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
+            _ => return StatusError::unauthorized("Missing agent token").into_response(),
+        };
+        match state
+            .storage
+            .get_agent_by_token(&runtime_tenant_id, auth_header)
+            .await
+        {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return StatusError::unauthorized("Invalid or quarantined agent token")
+                    .into_response()
+            }
+            Err(e) => {
+                error!("Database lookup error: {:?}", e);
+                return StatusError::internal("Database error").into_response();
+            }
         }
     };
 
@@ -4521,6 +4550,104 @@ mod tests {
         assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// #1310: a request carrying the mTLS Subject-CN header (set, in
+    /// production, by the TLS accept loop after a verified client-cert
+    /// handshake — see `mtls_headers`) and no `Authorization` header at all
+    /// still authenticates, when the CN is bound to an agent.
+    #[tokio::test]
+    async fn authorize_action_authenticates_via_mtls_cn() {
+        let (state, tenant_id, agent_token) = setup_state("mtls_cn_authenticates").await;
+        let mut agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        agent.mtls_cn = Some("agent-cert-007".to_string());
+        state.storage.update_agent(&agent).await.unwrap();
+
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp = authorize_action(
+            State(state.clone()),
+            mtls_headers("agent-cert-007", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "a CN bound to an agent must authenticate without a bearer token"
+        );
+    }
+
+    /// #1310: a CN that doesn't map to any agent in this tenant must be
+    /// denied (401) rather than falling back to bearer-token auth, even
+    /// though no `Authorization` header was sent.
+    #[tokio::test]
+    async fn authorize_action_denies_unrecognized_mtls_cn() {
+        let (state, tenant_id, _agent_token) = setup_state("mtls_cn_unrecognized").await;
+
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp = authorize_action(
+            State(state.clone()),
+            mtls_headers("never-bound-cn", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// #1310: a quarantined agent must not be reachable via its bound mTLS
+    /// CN either — `get_agent_by_mtls_cn` mirrors `get_agent_by_token`'s
+    /// fail-closed quarantine filter.
+    #[tokio::test]
+    async fn authorize_action_denies_quarantined_agent_via_mtls_cn() {
+        let (state, tenant_id, agent_token) = setup_state("mtls_cn_quarantined").await;
+        let mut agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        agent.mtls_cn = Some("agent-cert-quarantined".to_string());
+        agent.status = "quarantined".to_string();
+        state.storage.update_agent(&agent).await.unwrap();
+
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp = authorize_action(
+            State(state.clone()),
+            mtls_headers("agent-cert-quarantined", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// #1310: absent the mTLS-CN header entirely, behavior is unchanged —
+    /// bearer-token auth still works (the acceptance criterion's "falls
+    /// back to bearer token auth when mTLS is not configured").
+    #[tokio::test]
+    async fn authorize_action_falls_back_to_bearer_token_without_mtls_header() {
+        let (state, tenant_id, agent_token) = setup_state("mtls_cn_fallback").await;
+
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp = authorize_action(
+            State(state.clone()),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
     /// `POST /v1/agents/:id/report-leaked-token` rotates by default (tenant's
     /// `auto_rotate_token_on_leak_enabled` defaults to `true`).
     #[tokio::test]
@@ -4998,6 +5125,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -5744,6 +5872,7 @@ mod tests {
                     quarantined_at: None,
                     signing_key: None,
                     allowed_environments: None,
+                    mtls_cn: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
@@ -5889,6 +6018,7 @@ mod tests {
                     quarantined_at: None,
                     signing_key: None,
                     allowed_environments: None,
+                    mtls_cn: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 },
@@ -6258,6 +6388,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -6463,6 +6594,7 @@ mod tests {
             quarantined_at: None,
             signing_key: None,
             allowed_environments: None,
+            mtls_cn: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
