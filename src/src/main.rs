@@ -28,6 +28,7 @@ use gateway::gh_comment;
 use gateway::jobs;
 use gateway::metrics;
 use gateway::mtls;
+use gateway::otel;
 use gateway::policy;
 use gateway::qdrant;
 use gateway::routes;
@@ -1018,6 +1019,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // #1156: distributed tracing, gated on AEGIS_OTLP_ENDPOINT. `None` when
+    // unset — entirely inert, see `otel::init_tracer_provider`'s doc comment.
+    let otel_tracer_provider = otel::init_tracer_provider();
+    let otel_layer = otel::tracing_layer(&otel_tracer_provider);
+
     // Initialize tracing with structured JSON logging and log redaction
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -1029,7 +1035,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_writer(RedactingMakeWriter {
                     inner: std::io::stdout,
                 }),
-        );
+        )
+        .with(otel_layer);
 
     tracing::subscriber::set_global_default(subscriber).expect("Unable to set global subscriber");
 
@@ -1960,6 +1967,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => tracing::warn!(
             "Audit batch writer drain timed out. Some audit events may have been lost."
         ),
+    }
+
+    // #1156: flush any spans still buffered in the OTel batch processor.
+    if let Some(provider) = otel_tracer_provider {
+        otel::shutdown_tracer_provider(&provider);
     }
 
     info!("AegisAgent shut down gracefully.");

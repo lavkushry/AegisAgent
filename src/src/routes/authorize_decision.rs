@@ -6,7 +6,7 @@
 use chrono::Utc;
 use serde_json::json;
 use std::sync::Arc;
-use tracing::error;
+use tracing::{error, Instrument};
 use uuid::Uuid;
 
 use crate::db;
@@ -165,7 +165,13 @@ pub(crate) async fn write_decision_and_audit(
 
     // #1399: retry on transient SQLITE_BUSY/LOCKED before treating the audit
     // write as failed (fail-closed only after retries are exhausted).
-    storage.insert_decision(&decision_record).await?;
+    storage
+        .insert_decision(&decision_record)
+        .instrument(tracing::info_span!(
+            "db_query",
+            db.operation = "insert_decision"
+        ))
+        .await?;
 
     // TASK-0089 (#935): best-effort historical risk-score sample, so
     // operators can see an agent's risk trend over time. Never blocks the
