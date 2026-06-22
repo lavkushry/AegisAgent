@@ -53,7 +53,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
         if: matrix.rust == 'stable'
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
       # ── TASK-1313: /v1/authorize latency regression gate ─────────────────
       # Runs the criterion benchmark (reduced sample size, see
       # benches/authorize_benchmark.rs) and compares the mean latency of the
@@ -117,7 +117,7 @@ jobs:
         run: cargo install cargo-llvm-cov --locked
       - name: Coverage (fails under 70% lines)
         run: |
-          cargo llvm-cov --summary-only --fail-under-lines 70 | tee coverage-summary.txt
+          cargo llvm-cov --summary-only --fail-under-lines 70 -- --test-threads=1 | tee coverage-summary.txt
       - name: Publish coverage summary
         if: always()
         run: |
