@@ -1304,6 +1304,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // this is `Arc`-shared with (not leader-gated, unlike the maintenance
     // jobs above) `jobs::run_heartbeat_flush_job`.
     let heartbeat_debouncer = Arc::new(routes::HeartbeatDebouncer::new());
+    // #1512: tracks fire-and-forget background writes spawned off the
+    // `/v1/authorize` hot path (historical risk-score sample, verifiable
+    // receipt) — see `routes::DeferredWriteTracker`. Drained (not aborted)
+    // during graceful shutdown below so a deferred write is never silently
+    // lost mid-flight.
+    let deferred_write_tracker = Arc::new(routes::DeferredWriteTracker::new());
     let heartbeat_flush_interval_secs: u64 = std::env::var("AEGIS_HEARTBEAT_FLUSH_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1506,6 +1512,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         replay_nonce_cache,
         risk_weight_cache,
         heartbeat_debouncer: heartbeat_debouncer.clone(),
+        deferred_write_tracker: deferred_write_tracker.clone(),
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: audit_writer_unhealthy.clone(),
         audit_batch,
@@ -1827,6 +1834,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // graceful shutdown never silently drops a pending last_seen_at write.
     jobs::flush_heartbeats(state.storage.get_pool(), &state.heartbeat_debouncer).await;
 
+    // #1512: wait for any deferred (fire-and-forget) risk-score/receipt
+    // writes spawned during the inline authorize path to land before the
+    // process exits, so graceful shutdown never silently drops one. Bounded
+    // by AEGIS_DEFERRED_WRITE_DRAIN_TIMEOUT_SECS (default 5s) — these are
+    // best-effort writes, so a slow drain should not hold up shutdown
+    // indefinitely.
+    let deferred_write_drain_timeout = std::env::var("AEGIS_DEFERRED_WRITE_DRAIN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(std::time::Duration::from_secs(5));
+    if !state
+        .deferred_write_tracker
+        .drain(deferred_write_drain_timeout)
+        .await
+    {
+        tracing::warn!(
+            "Deferred-write drain timed out during shutdown. Some risk-score/receipt writes may not have completed."
+        );
+    }
+
     drop(state);
 
     // Wait for the drain task to finish with a timeout (default 10s)
@@ -2061,6 +2089,7 @@ mod tests {
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2353,6 +2382,7 @@ mod tests {
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2682,6 +2712,7 @@ mod tests {
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),

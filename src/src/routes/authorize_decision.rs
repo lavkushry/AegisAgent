@@ -5,6 +5,7 @@
 
 use chrono::Utc;
 use serde_json::json;
+use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
@@ -76,7 +77,8 @@ async fn get_cached_risk_weights(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_decision_and_audit(
-    storage: &dyn aegis_storage::traits::StorageBackend,
+    storage: &Arc<dyn aegis_storage::traits::StorageBackend>,
+    deferred_write_tracker: &Arc<super::DeferredWriteTracker>,
     events: &EventSink,
     metrics: &SecurityMetrics,
     audit_batch: &crate::audit_batch::AuditBatchSink,
@@ -98,7 +100,7 @@ pub(crate) async fn write_decision_and_audit(
     // fall back to env-configured defaults inside `db::get_risk_weights`,
     // read through the #1513 TTL cache to avoid a DB read on every call.
     let composite_risk_score = {
-        let weights = get_cached_risk_weights(storage, risk_weight_cache, tenant_id).await;
+        let weights = get_cached_risk_weights(storage.as_ref(), risk_weight_cache, tenant_id).await;
         let is_mcp_call =
             super::mcp_server_key_from_tool(&normalize_tool_identifier(&payload.tool_call.tool))
                 .is_some();
@@ -167,18 +169,32 @@ pub(crate) async fn write_decision_and_audit(
 
     // TASK-0089 (#935): best-effort historical risk-score sample, so
     // operators can see an agent's risk trend over time. Never blocks the
-    // decision response.
-    if let Err(e) = storage
-        .insert_agent_risk_score(
-            tenant_id,
-            agent_id,
-            &decision_id.to_string(),
-            risk_score,
-            reason,
-        )
-        .await
+    // decision response. #1512: spawned as a tracked background write
+    // instead of `.await`ed inline — it competed for the SQLite WAL write
+    // lock with the synchronous `insert_decision` above on every request.
+    // `SqliteStorage::insert_agent_risk_score` doesn't retry on its own
+    // (unlike `insert_decision`), so this wraps its own retry-on-busy.
     {
-        error!("Failed to record agent risk score: {:?}", e);
+        let storage = Arc::clone(storage);
+        let tenant_id = tenant_id.to_string();
+        let agent_id = agent_id.to_string();
+        let decision_id_str = decision_id.to_string();
+        let reason = reason.to_string();
+        deferred_write_tracker.spawn_tracked(async move {
+            if let Err(e) = super::retry_storage_write_on_busy(3, || {
+                storage.insert_agent_risk_score(
+                    &tenant_id,
+                    &agent_id,
+                    &decision_id_str,
+                    risk_score,
+                    &reason,
+                )
+            })
+            .await
+            {
+                error!("Failed to record agent risk score: {:?}", e);
+            }
+        });
     }
 
     let audit_record = AuditEventRecord {

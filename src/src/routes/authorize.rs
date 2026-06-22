@@ -383,7 +383,8 @@ pub async fn authorize_action(
         };
 
         let composite_risk_score = match write_decision_and_audit(
-            state.storage.as_ref(),
+            &state.storage,
+            &state.deferred_write_tracker,
             &state.events,
             &state.metrics,
             &state.audit_batch,
@@ -451,7 +452,8 @@ pub async fn authorize_action(
                 };
 
                 let composite_risk_score = match write_decision_and_audit(
-                    state.storage.as_ref(),
+                    &state.storage,
+                    &state.deferred_write_tracker,
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
@@ -591,7 +593,8 @@ pub async fn authorize_action(
                 risk_score = 100;
 
                 let composite_risk_score = match write_decision_and_audit(
-                    state.storage.as_ref(),
+                    &state.storage,
+                    &state.deferred_write_tracker,
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
@@ -661,7 +664,8 @@ pub async fn authorize_action(
                     let matched_policies = vec!["mcp_tool_status".to_string()];
 
                     let composite_risk_score = match write_decision_and_audit(
-                        state.storage.as_ref(),
+                        &state.storage,
+                        &state.deferred_write_tracker,
                         &state.events,
                         &state.metrics,
                         &state.audit_batch,
@@ -717,7 +721,8 @@ pub async fn authorize_action(
                 risk_score = 100;
 
                 let composite_risk_score = match write_decision_and_audit(
-                    state.storage.as_ref(),
+                    &state.storage,
+                    &state.deferred_write_tracker,
                     &state.events,
                     &state.metrics,
                     &state.audit_batch,
@@ -895,7 +900,8 @@ pub async fn authorize_action(
     }
 
     let composite_risk_score = match write_decision_and_audit(
-        state.storage.as_ref(),
+        &state.storage,
+        &state.deferred_write_tracker,
         &state.events,
         &state.metrics,
         &state.audit_batch,
@@ -980,7 +986,8 @@ pub async fn authorize_action(
     // Skipped for dry-run (#1281) — no decision was persisted to chain from.
     if !dry_run {
         emit_action_receipt(
-            state.storage.as_ref(),
+            &state.storage,
+            &state.deferred_write_tracker,
             &tenant_id,
             &agent_id,
             &payload,
@@ -1767,6 +1774,7 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1822,6 +1830,7 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2294,6 +2303,13 @@ mod tests {
         request.tool_call.mutates_state = false;
         let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
 
+        // #1512: the receipt write is now a deferred background task — wait
+        // for it to land before querying for it.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
+
         let (receipt_id,): (String,) = sqlx::query_as(
             "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
         )
@@ -2331,6 +2347,13 @@ mod tests {
 
         let request = mcp_authorize_request("github", "read_issue");
         let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+
+        // #1512: the receipt write is now a deferred background task — wait
+        // for it to land before querying for it.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
 
         let (receipt_id,): (String,) = sqlx::query_as(
             "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
@@ -2555,6 +2578,13 @@ mod tests {
         assert_eq!(response.decision, "allow");
         assert_eq!(response.risk_score, 10);
 
+        // #1512: the risk-score sample is now a deferred background write —
+        // wait for it to land before querying for it.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
+
         let decisions = db::list_decisions(&state.pool, &tenant_id, 10, 0, None, None)
             .await
             .unwrap();
@@ -2566,6 +2596,65 @@ mod tests {
         assert_eq!(scores.len(), 1);
         assert_eq!(scores[0].decision_id, decision.id);
         assert_eq!(scores[0].score, 10);
+    }
+
+    /// #1512: the risk-score sample and the verifiable receipt are both
+    /// written off the `/v1/authorize` hot path via the same
+    /// [`DeferredWriteTracker`] — the decision/audit row (synchronous) is
+    /// visible immediately, but the risk-score and receipt rows land only
+    /// once the tracker has drained. One `drain()` call must be sufficient
+    /// for both, since they're spawned from the same decision.
+    #[tokio::test]
+    async fn authorize_defers_risk_score_and_receipt_writes_until_drained() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_defers_writes").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = false;
+        request.context.source_trust = "trusted_internal_signed".to_string();
+
+        let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(response.decision, "allow");
+
+        // The decision row itself is written synchronously — visible with no
+        // drain.
+        let decisions = db::list_decisions(&state.pool, &tenant_id, 10, 0, None, None)
+            .await
+            .unwrap();
+        let decision = decisions
+            .first()
+            .expect("decision row must be visible without draining")
+            .clone();
+
+        // A single drain() call is sufficient for both deferred writes
+        // spawned by that one decision.
+        let drained = state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
+        assert!(drained, "deferred writes should drain within the timeout");
+
+        let scores = db::list_agent_risk_scores(&state.pool, &tenant_id, &decision.agent_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            scores.len(),
+            1,
+            "risk-score sample should have landed after drain"
+        );
+
+        let (receipt_count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ? AND decision_id = ?",
+        )
+        .bind(tenant_id.as_str())
+        .bind(&decision.id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            receipt_count, 1,
+            "receipt should have landed after the same drain"
+        );
     }
 
     /// #1293: end-to-end 3-hop trust propagation through `/v1/authorize`.
@@ -3677,6 +3766,16 @@ mod tests {
         request.tool_call.parameters = serde_json::json!({"base_branch": "main"});
         let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
         let approval_id = response.approval.expect("approval created").approval_id;
+
+        // #1512: the original decision's receipt write is now deferred —
+        // wait for it to land so it's the chain head the tamper-attempt
+        // receipt below chains onto (otherwise the tamper receipt could win
+        // the race and become the head itself, with an empty
+        // `prev_receipt_hash`).
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
 
         let approve = approve_approval(
             State(state.clone()),
@@ -6182,6 +6281,7 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -6323,10 +6423,16 @@ mod tests {
             "sqlite://target/routes_audit_busy_{}.db",
             Uuid::new_v4().simple()
         );
-        // busy_timeout(0) → any concurrent writer lock surfaces as an
-        // immediate SQLITE_BUSY instead of SQLite's own multi-second
-        // busy-wait, so the test stays fast and deterministic.
-        let pool = db::init_db_with_busy_timeout(&db_url, Duration::from_millis(0))
+        // busy_timeout(50ms) → any concurrent writer lock still surfaces as
+        // SQLITE_BUSY quickly (test stays fast and deterministic), but
+        // tolerates the #1512 deferred risk-score/receipt writes from the
+        // FIRST call below still finishing on a separate connection (each
+        // retries internally for up to ~7ms) when the SECOND call's own
+        // synchronous writes land. A 0ms timeout conflated "externally
+        // locked the whole test" with "this request's own deferred writes
+        // briefly overlapping" — both used to surface as SQLITE_BUSY
+        // identically, but only the former should deny.
+        let pool = db::init_db_with_busy_timeout(&db_url, Duration::from_millis(50))
             .await
             .unwrap();
         let tenant_id = "tenant_routes".to_string();
@@ -6379,6 +6485,7 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),

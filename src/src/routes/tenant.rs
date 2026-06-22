@@ -1110,6 +1110,13 @@ mod tests {
         )
         .await;
 
+        // #1512: the receipt write is now a deferred background task — wait
+        // for it to land before exporting.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
+
         // Happy path: export own tenant.
         let resp = export_tenant(
             State(state.clone()),
@@ -1168,6 +1175,13 @@ mod tests {
             mcp_authorize_request("github", "read_issue"),
         )
         .await;
+
+        // #1512: the receipt write is now a deferred background task — wait
+        // for it to land before the rest of this seed helper queries for it.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
 
         // Reuse the decision row created above so the approval's FK is valid.
         let decision_id: String = sqlx::query_scalar(
@@ -1305,6 +1319,13 @@ mod tests {
             mcp_authorize_request("github", "read_issue"),
         )
         .await;
+        // #1512: the receipt write is now deferred — wait for it to land
+        // before the UPDATE below ages its created_at, otherwise the UPDATE
+        // can race the write and miss the row entirely.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
         let old_time = Utc::now() - Duration::days(10);
         sqlx::query("UPDATE action_receipts SET created_at = ? WHERE tenant_id = ?")
             .bind(old_time)
@@ -1327,6 +1348,12 @@ mod tests {
             mcp_authorize_request("github", "read_issue"),
         )
         .await;
+        // #1512: wait for this second receipt's deferred write to land
+        // before querying the evidence pack below.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
 
         // Narrow the range to exclude the 10-day-old rows but include "now".
         let from = (Utc::now() - Duration::days(1)).to_rfc3339();

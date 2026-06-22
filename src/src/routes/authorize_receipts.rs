@@ -5,6 +5,7 @@
 
 use chrono::Utc;
 use serde_json::json;
+use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
@@ -34,9 +35,15 @@ pub(crate) fn apply_receipt_signature(receipt: &mut ActionReceiptRecord) {
 }
 
 /// Emit a hash-chained, verifiable receipt for a finalized decision. Non-fatal:
-/// a receipt write failure is logged but does not change the authorization result.
+/// a receipt write failure is logged but does not change the authorization
+/// result. #1512: the write itself is spawned as a tracked background task
+/// (see [`super::DeferredWriteTracker`]) rather than `.await`ed inline — it
+/// competed for the SQLite WAL write lock with the decision write on every
+/// request. This function returns as soon as the write is scheduled, not
+/// once it lands.
 pub(crate) async fn emit_action_receipt(
-    storage: &dyn aegis_storage::traits::StorageBackend,
+    storage: &Arc<dyn aegis_storage::traits::StorageBackend>,
+    deferred_write_tracker: &Arc<super::DeferredWriteTracker>,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -72,12 +79,19 @@ pub(crate) async fn emit_action_receipt(
         created_at: Utc::now(),
     };
 
-    if let Err(e) = storage
-        .append_action_receipt_atomic(tenant_id, receipt)
+    let storage = Arc::clone(storage);
+    let tenant_id_owned = tenant_id.to_string();
+    deferred_write_tracker.spawn_tracked(async move {
+        // `SqliteStorage::append_action_receipt_atomic` doesn't retry on its
+        // own, so wrap it the same way the deferred risk-score write is.
+        if let Err(e) = super::retry_storage_write_on_busy(3, || {
+            storage.append_action_receipt_atomic(&tenant_id_owned, receipt.clone())
+        })
         .await
-    {
-        error!("Failed to write action receipt: {:?}", e);
-    }
+        {
+            error!("Failed to write action receipt: {:?}", e);
+        }
+    });
 }
 
 /// Decision label for a receipt recording a detected integrity violation (T-D:

@@ -475,6 +475,179 @@ impl RiskWeightsCache {
     }
 }
 
+/// #1512: tracks in-flight "fire-and-forget" background writes spawned off
+/// the `/v1/authorize` hot path — the historical risk-score sample
+/// (`StorageBackend::insert_agent_risk_score`) and the verifiable receipt
+/// write (`StorageBackend::append_action_receipt_atomic`). Both are
+/// best-effort and have always been allowed to fail without affecting the
+/// returned decision; the only change is *when* they run. Previously they
+/// were `.await`ed inline, competing for the SQLite WAL write lock with the
+/// real decision write on every single request. Now they're spawned onto a
+/// tracked background task instead, so the response returns as soon as the
+/// decision/audit row lands.
+///
+/// Mirrors the [`HeartbeatDebouncer`] pattern below: an `Arc`-shared counter
+/// the hot path touches without blocking, drained by a slower path (test
+/// assertions, or graceful shutdown) on a bounded timeout — so a deferred
+/// write is observable/waitable, never silently dropped.
+#[derive(Default)]
+pub struct DeferredWriteTracker {
+    in_flight: std::sync::atomic::AtomicUsize,
+}
+
+/// RAII guard decrementing [`DeferredWriteTracker::in_flight`] on drop. Fires
+/// whether the tracked future completes normally OR panics, so a panicking
+/// deferred write can never permanently wedge [`DeferredWriteTracker::drain`].
+struct InFlightGuard {
+    tracker: Arc<DeferredWriteTracker>,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.tracker
+            .in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl DeferredWriteTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Current number of in-flight deferred writes. Test/diagnostic use only.
+    pub fn in_flight_count(&self) -> usize {
+        self.in_flight.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Spawn `fut` as a tracked background task: increments the in-flight
+    /// counter before spawning, decrements it when `fut` completes (or
+    /// panics) via [`InFlightGuard`]'s `Drop`. Never awaited by the caller —
+    /// this is the whole point, the hot path returns immediately.
+    pub fn spawn_tracked<F>(self: &Arc<Self>, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let guard = InFlightGuard {
+            tracker: Arc::clone(self),
+        };
+        tokio::spawn(async move {
+            fut.await;
+            drop(guard);
+        });
+    }
+
+    /// Poll until every tracked write has completed, or `timeout` elapses.
+    /// Returns `true` if drained cleanly, `false` on timeout. Used at
+    /// graceful shutdown (so a deferred write is never silently lost when the
+    /// process exits) and in tests asserting that a deferred write has
+    /// landed before checking its effect.
+    pub async fn drain(&self, timeout: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while self.in_flight_count() > 0 {
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        true
+    }
+}
+
+/// Run a `StorageBackend` write, retrying up to `max_retries` additional
+/// times with exponential backoff (1ms, 2ms, 4ms, ...) if it fails with a
+/// transient `SQLITE_BUSY`/`SQLITE_LOCKED` error — mirrors
+/// `aegis_storage::db::retry_on_busy`, but operates on `AegisError` since
+/// `StorageBackend` trait methods return that rather than a raw
+/// `sqlx::Error`. Needed for the #1512 deferred writes
+/// (`insert_agent_risk_score`, `append_action_receipt_atomic`), whose
+/// `SqliteStorage` impls don't retry internally themselves (unlike
+/// `insert_decision`, which already retries inside the trait impl).
+pub(crate) async fn retry_storage_write_on_busy<F, Fut, T>(
+    max_retries: u32,
+    mut f: F,
+) -> Result<T, aegis_common::errors::AegisError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, aegis_common::errors::AegisError>>,
+{
+    fn is_retryable(err: &aegis_common::errors::AegisError) -> bool {
+        matches!(
+            err,
+            aegis_common::errors::AegisError::Database(sqlx::Error::Database(db_err))
+                if matches!(db_err.code().as_deref(), Some("5") | Some("6"))
+        )
+    }
+
+    let mut attempt = 0;
+    loop {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt < max_retries && is_retryable(&e) => {
+                let delay_ms = 1u64 << attempt;
+                tracing::debug!(
+                    "retrying deferred write after SQLITE_BUSY/LOCKED (attempt {}/{}, backoff {}ms): {}",
+                    attempt + 1,
+                    max_retries,
+                    delay_ms,
+                    e
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod deferred_write_tracker_tests {
+    use super::DeferredWriteTracker;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn deferred_write_tracker_tracks_in_flight_and_drains() {
+        let tracker = Arc::new(DeferredWriteTracker::new());
+        assert_eq!(tracker.in_flight_count(), 0);
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        tracker.spawn_tracked(async move {
+            let _ = rx.await;
+        });
+        assert_eq!(tracker.in_flight_count(), 1);
+
+        // Nothing has released the in-flight task yet — drain should time
+        // out rather than report a false "drained".
+        let drained_too_early = tracker.drain(Duration::from_millis(50)).await;
+        assert!(!drained_too_early);
+        assert_eq!(tracker.in_flight_count(), 1);
+
+        // Release the task; drain should now observe it complete.
+        let _ = tx.send(());
+        let drained = tracker.drain(Duration::from_secs(5)).await;
+        assert!(drained);
+        assert_eq!(tracker.in_flight_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn deferred_write_tracker_decrements_on_panic() {
+        let tracker = Arc::new(DeferredWriteTracker::new());
+        tracker.spawn_tracked(async move {
+            panic!("simulated deferred-write panic");
+        });
+
+        // The InFlightGuard's Drop runs even when the tracked future panics
+        // (tokio isolates the panic to the spawned task), so drain must not
+        // wedge forever waiting on a task that already died.
+        let drained = tracker.drain(Duration::from_secs(5)).await;
+        assert!(drained);
+        assert_eq!(tracker.in_flight_count(), 0);
+    }
+}
+
 /// #1511: debounces `db::touch_agent_last_seen` writes off the `/v1/authorize`
 /// hot path. That write previously ran inline on every single call, competing
 /// for the SQLite WAL write lock with the real decision write
@@ -574,6 +747,10 @@ pub struct AppState {
     /// writer task) so the periodic flush job can drain the same in-memory
     /// set the request handlers write into. See [`HeartbeatDebouncer`].
     pub heartbeat_debouncer: Arc<HeartbeatDebouncer>,
+    /// Tracks in-flight fire-and-forget background writes spawned off the
+    /// `/v1/authorize` hot path (#1512: risk-score sample, verifiable
+    /// receipt). See [`DeferredWriteTracker`].
+    pub deferred_write_tracker: Arc<DeferredWriteTracker>,
     /// Set to `true` once startup initialization (DB pool, migrations, policy
     /// engine, background jobs) has completed. Backs `GET /startupz` (#1208)
     /// so orchestrators can distinguish "still starting" from "ready".
@@ -1232,6 +1409,7 @@ pub mod benchutil {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1472,6 +1650,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1521,6 +1700,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1572,6 +1752,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1672,6 +1853,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1731,6 +1913,7 @@ pub(crate) mod test_helpers {
             skill_cache: SkillActionCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),
