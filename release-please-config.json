@@ -1,21 +1,52 @@
 {
   "packages": {
-    "src": {
-      "release-type": "rust",
+    ".": {
+      "release-type": "simple",
       "component": "aegisagent",
-      "changelog-path": "../CHANGELOG.md",
+      "changelog-path": "CHANGELOG.md",
       "changelog-host": "github",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "prerelease": true,
       "prerelease-type": "beta",
       "versioning": "default",
+      "version-file": "version.txt",
       "extra-files": [
-        "lib/api/Cargo.toml",
-        "lib/common/Cargo.toml",
-        "lib/policy/Cargo.toml",
-        "lib/soc/Cargo.toml",
-        "lib/storage/Cargo.toml"
+        {
+          "type": "toml",
+          "path": "src/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "src/canon/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "lib/api/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "lib/common/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "lib/policy/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "lib/soc/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "lib/storage/Cargo.toml",
+          "jsonpath": "$.package.version"
+        }
       ],
       "changelog-sections": [
         { "type": "feat", "section": "Added", "hidden": false },
