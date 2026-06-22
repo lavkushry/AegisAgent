@@ -9,6 +9,11 @@ members = [
     "lib/policy",
     "lib/soc",
 ]
+# src/fuzz has its own cargo-fuzz-managed build (ASan/sancov instrumentation,
+# a separate target dir) and must never be built by `cargo build/test
+# --workspace`; Cargo treats any Cargo.toml nested under the workspace root
+# as an implicit member unless explicitly excluded.
+exclude = ["src/fuzz"]
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }

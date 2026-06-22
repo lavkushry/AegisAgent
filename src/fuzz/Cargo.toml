@@ -4,6 +4,11 @@ version = "0.0.0"
 publish = false
 edition = "2021"
 
+# Stand-alone from the root Cargo-workspace (different toolchain/instrumentation
+# needs — ASan, sanitizer-coverage — and its own target dir managed by cargo-fuzz).
+# An empty `[workspace]` table here is the standard cargo-fuzz idiom for this.
+[workspace]
+
 [package.metadata]
 cargo-fuzz = true
 
