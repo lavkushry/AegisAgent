@@ -131,6 +131,36 @@ where
     Ok((items, next_cursor))
 }
 
+/// #1192: when `encryption_key_configured` is true (i.e. `AEGIS_DB_ENCRYPTION_KEY`
+/// was set), confirms the connection is actually backed by a SQLCipher-enabled
+/// SQLite — `PRAGMA cipher_version` returns SQLCipher's version string when
+/// active, and an empty result set on a plain SQLite build (an unrecognized
+/// pragma is a silent no-op there, never an error). Returns an error in that
+/// mismatch case rather than starting up with an operator-requested
+/// encryption key silently ignored. A no-op when encryption wasn't requested.
+async fn verify_encryption_or_fail_closed(
+    pool: &SqlitePool,
+    encryption_key_configured: bool,
+) -> Result<(), sqlx::Error> {
+    if !encryption_key_configured {
+        return Ok(());
+    }
+    let cipher_version: Vec<(Option<String>,)> = sqlx::query_as("PRAGMA cipher_version;")
+        .fetch_all(pool)
+        .await?;
+    let cipher_active = matches!(cipher_version.first(), Some((Some(_),)));
+    if !cipher_active {
+        return Err(sqlx::Error::Configuration(
+            "AEGIS_DB_ENCRYPTION_KEY is set, but this binary was not built with the \
+             `sqlcipher` Cargo feature. PRAGMA key would be silently ignored and the \
+             database would NOT be encrypted at rest. Refusing to start. Rebuild with \
+             `--features sqlcipher`, or unset AEGIS_DB_ENCRYPTION_KEY."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }
@@ -144,8 +174,16 @@ pub async fn init_db_with_busy_timeout(
     db_url: &str,
     busy_timeout: std::time::Duration,
 ) -> Result<SqlitePool, sqlx::Error> {
+    // #1192: database encryption at rest. `SqliteConnectOptions` reserves the
+    // "key" pragma slot FIRST in its internal pragma list specifically for
+    // SQLCipher (see sqlx-sqlite's `SqliteConnectOptions::new()`), so it is
+    // always emitted before journal_mode/foreign_keys/etc regardless of
+    // builder call order here — required, since SQLCipher must decrypt the
+    // first page before any other statement can touch the database file.
+    let encryption_key = std::env::var("AEGIS_DB_ENCRYPTION_KEY").ok();
+
     // Enforce WAL mode and busy timeout on pool initialization
-    let connection_options = sqlx::sqlite::SqliteConnectOptions::from_str(db_url)?
+    let mut connection_options = sqlx::sqlite::SqliteConnectOptions::from_str(db_url)?
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .busy_timeout(busy_timeout)
@@ -154,6 +192,14 @@ pub async fn init_db_with_busy_timeout(
         // referential integrity checks declared in the schema are silently
         // not enforced).
         .foreign_keys(true);
+    if let Some(ref key) = encryption_key {
+        // `.pragma()` splices the value into `PRAGMA key = <value>;` verbatim
+        // (no auto-quoting — it's also used for unquoted idents like
+        // `journal_mode=WAL`), so a raw passphrase must be quoted ourselves;
+        // otherwise e.g. a hyphen is parsed as SQL subtraction, not a string.
+        let quoted_key = format!("'{}'", key.replace('\'', "''"));
+        connection_options = connection_options.pragma("key", quoted_key);
+    }
 
     let max_connections = std::env::var("AEGIS_DB_MAX_CONNECTIONS")
         .ok()
@@ -176,6 +222,13 @@ pub async fn init_db_with_busy_timeout(
         .acquire_timeout(std::time::Duration::from_secs(acquire_timeout))
         .connect_with(connection_options)
         .await?;
+
+    // #1192: fail closed if encryption was requested but can't actually be
+    // honored. Without the `sqlcipher` Cargo feature, the linked SQLite is
+    // plain SQLite, which silently treats an unrecognized "key" pragma as a
+    // no-op (per SQLite's documented behavior for unknown pragmas) — the
+    // operator would believe their database is encrypted when it is not.
+    verify_encryption_or_fail_closed(&pool, encryption_key.is_some()).await?;
 
     // Performance tuning PRAGMAs for SQLite WAL mode autocheckpointing
     sqlx::query("PRAGMA journal_size_limit = 67108864;")
@@ -1503,4 +1556,61 @@ mod tests {
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
+
+    /// #1192: no-op when encryption wasn't requested, regardless of the
+    /// underlying SQLite build.
+    #[tokio::test]
+    async fn verify_encryption_or_fail_closed_is_noop_when_no_key_configured() {
+        let pool = setup_pool("verify_encryption_noop").await;
+        verify_encryption_or_fail_closed(&pool, false)
+            .await
+            .unwrap();
+    }
+
+    /// #1192: the dangerous case this whole check exists to catch — a key
+    /// WAS configured (`AEGIS_DB_ENCRYPTION_KEY` set), but the binary is the
+    /// plain-SQLite build every CI job and most local dev actually runs.
+    /// `PRAGMA cipher_version` reports whether the LINKED LIBRARY is
+    /// SQLCipher-capable at all — a build-time property, constant across
+    /// every connection/test in this binary — so this test only makes sense
+    /// (and is only meaningfully testing the real misconfiguration) in the
+    /// default, non-`sqlcipher` build.
+    #[cfg(not(feature = "sqlcipher"))]
+    #[tokio::test]
+    async fn verify_encryption_or_fail_closed_errors_when_key_configured_without_sqlcipher() {
+        let pool = setup_pool("verify_encryption_no_cipher").await;
+        let result = verify_encryption_or_fail_closed(&pool, true).await;
+        assert!(result.is_err());
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains("sqlcipher"),
+            "error must explain the `sqlcipher` feature is required, got: {message}"
+        );
+    }
+
+    /// #1192: only runs when actually built against SQLCipher
+    /// (`cargo test --features sqlcipher -p aegis-storage`), proving the
+    /// detection logic also passes cleanly in the configuration it's
+    /// supposed to allow through.
+    #[cfg(feature = "sqlcipher")]
+    #[tokio::test]
+    async fn verify_encryption_or_fail_closed_passes_with_real_sqlcipher() {
+        let pool = setup_pool("verify_encryption_real_cipher").await;
+        sqlx::query("PRAGMA key = 'test-encryption-key';")
+            .execute(&pool)
+            .await
+            .unwrap();
+        verify_encryption_or_fail_closed(&pool, true).await.unwrap();
+    }
+
+    // Deliberately no test exercises `init_db`/`init_db_with_busy_timeout`
+    // with `AEGIS_DB_ENCRYPTION_KEY` set: that env var is process-global,
+    // every test in this module calls `init_db`, and `cargo test` runs them
+    // concurrently — so mutating it here (even guarded by a lock only this
+    // test would respect) leaks into unrelated tests' connections and was
+    // observed to make them fail intermittently with "file is not a
+    // database". `verify_encryption_or_fail_closed`'s own unit tests above
+    // cover the exact logic that matters without touching global env state;
+    // the thin remaining wiring (reading the env var, quoting it into the
+    // `key` pragma) is covered by review, not a flaky integration test.
 }

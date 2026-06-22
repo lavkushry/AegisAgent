@@ -19,7 +19,15 @@ sha2 = { workspace = true }
 hmac = { workspace = true }
 async-trait = "0.1.89"
 hex = "=0.4.3"
+# #1192: database encryption at rest. Feature-unifies with sqlx-sqlite's own
+# (unversioned-feature-set) libsqlite3-sys dependency — there is exactly one
+# compiled libsqlite3-sys per the dependency graph, so enabling SQLCipher
+# here makes the SAME underlying SQLite library sqlx already links against
+# build from the SQLCipher amalgamation instead of plain sqlite3.c.
+# Vendored OpenSSL means no system libsqlcipher/libssl-dev required.
+libsqlite3-sys = { version = "0.30", features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
 
 [features]
 default = []
 test-utils = []
+sqlcipher = ["dep:libsqlite3-sys"]
