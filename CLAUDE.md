@@ -15,6 +15,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 For the complete feature development records, SDK specifications, and ticket parity logs, see **[`docs/feature_history.md`](docs/feature_history.md)**.
 
 * **Baseline**: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, 3-SDK parity.
+* **Agent-to-gateway mTLS (#1310)**: optional mutual-TLS auth, alternative to bearer tokens, gated on `AEGIS_MTLS_CA_CERT` (CRL revocation via `AEGIS_MTLS_CRL_PATH`). Verified client-cert Subject CN maps to an agent via `agents.mtls_cn` (set through `PATCH /v1/agents/:id`); unrecognized CN fails closed (401); unset env var leaves bearer-token auth unchanged. See `src/src/mtls.rs`.
 
 ## Architecture & Performance Roadmap
 
