@@ -61,7 +61,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # a second stream-adapter crate. Already present as a transitive dependency
 # (and previously a direct dev-dependency for WS tests) — promoted to a
 futures-util = "0.3"
-qdrant-client = "=1.10.2"
+qdrant-client = "=1.18.0"
 fastembed = { version = "4", optional = true }
 utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "6", features = ["axum"] }

@@ -63,11 +63,17 @@ Every decision flows through the **Inline Plane** to enforce permissions, while 
 
 ## 📥 Installation
 
-### Docker (recommended)
+### Docker Compose (recommended)
 ```bash
+git clone https://github.com/lavkushry/AegisAgent.git
+cd AegisAgent
+docker compose up --build
+```
+
+<!-- After the first release, pre-built images will be available:
 docker pull ghcr.io/lavkushry/aegisagent:latest
 docker run -p 8080:8080 -p 6334:6334 ghcr.io/lavkushry/aegisagent:latest
-```
+-->
 
 ### From Source
 ```bash
