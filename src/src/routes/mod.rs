@@ -774,6 +774,13 @@ pub struct AppState {
     /// default), signature verification is skipped entirely, preserving
     /// pre-#1339 behavior.
     pub github_webhook_secret: Option<String>,
+    /// Ed25519 verifying (public) key, hex-encoded, for `POST
+    /// /v1/policies/bundles` (#1280). Configured via
+    /// `AEGIS_POLICY_SIGNING_KEY`. When `None`, the endpoint refuses every
+    /// request with `501` — fail closed, since an unconfigured key means no
+    /// bundle signature can ever be verified, and accepting one unverified
+    /// would defeat the feature's purpose.
+    pub policy_signing_verifying_key: Option<String>,
     /// HMAC-SHA256 signing secret for verifying `X-Slack-Signature` on
     /// `POST /v1/callbacks/slack` (#1276). Configured via
     /// `AEGIS_SLACK_SIGNING_SECRET`. When `None`, the endpoint refuses every
@@ -1416,6 +1423,7 @@ pub mod benchutil {
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1658,6 +1666,56 @@ pub(crate) mod test_helpers {
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: Some(secret.to_string()),
+            policy_signing_verifying_key: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+            qdrant_exporter: None,
+            admission_webhook: None,
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `policy_signing_verifying_key` set to `Some(verifying_key_hex)`, for
+    /// testing `POST /v1/policies/bundles` signature verification (#1280).
+    pub(crate) async fn setup_state_with_policy_signing_key(
+        test_name: &str,
+        verifying_key_hex: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.pool.clone(),
+            state_raw.metrics.clone(),
+            None,
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            pool: state_raw.pool.clone(),
+            storage: state_raw.storage.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            policy_signing_verifying_key: Some(verifying_key_hex.to_string()),
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1708,6 +1766,7 @@ pub(crate) mod test_helpers {
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1760,6 +1819,7 @@ pub(crate) mod test_helpers {
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: Some(secret.to_string()),
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1863,6 +1923,7 @@ pub(crate) mod test_helpers {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1922,6 +1983,7 @@ pub(crate) mod test_helpers {
             audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),
             audit_batch,
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,

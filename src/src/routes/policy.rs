@@ -526,6 +526,184 @@ pub async fn reload_global_policies(
     }
 }
 
+/// A single Cedar policy within a [`PolicyBundleUploadRequest`] (#1280).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PolicyBundleEntry {
+    pub policy_key: String,
+    pub name: String,
+    pub body: String,
+}
+
+/// `POST /v1/policies/bundles` body (#1280): a tamper-evident, Ed25519-signed
+/// bundle of Cedar policies for tamper-proof policy distribution.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PolicyBundleUploadRequest {
+    pub policies: Vec<PolicyBundleEntry>,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    /// Hex-encoded Ed25519 signature, verified against
+    /// `AppState::policy_signing_verifying_key` (`AEGIS_POLICY_SIGNING_KEY`).
+    pub signature: String,
+}
+
+/// The signed portion of a [`PolicyBundleUploadRequest`] — every field
+/// EXCEPT `signature` itself, since a signature can't cover its own bytes.
+/// Field names and types must exactly mirror `PolicyBundleUploadRequest`
+/// minus `signature`, so the external signer and this gateway compute the
+/// same canonical bytes.
+#[derive(Debug, serde::Serialize)]
+struct PolicyBundleSignaturePayload<'a> {
+    policies: &'a [PolicyBundleEntry],
+    version: i64,
+    created_at: DateTime<Utc>,
+}
+
+/// `aegis-jcs-1`-canonicalizes the signed portion of a bundle and SHA-256
+/// hashes it — the message an external signer signs and this gateway
+/// verifies. Changing any policy's key/name/body, the bundle version, or its
+/// timestamp changes this hash, invalidating any prior signature over it.
+fn policy_bundle_signed_hash(payload: &PolicyBundleUploadRequest) -> String {
+    let unsigned = PolicyBundleSignaturePayload {
+        policies: &payload.policies,
+        version: payload.version,
+        created_at: payload.created_at,
+    };
+    let canonical = aegis_canon::canonical_value_string(&unsigned);
+    sha256_hex(canonical.as_bytes())
+}
+
+/// `POST /v1/policies/bundles` (#1280): upload a signed bundle of Cedar
+/// policies, verified against `AEGIS_POLICY_SIGNING_KEY` before any policy in
+/// it is loaded. Fails closed: with no verifying key configured, every
+/// request is refused with `501` — there's no key to verify against, and
+/// accepting a bundle unverified would defeat the feature's purpose.
+///
+/// Each entry is upserted by `policy_key` within the tenant: an existing
+/// `policy_key` is updated (the prior version is archived first, exactly
+/// like [`update_policy`]); an unseen `policy_key` is created. Every Cedar
+/// body in the bundle is validated to compile BEFORE any of them is written,
+/// so a single bad entry rejects the whole bundle rather than partially
+/// applying it.
+pub async fn upload_policy_bundle(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(payload): Json<PolicyBundleUploadRequest>,
+) -> impl IntoResponse {
+    let Some(verifying_key) = state.policy_signing_verifying_key.as_deref() else {
+        return StatusError::not_implemented(
+            "Policy bundle signing is not configured on this gateway (AEGIS_POLICY_SIGNING_KEY unset)",
+        )
+        .into_response();
+    };
+
+    let signed_hash = policy_bundle_signed_hash(&payload);
+    if !sign::verify_signature(verifying_key, &signed_hash, &payload.signature) {
+        return StatusError::forbidden("Invalid policy bundle signature").into_response();
+    }
+
+    if payload.policies.is_empty() {
+        return StatusError::bad_request("Policy bundle must contain at least one policy")
+            .into_response();
+    }
+
+    // Validate every Cedar body compiles BEFORE writing anything.
+    for entry in &payload.policies {
+        if let Err(e) = cedar_policy::PolicySet::from_str(&entry.body) {
+            return StatusError::bad_request(format!(
+                "Cedar compilation error in policy '{}': {}",
+                entry.policy_key, e
+            ))
+            .into_response();
+        }
+    }
+
+    let existing_policies = match state.storage.list_policies(&tenant_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to list policies for bundle upload: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    let mut results = Vec::with_capacity(payload.policies.len());
+    for entry in &payload.policies {
+        let existing = existing_policies
+            .iter()
+            .find(|p| p.policy_key == entry.policy_key)
+            .cloned();
+
+        let record = match existing {
+            Some(mut record) => {
+                let previous = record.clone();
+                record.name = entry.name.clone();
+                record.body = entry.body.clone();
+                record.version += 1;
+                if let Err(e) = state.storage.insert_policy_version(&previous).await {
+                    error!("Failed to archive previous policy version: {:?}", e);
+                }
+                if let Err(e) = state.storage.update_policy(&record).await {
+                    error!("Failed to update policy from bundle: {:?}", e);
+                    return StatusError::internal("Database error").into_response();
+                }
+                record_policy_audit_log(
+                    state.storage.as_ref(),
+                    &tenant_id,
+                    &record.id,
+                    &record.policy_key,
+                    "updated",
+                    &record.body,
+                    format!(
+                        "Policy '{}' updated to version {} via signed bundle",
+                        record.name, record.version
+                    ),
+                )
+                .await;
+                record
+            }
+            None => {
+                let record = PolicyRecord {
+                    id: Uuid::new_v4().to_string(),
+                    tenant_id: tenant_id.clone(),
+                    policy_key: entry.policy_key.clone(),
+                    name: entry.name.clone(),
+                    language: "cedar".to_string(),
+                    body: entry.body.clone(),
+                    version: 1,
+                    status: "active".to_string(),
+                    created_by: None,
+                    created_at: Utc::now(),
+                };
+                if let Err(e) = state.storage.insert_policy(&record).await {
+                    error!("Failed to insert policy from bundle: {:?}", e);
+                    return StatusError::internal("Database error").into_response();
+                }
+                record_policy_audit_log(
+                    state.storage.as_ref(),
+                    &tenant_id,
+                    &record.id,
+                    &record.policy_key,
+                    "created",
+                    &record.body,
+                    format!(
+                        "Policy '{}' created (version 1) via signed bundle",
+                        record.name
+                    ),
+                )
+                .await;
+                record
+            }
+        };
+        results.push(record);
+    }
+
+    if let Err(e) = reload_policies_helper(&state, &tenant_id).await {
+        error!("Failed to reload policies after bundle upload: {:?}", e);
+        return StatusError::internal("Failed to hot-reload policy changes").into_response();
+    }
+
+    (StatusCode::OK, Json(results)).into_response()
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct CreateApiKeyRequest {
     pub name: String,
@@ -1069,5 +1247,270 @@ mod tests {
         // Highest-numbered (most recent) versions retained: 12 down to 3.
         let kept_versions: Vec<i32> = versions.iter().map(|v| v.version).collect();
         assert_eq!(kept_versions, vec![12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+    }
+
+    /// Fixed throwaway Ed25519 secret for bundle-signing tests (#1280) —
+    /// never used outside this test module.
+    fn test_signing_key() -> crate::sign::ReceiptSigner {
+        crate::sign::ReceiptSigner::from_secret_hex(&"11".repeat(32)).unwrap()
+    }
+
+    fn sign_bundle(
+        payload: &PolicyBundleUploadRequest,
+        signer: &crate::sign::ReceiptSigner,
+    ) -> String {
+        signer.sign_hash(&policy_bundle_signed_hash(payload))
+    }
+
+    #[tokio::test]
+    async fn upload_policy_bundle_rejects_when_signing_not_configured() {
+        let (state, tenant_id, _) = setup_state("bundle_no_signing_key").await;
+        let signer = test_signing_key();
+        let mut payload = PolicyBundleUploadRequest {
+            policies: vec![PolicyBundleEntry {
+                policy_key: "bundle-policy-1".to_string(),
+                name: "Bundle Policy 1".to_string(),
+                body: "permit (principal, action, resource);".to_string(),
+            }],
+            version: 1,
+            created_at: Utc::now(),
+            signature: String::new(),
+        };
+        payload.signature = sign_bundle(&payload, &signer);
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn upload_policy_bundle_rejects_invalid_signature() {
+        let signer = test_signing_key();
+        let (state, tenant_id, _) =
+            setup_state_with_policy_signing_key("bundle_invalid_sig", &signer.public_key_hex())
+                .await;
+
+        let payload = PolicyBundleUploadRequest {
+            policies: vec![PolicyBundleEntry {
+                policy_key: "bundle-policy-1".to_string(),
+                name: "Bundle Policy 1".to_string(),
+                body: "permit (principal, action, resource);".to_string(),
+            }],
+            version: 1,
+            created_at: Utc::now(),
+            signature: "deadbeef".repeat(16), // well-formed hex, but not a valid signature
+        };
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn upload_policy_bundle_accepts_valid_signature_and_creates_policy() {
+        let signer = test_signing_key();
+        let (state, tenant_id, _) =
+            setup_state_with_policy_signing_key("bundle_valid_create", &signer.public_key_hex())
+                .await;
+
+        let mut payload = PolicyBundleUploadRequest {
+            policies: vec![PolicyBundleEntry {
+                policy_key: "bundle-policy-1".to_string(),
+                name: "Bundle Policy 1".to_string(),
+                body: "permit (principal, action, resource);".to_string(),
+            }],
+            version: 1,
+            created_at: Utc::now(),
+            signature: String::new(),
+        };
+        payload.signature = sign_bundle(&payload, &signer);
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let policies = state.storage.list_policies(&tenant_id).await.unwrap();
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].policy_key, "bundle-policy-1");
+        assert_eq!(policies[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn upload_policy_bundle_updates_existing_policy_and_bumps_version() {
+        let signer = test_signing_key();
+        let (state, tenant_id, _) =
+            setup_state_with_policy_signing_key("bundle_update_existing", &signer.public_key_hex())
+                .await;
+
+        // Seed an existing policy directly.
+        let existing = PolicyRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.clone(),
+            policy_key: "bundle-policy-1".to_string(),
+            name: "Original Name".to_string(),
+            language: "cedar".to_string(),
+            body: "forbid (principal, action, resource);".to_string(),
+            version: 1,
+            status: "active".to_string(),
+            created_by: None,
+            created_at: Utc::now(),
+        };
+        state.storage.insert_policy(&existing).await.unwrap();
+
+        let mut payload = PolicyBundleUploadRequest {
+            policies: vec![PolicyBundleEntry {
+                policy_key: "bundle-policy-1".to_string(),
+                name: "Updated Name".to_string(),
+                body: "permit (principal, action, resource);".to_string(),
+            }],
+            version: 1,
+            created_at: Utc::now(),
+            signature: String::new(),
+        };
+        payload.signature = sign_bundle(&payload, &signer);
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let updated = state
+            .storage
+            .get_policy_by_id(&tenant_id, &existing.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.version, 2);
+        assert_eq!(updated.name, "Updated Name");
+        assert_eq!(updated.body, "permit (principal, action, resource);");
+
+        let versions = db::list_policy_versions(&state.pool, &tenant_id, &existing.id)
+            .await
+            .unwrap();
+        assert_eq!(versions.len(), 1, "the prior version must be archived");
+        assert_eq!(versions[0].body, "forbid (principal, action, resource);");
+    }
+
+    #[tokio::test]
+    async fn upload_policy_bundle_rejects_invalid_cedar_body_without_partial_writes() {
+        let signer = test_signing_key();
+        let (state, tenant_id, _) =
+            setup_state_with_policy_signing_key("bundle_invalid_cedar", &signer.public_key_hex())
+                .await;
+
+        let mut payload = PolicyBundleUploadRequest {
+            policies: vec![
+                PolicyBundleEntry {
+                    policy_key: "bundle-policy-good".to_string(),
+                    name: "Good".to_string(),
+                    body: "permit (principal, action, resource);".to_string(),
+                },
+                PolicyBundleEntry {
+                    policy_key: "bundle-policy-bad".to_string(),
+                    name: "Bad".to_string(),
+                    body: "permit (invalid syntax);".to_string(),
+                },
+            ],
+            version: 1,
+            created_at: Utc::now(),
+            signature: String::new(),
+        };
+        payload.signature = sign_bundle(&payload, &signer);
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let policies = state.storage.list_policies(&tenant_id).await.unwrap();
+        assert!(
+            policies.is_empty(),
+            "a bad entry must reject the WHOLE bundle, not partially apply it"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_policy_bundle_rejects_tampered_bundle() {
+        let signer = test_signing_key();
+        let (state, tenant_id, _) =
+            setup_state_with_policy_signing_key("bundle_tampered", &signer.public_key_hex()).await;
+
+        let mut payload = PolicyBundleUploadRequest {
+            policies: vec![PolicyBundleEntry {
+                policy_key: "bundle-policy-1".to_string(),
+                name: "Bundle Policy 1".to_string(),
+                body: "permit (principal, action, resource);".to_string(),
+            }],
+            version: 1,
+            created_at: Utc::now(),
+            signature: String::new(),
+        };
+        payload.signature = sign_bundle(&payload, &signer);
+
+        // Tamper with the signed body AFTER signing — the signature no
+        // longer covers this content.
+        payload.policies[0].body = "forbid (principal, action, resource);".to_string();
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let policies = state.storage.list_policies(&tenant_id).await.unwrap();
+        assert!(
+            policies.is_empty(),
+            "a tampered bundle must never be applied"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_policy_bundle_rejects_empty_policies_list() {
+        let signer = test_signing_key();
+        let (state, tenant_id, _) =
+            setup_state_with_policy_signing_key("bundle_empty", &signer.public_key_hex()).await;
+
+        let mut payload = PolicyBundleUploadRequest {
+            policies: vec![],
+            version: 1,
+            created_at: Utc::now(),
+            signature: String::new(),
+        };
+        payload.signature = sign_bundle(&payload, &signer);
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

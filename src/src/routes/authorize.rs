@@ -1810,6 +1810,7 @@ mod tests {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1866,6 +1867,7 @@ mod tests {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -6419,6 +6421,7 @@ mod tests {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -6623,6 +6626,7 @@ mod tests {
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
