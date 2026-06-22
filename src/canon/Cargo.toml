@@ -1,6 +1,6 @@
 [package]
 name = "aegis-canon"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.88"
 description = "AegisAgent aegis-jcs-1 JSON canonicalization (key sort + compact separators), shared by the gateway and its fuzz targets"
