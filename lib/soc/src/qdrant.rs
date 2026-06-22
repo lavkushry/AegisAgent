@@ -9,10 +9,10 @@
 #![allow(deprecated)]
 
 use async_trait::async_trait;
-use qdrant_client::client::{Payload, QdrantClient};
 use qdrant_client::qdrant::{
-    CreateCollection, Distance, PointId, PointStruct, VectorParams, VectorsConfig,
+    CreateCollection, Distance, PointId, PointStruct, UpsertPoints, VectorParams, VectorsConfig,
 };
+use qdrant_client::{Payload, Qdrant};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -124,17 +124,13 @@ impl EmbeddingModel for LocalEmbeddingModel {
 
 // Qdrant exporter wrapper
 pub struct QdrantExporter {
-    pub client: QdrantClient,
+    pub client: Qdrant,
     pub model: Arc<dyn EmbeddingModel>,
     pub collection_name: String,
 }
 
 impl QdrantExporter {
-    pub fn new(
-        client: QdrantClient,
-        model: Arc<dyn EmbeddingModel>,
-        collection_name: String,
-    ) -> Self {
+    pub fn new(client: Qdrant, model: Arc<dyn EmbeddingModel>, collection_name: String) -> Self {
         Self {
             client,
             model,
@@ -144,14 +140,18 @@ impl QdrantExporter {
 
     /// Initializes the Qdrant collection if it doesn't already exist.
     pub async fn init_collection(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if !self.client.has_collection(&self.collection_name).await? {
+        if !self
+            .client
+            .collection_exists(self.collection_name.as_str())
+            .await?
+        {
             info!(
                 collection = %self.collection_name,
                 dimension = %self.model.dimension(),
                 "Creating Qdrant collection for semantic audit indexing"
             );
             self.client
-                .create_collection(&CreateCollection {
+                .create_collection(CreateCollection {
                     collection_name: self.collection_name.clone(),
                     vectors_config: Some(VectorsConfig {
                         config: Some(qdrant_client::qdrant::vectors_config::Config::Params(
@@ -260,7 +260,11 @@ impl QdrantExporter {
         let point = PointStruct::new(point_id, vector, Payload::from(payload));
 
         self.client
-            .upsert_points(&self.collection_name, None, vec![point], None)
+            .upsert_points(UpsertPoints {
+                collection_name: self.collection_name.clone(),
+                points: vec![point],
+                ..Default::default()
+            })
             .await?;
 
         debug!(point_id = %point_uuid, "successfully indexed event to Qdrant");
@@ -295,14 +299,13 @@ impl QdrantExporter {
         };
 
         // 4. Perform search
-        let response = self.client.search_points(&req).await?;
+        let response = self.client.search_points(req).await?;
 
         // 5. Convert points back to JSON, appending similarity score
         let mut results = Vec::new();
         for point in response.result {
-            let mut payload =
-                serde_json::to_value(qdrant_client::client::Payload::from(point.payload))
-                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+            let mut payload = serde_json::to_value(Payload::from(point.payload))
+                .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
 
             if let serde_json::Value::Object(ref mut map) = payload {
                 map.insert(
