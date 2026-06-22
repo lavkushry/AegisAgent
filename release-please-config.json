@@ -2,6 +2,7 @@
   "packages": {
     ".": {
       "release-type": "simple",
+      "target-branch": "release",
       "component": "aegisagent",
       "changelog-path": "CHANGELOG.md",
       "changelog-host": "github",

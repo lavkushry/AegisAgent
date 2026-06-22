@@ -15,7 +15,7 @@ name: Release Please
 
 on:
   push:
-    branches: [main]
+    branches: [release]
 
 permissions:
   contents: write
