@@ -1125,11 +1125,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Build Qdrant client
-        let mut config = qdrant_client::prelude::QdrantClientConfig::from_url(&qdrant_url);
+        let mut builder = qdrant_client::Qdrant::from_url(&qdrant_url);
         if let Some(ref api_key) = qdrant_api_key {
-            config.set_api_key(api_key);
+            builder = builder.api_key(api_key.as_str());
         }
-        let qdrant_client = qdrant_client::prelude::QdrantClient::new(Some(config))?;
+        let qdrant_client = builder.build()?;
 
         let exporter = qdrant::QdrantExporter::new(qdrant_client, embedding_model, collection_name);
 
