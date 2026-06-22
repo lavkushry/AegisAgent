@@ -7,22 +7,27 @@ WORKDIR /build
 ENV CARGO_NET_RETRY=10
 ENV CARGO_HTTP_MULTIPLEXING=false
 
+# aegis-api's build.rs (lib/api/build.rs) compiles proto/*.proto via
+# prost-build/tonic-build, which needs the protoc binary on PATH.
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
 # #1160: repo-root .cargo/config.toml sets `--cfg tokio_unstable` (needed by
 # the /debug/runtime endpoint's per-worker poll/busy-duration counters) — this
 # build runs `cargo build` from /build (this WORKDIR), mirroring how CI invokes
 # it from the repo root, so the config must land at the same relative path.
+#
+# Cargo-workspace layout (post-refactor): the gateway binary crate lives at
+# src/, with sibling library crates under lib/{common,api,storage,policy,soc}
+# — copy the whole workspace rather than the old single-crate `gateway/` tree.
 COPY .cargo ./.cargo
-COPY gateway/Cargo.toml gateway/Cargo.lock ./gateway/
-COPY gateway/src ./gateway/src
-COPY gateway/canon ./gateway/canon
-COPY gateway/benches ./gateway/benches
-COPY gateway/migrations ./gateway/migrations
-COPY gateway/policies.cedar ./gateway/policies.cedar
-COPY gateway/dashboard ./gateway/dashboard
-RUN cargo build --release --manifest-path gateway/Cargo.toml
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY lib ./lib
+RUN cargo build --release -p gateway --bin gateway
 # Strip debug symbols (~15% smaller binary) — the builder has `strip`
 # available; the distroless final stage below does not.
-RUN strip /build/gateway/target/release/gateway
+RUN strip /build/target/release/gateway
 # Pre-create the data dir owned by distroless's built-in nonroot uid/gid
 # (65532) — the final stage below has no shell/mkdir to do this itself.
 RUN mkdir -p /data && chown 65532:65532 /data
@@ -49,7 +54,7 @@ RUN mkdir -p /data && chown 65532:65532 /data
 FROM gcr.io/distroless/cc-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
-COPY --from=builder /build/gateway/target/release/gateway /usr/local/bin/aegis-gateway
+COPY --from=builder /build/target/release/gateway /usr/local/bin/aegis-gateway
 COPY policies.cedar /app/policies.cedar
 COPY --from=builder --chown=65532:65532 /data /data
 

@@ -49,9 +49,11 @@ rules:
       - pattern-not: $X.write().unwrap()
     paths:
       include:
-        - "**/gateway/src/**/*.rs"
+        - "**/src/src/**/*.rs"
+        - "**/lib/*/src/**/*.rs"
       exclude:
-        - "**/gateway/src/**/tests.rs"
+        - "**/src/src/**/tests.rs"
+        - "**/lib/*/src/**/tests.rs"
     metadata:
       category: security
       cwe: "CWE-391/CWE-397: Unchecked Error Condition / Panic"
@@ -67,7 +69,8 @@ rules:
       or log only a hash/id.
     paths:
       include:
-        - "**/gateway/src/**/*.rs"
+        - "**/src/src/**/*.rs"
+        - "**/lib/*/src/**/*.rs"
     patterns:
       - pattern-regex: '(?i)\b(tracing::)?(info|warn|error|debug|trace)!\([^)]*\b(secret|token|password|api_?key|credential|bearer)s?\s*='
     metadata:

@@ -34,6 +34,10 @@ jobs:
         rust: [stable, beta, "1.88"]
     steps:
       - uses: actions/checkout@v6
+      # aegis-api's build.rs (lib/api/build.rs) compiles proto/*.proto via
+      # prost-build/tonic-build, which needs the protoc binary on PATH.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
@@ -100,6 +104,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -249,6 +255,8 @@ jobs:
     needs: [gateway, python-sdk, go-sdk, ts-canon]
     steps:
       - uses: actions/checkout@v6
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
