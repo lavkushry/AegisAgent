@@ -35,13 +35,13 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt
-        entry: cargo fmt --manifest-path gateway/Cargo.toml --
+        entry: cargo fmt --manifest-path Cargo.toml --
         language: system
         types: [rust]
         pass_filenames: false
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
+        entry: cargo clippy --manifest-path Cargo.toml --workspace --all-targets -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false

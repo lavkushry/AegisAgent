@@ -17,7 +17,7 @@ services:
   gateway:
     build:
       context: .
-      dockerfile: gateway/Dockerfile
+      dockerfile: src/Dockerfile
     image: aegisagent-gateway:local
     network_mode: host
     depends_on:
@@ -32,7 +32,7 @@ services:
       - ./policies.cedar:/app/policies.cedar:ro
     healthcheck:
       # #1207: the distroless runtime image has no curl/shell — the binary
-      # execs itself with --healthcheck instead (see gateway/Dockerfile and
+      # execs itself with --healthcheck instead (see src/Dockerfile and
       # main.rs's check_liveness).
       test: ["CMD", "/usr/local/bin/aegis-gateway", "--healthcheck"]
       interval: 10s

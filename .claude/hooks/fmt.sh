@@ -9,8 +9,8 @@ fp="$(python3 -c 'import sys,json; print(json.load(sys.stdin).get("tool_input",{
 [ -z "$fp" ] && exit 0
 
 case "$fp" in
-  *gateway/*.rs)
-    command -v cargo  >/dev/null 2>&1 && cargo fmt --manifest-path gateway/Cargo.toml >/dev/null 2>&1 || true ;;
+  *.rs)
+    command -v cargo  >/dev/null 2>&1 && cargo fmt --manifest-path Cargo.toml >/dev/null 2>&1 || true ;;
   *sdk-go/*.go)
     command -v gofmt  >/dev/null 2>&1 && gofmt -w "$fp" >/dev/null 2>&1 || true ;;
   *sdk-python/*.py|*examples/*.py)
