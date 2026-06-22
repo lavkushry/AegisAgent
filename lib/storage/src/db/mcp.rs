@@ -100,6 +100,10 @@ pub async fn list_mcp_manifest_snapshots(
     .await
 }
 
+/// #1193: re-registering a previously soft-deleted `server_key` revives it
+/// (clears `deleted_at`) rather than erroring on the `(tenant_id,
+/// server_key)` unique constraint — a soft-deleted row still occupies that
+/// key, so "register again" is the only way back in without a hard delete.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_mcp_server(
     pool: &SqlitePool,
@@ -123,7 +127,8 @@ pub async fn upsert_mcp_server(
             source=excluded.source,
             trust_level=excluded.trust_level,
             endpoint=excluded.endpoint,
-            status='active'",
+            status='active',
+            deleted_at=NULL",
     )
     .bind(&id)
     .bind(tenant_id)
@@ -153,7 +158,7 @@ pub async fn get_mcp_server_by_key(
     server_key: &str,
 ) -> Result<Option<McpServerRecord>, sqlx::Error> {
     sqlx::query_as::<_, McpServerRecord>(
-        "SELECT * FROM mcp_servers WHERE tenant_id = ? AND server_key = ?",
+        "SELECT * FROM mcp_servers WHERE tenant_id = ? AND server_key = ? AND deleted_at IS NULL",
     )
     .bind(tenant_id)
     .bind(server_key)
@@ -297,7 +302,8 @@ pub async fn list_mcp_servers(
     offset: i64,
 ) -> Result<Vec<McpServerRecord>, sqlx::Error> {
     sqlx::query_as::<_, McpServerRecord>(
-        "SELECT * FROM mcp_servers WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        "SELECT * FROM mcp_servers WHERE tenant_id = ? AND deleted_at IS NULL
+         ORDER BY created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(tenant_id)
     .bind(limit)
@@ -306,6 +312,31 @@ pub async fn list_mcp_servers(
     .await
 }
 
+/// #1193: soft delete — marks `deleted_at` instead of removing the row.
+/// `deleted_at IS NULL` in the `WHERE` clause makes this idempotent: a
+/// second delete of an already-deleted server affects zero rows. Filtered
+/// back out by `list_mcp_servers`/`get_mcp_server_by_key`/
+/// `get_mcp_server_by_id`, and (security-relevant) by the authorize path's
+/// own lookups — a deleted server's tools stop being callable, not just
+/// hidden from the management UI.
+pub async fn delete_mcp_server(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    server_key: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE mcp_servers SET deleted_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ? AND server_key = ? AND deleted_at IS NULL",
+    )
+    .bind(tenant_id)
+    .bind(server_key)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// #1193: same revive-on-conflict reasoning as [`upsert_mcp_server`] —
+/// re-registering a soft-deleted `server_key` clears `deleted_at`.
 pub async fn register_mcp_server(
     pool: &SqlitePool,
     record: &McpServerRecord,
@@ -316,7 +347,8 @@ pub async fn register_mcp_server(
          ON CONFLICT(tenant_id, server_key) DO UPDATE SET \
             name=excluded.name, owner_team=excluded.owner_team, transport=excluded.transport, \
             source=excluded.source, trust_level=excluded.trust_level, endpoint=excluded.endpoint, \
-            status=excluded.status, inspection_enabled=excluded.inspection_enabled, version=excluded.version",
+            status=excluded.status, inspection_enabled=excluded.inspection_enabled, version=excluded.version, \
+            deleted_at=NULL",
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -340,11 +372,13 @@ pub async fn get_mcp_server_by_id(
     tenant_id: &str,
     server_id: &str,
 ) -> Result<Option<McpServerRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpServerRecord>("SELECT * FROM mcp_servers WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(server_id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, McpServerRecord>(
+        "SELECT * FROM mcp_servers WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
+    )
+    .bind(tenant_id)
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn get_last_mcp_manifest_snapshot(
@@ -567,5 +601,148 @@ mod tests {
             server.status, "active",
             "re-registration must re-activate a quarantined server"
         );
+    }
+
+    /// #1193: `delete_mcp_server` soft-deletes (sets `deleted_at`) instead
+    /// of removing the row — it must disappear from `list_mcp_servers`/
+    /// `get_mcp_server_by_key`/`get_mcp_server_by_id` while the row persists.
+    #[tokio::test]
+    async fn delete_mcp_server_soft_deletes_and_hides_from_reads() {
+        let pool = setup_pool("mcp_server_soft_delete").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        let id = upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP",
+            None,
+            "http",
+            None,
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        assert!(delete_mcp_server(&pool, "tenant_a", "github-mcp")
+            .await
+            .unwrap());
+
+        assert!(
+            get_mcp_server_by_key(&pool, "tenant_a", "github-mcp")
+                .await
+                .unwrap()
+                .is_none(),
+            "a soft-deleted server must not be returned by get_mcp_server_by_key"
+        );
+        assert!(
+            get_mcp_server_by_id(&pool, "tenant_a", &id)
+                .await
+                .unwrap()
+                .is_none(),
+            "a soft-deleted server must not be returned by get_mcp_server_by_id"
+        );
+        assert!(
+            list_mcp_servers(&pool, "tenant_a", 100, 0)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a soft-deleted server must not appear in list_mcp_servers"
+        );
+
+        let raw: (Option<String>,) =
+            sqlx::query_as("SELECT deleted_at FROM mcp_servers WHERE tenant_id = ? AND id = ?")
+                .bind("tenant_a")
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            raw.0.is_some(),
+            "the row must persist with deleted_at set, not be removed"
+        );
+    }
+
+    /// #1193: deleting an already-deleted server is a no-op (zero rows
+    /// affected), not an error or a double "deleted" event.
+    #[tokio::test]
+    async fn delete_mcp_server_is_idempotent() {
+        let pool = setup_pool("mcp_server_delete_idempotent").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP",
+            None,
+            "http",
+            None,
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        assert!(delete_mcp_server(&pool, "tenant_a", "github-mcp")
+            .await
+            .unwrap());
+        assert!(
+            !delete_mcp_server(&pool, "tenant_a", "github-mcp")
+                .await
+                .unwrap(),
+            "deleting an already-deleted server must affect zero rows"
+        );
+    }
+
+    /// #1193: re-registering a previously soft-deleted `server_key` revives
+    /// it (clears `deleted_at`) — the unique constraint on `(tenant_id,
+    /// server_key)` means the only way back in is reusing the same row.
+    #[tokio::test]
+    async fn upsert_mcp_server_revives_a_soft_deleted_server() {
+        let pool = setup_pool("mcp_server_revive_on_upsert").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        let first_id = upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP",
+            None,
+            "http",
+            None,
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+        delete_mcp_server(&pool, "tenant_a", "github-mcp")
+            .await
+            .unwrap();
+
+        let second_id = upsert_mcp_server(
+            &pool,
+            "tenant_a",
+            "github-mcp",
+            "GitHub MCP Revived",
+            None,
+            "http",
+            None,
+            "trusted_internal_signed",
+            "http://127.0.0.1:9002/mcp",
+        )
+        .await
+        .unwrap();
+        assert_eq!(first_id, second_id, "revive must reuse the existing row id");
+
+        let server = get_mcp_server_by_key(&pool, "tenant_a", "github-mcp")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.name, "GitHub MCP Revived");
     }
 }

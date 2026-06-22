@@ -472,6 +472,45 @@ pub async fn restore_mcp_server(
     update_mcp_server_quarantine(state, tenant_id, server_key, "active").await
 }
 
+/// #1193: soft-deletes an MCP server (sets `deleted_at`) — it stops
+/// appearing in `list`/`get`, and (security-relevant, not just a management
+/// UI concern) the authorize path's own server lookups, so its tools stop
+/// being callable. The row and its tool history are kept for audit/receipt
+/// integrity; only `DELETE /v1/tenants/:id` (GDPR erasure) actually removes it.
+pub async fn delete_mcp_server(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(server_key): Path<String>,
+) -> impl IntoResponse {
+    match state
+        .storage
+        .delete_mcp_server(&tenant_id, &server_key)
+        .await
+    {
+        Ok(true) => {
+            super::write_admin_action_audit_event(
+                state.storage.as_ref(),
+                &tenant_id,
+                "mcp_server_deleted",
+                None,
+                Some(&server_key),
+                json!({"server_key": server_key}),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({"message": "MCP server successfully deleted"})),
+            )
+                .into_response()
+        }
+        Ok(false) => StatusError::not_found("MCP server not found").into_response(),
+        Err(e) => {
+            error!("Failed to delete MCP server: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 pub(crate) async fn update_mcp_server_quarantine(
     state: Arc<AppState>,
     tenant_id: String,
@@ -1472,6 +1511,91 @@ mod tests {
         assert!(denied
             .matched_policies
             .contains(&"mcp_server_quarantined".to_string()));
+    }
+
+    /// #1193: `DELETE /v1/mcp/servers/:key` soft-deletes a server — it must
+    /// disappear from `get`/`list`, leave an `admin_action` audit row, and
+    /// 404 on a second delete or a delete of a server that never existed.
+    #[tokio::test]
+    async fn test_delete_mcp_server_route() {
+        let (state, tenant_id, _) = setup_state("delete_mcp_server_route").await;
+        db::upsert_mcp_server(
+            &state.pool,
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+
+        // 1. Delete it.
+        let response = delete_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 2. It must no longer be gettable.
+        let get_resp = get_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
+
+        // 3. ...nor listed.
+        let list_resp = list_mcp_servers(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        let body_list = to_bytes(list_resp.into_body(), usize::MAX).await.unwrap();
+        let list: Vec<McpServerRecord> = serde_json::from_slice(&body_list).unwrap();
+        assert!(list.is_empty());
+
+        // 4. Deleting it again returns 404 (idempotent, not a 200 double-delete).
+        let response_404 = delete_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("github-mcp".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_404.status(), StatusCode::NOT_FOUND);
+
+        // 5. Deleting a server that never existed also 404s.
+        let response_never_existed = delete_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("never-existed".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_never_existed.status(), StatusCode::NOT_FOUND);
+
+        // 6. The successful delete left an admin_action audit row.
+        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
+            .await
+            .unwrap();
+        let admin_event = events
+            .iter()
+            .find(|e| {
+                e.event_type == "admin_action" && e.action.as_deref() == Some("mcp_server_deleted")
+            })
+            .expect("expected an admin_action audit event for mcp_server_deleted");
+        assert_eq!(admin_event.resource.as_deref(), Some("github-mcp"));
     }
 
     #[test]

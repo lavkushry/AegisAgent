@@ -230,6 +230,12 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<McpServerRecord>, AegisError>;
+    /// #1193: soft delete (sets `deleted_at`) — see `db::mcp::delete_mcp_server`.
+    async fn delete_mcp_server(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+    ) -> Result<bool, AegisError>;
     async fn update_mcp_server(
         &self,
         tenant_id: &str,
