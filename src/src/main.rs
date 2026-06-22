@@ -834,6 +834,7 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/policies/:id/rollback", post(routes::rollback_policy))
         .route("/policies/reload", post(routes::reload_global_policies))
         .route("/policies/audit-log", get(routes::list_policy_audit_log))
+        .route("/policies/bundles", post(routes::upload_policy_bundle))
         .route(
             "/tenants/risk-weights",
             get(routes::get_tenant_risk_weights).put(routes::put_tenant_risk_weights),
@@ -1464,6 +1465,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Ed25519 verifying (public) key for POST /v1/policies/bundles (#1280).
+    // When unset, the endpoint refuses every request with 501 (fail closed —
+    // there's no key to verify against, so accepting a bundle unverified
+    // would defeat the feature's purpose).
+    let policy_signing_verifying_key = std::env::var("AEGIS_POLICY_SIGNING_KEY").ok();
+    if policy_signing_verifying_key.is_none() {
+        info!(
+            "AEGIS_POLICY_SIGNING_KEY is not set. POST /v1/policies/bundles \
+             will refuse all requests with 501."
+        );
+    }
+
     // HMAC-SHA256 signing secret for verifying X-Slack-Signature on
     // POST /v1/callbacks/slack (#1276). When unset, the endpoint refuses every
     // request with 404 (fail closed).
@@ -1529,6 +1542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_writer_unhealthy: audit_writer_unhealthy.clone(),
         audit_batch,
         github_webhook_secret,
+        policy_signing_verifying_key,
         slack_signing_secret,
         github_pr_commenter,
         github_checks_client,
@@ -2158,6 +2172,7 @@ mod tests {
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -2451,6 +2466,7 @@ mod tests {
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -2781,6 +2797,7 @@ mod tests {
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
+            policy_signing_verifying_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
