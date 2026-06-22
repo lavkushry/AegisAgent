@@ -45,6 +45,7 @@ AegisAgent uses a **two-layer storage model**:
 # Gateway (Rust)
 cargo check  --manifest-path src/Cargo.toml
 cargo test   --manifest-path src/Cargo.toml        # 637 tests
+cargo test   --manifest-path src/Cargo.toml --features sqlcipher   # #1192, encryption-at-rest build
 cargo fmt    --manifest-path src/Cargo.toml -- --check
 cargo clippy --manifest-path src/Cargo.toml -- -D warnings
 cargo deny --manifest-path src/Cargo.toml check licenses   # #1174, blocks GPL/AGPL
@@ -77,6 +78,7 @@ cd e2e && npm ci && AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright tes
 * **Trust-provenance is deterministic:** Classifiers may only *tighten* a label, never loosen it. Downstream agent hops gate on the most restrictive trust level seen anywhere upstream (`trust_chain::propagate`).
 * **Multi-tenant isolation:** Every tenant-owned query binds/filters `tenant_id`; parameterized SQLx only.
 * **Local binding** `127.0.0.1` for dev/test; redact secrets from logs/receipts; no `.unwrap()`/`.expect()` in production.
+* **Encryption-at-rest fails closed:** if `AEGIS_DB_ENCRYPTION_KEY` is set but the binary was not compiled with `--features sqlcipher`, startup MUST error rather than silently run unencrypted (`verify_encryption_or_fail_closed` in `lib/storage/src/db/mod.rs`).
 
 ## Where Things Live
 

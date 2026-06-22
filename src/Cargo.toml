@@ -79,6 +79,10 @@ x509-parser = "0.18"
 [features]
 default = []
 local-embeddings = ["dep:fastembed"]
+# #1192: database encryption at rest (SQLCipher). Compile-time, since it
+# swaps the linked SQLite library for the SQLCipher amalgamation — see
+# lib/storage/Cargo.toml for why this can't be a pure runtime toggle.
+sqlcipher = ["aegis-storage/sqlcipher"]
 
 [dev-dependencies]
 aegis-storage = { path = "../lib/storage", features = ["test-utils"] }
