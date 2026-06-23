@@ -91,6 +91,9 @@ opentelemetry-otlp = { version = "0.32.0", default-features = false, features = 
 # axum/http `HeaderMap` so a span can be parented to the SDK caller's trace.
 opentelemetry-http = "0.32.0"
 tracing-opentelemetry = "0.33.0"
+# Cedar policy hot-reload (#883), gated on AEGIS_POLICY_HOT_RELOAD=true —
+# unset, no watcher thread is started and this dependency is otherwise idle.
+notify-debouncer-mini = "0.7.0"
 
 
 [features]

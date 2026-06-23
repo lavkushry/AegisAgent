@@ -30,6 +30,7 @@ use gateway::metrics;
 use gateway::mtls;
 use gateway::otel;
 use gateway::policy;
+use gateway::policy_watcher;
 use gateway::qdrant;
 use gateway::routes;
 use gateway::splunk_export;
@@ -1559,6 +1560,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         admission_webhook,
         background_task_handles: std::sync::Mutex::new(background_task_handles),
     });
+
+    // #883: Cedar policy hot-reload — opt-in background watcher that calls
+    // the same reload `POST /v1/policies/reload` triggers, automatically,
+    // whenever `policy_path` changes on disk. Inert unless
+    // AEGIS_POLICY_HOT_RELOAD=true.
+    if let Some(handle) =
+        policy_watcher::spawn_policy_hot_reload_watcher(state.clone(), policy_path.clone().into())
+    {
+        if let Ok(mut handles) = state.background_task_handles.lock() {
+            handles.push(("policy_hot_reload_watcher", handle.abort_handle()));
+        }
+    }
 
     // Read request body size limit (default 1MB)
     let body_limit = std::env::var("AEGIS_MAX_BODY_LIMIT_BYTES")
