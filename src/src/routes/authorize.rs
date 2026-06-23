@@ -6086,9 +6086,9 @@ mod tests {
         let tok_a = format!("tok_iso_a_{}", Uuid::new_v4().simple());
         let tok_b = format!("tok_iso_b_{}", Uuid::new_v4().simple());
         for (tid, aid, tok) in [(&tenant_a, &agent_a, &tok_a), (&tenant_b, &agent_b, &tok_b)] {
-            db::insert_agent(
-                state.storage.get_pool(),
-                &AgentRecord {
+            state
+                .storage
+                .insert_agent(&AgentRecord {
                     id: aid.clone(),
                     tenant_id: tid.clone(),
                     agent_key: "iso-agent".to_string(),
@@ -6112,10 +6112,9 @@ mod tests {
                     mtls_cn: None,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
-                },
-            )
-            .await
-            .unwrap();
+                })
+                .await
+                .unwrap();
         }
 
         // Produce a decision + audit event for each tenant via authorize so
@@ -6147,9 +6146,9 @@ mod tests {
             (&tenant_a, &agent_a, &alert_a_id),
             (&tenant_b, &agent_b, &alert_b_id),
         ] {
-            db::insert_soc_alert(
-                state.storage.get_pool(),
-                &crate::models::SocAlertRecord {
+            state
+                .storage
+                .insert_soc_alert(&crate::models::SocAlertRecord {
                     id: alert_id.clone(),
                     tenant_id: tid.clone(),
                     rule: "iso_test_rule".to_string(),
@@ -6158,10 +6157,9 @@ mod tests {
                     source_event_id: Uuid::new_v4().to_string(),
                     summary: format!("Iso alert for {tid}"),
                     created_at: Utc::now().to_rfc3339(),
-                },
-            )
-            .await
-            .unwrap();
+                })
+                .await
+                .unwrap();
         }
 
         let incident_a_id = Uuid::new_v4().to_string();
@@ -6170,9 +6168,9 @@ mod tests {
             (&tenant_a, &agent_a, &incident_a_id),
             (&tenant_b, &agent_b, &incident_b_id),
         ] {
-            db::insert_soc_incident(
-                state.storage.get_pool(),
-                &crate::models::SocIncidentRecord {
+            state
+                .storage
+                .insert_soc_incident(&crate::models::SocIncidentRecord {
                     id: incident_id.clone(),
                     tenant_id: tid.clone(),
                     kind: "iso_test_incident".to_string(),
@@ -6183,10 +6181,9 @@ mod tests {
                     opened_at: Utc::now().to_rfc3339(),
                     status: "open".to_string(),
                     closed_at: None,
-                },
-            )
-            .await
-            .unwrap();
+                })
+                .await
+                .unwrap();
         }
 
         // ── Isolation assertions for Tenant A ─────────────────────────────────

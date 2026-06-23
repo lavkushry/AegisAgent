@@ -1,6 +1,7 @@
 use aegis_api::models::PlaybookRecord;
 use sqlx::SqlitePool;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_playbook(
     pool: &SqlitePool,
     tenant_id: &str,

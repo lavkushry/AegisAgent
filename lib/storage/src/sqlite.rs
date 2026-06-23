@@ -1369,6 +1369,7 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn insert_playbook(
         &self,
         tenant_id: &str,

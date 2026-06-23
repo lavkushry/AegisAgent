@@ -1044,15 +1044,12 @@ mod tests {
         approval.decision_id = decision.id.clone();
         state.storage.insert_approval(&approval).await.unwrap();
 
+        let mut r = unsigned_receipt_template(&tenant_id);
+        r.decision_id = Some(decision.id.clone());
+
         state
             .storage
-            .append_action_receipt_atomic(&tenant_id, |prev| {
-                let mut r = unsigned_receipt_template(&tenant_id);
-                r.decision_id = Some(decision.id.clone());
-                r.prev_receipt_hash = prev;
-                r.receipt_hash = compute_receipt_hash(&r);
-                r
-            })
+            .append_action_receipt_atomic(&tenant_id, r)
             .await
             .unwrap();
 
@@ -1363,9 +1360,13 @@ mod tests {
         // #1304: stress test verifying that evidence graph query handlers (run,
         // incident, and agent centric) enforce tenant boundaries and never leak
         // nodes/edges even when run/incident/policy IDs collide across tenants.
-        let state = Arc::new(AppState::test_new().await);
+        let (state, _, _) = setup_state("graph_cross_tenant_isolation").await;
         let tenant_a = "tenant_a".to_string();
         let tenant_b = "tenant_b".to_string();
+
+        // Register both tenants so FK constraints are satisfied.
+        register_tenant_helper(state.storage.as_ref(), &tenant_a, "Tenant A", "developer").await;
+        register_tenant_helper(state.storage.as_ref(), &tenant_b, "Tenant B", "developer").await;
 
         // Seed colliding data. Both tenants have an agent with different names,
         // and decisions under the same run_id ("shared_run"), and policies/approvals
@@ -1377,7 +1378,7 @@ mod tests {
             let agent = make_graph_test_agent(&format!("agent_{tenant_id}"), tenant_id, agent_name);
             state.storage.insert_agent(&agent).await.unwrap();
 
-            let decision = make_graph_test_decision(
+            let mut decision = make_graph_test_decision(
                 &format!("decision_{tenant_id}"),
                 tenant_id,
                 &agent.id,
@@ -1385,15 +1386,21 @@ mod tests {
                 "allow",
                 Some(&format!("policy_{tenant_id}")),
             );
+            decision.skill = skill.to_string();
+            decision.action = action.to_string();
             state.storage.insert_decision(&decision).await.unwrap();
 
             let policy = crate::models::PolicyRecord {
+                id: format!("policy_{tenant_id}"),
                 policy_key: format!("policy_{tenant_id}"),
                 tenant_id: tenant_id.clone(),
                 name: format!("policy_{tenant_id}"),
+                language: "cedar".to_string(),
                 body: "permit(principal, action, resource);".to_string(),
+                version: 1,
+                status: "active".to_string(),
+                created_by: None,
                 created_at: Utc::now(),
-                updated_at: Utc::now(),
             };
             state.storage.insert_policy(&policy).await.unwrap();
 

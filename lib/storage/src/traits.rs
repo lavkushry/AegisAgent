@@ -602,6 +602,7 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
 
     // Playbooks
+    #[allow(clippy::too_many_arguments)]
     async fn insert_playbook(
         &self,
         tenant_id: &str,
