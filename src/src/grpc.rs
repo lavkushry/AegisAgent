@@ -8,6 +8,8 @@ use aegis_api::grpc::aegis::{
     DiscoverMcpToolsResponse, ListAlertsRequest, ListAlertsResponse, ListIncidentsRequest,
     ListIncidentsResponse, McpToolStatusResponse, RegisterAgentRequest, RegisterAgentResponse,
     RegisterMcpServerRequest, RegisterMcpServerResponse,
+    CreatePlaybookRequest, CreatePlaybookResponse, ListPlaybooksRequest, ListPlaybooksResponse,
+    DeletePlaybookRequest, DeletePlaybookResponse,
 };
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
@@ -636,6 +638,110 @@ impl SocService for SocGrpcServiceImpl {
             status: "closed".to_string(),
             incident_id: req.incident_id,
         }))
+    }
+
+    async fn create_playbook(
+        &self,
+        request: Request<CreatePlaybookRequest>,
+    ) -> Result<Response<CreatePlaybookResponse>, Status> {
+        let req = request.into_inner();
+
+        // Parse and validate the playbook steps using the engine validator
+        let steps: Vec<aegis_soc::playbook::PlaybookStep> = serde_json::from_str(&req.steps_json)
+            .map_err(|e| Status::invalid_argument(format!("Invalid steps_json: {e}")))?;
+
+        let trigger_sev = aegis_soc::playbook::TriggerSeverity::List(req.trigger_severity.clone());
+        let trigger_agent_id = if req.trigger_agent_id.is_empty() { None } else { Some(req.trigger_agent_id.as_str()) };
+        let trigger_env = if req.trigger_environment.is_empty() { None } else { Some(req.trigger_environment.as_str()) };
+
+        let playbook = aegis_soc::playbook::ResponsePlaybook {
+            name: req.name.clone(),
+            trigger: aegis_soc::playbook::PlaybookTrigger {
+                kind: req.trigger_kind.clone(),
+                severity: trigger_sev,
+                agent_id: trigger_agent_id.map(|s| s.to_string()),
+                environment: trigger_env.map(|s| s.to_string()),
+            },
+            steps,
+        };
+
+        playbook.validate()
+            .map_err(|e| Status::invalid_argument(format!("Playbook validation failed: {e}")))?;
+
+        match self._state.storage.insert_playbook(
+            &req.tenant_id,
+            &req.name,
+            &req.trigger_kind,
+            &req.trigger_severity,
+            trigger_agent_id,
+            trigger_env,
+            &req.steps_json,
+        )
+        .await
+        {
+            Ok(pb) => {
+                Ok(Response::new(CreatePlaybookResponse {
+                    playbook: Some(aegis_api::grpc::aegis::PlaybookItem {
+                        id: pb.id,
+                        tenant_id: pb.tenant_id,
+                        name: pb.name,
+                        trigger_kind: pb.trigger_kind,
+                        trigger_severity: req.trigger_severity,
+                        trigger_agent_id: pb.trigger_agent_id.unwrap_or_default(),
+                        trigger_environment: pb.trigger_environment.unwrap_or_default(),
+                        steps_json: pb.steps_json,
+                        enabled: pb.enabled,
+                        created_at: pb.created_at.to_rfc3339(),
+                    }),
+                }))
+            }
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn list_playbooks(
+        &self,
+        request: Request<ListPlaybooksRequest>,
+    ) -> Result<Response<ListPlaybooksResponse>, Status> {
+        let req = request.into_inner();
+        match self._state.storage.list_playbooks(&req.tenant_id).await {
+            Ok(playbooks) => {
+                let items = playbooks
+                    .into_iter()
+                    .map(|pb| {
+                        let trigger_severity: Vec<String> = serde_json::from_str(&pb.trigger_severity)
+                            .unwrap_or_default();
+                        aegis_api::grpc::aegis::PlaybookItem {
+                            id: pb.id,
+                            tenant_id: pb.tenant_id,
+                            name: pb.name,
+                            trigger_kind: pb.trigger_kind,
+                            trigger_severity,
+                            trigger_agent_id: pb.trigger_agent_id.unwrap_or_default(),
+                            trigger_environment: pb.trigger_environment.unwrap_or_default(),
+                            steps_json: pb.steps_json,
+                            enabled: pb.enabled,
+                            created_at: pb.created_at.to_rfc3339(),
+                        }
+                    })
+                    .collect();
+                Ok(Response::new(ListPlaybooksResponse { items }))
+            }
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn delete_playbook(
+        &self,
+        request: Request<DeletePlaybookRequest>,
+    ) -> Result<Response<DeletePlaybookResponse>, Status> {
+        let req = request.into_inner();
+        match self._state.storage.delete_playbook(&req.tenant_id, &req.id).await {
+            Ok(success) => {
+                Ok(Response::new(DeletePlaybookResponse { success }))
+            }
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
     }
 }
 

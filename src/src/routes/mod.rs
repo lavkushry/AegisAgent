@@ -49,6 +49,7 @@ pub mod receipts;
 pub mod soc;
 pub mod tenant;
 pub mod webhooks;
+pub mod playbook;
 
 // Re-export all handlers & types to maintain flat namespace
 pub use agents::*;
@@ -66,6 +67,7 @@ pub use receipts::*;
 pub use soc::*;
 pub use tenant::*;
 pub use webhooks::*;
+pub use playbook::*;
 #[derive(Debug, Clone)]
 struct TokenBucket {
     tokens: f64,

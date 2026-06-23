@@ -92,6 +92,48 @@ pub async fn dispatch(
         return Ok(None);
     }
 
+    // Fetch the agent to match agent_id / environment
+    let agent_opt = db::get_agent_by_id(pool, &incident.tenant_id, &incident.agent_id).await?;
+    let agent = match agent_opt {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+
+    // Load tenant playbooks
+    let playbooks = db::playbooks::list_playbooks(pool, &incident.tenant_id).await?;
+    let mut matched_playbooks = Vec::new();
+    for pb_rec in playbooks {
+        if !pb_rec.enabled {
+            continue;
+        }
+        if let Ok(pb) = crate::playbook::ResponsePlaybook::from_record(&pb_rec) {
+            if pb.matches(incident, &agent) {
+                matched_playbooks.push(pb);
+            }
+        }
+    }
+
+    if !matched_playbooks.is_empty() {
+        for pb in &matched_playbooks {
+            for step in &pb.steps {
+                if let Err(e) = crate::playbook::execute_step(pool, step, incident, &agent).await {
+                    tracing::error!("Failed to execute playbook '{}' step {:?}: {:?}", pb.name, step, e);
+                }
+            }
+        }
+
+        let description = format!(
+            "Executed playbook(s): {}",
+            matched_playbooks.iter().map(|pb| pb.name.clone()).collect::<Vec<_>>().join(", ")
+        );
+
+        return Ok(Some(ResponseAction {
+            action: "playbooks_executed".to_string(),
+            description,
+            critical_notify: incident.severity == "critical" || incident.severity == "high",
+        }));
+    }
+
     let action = match recommended_action(incident) {
         Some(action) => action,
         None => return Ok(None),
@@ -309,5 +351,35 @@ mod tests {
     fn recommended_action_unmapped_incident_kind_returns_none() {
         let incident = make_incident("tenant_x", "agent_x", "repeated_approval");
         assert!(recommended_action(&incident).is_none());
+    }
+
+    #[tokio::test]
+    async fn playbook_matching_and_execution_works() {
+        let (pool, tenant_id, agent_id) = setup("playbook").await;
+        
+        db::playbooks::insert_playbook(
+            &pool,
+            &tenant_id,
+            "Quarantine and Notify Playbook",
+            "deny_storm",
+            &["critical".to_string(), "high".to_string()],
+            None,
+            None,
+            r#"[{"action": "force_approval"}]"#,
+        )
+        .await
+        .unwrap();
+
+        let incident = make_incident(&tenant_id, &agent_id, "deny_storm");
+        let action = dispatch(&pool, &incident).await.unwrap().unwrap();
+        assert_eq!(action.action, "playbooks_executed");
+        assert!(action.description.contains("Quarantine and Notify Playbook"));
+
+        let agent = db::get_agent_by_id(&pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(agent.force_approval);
+        assert_eq!(agent.status, "active");
     }
 }

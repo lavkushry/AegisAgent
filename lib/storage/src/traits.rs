@@ -595,6 +595,31 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
     ) -> Result<Vec<DetectionRuleRecord>, AegisError>;
     async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
+    
+    // Playbooks
+    async fn insert_playbook(
+        &self,
+        tenant_id: &str,
+        name: &str,
+        trigger_kind: &str,
+        trigger_severity: &[String],
+        trigger_agent_id: Option<&str>,
+        trigger_environment: Option<&str>,
+        steps_json: &str,
+    ) -> Result<PlaybookRecord, AegisError>;
+    async fn list_playbooks(&self, tenant_id: &str) -> Result<Vec<PlaybookRecord>, AegisError>;
+    async fn get_playbook_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<PlaybookRecord>, AegisError>;
+    async fn delete_playbook(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
+    async fn set_playbook_enabled(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        enabled: bool,
+    ) -> Result<bool, AegisError>;
     async fn list_soc_alerts_by_source_event_ids(
         &self,
         tenant_id: &str,

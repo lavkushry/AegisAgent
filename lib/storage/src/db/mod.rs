@@ -12,6 +12,7 @@ pub mod receipts;
 pub mod soc;
 pub mod tenant;
 pub mod webhooks;
+pub mod playbooks;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -27,6 +28,7 @@ pub use receipts::*;
 pub use soc::*;
 pub use tenant::*;
 pub use webhooks::*;
+pub use playbooks::*;
 
 /// The schema version this binary expects (DB-005, #1195).
 ///

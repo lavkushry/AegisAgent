@@ -1359,6 +1359,63 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn insert_playbook(
+        &self,
+        tenant_id: &str,
+        name: &str,
+        trigger_kind: &str,
+        trigger_severity: &[String],
+        trigger_agent_id: Option<&str>,
+        trigger_environment: Option<&str>,
+        steps_json: &str,
+    ) -> Result<PlaybookRecord, AegisError> {
+        db::insert_playbook(
+            &self.pool,
+            tenant_id,
+            name,
+            trigger_kind,
+            trigger_severity,
+            trigger_agent_id,
+            trigger_environment,
+            steps_json,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_playbooks(&self, tenant_id: &str) -> Result<Vec<PlaybookRecord>, AegisError> {
+        db::list_playbooks(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_playbook_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<PlaybookRecord>, AegisError> {
+        db::get_playbook_by_id(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_playbook(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError> {
+        db::delete_playbook(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn set_playbook_enabled(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        enabled: bool,
+    ) -> Result<bool, AegisError> {
+        db::set_playbook_enabled(&self.pool, tenant_id, id, enabled)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn list_soc_alerts_by_source_event_ids(
         &self,
         tenant_id: &str,

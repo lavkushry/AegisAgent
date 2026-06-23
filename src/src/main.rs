@@ -865,6 +865,18 @@ fn api_routes() -> Router<Arc<AppState>> {
             delete(routes::delete_detection_rule),
         )
         .route(
+            "/playbooks",
+            get(routes::list_playbooks).post(routes::create_playbook),
+        )
+        .route(
+            "/playbooks/:id",
+            delete(routes::delete_playbook),
+        )
+        .route(
+            "/playbooks/:id/test",
+            post(routes::test_playbook),
+        )
+        .route(
             "/soc/rules",
             get(routes::get_soc_rules).post(routes::create_soc_rule),
         )

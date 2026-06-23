@@ -1046,3 +1046,17 @@ impl Default for RiskEscalationConfig {
         }
     }
 }
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct PlaybookRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub name: String,
+    pub trigger_kind: String,
+    pub trigger_severity: String, // stored as JSON array in sqlite
+    pub trigger_agent_id: Option<String>,
+    pub trigger_environment: Option<String>,
+    pub steps_json: String,       // stored as JSON array in sqlite
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}

@@ -11,3 +11,4 @@ pub mod qdrant;
 pub mod respond;
 pub mod rule_dsl;
 pub mod webhook_export;
+pub mod playbook;

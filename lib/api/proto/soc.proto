@@ -6,6 +6,53 @@ service SocService {
     rpc ListAlerts (ListAlertsRequest) returns (ListAlertsResponse);
     rpc ListIncidents (ListIncidentsRequest) returns (ListIncidentsResponse);
     rpc CloseIncident (CloseIncidentRequest) returns (CloseIncidentResponse);
+    rpc CreatePlaybook (CreatePlaybookRequest) returns (CreatePlaybookResponse);
+    rpc ListPlaybooks (ListPlaybooksRequest) returns (ListPlaybooksResponse);
+    rpc DeletePlaybook (DeletePlaybookRequest) returns (DeletePlaybookResponse);
+}
+
+message CreatePlaybookRequest {
+    string tenant_id = 1;
+    string name = 2;
+    string trigger_kind = 3;
+    repeated string trigger_severity = 4;
+    string trigger_agent_id = 5;
+    string trigger_environment = 6;
+    string steps_json = 7;
+}
+
+message PlaybookItem {
+    string id = 1;
+    string tenant_id = 2;
+    string name = 3;
+    string trigger_kind = 4;
+    repeated string trigger_severity = 5;
+    string trigger_agent_id = 6;
+    string trigger_environment = 7;
+    string steps_json = 8;
+    bool enabled = 9;
+    string created_at = 10;
+}
+
+message CreatePlaybookResponse {
+    PlaybookItem playbook = 1;
+}
+
+message ListPlaybooksRequest {
+    string tenant_id = 1;
+}
+
+message ListPlaybooksResponse {
+    repeated PlaybookItem items = 1;
+}
+
+message DeletePlaybookRequest {
+    string tenant_id = 1;
+    string id = 2;
+}
+
+message DeletePlaybookResponse {
+    bool success = 1;
 }
 
 message ListAlertsRequest {
