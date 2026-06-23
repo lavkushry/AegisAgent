@@ -72,3 +72,4 @@ front it with TLS and expose it on a controlled endpoint your agents can reach (
 - **[Connect your first agent](AegisAgent_Integration_Connectivity.md)** — inline SDK, proxy, or agentless.
 - Write policies — the deterministic gates live in `policies.cedar`.
 - Read the [Operational design](AegisAgent_Operational_Design.md) for SLOs and fail-closed behavior.
+- Ready for production? See the **[Deployment guide](deployment-guide.md)** for Docker Compose, Kubernetes (Helm), bare metal, the full environment variable reference, and capacity planning.
