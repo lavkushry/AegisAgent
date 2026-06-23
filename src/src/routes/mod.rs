@@ -1592,6 +1592,40 @@ pub async fn deprecation_middleware(
     response
 }
 
+/// Middleware to dynamically route unversioned requests using Accept header content negotiation.
+pub async fn version_negotiation_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> impl axum::response::IntoResponse {
+    let accept_header = request
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|val| val.to_str().ok())
+        .unwrap_or("");
+
+    let is_v2 = accept_header.contains("application/vnd.aegis.v2+json");
+
+    let mut response = next.run(request).await;
+
+    if !is_v2 {
+        // Negotiated to v1 -> append deprecation and sunset headers
+        if let Ok(deprecation_val) = axum::http::HeaderValue::from_str("true") {
+            response.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("deprecation"),
+                deprecation_val,
+            );
+        }
+        if let Ok(sunset_val) = axum::http::HeaderValue::from_str("Wed, 31 Dec 2026 23:59:59 GMT") {
+            response.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("sunset"),
+                sunset_val,
+            );
+        }
+    }
+
+    response
+}
+
 #[cfg(test)]
 #[cfg(test)]
 #[allow(unused_imports)]
