@@ -855,14 +855,13 @@ mod tests {
                 created_at: Utc::now() - Duration::hours(idx), // older first
                 updated_at: Utc::now(),
             };
-            db::insert_agent(&state.pool, &agent).await.unwrap();
+            state.storage.insert_agent( &agent).await.unwrap();
         }
 
         // Seed an agent for another tenant to test isolation
         let other_tenant = "other_tenant_id".to_string();
-        db::register_tenant(&state.pool, &other_tenant, "Other Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), &other_tenant, "Other Tenant", "developer")
+            .await;
         let other_agent = AgentRecord {
             id: "other_agent_id".to_string(),
             tenant_id: other_tenant.clone(),
@@ -888,7 +887,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &other_agent).await.unwrap();
+        state.storage.insert_agent( &other_agent).await.unwrap();
 
         // 1. Check all agents for tenant_id (should be 4 total including the default setup agent)
         let response = list_agents(
@@ -956,7 +955,7 @@ mod tests {
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
-            db::insert_agent(&state.pool, &agent).await.unwrap();
+            state.storage.insert_agent( &agent).await.unwrap();
         }
 
         // ?status=active matches exactly the 2 active agents seeded above
@@ -1096,7 +1095,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &agent).await.unwrap();
+        state.storage.insert_agent( &agent).await.unwrap();
 
         // 1. Fetch existing agent (should return 200)
         let response = get_agent(
@@ -1164,7 +1163,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &agent).await.unwrap();
+        state.storage.insert_agent( &agent).await.unwrap();
 
         // 1. Patch name and environment
         let patch_request = PatchAgentRequest {
@@ -1198,7 +1197,7 @@ mod tests {
         assert_eq!(updated.status, "frozen");
 
         // Verify it was actually updated in the database
-        let db_agent = db::get_agent_by_id(&state.pool, &tenant_id, "patch_agent_test_id")
+        let db_agent = state.storage.get_agent_by_id( &tenant_id, "patch_agent_test_id")
             .await
             .unwrap()
             .unwrap();
@@ -1261,7 +1260,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &agent).await.unwrap();
+        state.storage.insert_agent( &agent).await.unwrap();
 
         let patch_request = PatchAgentRequest {
             name: None,
@@ -1290,7 +1289,7 @@ mod tests {
         let updated: AgentRecord = serde_json::from_slice(&body).unwrap();
         assert_eq!(updated.mtls_cn, Some("agent-cert-cn-123".to_string()));
 
-        let resolved = db::get_agent_by_mtls_cn(&state.pool, &tenant_id, "agent-cert-cn-123")
+        let resolved = state.storage.get_agent_by_mtls_cn( &tenant_id, "agent-cert-cn-123")
             .await
             .unwrap()
             .unwrap();
@@ -1327,7 +1326,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &agent).await.unwrap();
+        state.storage.insert_agent( &agent).await.unwrap();
 
         // 1. Delete the agent
         let response = delete_agent(
@@ -1391,7 +1390,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &agent).await.unwrap();
+        state.storage.insert_agent( &agent).await.unwrap();
 
         let response = delete_agent(
             State(state.clone()),
@@ -1402,9 +1401,7 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         let admin_event = events
             .iter()
             .find(|e| {
@@ -1449,8 +1446,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &agent).await.unwrap();
-        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent.id, "github")
+        state.storage.insert_agent( &agent).await.unwrap();
+        state.storage.grant_agent_tool_permission( &tenant_id, &agent.id, "github")
             .await
             .unwrap();
 
@@ -1463,9 +1460,7 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         let admin_event = events
             .iter()
             .find(|e| {
@@ -1488,12 +1483,12 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&agent_token))
-                .fetch_one(&state.pool)
+                .fetch_one(state.storage.get_pool())
                 .await
                 .unwrap();
 
         // Quarantine the agent directly via DB (simulates Cedar-triggered quarantine).
-        db::set_agent_status(&state.pool, &tenant_id, &agent_id, "quarantined")
+        state.storage.set_agent_status( &tenant_id, &agent_id, "quarantined")
             .await
             .unwrap();
 
@@ -1546,7 +1541,7 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&old_token))
-                .fetch_one(&state.pool)
+                .fetch_one(state.storage.get_pool())
                 .await
                 .unwrap();
 
@@ -1587,9 +1582,7 @@ mod tests {
         assert_eq!(resp_new.status(), StatusCode::OK);
 
         // Audit event recorded.
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         assert!(events.iter().any(|e| e.event_type == "agent_token_rotated"));
     }
 
@@ -1615,7 +1608,7 @@ mod tests {
     #[tokio::test]
     async fn agent_lifecycle_columns_are_populated_and_cleared() {
         let (state, tenant_id, agent_token) = setup_state("agent_lifecycle").await;
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -1627,8 +1620,8 @@ mod tests {
         // periodic flush job's logic must run once before it lands in the DB.
         let request = mcp_authorize_request("filesystem", "read_file");
         let _ = call_authorize(state.clone(), &tenant_id, &agent_token, request.clone()).await;
-        crate::jobs::flush_heartbeats(&state.pool, &state.heartbeat_debouncer).await;
-        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        crate::jobs::flush_heartbeats(state.storage.get_pool(), &state.heartbeat_debouncer).await;
+        let agent = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -1646,7 +1639,7 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -1663,7 +1656,7 @@ mod tests {
         )
         .await
         .into_response();
-        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -1672,11 +1665,11 @@ mod tests {
 
         // quarantined_at: set on transition to quarantined, cleared on transition out.
         assert!(
-            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "quarantined")
+            state.storage.set_agent_status( &tenant_id, &agent_id, "quarantined")
                 .await
                 .unwrap()
         );
-        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -1684,11 +1677,11 @@ mod tests {
         assert!(agent.quarantined_at.is_some());
 
         assert!(
-            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "active")
+            state.storage.set_agent_status( &tenant_id, &agent_id, "active")
                 .await
                 .unwrap()
         );
-        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -1700,7 +1693,7 @@ mod tests {
     #[tokio::test]
     async fn revoke_agent_sets_status_to_revoked() {
         let (state, tenant_id, agent_token) = setup_state("revoke_agent_status").await;
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -1715,7 +1708,7 @@ mod tests {
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let agent = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -1728,7 +1721,7 @@ mod tests {
     async fn quarantine_mcp_server_sets_status_to_quarantined() {
         let (state, tenant_id, _agent_token) = setup_state("quarantine_mcp_server_status").await;
         db::upsert_mcp_server(
-            &state.pool,
+            state.storage.get_pool(),
             &tenant_id,
             "github-mcp",
             "GitHub MCP",
@@ -1750,7 +1743,7 @@ mod tests {
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let server = db::get_mcp_server_by_key(&state.pool, &tenant_id, "github-mcp")
+        let server = state.storage.get_mcp_server_by_key( &tenant_id, "github-mcp")
             .await
             .unwrap()
             .expect("server should exist");
@@ -1796,7 +1789,7 @@ mod tests {
         use tower::ServiceExt;
 
         let (state, tenant_id, _agent_token) = setup_state("register_agent_dup").await;
-        let state_pool = state.pool.clone();
+        let state_pool = state.storage.get_pool().clone();
         let app = register_agent_router(state);
 
         let make_request = || {
@@ -1878,7 +1871,7 @@ mod tests {
         assert!(cleartext_token.starts_with("agent_tok_"));
 
         // 2. Query the DB directly to check the stored token
-        let stored_agent = db::get_agent_by_key(&state.pool, &tenant_id, "hash-agent")
+        let stored_agent = state.storage.get_agent_by_key( &tenant_id, "hash-agent")
             .await
             .unwrap()
             .expect("agent should exist in database");
@@ -1891,7 +1884,7 @@ mod tests {
         assert_eq!(stored_agent.agent_token, expected_hash);
 
         // 3. Verify that get_agent_by_token successfully resolves the agent using cleartext
-        let resolved = db::get_agent_by_token(&state.pool, &tenant_id, &cleartext_token)
+        let resolved = state.storage.get_agent_by_token( &tenant_id, &cleartext_token)
             .await
             .unwrap();
         assert!(resolved.is_some());
@@ -1958,8 +1951,8 @@ mod tests {
         use tower::ServiceExt;
 
         let (state, tenant_id, _agent_token) = setup_state("register_tool_creates").await;
-        let pool = state.pool.clone();
-        let app = register_tool_router(state);
+        let pool = state.storage.get_pool().clone();
+        let app = register_tool_router(state.clone());
 
         let request = Request::builder()
             .method("POST")
@@ -1974,7 +1967,7 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let action = db::get_skill_action(&pool, &tenant_id, "deployer", "ship")
+        let action = state.storage.get_skill_action( &tenant_id, "deployer", "ship")
             .await
             .unwrap()
             .expect("registered action should be queryable");
@@ -1996,8 +1989,8 @@ mod tests {
         use tower::ServiceExt;
 
         let (state, tenant_id, _agent_token) = setup_state("register_tool_dup").await;
-        let pool = state.pool.clone();
-        let app = register_tool_router(state);
+        let pool = state.storage.get_pool().clone();
+        let app = register_tool_router(state.clone());
 
         let first = Request::builder()
             .method("POST")
@@ -2023,7 +2016,7 @@ mod tests {
         let second_response = app.oneshot(second).await.unwrap();
         assert_eq!(second_response.status(), StatusCode::OK);
 
-        let action = db::get_skill_action(&pool, &tenant_id, "deployer", "ship")
+        let action = state.storage.get_skill_action( &tenant_id, "deployer", "ship")
             .await
             .unwrap()
             .expect("registered action should be queryable");

@@ -350,19 +350,18 @@ mod tests {
     async fn verify_receipt_detects_tampered_receipt() {
         let (state, tenant_id, _agent_token) = setup_state("tampered_single_receipt").await;
 
-        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
-            let mut r = unsigned_receipt_template(&tenant_id);
-            r.prev_receipt_hash = prev;
-            r.receipt_hash = compute_receipt_hash(&r);
-            r
-        })
-        .await
-        .expect("receipt insert");
+        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
+            .map(|r| r.receipt_hash).unwrap_or_default();
+        let mut r = unsigned_receipt_template(&tenant_id);
+        r.prev_receipt_hash = prev;
+        r.receipt_hash = db::compute_receipt_hash(&r);
+        state.storage.insert_action_receipt(&r).await.unwrap();
+        let rec = r;
 
         sqlx::query("UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE tenant_id = ? AND id = ?")
             .bind(tenant_id.as_str())
             .bind(&rec.id)
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -392,16 +391,15 @@ mod tests {
 
         // Insert a signed receipt through the real atomic appender. Hash FIRST over
         // the live chain head, then sign OVER that hash (additive metadata).
-        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
-            let mut r = unsigned_receipt_template(&tenant_id);
-            r.prev_receipt_hash = prev;
-            r.receipt_hash = compute_receipt_hash(&r);
-            r.signature = Some(signer.sign_hash(&r.receipt_hash));
-            r.signer_public_key = Some(signer.public_key_hex());
-            r
-        })
-        .await
-        .expect("signed receipt insert");
+        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
+            .map(|r| r.receipt_hash).unwrap_or_default();
+        let mut r = unsigned_receipt_template(&tenant_id);
+        r.prev_receipt_hash = prev;
+        r.receipt_hash = db::compute_receipt_hash(&r);
+        r.signature = Some(signer.sign_hash(&r.receipt_hash));
+        r.signer_public_key = Some(signer.public_key_hex());
+        state.storage.insert_action_receipt(&r).await.unwrap();
+        let rec = r;
 
         let response = verify_receipt(
             State(state.clone()),
@@ -438,17 +436,16 @@ mod tests {
         .unwrap();
         assert_eq!(signer.key_id(), Some("rotation-2026-06"));
 
-        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
-            let mut r = unsigned_receipt_template(&tenant_id);
-            r.prev_receipt_hash = prev;
-            r.receipt_hash = compute_receipt_hash(&r);
-            r.signature = Some(signer.sign_hash(&r.receipt_hash));
-            r.signer_public_key = Some(signer.public_key_hex());
-            r.signer_key_id = signer.key_id().map(str::to_string);
-            r
-        })
-        .await
-        .expect("signed receipt insert");
+        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
+            .map(|r| r.receipt_hash).unwrap_or_default();
+        let mut r = unsigned_receipt_template(&tenant_id);
+        r.prev_receipt_hash = prev;
+        r.receipt_hash = db::compute_receipt_hash(&r);
+        r.signature = Some(signer.sign_hash(&r.receipt_hash));
+        r.signer_public_key = Some(signer.public_key_hex());
+        r.signer_key_id = signer.key_id().map(str::to_string);
+        state.storage.insert_action_receipt(&r).await.unwrap();
+        let rec = r;
 
         let response = verify_receipt(
             State(state.clone()),
@@ -465,7 +462,7 @@ mod tests {
         assert_eq!(json["signer_key_id"].as_str(), Some("rotation-2026-06"));
 
         // Also round-trips through a direct DB read, not just the verify response.
-        let fetched = db::get_action_receipt_by_id(&state.pool, &tenant_id, &rec.id)
+        let fetched = state.storage.get_action_receipt_by_id( &tenant_id, &rec.id)
             .await
             .unwrap()
             .unwrap();
@@ -481,17 +478,16 @@ mod tests {
         let signer = sign::ReceiptSigner::from_env_value(TEST_SIGNING_SECRET_HEX).unwrap();
         assert_eq!(signer.key_id(), None);
 
-        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
-            let mut r = unsigned_receipt_template(&tenant_id);
-            r.prev_receipt_hash = prev;
-            r.receipt_hash = compute_receipt_hash(&r);
-            r.signature = Some(signer.sign_hash(&r.receipt_hash));
-            r.signer_public_key = Some(signer.public_key_hex());
-            r.signer_key_id = signer.key_id().map(str::to_string);
-            r
-        })
-        .await
-        .expect("signed receipt insert");
+        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
+            .map(|r| r.receipt_hash).unwrap_or_default();
+        let mut r = unsigned_receipt_template(&tenant_id);
+        r.prev_receipt_hash = prev;
+        r.receipt_hash = db::compute_receipt_hash(&r);
+        r.signature = Some(signer.sign_hash(&r.receipt_hash));
+        r.signer_public_key = Some(signer.public_key_hex());
+        r.signer_key_id = signer.key_id().map(str::to_string);
+        state.storage.insert_action_receipt(&r).await.unwrap();
+        let rec = r;
 
         let response = verify_receipt(State(state), TenantId(tenant_id), Path(rec.id))
             .await
@@ -567,38 +563,35 @@ mod tests {
         const TASKS: usize = 24;
         let mut handles = Vec::with_capacity(TASKS);
         for i in 0..TASKS {
-            let pool = state.pool.clone();
+            let pool = state.storage.get_pool().clone();
             let tenant = tenant_id.clone();
+            let state = state.clone();
             handles.push(tokio::spawn(async move {
-                db::append_action_receipt_atomic(&pool, &tenant, |prev| {
-                    let mut rec = ActionReceiptRecord {
-                        id: Uuid::new_v4().to_string(),
-                        tenant_id: tenant.clone(),
-                        decision_id: Some(Uuid::new_v4().to_string()),
-                        ts: Utc::now().to_rfc3339(),
-                        agent_id: Some("concurrency-agent".to_string()),
-                        user_id: None,
-                        run_id: None,
-                        trace_id: None,
-                        tool: Some("github".to_string()),
-                        action: Some(format!("op_{}", i)),
-                        resource: None,
-                        source_trust: "trusted_internal_signed".to_string(),
-                        decision: "allow".to_string(),
-                        approver: None,
-                        action_hash: Some(format!("sha256:dead{:04}", i)),
-                        prev_receipt_hash: prev,
-                        receipt_hash: String::new(),
-                        canon_version: CANON_VERSION.to_string(),
-                        signature: None,
-                        signer_public_key: None,
-                        signer_key_id: None,
-                        created_at: Utc::now(),
-                    };
-                    rec.receipt_hash = compute_receipt_hash(&rec);
-                    rec
-                })
-                .await
+                let rec = ActionReceiptRecord {
+                    id: Uuid::new_v4().to_string(),
+                    tenant_id: tenant.clone(),
+                    decision_id: Some(Uuid::new_v4().to_string()),
+                    ts: Utc::now().to_rfc3339(),
+                    agent_id: Some("concurrency-agent".to_string()),
+                    user_id: None,
+                    run_id: None,
+                    trace_id: None,
+                    tool: Some("github".to_string()),
+                    action: Some(format!("op_{}", i)),
+                    resource: None,
+                    source_trust: "trusted_internal_signed".to_string(),
+                    decision: "allow".to_string(),
+                    approver: None,
+                    action_hash: Some(format!("sha256:dead{:04}", i)),
+                    prev_receipt_hash: String::new(),
+                    receipt_hash: String::new(),
+                    canon_version: CANON_VERSION.to_string(),
+                    signature: None,
+                    signer_public_key: None,
+                    signer_key_id: None,
+                    created_at: Utc::now(),
+                };
+                state.storage.append_action_receipt_atomic(&tenant, rec).await
             }));
         }
         for h in handles {
@@ -610,7 +603,7 @@ mod tests {
              WHERE tenant_id = ? ORDER BY rowid ASC",
         )
         .bind(tenant_id.as_str())
-        .fetch_all(&state.pool)
+        .fetch_all(state.storage.get_pool())
         .await
         .unwrap();
         assert_eq!(rows.len(), TASKS, "every append must commit exactly once");
@@ -720,39 +713,34 @@ mod tests {
 
         const N: usize = 1000;
         for i in 0..N {
-            db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev_receipt_hash| {
-                let mut receipt = ActionReceiptRecord {
-                    id: Uuid::new_v4().to_string(),
-                    tenant_id: tenant_id.clone(),
-                    decision_id: None,
-                    ts: Utc::now().to_rfc3339(),
-                    agent_id: None,
-                    user_id: None,
-                    run_id: None,
-                    trace_id: None,
-                    tool: Some("filesystem".to_string()),
-                    action: Some("read_file".to_string()),
-                    resource: Some(format!("/tmp/file-{i}")),
-                    source_trust: "trusted_internal_signed".to_string(),
-                    decision: "allow".to_string(),
-                    approver: None,
-                    action_hash: Some(format!("{i:064x}")),
-                    prev_receipt_hash,
-                    receipt_hash: String::new(),
-                    canon_version: CANON_VERSION.to_string(),
-                    signature: None,
-                    signer_public_key: None,
-                    signer_key_id: None,
-                    created_at: Utc::now(),
-                };
-                receipt.receipt_hash = compute_receipt_hash(&receipt);
-                receipt
-            })
-            .await
-            .unwrap();
+            let receipt = ActionReceiptRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                decision_id: None,
+                ts: Utc::now().to_rfc3339(),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                tool: Some("filesystem".to_string()),
+                action: Some("read_file".to_string()),
+                resource: Some(format!("/tmp/file-{i}")),
+                source_trust: "trusted_internal_signed".to_string(),
+                decision: "allow".to_string(),
+                approver: None,
+                action_hash: Some(format!("{i:064x}")),
+                prev_receipt_hash: String::new(),
+                receipt_hash: String::new(),
+                canon_version: CANON_VERSION.to_string(),
+                signature: None,
+                signer_public_key: None,
+                signer_key_id: None,
+                created_at: Utc::now(),
+            };
+            state.storage.append_action_receipt_atomic(&tenant_id, receipt).await.unwrap();
         }
 
-        let chain = db::list_action_receipts_chain_order(&state.pool, &tenant_id)
+        let chain = state.storage.list_action_receipts_chain_order( &tenant_id)
             .await
             .unwrap();
         assert_eq!(chain.len(), N, "all 1000 receipts must be persisted");

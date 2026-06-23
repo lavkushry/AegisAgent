@@ -1031,12 +1031,11 @@ mod tests {
 
         // A second tenant with its own data must be unaffected.
         let tenant_b = format!("tenant_b_{}", Uuid::new_v4().simple());
-        db::register_tenant(&state.pool, &tenant_b, "Tenant B", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), &tenant_b, "Tenant B", "developer")
+            .await;
 
         // Sanity check: tenant_id has rows before deletion.
-        let stats_before = db::get_tenant_stats(&state.pool, &tenant_id).await.unwrap();
+        let stats_before = state.storage.get_tenant_stats( &tenant_id).await.unwrap();
         assert!(stats_before.total_decisions >= 1);
 
         let resp = delete_tenant(
@@ -1049,27 +1048,27 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
         // The tenant and all owned rows are gone.
-        assert!(db::get_tenant_by_id(&state.pool, &tenant_id)
+        assert!(state.storage.get_tenant_by_id( &tenant_id)
             .await
             .unwrap()
             .is_none());
-        let stats_after = db::get_tenant_stats(&state.pool, &tenant_id).await.unwrap();
+        let stats_after = state.storage.get_tenant_stats( &tenant_id).await.unwrap();
         assert_eq!(stats_after.total_decisions, 0);
         assert_eq!(stats_after.total_agents, 0);
         assert_eq!(stats_after.total_receipts, 0);
 
-        let remaining_approvals = db::list_pending_approvals(&state.pool, &tenant_id, 50, 0)
+        let remaining_approvals = state.storage.list_pending_approvals( &tenant_id, 50, 0)
             .await
             .unwrap();
         assert!(remaining_approvals.is_empty());
 
-        let remaining_servers = db::list_mcp_servers(&state.pool, &tenant_id, 50, 0)
+        let remaining_servers = state.storage.list_mcp_servers( &tenant_id, 50, 0)
             .await
             .unwrap();
         assert!(remaining_servers.is_empty());
 
         // tenant_b is untouched.
-        assert!(db::get_tenant_by_id(&state.pool, &tenant_b)
+        assert!(state.storage.get_tenant_by_id( &tenant_b)
             .await
             .unwrap()
             .is_some());
@@ -1151,10 +1150,9 @@ mod tests {
         assert_eq!(denied.status(), StatusCode::NOT_FOUND);
 
         // Tenant isolation: another tenant's export contains none of A's records.
-        db::register_tenant(&state.pool, "tenant_other", "Other", "developer")
-            .await
-            .unwrap();
-        let other = db::export_tenant_data(&state.pool, "tenant_other")
+        register_tenant_helper(state.storage.as_ref(), "tenant_other", "Other", "developer")
+            .await;
+        let other = state.storage.export_tenant_data( "tenant_other")
             .await
             .unwrap();
         assert!(other.agents.is_empty());
@@ -1188,7 +1186,7 @@ mod tests {
             "SELECT id FROM decisions WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1",
         )
         .bind(tenant_id)
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .unwrap();
 
@@ -1210,7 +1208,7 @@ mod tests {
             callback_secret_hash: None,
             created_at: Utc::now(),
         };
-        db::insert_approval(&state.pool, &approval).await.unwrap();
+        state.storage.insert_approval( &approval).await.unwrap();
 
         // Current policy snapshot.
         let policy = PolicyRecord {
@@ -1225,7 +1223,7 @@ mod tests {
             created_by: None,
             created_at: Utc::now(),
         };
-        db::insert_policy(&state.pool, &policy).await.unwrap();
+        state.storage.insert_policy( &policy).await.unwrap();
 
         // SOC incident.
         let incident = SocIncidentRecord {
@@ -1240,7 +1238,7 @@ mod tests {
             status: "open".to_string(),
             closed_at: None,
         };
-        db::insert_soc_incident(&state.pool, &incident)
+        state.storage.insert_soc_incident( &incident)
             .await
             .unwrap();
     }
@@ -1330,13 +1328,13 @@ mod tests {
         sqlx::query("UPDATE action_receipts SET created_at = ? WHERE tenant_id = ?")
             .bind(old_time)
             .bind(&tenant_id)
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
         sqlx::query("UPDATE audit_events SET created_at = ? WHERE tenant_id = ?")
             .bind(old_time)
             .bind(&tenant_id)
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -1398,9 +1396,8 @@ mod tests {
         // Register a second tenant + agent in the *same* pool and seed its
         // own evidence data.
         let tenant_b = "tenant_other_evidence".to_string();
-        db::register_tenant(&state.pool, &tenant_b, "Other Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), &tenant_b, "Other Tenant", "developer")
+            .await;
         let register_resp = register_agent(
             State(state.clone()),
             TenantId(tenant_b.clone()),
@@ -1536,9 +1533,8 @@ mod tests {
     async fn put_tenant_risk_weights_round_trips_and_is_tenant_scoped() {
         let (state, tenant_id, _) = setup_state("risk_weights_put_roundtrip").await;
         let other_tenant = "tenant_other_risk_weights";
-        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other Tenant", "developer")
+            .await;
 
         let mut custom = RiskWeights::DEFAULT;
         custom.environment_weight_mutating = 42;
