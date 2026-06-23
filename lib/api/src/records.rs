@@ -3,6 +3,6 @@
 pub use crate::models::{
     ActionReceiptRecord, AgentRecord, AgentToolPermission, ApiKeyRecord, ApprovalRecord,
     AuditEventRecord, DecisionRecord, DetectionRuleRecord, McpManifestSnapshotRecord,
-    McpServerRecord, McpToolRecord, PlaybookRecord, PolicyAuditLogRecord, PolicyRecord, PolicyVersionRecord,
-    TenantRecord, WebhookSubscriptionRecord,
+    McpServerRecord, McpToolRecord, PlaybookRecord, PolicyAuditLogRecord, PolicyRecord,
+    PolicyVersionRecord, TenantRecord, WebhookSubscriptionRecord,
 };

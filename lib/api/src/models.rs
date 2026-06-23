@@ -1056,7 +1056,7 @@ pub struct PlaybookRecord {
     pub trigger_severity: String, // stored as JSON array in sqlite
     pub trigger_agent_id: Option<String>,
     pub trigger_environment: Option<String>,
-    pub steps_json: String,       // stored as JSON array in sqlite
+    pub steps_json: String, // stored as JSON array in sqlite
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
 }

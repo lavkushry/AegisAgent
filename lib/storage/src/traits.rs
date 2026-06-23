@@ -595,7 +595,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
     ) -> Result<Vec<DetectionRuleRecord>, AegisError>;
     async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
-    
+
     // Playbooks
     async fn insert_playbook(
         &self,
