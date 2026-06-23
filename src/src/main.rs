@@ -1173,6 +1173,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stream and never touches the inline path.
     // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
     let metrics = Arc::new(metrics::SecurityMetrics::new());
+
+    // #1287: OTLP metrics export, gated on the same AEGIS_OTLP_ENDPOINT as
+    // tracing above. `None` when unset — entirely inert, see
+    // `otel::init_meter_provider`'s doc comment.
+    let otel_meter_provider = otel::init_meter_provider(metrics.clone());
+
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
     let drain_handle = tokio::spawn(events::drain(
         events_rx,
@@ -1987,6 +1993,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // #1156: flush any spans still buffered in the OTel batch processor.
     if let Some(provider) = otel_tracer_provider {
         otel::shutdown_tracer_provider(&provider);
+    }
+    // #1287: flush any metrics still buffered before the periodic exporter's
+    // next tick would otherwise have run.
+    if let Some(provider) = otel_meter_provider {
+        otel::shutdown_meter_provider(&provider);
     }
 
     info!("AegisAgent shut down gracefully.");
