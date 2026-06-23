@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aegis-gateway.fullname" . }}
+  labels:
+    {{- include "aegis-gateway.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "aegis-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/policy: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "aegis-gateway.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "aegis-gateway.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: rest
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 6334
+              protocol: TCP
+          env:
+            # Container default (127.0.0.1) only accepts loopback traffic —
+            # override to 0.0.0.0 so the in-cluster Service can reach the pod.
+            - name: AEGIS_BIND_ADDR
+              value: "0.0.0.0:8080"
+            - name: AEGIS_GRPC_BIND_ADDR
+              value: "0.0.0.0:6334"
+            - name: DATABASE_URL
+              value: {{ .Values.config.databaseUrl | quote }}
+            - name: CEDAR_POLICY_PATH
+              value: /app/policies.cedar
+            - name: RUST_LOG
+              value: {{ .Values.config.logLevel | quote }}
+            - name: AEGIS_JWT_REQUIRED
+              value: {{ .Values.config.jwtRequired | quote }}
+            {{- if .Values.config.corsOrigins }}
+            - name: AEGIS_CORS_ORIGINS
+              value: {{ .Values.config.corsOrigins | quote }}
+            {{- end }}
+            # The ConfigMap-mounted policy file is updated by kubelet on
+            # change; the gateway's own filesystem watcher (#883) picks it up
+            # live without a pod restart.
+            - name: AEGIS_POLICY_HOT_RELOAD
+              value: "true"
+            - name: AEGIS_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-gateway.secretName" . }}
+                  key: AEGIS_JWT_SECRET
+                  optional: true
+            - name: AEGIS_POLICY_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-gateway.secretName" . }}
+                  key: AEGIS_POLICY_SIGNING_KEY
+                  optional: true
+            - name: AEGIS_GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-gateway.secretName" . }}
+                  key: AEGIS_GITHUB_WEBHOOK_SECRET
+                  optional: true
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: rest
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: rest
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path }}
+              port: rest
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: policy
+              mountPath: /app/policies.cedar
+              subPath: policies.cedar
+              readOnly: true
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "aegis-gateway.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: policy
+          configMap:
+            name: {{ include "aegis-gateway.fullname" . }}-policy
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

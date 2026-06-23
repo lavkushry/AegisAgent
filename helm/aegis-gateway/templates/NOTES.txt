@@ -1,0 +1,24 @@
+AegisAgent gateway ({{ .Chart.AppVersion }}) has been deployed as "{{ include "aegis-gateway.fullname" . }}" in namespace "{{ .Release.Namespace }}".
+
+Check rollout status:
+  kubectl rollout status deployment/{{ include "aegis-gateway.fullname" . }} -n {{ .Release.Namespace }}
+
+Port-forward the REST API:
+  kubectl port-forward svc/{{ include "aegis-gateway.fullname" . }} -n {{ .Release.Namespace }} 8080:{{ .Values.service.restPort }}
+  curl http://127.0.0.1:8080/health
+
+{{- if not .Values.secret.create }}
+
+NOTE: secret.create is false — AEGIS_JWT_SECRET / AEGIS_POLICY_SIGNING_KEY /
+AEGIS_GITHUB_WEBHOOK_SECRET are unset unless you pre-created a Secret named
+"{{ include "aegis-gateway.secretName" . }}" with those keys.
+{{- end }}
+
+{{- if gt (int .Values.replicaCount) 1 }}
+
+WARNING: replicaCount is {{ .Values.replicaCount }} with a SQLite backend on a
+ReadWriteOnce volume. Multiple replicas will contend for the same writer lock
+on the same volume — this is not supported until the PostgreSQL backend
+(#1194) ships. Set replicaCount back to 1 unless you've configured an
+external PostgreSQL database yourself.
+{{- end }}

@@ -1,0 +1,16 @@
+apiVersion: v2
+name: aegis-gateway
+description: AegisAgent integrity gateway — Cedar-policy authorization, approval-bound action receipts, and trust-provenance gating for AI agent tool calls.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/lavkushry/AegisAgent
+sources:
+  - https://github.com/lavkushry/AegisAgent
+keywords:
+  - ai-agent-security
+  - policy-engine
+  - cedar
+  - gateway
+maintainers:
+  - name: AegisAgent
