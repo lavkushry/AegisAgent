@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use aegis_api::models::{PlaybookRecord, AgentRecord};
 use crate::correlate::Incident;
+use aegis_api::models::{AgentRecord, PlaybookRecord};
 use aegis_common::errors::AegisError;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,9 +71,11 @@ impl ResponsePlaybook {
         for sev in &severities {
             match sev.as_str() {
                 "info" | "low" | "medium" | "high" | "critical" => {}
-                _ => return Err(format!(
+                _ => {
+                    return Err(format!(
                     "Invalid severity: '{sev}'. Expected one of: info, low, medium, high, critical"
-                )),
+                ))
+                }
             }
         }
         if self.steps.is_empty() {
@@ -85,12 +87,18 @@ impl ResponsePlaybook {
                 PlaybookStep::ForceApproval => {}
                 PlaybookStep::QuarantineMcp { server_key } => {
                     if server_key.trim().is_empty() {
-                        return Err(format!("Step {i}: server_key cannot be empty in quarantine_mcp"));
+                        return Err(format!(
+                            "Step {i}: server_key cannot be empty in quarantine_mcp"
+                        ));
                     }
                 }
-                PlaybookStep::NotifySlack { webhook_url, text, .. } => {
+                PlaybookStep::NotifySlack {
+                    webhook_url, text, ..
+                } => {
                     if webhook_url.trim().is_empty() {
-                        return Err(format!("Step {i}: webhook_url cannot be empty in notify_slack"));
+                        return Err(format!(
+                            "Step {i}: webhook_url cannot be empty in notify_slack"
+                        ));
                     }
                     if text.trim().is_empty() {
                         return Err(format!("Step {i}: text cannot be empty in notify_slack"));
@@ -153,7 +161,7 @@ impl ResponsePlaybook {
 
 pub fn render_template(template: &str, incident: &Incident, agent: &AgentRecord) -> String {
     let mut rendered = template.to_string();
-    
+
     // Incident variables
     rendered = rendered.replace("{{ incident.incident_id }}", &incident.incident_id);
     rendered = rendered.replace("{{ incident.tenant_id }}", &incident.tenant_id);
@@ -170,7 +178,7 @@ pub fn render_template(template: &str, incident: &Incident, agent: &AgentRecord)
     rendered = rendered.replace("{{ agent.environment }}", &agent.environment);
     rendered = rendered.replace("{{ agent.risk_tier }}", &agent.risk_tier);
     rendered = rendered.replace("{{ agent.status }}", &agent.status);
-    
+
     if let Some(ref reason) = agent.frozen_reason {
         rendered = rendered.replace("{{ agent.frozen_reason }}", reason);
     } else {
@@ -199,13 +207,19 @@ pub async fn execute_step(
     match step {
         PlaybookStep::FreezeAgent { reason } => {
             let default_reason = format!("auto-response: playbook freeze");
-            let rendered_reason = reason.as_ref()
+            let rendered_reason = reason
+                .as_ref()
                 .map(|r| render_template(r, incident, agent))
                 .unwrap_or(default_reason);
 
-            aegis_storage::db::set_agent_status(pool, &incident.tenant_id, &incident.agent_id, "frozen")
-                .await
-                .map_err(AegisError::Database)?;
+            aegis_storage::db::set_agent_status(
+                pool,
+                &incident.tenant_id,
+                &incident.agent_id,
+                "frozen",
+            )
+            .await
+            .map_err(AegisError::Database)?;
             aegis_storage::db::set_agent_frozen_reason(
                 pool,
                 &incident.tenant_id,
@@ -216,9 +230,14 @@ pub async fn execute_step(
             .map_err(AegisError::Database)?;
         }
         PlaybookStep::ForceApproval => {
-            aegis_storage::db::set_agent_force_approval(pool, &incident.tenant_id, &incident.agent_id, true)
-                .await
-                .map_err(AegisError::Database)?;
+            aegis_storage::db::set_agent_force_approval(
+                pool,
+                &incident.tenant_id,
+                &incident.agent_id,
+                true,
+            )
+            .await
+            .map_err(AegisError::Database)?;
         }
         PlaybookStep::QuarantineMcp { server_key } => {
             let rendered_key = render_template(server_key, incident, agent);
@@ -237,10 +256,16 @@ pub async fn execute_step(
             .await
             .map_err(AegisError::Database)?;
         }
-        PlaybookStep::NotifySlack { webhook_url, channel, text } => {
+        PlaybookStep::NotifySlack {
+            webhook_url,
+            channel,
+            text,
+        } => {
             let rendered_url = render_template(webhook_url, incident, agent);
             let rendered_text = render_template(text, incident, agent);
-            let rendered_channel = channel.as_ref().map(|c| render_template(c, incident, agent));
+            let rendered_channel = channel
+                .as_ref()
+                .map(|c| render_template(c, incident, agent));
 
             let client = reqwest::Client::new();
             let mut payload = serde_json::json!({
@@ -250,15 +275,15 @@ pub async fn execute_step(
                 payload["channel"] = serde_json::Value::String(c);
             }
 
-            let _ = client.post(&rendered_url)
-                .json(&payload)
-                .send()
-                .await;
+            let _ = client.post(&rendered_url).json(&payload).send().await;
         }
-        PlaybookStep::NotifyWebhook { url, payload_template } => {
+        PlaybookStep::NotifyWebhook {
+            url,
+            payload_template,
+        } => {
             let rendered_url = render_template(url, incident, agent);
             let client = reqwest::Client::new();
-            
+
             let payload = if let Some(ref template) = payload_template {
                 let rendered_payload = render_template(template, incident, agent);
                 match serde_json::from_str::<serde_json::Value>(&rendered_payload) {
@@ -280,10 +305,7 @@ pub async fn execute_step(
                 })
             };
 
-            let _ = client.post(&rendered_url)
-                .json(&payload)
-                .send()
-                .await;
+            let _ = client.post(&rendered_url).json(&payload).send().await;
         }
     }
     Ok(())
@@ -346,7 +368,9 @@ mod tests {
                 agent_id: None,
                 environment: None,
             },
-            steps: vec![PlaybookStep::FreezeAgent { reason: Some("Freeze reason".to_string()) }],
+            steps: vec![PlaybookStep::FreezeAgent {
+                reason: Some("Freeze reason".to_string()),
+            }],
         };
         assert!(pb.validate().is_ok());
 

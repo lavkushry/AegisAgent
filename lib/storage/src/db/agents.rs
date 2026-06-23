@@ -145,6 +145,23 @@ pub async fn get_agent_by_id(
     .await
 }
 
+/// Like [`get_agent_by_id`], but also returns soft-deleted agents
+/// (`status = 'deleted'`). Used by evidence-graph queries (#1327) so that
+/// historical decisions/incidents triggered by an agent still render an
+/// `Agent` node — and the edges pointing at it — after the agent is deleted,
+/// rather than leaving a dangling edge reference.
+pub async fn get_agent_by_id_any_status(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    id: &str,
+) -> Result<Option<AgentRecord>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRecord>("SELECT * FROM agents WHERE tenant_id = ? AND id = ?")
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
 /// #1290: rolling 24h average `composite_risk_score` per agent, ranked
 /// highest-first, for the dashboard's Agent Risk Scoreboard. Compares against
 /// the prior 24h window (24-48h ago) to derive a `trend`:

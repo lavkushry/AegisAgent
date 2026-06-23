@@ -82,6 +82,16 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn get_agent_by_id_any_status(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+    ) -> Result<Option<AgentRecord>, AegisError> {
+        db::get_agent_by_id_any_status(&self.pool, tenant_id, agent_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_agent_risk_scoreboard(
         &self,
         tenant_id: &str,

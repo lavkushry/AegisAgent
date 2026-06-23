@@ -122,4 +122,3 @@ pub fn verify_request_signature(signing_key: &str, body: &[u8], sig_header: &str
     mac.update(body);
     mac.verify_slice(&expected).is_ok()
 }
-
