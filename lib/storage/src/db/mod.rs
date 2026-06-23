@@ -161,6 +161,22 @@ async fn verify_encryption_or_fail_closed(
     Ok(())
 }
 
+/// Default per-connection prepared-statement LRU cache capacity — mirrors
+/// sqlx-sqlite's own built-in default. Overridable via
+/// `AEGIS_DB_STATEMENT_CACHE_CAPACITY`.
+pub const DEFAULT_STATEMENT_CACHE_CAPACITY: usize = 100;
+
+/// Read `AEGIS_DB_STATEMENT_CACHE_CAPACITY`, falling back to
+/// [`DEFAULT_STATEMENT_CACHE_CAPACITY`]. Unlike batch/interval env vars
+/// elsewhere, `0` is a valid, meaningful value here (disables statement
+/// caching) rather than being filtered out.
+pub fn statement_cache_capacity_from_env() -> usize {
+    std::env::var("AEGIS_DB_STATEMENT_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_STATEMENT_CACHE_CAPACITY)
+}
+
 pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }
@@ -215,6 +231,17 @@ pub async fn init_db_with_busy_timeout(
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(5);
+
+    // #906: each pooled connection keeps its own LRU cache of prepared
+    // statements (sqlx-sqlite's default capacity is 100); the hot-path
+    // queries in routes/authorize.rs and routes/authorize_decision.rs are
+    // identical across requests modulo bound parameters, so a warm cache
+    // skips SQLite's parse/plan step on every repeat. Explicitly configured
+    // (rather than left at sqlx's built-in default) so it's tunable per
+    // deployment without a code change — e.g. lower on memory-constrained
+    // hosts, `0` to disable caching entirely for debugging.
+    connection_options =
+        connection_options.statement_cache_capacity(statement_cache_capacity_from_env());
 
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections)
@@ -1232,6 +1259,75 @@ mod tests {
     use super::*;
     use crate::db::test_utils::*;
     use uuid::Uuid;
+
+    /// #906: unset env var falls back to sqlx's own built-in default.
+    #[tokio::test]
+    async fn statement_cache_capacity_from_env_defaults_when_unset() {
+        let _guard = crate::db::test_utils::STATEMENT_CACHE_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY");
+        assert_eq!(
+            statement_cache_capacity_from_env(),
+            DEFAULT_STATEMENT_CACHE_CAPACITY
+        );
+    }
+
+    /// #906: a configured value is read and parsed.
+    #[tokio::test]
+    async fn statement_cache_capacity_from_env_reads_configured_value() {
+        let _guard = crate::db::test_utils::STATEMENT_CACHE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY", "250");
+        assert_eq!(statement_cache_capacity_from_env(), 250);
+        std::env::remove_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY");
+    }
+
+    /// #906: `0` is a valid, meaningful value (disables caching) — not
+    /// filtered out like the batch-size/interval env vars elsewhere.
+    #[tokio::test]
+    async fn statement_cache_capacity_from_env_allows_zero() {
+        let _guard = crate::db::test_utils::STATEMENT_CACHE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY", "0");
+        assert_eq!(statement_cache_capacity_from_env(), 0);
+        std::env::remove_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY");
+    }
+
+    /// #906: an unparseable value falls back to the default instead of
+    /// failing startup.
+    #[tokio::test]
+    async fn statement_cache_capacity_from_env_falls_back_on_garbage_value() {
+        let _guard = crate::db::test_utils::STATEMENT_CACHE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY", "not-a-number");
+        assert_eq!(
+            statement_cache_capacity_from_env(),
+            DEFAULT_STATEMENT_CACHE_CAPACITY
+        );
+        std::env::remove_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY");
+    }
+
+    /// #906: a custom (including zero) statement cache capacity doesn't
+    /// break pool initialization or basic query execution — the cache
+    /// capacity only affects whether SQLite re-parses a repeated statement,
+    /// never correctness.
+    #[tokio::test]
+    async fn init_db_succeeds_with_custom_statement_cache_capacity() {
+        let _guard = crate::db::test_utils::STATEMENT_CACHE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY", "0");
+        let pool = setup_pool("stmt_cache_capacity_zero").await;
+
+        let (one,): (i64,) = sqlx::query_as("SELECT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("a basic query should still succeed");
+        assert_eq!(one, 1);
+        // Run the same query again to exercise the (disabled) cache path
+        // a second time — must still succeed identically.
+        let (one_again,): (i64,) = sqlx::query_as("SELECT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("a repeated query should still succeed with caching disabled");
+        assert_eq!(one_again, 1);
+
+        std::env::remove_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY");
+    }
 
     #[tokio::test]
     async fn retry_on_busy_retries_transient_busy_then_succeeds() {

@@ -11,6 +11,10 @@ use uuid::Uuid;
 /// `AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS` env var.
 pub static DEDUP_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Serializes tests that mutate the process-wide
+/// `AEGIS_DB_STATEMENT_CACHE_CAPACITY` env var (#906).
+pub static STATEMENT_CACHE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub async fn setup_pool(test_name: &str) -> SqlitePool {
     std::fs::create_dir_all("target").unwrap();
     let db_url = format!(
