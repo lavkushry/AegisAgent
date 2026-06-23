@@ -40,10 +40,12 @@ Repository = "https://github.com/lavkushry/AegisAgent"
 Issues = "https://github.com/lavkushry/AegisAgent/issues"
 
 [project.scripts]
+aegis = "aegisagent.cli:main"
 aegis-verify-receipts = "aegisagent.verify_receipts:main"
 aegis-status = "aegisagent.cli:status_main"
 aegis-freeze-agent = "aegisagent.cli:freeze_agent_main"
 aegis-export-audit = "aegisagent.cli:export_audit_main"
+aegis-soc-summary = "aegisagent.cli:soc_summary_main"
 
 [tool.setuptools.packages.find]
 where = ["."]
