@@ -3014,7 +3014,7 @@ mod tests {
             .unwrap();
         let resp_v2 = app.clone().oneshot(req_v2).await.unwrap();
         assert_eq!(resp_v2.status(), StatusCode::OK);
-        
+
         let headers_v2 = resp_v2.headers();
         assert!(headers_v2.get("deprecation").is_none());
         assert!(headers_v2.get("sunset").is_none());
@@ -3027,7 +3027,7 @@ mod tests {
             .unwrap();
         let resp_v1 = app.clone().oneshot(req_v1).await.unwrap();
         assert_eq!(resp_v1.status(), StatusCode::OK);
-        
+
         let headers_v1 = resp_v1.headers();
         assert_eq!(
             headers_v1.get("deprecation").unwrap().to_str().unwrap(),
@@ -3045,10 +3045,14 @@ mod tests {
             .unwrap();
         let resp_default = app.clone().oneshot(req_default).await.unwrap();
         assert_eq!(resp_default.status(), StatusCode::OK);
-        
+
         let headers_default = resp_default.headers();
         assert_eq!(
-            headers_default.get("deprecation").unwrap().to_str().unwrap(),
+            headers_default
+                .get("deprecation")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "true"
         );
         assert_eq!(

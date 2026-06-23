@@ -6,7 +6,7 @@ pub fn validate_environment(
     allowed_environments_json: Option<&str>,
     declared_env: &str,
 ) -> Result<(), String> {
-    if let Some(ref env_json) = allowed_environments_json {
+    if let Some(env_json) = allowed_environments_json {
         if let Ok(allowed) = serde_json::from_str::<Vec<String>>(env_json) {
             if !allowed.is_empty() && !allowed.contains(&declared_env.to_string()) {
                 return Err(format!(

@@ -865,7 +865,7 @@ pub async fn authorize_action(
         state.metrics.inc_provenance_denial();
     }
 
-    let (mut decision_str, mut reason, mut matched_policies) =
+    let (decision_str, reason, matched_policies) =
         aegis_policy::validation::apply_decision_overrides(
             policy_decision.decision.clone(),
             policy_decision.reason.clone(),
