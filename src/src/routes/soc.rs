@@ -1308,7 +1308,7 @@ mod tests {
             summary: "Route test alert".to_string(),
             created_at: "2026-06-06T10:00:00Z".to_string(),
         };
-        state.storage.insert_soc_alert( &alert).await.unwrap();
+        state.storage.insert_soc_alert(&alert).await.unwrap();
 
         let response = list_alerts(
             State(state.clone()),
@@ -1348,9 +1348,7 @@ mod tests {
             status: "open".to_string(),
             closed_at: None,
         };
-        state.storage.insert_soc_incident( &incident)
-            .await
-            .unwrap();
+        state.storage.insert_soc_incident(&incident).await.unwrap();
 
         let response = list_incidents(
             State(state.clone()),
@@ -1375,8 +1373,20 @@ mod tests {
     async fn list_incidents_route_filters_by_kind() {
         let (state, tenant_id, _agent_token) = setup_state("incidents_kind_filter_route").await;
 
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_deny_storm", "deny_storm").await;
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_policy_drift", "policy_drift").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_deny_storm",
+            "deny_storm",
+        )
+        .await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_policy_drift",
+            "policy_drift",
+        )
+        .await;
 
         let response = list_incidents(
             State(state.clone()),
@@ -1435,7 +1445,7 @@ mod tests {
             summary: "Watch test alert".to_string(),
             created_at: Utc::now().to_rfc3339(),
         };
-        state.storage.insert_soc_alert( &alert).await.unwrap();
+        state.storage.insert_soc_alert(&alert).await.unwrap();
 
         let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body_stream.next())
             .await
@@ -1476,9 +1486,21 @@ mod tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         // Non-matching kind first — must not be streamed.
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_deny_storm", "deny_storm").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_deny_storm",
+            "deny_storm",
+        )
+        .await;
         // Matching kind — must be streamed.
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_policy_drift", "policy_drift").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_policy_drift",
+            "policy_drift",
+        )
+        .await;
 
         let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body_stream.next())
             .await
@@ -1517,7 +1539,13 @@ mod tests {
     async fn narrate_incident_returns_narrative_for_own_incident() {
         let (state, tenant_id, _agent_token) = setup_state("narrate_own").await;
 
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_narrate_1", "deny_storm").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_narrate_1",
+            "deny_storm",
+        )
+        .await;
 
         // Call the handler directly — same pattern used by all other route tests.
         let mut headers = HeaderMap::new();
@@ -1554,9 +1582,14 @@ mod tests {
 
         // Register a second tenant and insert the incident under it.
         let other_tenant = "tenant_other_narrator";
-        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other", "developer")
-            .await;
-        insert_test_incident(state.storage.get_pool(), other_tenant, "inc_other", "deny_storm").await;
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other", "developer").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            other_tenant,
+            "inc_other",
+            "deny_storm",
+        )
+        .await;
 
         // Authenticate as our tenant and try to fetch the other tenant's incident.
         let mut headers = HeaderMap::new();
@@ -1633,7 +1666,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        state.storage.insert_agent( &agent).await.unwrap();
+        state.storage.insert_agent(&agent).await.unwrap();
 
         let decision_id = format!("{incident_id}_decision");
         let decision = DecisionRecord {
@@ -1658,7 +1691,7 @@ mod tests {
             parent_run_id: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_decision( &decision).await.unwrap();
+        state.storage.insert_decision(&decision).await.unwrap();
 
         let event_id = format!("{incident_id}_event");
         let audit_event = AuditEventRecord {
@@ -1680,7 +1713,9 @@ mod tests {
             approval_id: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_audit_event( &audit_event)
+        state
+            .storage
+            .insert_audit_event(&audit_event)
             .await
             .unwrap();
 
@@ -1694,10 +1729,15 @@ mod tests {
             summary: "Evidence pack test alert".to_string(),
             created_at: Utc::now().to_rfc3339(),
         };
-        state.storage.insert_soc_alert( &alert).await.unwrap();
+        state.storage.insert_soc_alert(&alert).await.unwrap();
 
-        let prev_hash = state.storage.get_latest_action_receipt(tenant_id).await.unwrap()
-            .map(|r| r.receipt_hash).unwrap_or_default();
+        let prev_hash = state
+            .storage
+            .get_latest_action_receipt(tenant_id)
+            .await
+            .unwrap()
+            .map(|r| r.receipt_hash)
+            .unwrap_or_default();
         let mut receipt = ActionReceiptRecord {
             id: format!("{incident_id}_receipt"),
             tenant_id: tenant_id.to_string(),
@@ -1737,9 +1777,7 @@ mod tests {
             status: "open".to_string(),
             closed_at: None,
         };
-        state.storage.insert_soc_incident( &incident)
-            .await
-            .unwrap();
+        state.storage.insert_soc_incident(&incident).await.unwrap();
     }
 
     /// SOC-006 (#1189): `GET /v1/incidents/:id/evidence-pack` bundles the
@@ -1812,8 +1850,7 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("evidence_pack_404").await;
 
         let other_tenant = "tenant_other_evidence_pack";
-        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other", "developer")
-            .await;
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other", "developer").await;
         seed_incident_evidence_chain(&state, other_tenant, "inc_other_evidence").await;
 
         let missing = get_incident_evidence_pack(
@@ -1846,7 +1883,13 @@ mod tests {
     #[tokio::test]
     async fn close_incident_returns_closed_for_own_incident() {
         let (state, tenant_id, _) = setup_state("close_own").await;
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_close_route_1", "deny_storm").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_close_route_1",
+            "deny_storm",
+        )
+        .await;
 
         let (status, json) = do_close(state, &tenant_id, "inc_close_route_1").await;
 
@@ -1867,9 +1910,14 @@ mod tests {
         let (state, tenant_id, _) = setup_state("close_iso").await;
 
         let other_tenant = "tenant_other_close_iso";
-        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other", "developer")
-            .await;
-        insert_test_incident(state.storage.get_pool(), other_tenant, "inc_other_close", "deny_storm").await;
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other", "developer").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            other_tenant,
+            "inc_other_close",
+            "deny_storm",
+        )
+        .await;
 
         let (status, json) = do_close(state, &tenant_id, "inc_other_close").await;
 
@@ -1886,7 +1934,13 @@ mod tests {
     #[tokio::test]
     async fn close_incident_is_idempotent() {
         let (state, tenant_id, _) = setup_state("close_idempotent_route").await;
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_idem_route", "replay_attempt").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_idem_route",
+            "replay_attempt",
+        )
+        .await;
 
         let (s1, j1) = do_close(state.clone(), &tenant_id, "inc_idem_route").await;
         assert_eq!(s1, StatusCode::OK);
@@ -1909,7 +1963,13 @@ mod tests {
     #[tokio::test]
     async fn close_incident_records_mttr_sample() {
         let (state, tenant_id, _) = setup_state("close_mttr").await;
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_mttr_1", "deny_storm").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_mttr_1",
+            "deny_storm",
+        )
+        .await;
 
         assert_eq!(state.metrics.soc_mttr.average_seconds(), 0.0);
 
@@ -1927,7 +1987,13 @@ mod tests {
     #[tokio::test]
     async fn get_incident_returns_200_for_own_incident() {
         let (state, tenant_id, _) = setup_state("get_inc_own").await;
-        insert_test_incident(state.storage.get_pool(), &tenant_id, "inc_get_own", "deny_storm").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_get_own",
+            "deny_storm",
+        )
+        .await;
 
         let (status, json) = do_get_incident(state, &tenant_id, "inc_get_own").await;
         assert_eq!(status, StatusCode::OK);
@@ -1953,8 +2019,13 @@ mod tests {
         let (state, tenant_id_a, _) = setup_state("get_inc_cross_tenant").await;
         // Register a second tenant and insert an incident under it.
         let tenant_id_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
-        register_tenant_helper(state.storage.as_ref(), &tenant_id_b, "Tenant B", "developer")
-            .await;
+        register_tenant_helper(
+            state.storage.as_ref(),
+            &tenant_id_b,
+            "Tenant B",
+            "developer",
+        )
+        .await;
         db::insert_soc_incident(
             state.storage.get_pool(),
             &SocIncidentRecord {
@@ -2074,7 +2145,9 @@ mod tests {
         .unwrap();
         insert_test_incident(state.storage.get_pool(), &tenant_id, "ss_i1", "deny_storm").await;
         insert_test_incident(state.storage.get_pool(), &tenant_id, "ss_i2", "exfil").await;
-        state.storage.close_soc_incident( &tenant_id, "ss_i2")
+        state
+            .storage
+            .close_soc_incident(&tenant_id, "ss_i2")
             .await
             .unwrap();
 

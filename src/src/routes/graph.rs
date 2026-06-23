@@ -623,7 +623,7 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("graph_run_basic").await;
 
         let agent = make_graph_test_agent("graph_run_agent", &tenant_id, "Graph Run Agent");
-        state.storage.insert_agent( &agent).await.unwrap();
+        state.storage.insert_agent(&agent).await.unwrap();
 
         let decision = make_graph_test_decision(
             "graph_run_decision_1",
@@ -633,16 +633,21 @@ mod tests {
             "require_approval",
             Some("policy_a,policy_b"),
         );
-        state.storage.insert_decision( &decision).await.unwrap();
+        state.storage.insert_decision(&decision).await.unwrap();
 
         let approval = make_test_approval(Some(Utc::now() + chrono::Duration::hours(1)), "pending");
         let mut approval = approval;
         approval.tenant_id = tenant_id.clone();
         approval.decision_id = decision.id.clone();
-        state.storage.insert_approval( &approval).await.unwrap();
+        state.storage.insert_approval(&approval).await.unwrap();
 
-        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
-            .map(|r| r.receipt_hash).unwrap_or_default();
+        let prev = state
+            .storage
+            .get_latest_action_receipt(&tenant_id)
+            .await
+            .unwrap()
+            .map(|r| r.receipt_hash)
+            .unwrap_or_default();
         let mut r = unsigned_receipt_template(&tenant_id);
         r.decision_id = Some(decision.id.clone());
         r.prev_receipt_hash = prev;
@@ -708,7 +713,7 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("graph_run_404").await;
 
         let agent = make_graph_test_agent("graph_run_404_agent", &tenant_id, "Agent");
-        state.storage.insert_agent( &agent).await.unwrap();
+        state.storage.insert_agent(&agent).await.unwrap();
         let decision = make_graph_test_decision(
             "graph_run_404_decision",
             &tenant_id,
@@ -717,7 +722,7 @@ mod tests {
             "allow",
             None,
         );
-        state.storage.insert_decision( &decision).await.unwrap();
+        state.storage.insert_decision(&decision).await.unwrap();
 
         // Unknown run_id.
         let response = get_graph_for_run(
@@ -745,7 +750,7 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("graph_incident_basic").await;
 
         let agent = make_graph_test_agent("graph_incident_agent", &tenant_id, "Incident Agent");
-        state.storage.insert_agent( &agent).await.unwrap();
+        state.storage.insert_agent(&agent).await.unwrap();
 
         let decision = make_graph_test_decision(
             "graph_incident_decision_1",
@@ -755,7 +760,7 @@ mod tests {
             "deny",
             None,
         );
-        state.storage.insert_decision( &decision).await.unwrap();
+        state.storage.insert_decision(&decision).await.unwrap();
 
         let audit_event = AuditEventRecord {
             id: "graph_incident_event_1".to_string(),
@@ -776,7 +781,9 @@ mod tests {
             approval_id: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_audit_event( &audit_event)
+        state
+            .storage
+            .insert_audit_event(&audit_event)
             .await
             .unwrap();
 
@@ -792,9 +799,7 @@ mod tests {
             status: "open".to_string(),
             closed_at: None,
         };
-        state.storage.insert_soc_incident( &incident)
-            .await
-            .unwrap();
+        state.storage.insert_soc_incident(&incident).await.unwrap();
 
         let response = get_graph_for_incident(
             State(state.clone()),
@@ -863,9 +868,7 @@ mod tests {
             status: "open".to_string(),
             closed_at: None,
         };
-        state.storage.insert_soc_incident( &incident)
-            .await
-            .unwrap();
+        state.storage.insert_soc_incident(&incident).await.unwrap();
 
         let response_cross = get_graph_for_incident(
             State(state.clone()),
@@ -882,7 +885,7 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("graph_agent_depth").await;
 
         let agent = make_graph_test_agent("graph_agent_depth_agent", &tenant_id, "Depth Agent");
-        state.storage.insert_agent( &agent).await.unwrap();
+        state.storage.insert_agent(&agent).await.unwrap();
 
         let decision = make_graph_test_decision(
             "graph_agent_depth_decision",
@@ -892,13 +895,13 @@ mod tests {
             "require_approval",
             Some("policy_depth"),
         );
-        state.storage.insert_decision( &decision).await.unwrap();
+        state.storage.insert_decision(&decision).await.unwrap();
 
         let mut approval =
             make_test_approval(Some(Utc::now() + chrono::Duration::hours(1)), "pending");
         approval.tenant_id = tenant_id.clone();
         approval.decision_id = decision.id.clone();
-        state.storage.insert_approval( &approval).await.unwrap();
+        state.storage.insert_approval(&approval).await.unwrap();
 
         let incident = crate::models::SocIncidentRecord {
             id: "graph_agent_depth_incident".to_string(),
@@ -912,9 +915,7 @@ mod tests {
             status: "open".to_string(),
             closed_at: None,
         };
-        state.storage.insert_soc_incident( &incident)
-            .await
-            .unwrap();
+        state.storage.insert_soc_incident(&incident).await.unwrap();
 
         use crate::graph::NodeType;
 
@@ -987,7 +988,7 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("graph_agent_404").await;
 
         let agent = make_graph_test_agent("graph_agent_404_agent", &tenant_id, "Agent");
-        state.storage.insert_agent( &agent).await.unwrap();
+        state.storage.insert_agent(&agent).await.unwrap();
 
         let response = get_graph_for_agent(
             State(state.clone()),

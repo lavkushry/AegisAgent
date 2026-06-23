@@ -350,8 +350,13 @@ mod tests {
     async fn verify_receipt_detects_tampered_receipt() {
         let (state, tenant_id, _agent_token) = setup_state("tampered_single_receipt").await;
 
-        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
-            .map(|r| r.receipt_hash).unwrap_or_default();
+        let prev = state
+            .storage
+            .get_latest_action_receipt(&tenant_id)
+            .await
+            .unwrap()
+            .map(|r| r.receipt_hash)
+            .unwrap_or_default();
         let mut r = unsigned_receipt_template(&tenant_id);
         r.prev_receipt_hash = prev;
         r.receipt_hash = db::compute_receipt_hash(&r);
@@ -391,8 +396,13 @@ mod tests {
 
         // Insert a signed receipt through the real atomic appender. Hash FIRST over
         // the live chain head, then sign OVER that hash (additive metadata).
-        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
-            .map(|r| r.receipt_hash).unwrap_or_default();
+        let prev = state
+            .storage
+            .get_latest_action_receipt(&tenant_id)
+            .await
+            .unwrap()
+            .map(|r| r.receipt_hash)
+            .unwrap_or_default();
         let mut r = unsigned_receipt_template(&tenant_id);
         r.prev_receipt_hash = prev;
         r.receipt_hash = db::compute_receipt_hash(&r);
@@ -436,8 +446,13 @@ mod tests {
         .unwrap();
         assert_eq!(signer.key_id(), Some("rotation-2026-06"));
 
-        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
-            .map(|r| r.receipt_hash).unwrap_or_default();
+        let prev = state
+            .storage
+            .get_latest_action_receipt(&tenant_id)
+            .await
+            .unwrap()
+            .map(|r| r.receipt_hash)
+            .unwrap_or_default();
         let mut r = unsigned_receipt_template(&tenant_id);
         r.prev_receipt_hash = prev;
         r.receipt_hash = db::compute_receipt_hash(&r);
@@ -462,7 +477,9 @@ mod tests {
         assert_eq!(json["signer_key_id"].as_str(), Some("rotation-2026-06"));
 
         // Also round-trips through a direct DB read, not just the verify response.
-        let fetched = state.storage.get_action_receipt_by_id( &tenant_id, &rec.id)
+        let fetched = state
+            .storage
+            .get_action_receipt_by_id(&tenant_id, &rec.id)
             .await
             .unwrap()
             .unwrap();
@@ -478,8 +495,13 @@ mod tests {
         let signer = sign::ReceiptSigner::from_env_value(TEST_SIGNING_SECRET_HEX).unwrap();
         assert_eq!(signer.key_id(), None);
 
-        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
-            .map(|r| r.receipt_hash).unwrap_or_default();
+        let prev = state
+            .storage
+            .get_latest_action_receipt(&tenant_id)
+            .await
+            .unwrap()
+            .map(|r| r.receipt_hash)
+            .unwrap_or_default();
         let mut r = unsigned_receipt_template(&tenant_id);
         r.prev_receipt_hash = prev;
         r.receipt_hash = db::compute_receipt_hash(&r);
@@ -591,7 +613,10 @@ mod tests {
                     signer_key_id: None,
                     created_at: Utc::now(),
                 };
-                state.storage.append_action_receipt_atomic(&tenant, rec).await
+                state
+                    .storage
+                    .append_action_receipt_atomic(&tenant, rec)
+                    .await
             }));
         }
         for h in handles {
@@ -737,10 +762,16 @@ mod tests {
                 signer_key_id: None,
                 created_at: Utc::now(),
             };
-            state.storage.append_action_receipt_atomic(&tenant_id, receipt).await.unwrap();
+            state
+                .storage
+                .append_action_receipt_atomic(&tenant_id, receipt)
+                .await
+                .unwrap();
         }
 
-        let chain = state.storage.list_action_receipts_chain_order( &tenant_id)
+        let chain = state
+            .storage
+            .list_action_receipts_chain_order(&tenant_id)
             .await
             .unwrap();
         assert_eq!(chain.len(), N, "all 1000 receipts must be persisted");
