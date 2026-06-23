@@ -979,14 +979,17 @@ mod tests {
         );
 
         // The new manifest is now pinned (re-pinned on drift).
-        let pinned = db::get_mcp_server_manifest_hash(state.storage.get_pool(), &tenant_id, "github-mcp")
-            .await
-            .unwrap();
+        let pinned =
+            db::get_mcp_server_manifest_hash(state.storage.get_pool(), &tenant_id, "github-mcp")
+                .await
+                .unwrap();
         let expected = compute_mcp_manifest_hash(&[drift_tool("create_issue", "critical")]);
         assert_eq!(pinned, expected);
 
         // Fail-closed response: drift must auto-quarantine the server.
-        let server = state.storage.get_mcp_server_by_key( &tenant_id, "github-mcp")
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "github-mcp")
             .await
             .unwrap()
             .unwrap();
@@ -1041,13 +1044,20 @@ mod tests {
         )
         .await;
 
-        let server = state.storage.get_mcp_server_by_key( &tenant_id, "github-mcp")
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "github-mcp")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(server.status, "quarantined");
 
-        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         let audit_event = events
             .iter()
             .find(|e| e.event_type == "mcp_server_auto_quarantined")
@@ -1181,7 +1191,9 @@ mod tests {
         .await
         .unwrap();
 
-        let before = state.storage.get_mcp_server_by_key( &tenant_id, "github-mcp")
+        let before = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "github-mcp")
             .await
             .unwrap()
             .unwrap();
@@ -1201,7 +1213,9 @@ mod tests {
         )
         .await;
 
-        let after = state.storage.get_mcp_server_by_key( &tenant_id, "github-mcp")
+        let after = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "github-mcp")
             .await
             .unwrap()
             .unwrap();
@@ -1245,7 +1259,9 @@ mod tests {
         )
         .await;
 
-        let snapshots = state.storage.list_mcp_manifest_snapshots( &tenant_id, "github-mcp", 10)
+        let snapshots = state
+            .storage
+            .list_mcp_manifest_snapshots(&tenant_id, "github-mcp", 10)
             .await
             .unwrap();
         assert_eq!(snapshots.len(), 1, "first discovery records one snapshot");
@@ -1268,7 +1284,9 @@ mod tests {
         )
         .await;
 
-        let snapshots = state.storage.list_mcp_manifest_snapshots( &tenant_id, "github-mcp", 10)
+        let snapshots = state
+            .storage
+            .list_mcp_manifest_snapshots(&tenant_id, "github-mcp", 10)
             .await
             .unwrap();
         assert_eq!(
@@ -1389,12 +1407,12 @@ mod tests {
         .unwrap();
 
         // No skill action exists prior to discovery.
-        assert!(
-            state.storage.get_skill_action( &tenant_id, "mcp:github-mcp", "create_issue")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(state
+            .storage
+            .get_skill_action(&tenant_id, "mcp:github-mcp", "create_issue")
+            .await
+            .unwrap()
+            .is_none());
 
         let mut approval_required_tool = drift_tool("merge_pr", "high");
         approval_required_tool.approval_required = true;
@@ -1413,11 +1431,12 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let create_issue =
-            state.storage.get_skill_action( &tenant_id, "mcp:github-mcp", "create_issue")
-                .await
-                .unwrap()
-                .expect("create_issue skill action must be registered");
+        let create_issue = state
+            .storage
+            .get_skill_action(&tenant_id, "mcp:github-mcp", "create_issue")
+            .await
+            .unwrap()
+            .expect("create_issue skill action must be registered");
         let risk = create_issue.risk;
         let mutates_state = create_issue.mutates_state;
         let approval_required = create_issue.approval_required;
@@ -1427,7 +1446,9 @@ mod tests {
         assert!(!approval_required);
         assert_eq!(default_decision, "policy");
 
-        let merge_pr = state.storage.get_skill_action( &tenant_id, "mcp:github-mcp", "merge_pr")
+        let merge_pr = state
+            .storage
+            .get_skill_action(&tenant_id, "mcp:github-mcp", "merge_pr")
             .await
             .unwrap()
             .expect("merge_pr skill action must be registered");
@@ -1493,11 +1514,14 @@ mod tests {
         assert_eq!(allowed.decision, "allow");
 
         // Quarantine the server — the same approved tool must now be denied.
-        assert!(
-            db::set_mcp_server_status(state.storage.get_pool(), &tenant_id, "github-mcp", "quarantined")
-                .await
-                .unwrap()
-        );
+        assert!(db::set_mcp_server_status(
+            state.storage.get_pool(),
+            &tenant_id,
+            "github-mcp",
+            "quarantined"
+        )
+        .await
+        .unwrap());
         let denied = call_authorize(
             state,
             &tenant_id,
@@ -1584,7 +1608,12 @@ mod tests {
         assert_eq!(response_never_existed.status(), StatusCode::NOT_FOUND);
 
         // 6. The successful delete left an admin_action audit row.
-        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         let admin_event = events
             .iter()
             .find(|e| {
@@ -1763,7 +1792,9 @@ mod tests {
         register_test_mcp_server(&state, &tenant_id, server_key).await;
 
         // Newly registered servers default to inspection disabled.
-        let server = state.storage.get_mcp_server_by_key( &tenant_id, server_key)
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, server_key)
             .await
             .unwrap()
             .unwrap();
@@ -1865,7 +1896,9 @@ mod tests {
         assert_eq!(json["reason"], json!("inspection_disabled"));
 
         // No alert should have been created since inspection never ran.
-        let alerts = state.storage.list_soc_alerts(&tenant_id, None, None, 50, None)
+        let alerts = state
+            .storage
+            .list_soc_alerts(&tenant_id, None, None, 50, None)
             .await
             .unwrap()
             .0;
@@ -1876,9 +1909,14 @@ mod tests {
     async fn inspect_mcp_response_flags_sensitive_data_and_creates_alert() {
         let (state, tenant_id, _agent_token) = setup_state("mcp_inspect_flagged").await;
         register_test_mcp_server(&state, &tenant_id, "test-mcp").await;
-        db::set_mcp_server_inspection_enabled(state.storage.get_pool(), &tenant_id, "test-mcp", true)
-            .await
-            .unwrap();
+        db::set_mcp_server_inspection_enabled(
+            state.storage.get_pool(),
+            &tenant_id,
+            "test-mcp",
+            true,
+        )
+        .await
+        .unwrap();
 
         let resp = inspect_mcp_response(
             State(state.clone()),
@@ -1905,7 +1943,9 @@ mod tests {
         let body_str = serde_json::to_string(&json).unwrap();
         assert!(!body_str.contains("123-45-6789"));
 
-        let alerts = state.storage.list_soc_alerts(&tenant_id, None, None, 50, None)
+        let alerts = state
+            .storage
+            .list_soc_alerts(&tenant_id, None, None, 50, None)
             .await
             .unwrap()
             .0;
@@ -1921,9 +1961,14 @@ mod tests {
     async fn inspect_mcp_response_benign_text_is_not_flagged_and_creates_no_alert() {
         let (state, tenant_id, _agent_token) = setup_state("mcp_inspect_benign").await;
         register_test_mcp_server(&state, &tenant_id, "test-mcp").await;
-        db::set_mcp_server_inspection_enabled(state.storage.get_pool(), &tenant_id, "test-mcp", true)
-            .await
-            .unwrap();
+        db::set_mcp_server_inspection_enabled(
+            state.storage.get_pool(),
+            &tenant_id,
+            "test-mcp",
+            true,
+        )
+        .await
+        .unwrap();
 
         let resp = inspect_mcp_response(
             State(state.clone()),
@@ -1945,7 +1990,9 @@ mod tests {
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["flagged"], json!(false));
 
-        let alerts = state.storage.list_soc_alerts(&tenant_id, None, None, 50, None)
+        let alerts = state
+            .storage
+            .list_soc_alerts(&tenant_id, None, None, 50, None)
             .await
             .unwrap()
             .0;
@@ -1956,8 +2003,13 @@ mod tests {
     async fn inspect_mcp_response_is_tenant_scoped() {
         let (state, tenant_id_a, _agent_token_a) = setup_state("mcp_inspect_tenant_a").await;
         let tenant_id_b = "mcp_inspect_iso_tenant_b".to_string();
-        register_tenant_helper(state.storage.as_ref(), &tenant_id_b, "Iso Tenant B", "developer")
-            .await;
+        register_tenant_helper(
+            state.storage.as_ref(),
+            &tenant_id_b,
+            "Iso Tenant B",
+            "developer",
+        )
+        .await;
         register_test_mcp_server(&state, &tenant_id_a, "test-mcp").await;
 
         // Tenant B must not be able to inspect-against tenant A's server key.
@@ -2001,10 +2053,17 @@ mod tests {
             .unwrap();
         }
         // beta is quarantined; alpha gets a pinned manifest hash.
-        db::set_mcp_server_status(state.storage.get_pool(), &tenant_id, "beta-mcp", "quarantined")
-            .await
-            .unwrap();
-        state.storage.set_mcp_server_manifest_hash( &tenant_id, "alpha-mcp", "sha256:abc")
+        db::set_mcp_server_status(
+            state.storage.get_pool(),
+            &tenant_id,
+            "beta-mcp",
+            "quarantined",
+        )
+        .await
+        .unwrap();
+        state
+            .storage
+            .set_mcp_server_manifest_hash(&tenant_id, "alpha-mcp", "sha256:abc")
             .await
             .unwrap();
 
@@ -2034,8 +2093,13 @@ mod tests {
         assert_eq!(beta["status"], "quarantined");
 
         // A different tenant sees none of these servers.
-        register_tenant_helper(state.storage.as_ref(), "tenant_other", "Other Tenant", "developer")
-            .await;
+        register_tenant_helper(
+            state.storage.as_ref(),
+            "tenant_other",
+            "Other Tenant",
+            "developer",
+        )
+        .await;
         let other = list_mcp_servers(
             State(state),
             TenantId("tenant_other".to_string()),
