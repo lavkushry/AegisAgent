@@ -2,7 +2,6 @@ use crate::correlate::Incident;
 use aegis_api::models::{AgentRecord, PlaybookRecord};
 use aegis_common::errors::AegisError;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
@@ -198,12 +197,24 @@ pub fn render_template(template: &str, incident: &Incident, agent: &AgentRecord)
     rendered
 }
 
+/// The outcome of a single playbook step, used for both real execution and
+/// dry-run simulation (#1330).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StepResult {
+    /// The step action type, e.g. `"freeze_agent"`, `"force_approval"`.
+    pub action: String,
+    /// Human-readable description of what happened (or would happen).
+    pub description: String,
+    /// `true` if this was a dry-run (no side effects).
+    pub dry_run: bool,
+}
+
 pub async fn execute_step(
-    pool: &SqlitePool,
+    storage: &dyn aegis_storage::traits::StorageBackend,
     step: &PlaybookStep,
     incident: &Incident,
     agent: &AgentRecord,
-) -> Result<(), AegisError> {
+) -> Result<StepResult, AegisError> {
     match step {
         PlaybookStep::FreezeAgent { reason } => {
             let default_reason = "auto-response: playbook freeze".to_string();
@@ -212,49 +223,56 @@ pub async fn execute_step(
                 .map(|r| render_template(r, incident, agent))
                 .unwrap_or(default_reason);
 
-            aegis_storage::db::set_agent_status(
-                pool,
-                &incident.tenant_id,
-                &incident.agent_id,
-                "frozen",
-            )
-            .await
-            .map_err(AegisError::Database)?;
-            aegis_storage::db::set_agent_frozen_reason(
-                pool,
-                &incident.tenant_id,
-                &incident.agent_id,
-                Some(&rendered_reason),
-            )
-            .await
-            .map_err(AegisError::Database)?;
+            storage
+                .set_agent_status(&incident.tenant_id, &incident.agent_id, "frozen")
+                .await?;
+            storage
+                .set_agent_frozen_reason(
+                    &incident.tenant_id,
+                    &incident.agent_id,
+                    Some(&rendered_reason),
+                )
+                .await?;
+            Ok(StepResult {
+                action: "freeze_agent".to_string(),
+                description: format!(
+                    "Froze agent {} with reason: {}",
+                    incident.agent_id, rendered_reason
+                ),
+                dry_run: false,
+            })
         }
         PlaybookStep::ForceApproval => {
-            aegis_storage::db::set_agent_force_approval(
-                pool,
-                &incident.tenant_id,
-                &incident.agent_id,
-                true,
-            )
-            .await
-            .map_err(AegisError::Database)?;
+            storage
+                .set_agent_force_approval(&incident.tenant_id, &incident.agent_id, true)
+                .await?;
+            Ok(StepResult {
+                action: "force_approval".to_string(),
+                description: format!("Enabled force_approval for agent {}", incident.agent_id),
+                dry_run: false,
+            })
         }
         PlaybookStep::QuarantineMcp { server_key } => {
             let rendered_key = render_template(server_key, incident, agent);
-            aegis_storage::db::update_mcp_server(
-                pool,
-                &incident.tenant_id,
-                &rendered_key,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some("quarantined"),
-            )
-            .await
-            .map_err(AegisError::Database)?;
+            storage
+                .update_mcp_server(
+                    &incident.tenant_id,
+                    &rendered_key,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("quarantined"),
+                    None,
+                )
+                .await?;
+            Ok(StepResult {
+                action: "quarantine_mcp".to_string(),
+                description: format!("Quarantined MCP server '{}'", rendered_key),
+                dry_run: false,
+            })
         }
         PlaybookStep::NotifySlack {
             webhook_url,
@@ -276,6 +294,11 @@ pub async fn execute_step(
             }
 
             let _ = client.post(&rendered_url).json(&payload).send().await;
+            Ok(StepResult {
+                action: "notify_slack".to_string(),
+                description: format!("Sent Slack notification to {}", rendered_url),
+                dry_run: false,
+            })
         }
         PlaybookStep::NotifyWebhook {
             url,
@@ -306,9 +329,73 @@ pub async fn execute_step(
             };
 
             let _ = client.post(&rendered_url).json(&payload).send().await;
+            Ok(StepResult {
+                action: "notify_webhook".to_string(),
+                description: format!("Sent webhook notification to {}", rendered_url),
+                dry_run: false,
+            })
         }
     }
-    Ok(())
+}
+
+/// Dry-run a playbook step: returns a [`StepResult`] describing what *would*
+/// happen without performing any database mutations or HTTP calls (#1330).
+pub fn simulate_step(step: &PlaybookStep, incident: &Incident, agent: &AgentRecord) -> StepResult {
+    match step {
+        PlaybookStep::FreezeAgent { reason } => {
+            let default_reason = "auto-response: playbook freeze".to_string();
+            let rendered_reason = reason
+                .as_ref()
+                .map(|r| render_template(r, incident, agent))
+                .unwrap_or(default_reason);
+            StepResult {
+                action: "freeze_agent".to_string(),
+                description: format!(
+                    "Would freeze agent {} with reason: {}",
+                    incident.agent_id, rendered_reason
+                ),
+                dry_run: true,
+            }
+        }
+        PlaybookStep::ForceApproval => StepResult {
+            action: "force_approval".to_string(),
+            description: format!(
+                "Would enable force_approval for agent {}",
+                incident.agent_id
+            ),
+            dry_run: true,
+        },
+        PlaybookStep::QuarantineMcp { server_key } => {
+            let rendered_key = render_template(server_key, incident, agent);
+            StepResult {
+                action: "quarantine_mcp".to_string(),
+                description: format!("Would quarantine MCP server '{}'", rendered_key),
+                dry_run: true,
+            }
+        }
+        PlaybookStep::NotifySlack {
+            webhook_url, text, ..
+        } => {
+            let rendered_url = render_template(webhook_url, incident, agent);
+            let rendered_text = render_template(text, incident, agent);
+            StepResult {
+                action: "notify_slack".to_string(),
+                description: format!(
+                    "Would send Slack notification to {}: {}",
+                    rendered_url, rendered_text
+                ),
+                dry_run: true,
+            }
+        }
+        PlaybookStep::NotifyWebhook { url, .. } => {
+            let rendered_url = render_template(url, incident, agent);
+            StepResult {
+                action: "notify_webhook".to_string(),
+                description: format!("Would send webhook notification to {}", rendered_url),
+                dry_run: true,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -455,5 +542,176 @@ mod tests {
             rendered,
             "Incident incident-789-id occurred in production for agent Test Agent (key: agent-123-key)"
         );
+    }
+
+    #[test]
+    fn test_simulate_step() {
+        let agent = make_mock_agent();
+        let incident = make_mock_incident("deny_storm", "critical");
+
+        // FreezeAgent
+        let step = PlaybookStep::FreezeAgent {
+            reason: Some("Incident {{ incident.incident_id }}".to_string()),
+        };
+        let result = simulate_step(&step, &incident, &agent);
+        assert_eq!(result.action, "freeze_agent");
+        assert!(result.dry_run);
+        assert_eq!(
+            result.description,
+            "Would freeze agent agent-123-id with reason: Incident incident-789-id"
+        );
+
+        // ForceApproval
+        let step = PlaybookStep::ForceApproval;
+        let result = simulate_step(&step, &incident, &agent);
+        assert_eq!(result.action, "force_approval");
+        assert!(result.dry_run);
+        assert_eq!(
+            result.description,
+            "Would enable force_approval for agent agent-123-id"
+        );
+
+        // QuarantineMcp
+        let step = PlaybookStep::QuarantineMcp {
+            server_key: "mcp-{{ agent.agent_key }}".to_string(),
+        };
+        let result = simulate_step(&step, &incident, &agent);
+        assert_eq!(result.action, "quarantine_mcp");
+        assert!(result.dry_run);
+        assert_eq!(
+            result.description,
+            "Would quarantine MCP server 'mcp-agent-123-key'"
+        );
+
+        // NotifySlack
+        let step = PlaybookStep::NotifySlack {
+            webhook_url: "http://slack/{{ incident.tenant_id }}".to_string(),
+            channel: None,
+            text: "Alert for {{ agent.name }}".to_string(),
+        };
+        let result = simulate_step(&step, &incident, &agent);
+        assert_eq!(result.action, "notify_slack");
+        assert!(result.dry_run);
+        assert_eq!(
+            result.description,
+            "Would send Slack notification to http://slack/tenant-abc: Alert for Test Agent"
+        );
+
+        // NotifyWebhook
+        let step = PlaybookStep::NotifyWebhook {
+            url: "http://webhook/{{ incident.tenant_id }}".to_string(),
+            payload_template: None,
+        };
+        let result = simulate_step(&step, &incident, &agent);
+        assert_eq!(result.action, "notify_webhook");
+        assert!(result.dry_run);
+        assert_eq!(
+            result.description,
+            "Would send webhook notification to http://webhook/tenant-abc"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_step() {
+        let db_url = format!(
+            "sqlite://target/test_playbook_exec_{}.db",
+            uuid::Uuid::new_v4().simple()
+        );
+        let _ = std::fs::remove_file(db_url.strip_prefix("sqlite://").unwrap());
+        let pool = aegis_storage::db::init_db(&db_url).await.unwrap();
+        let storage = aegis_storage::sqlite::SqliteStorage::new(pool.clone());
+
+        let tenant_id = "tenant-abc";
+        aegis_storage::db::register_tenant(&pool, tenant_id, "Test Tenant", "developer")
+            .await
+            .unwrap();
+
+        let agent = make_mock_agent();
+        aegis_storage::db::insert_agent(&pool, &agent)
+            .await
+            .unwrap();
+
+        let incident = make_mock_incident("deny_storm", "critical");
+
+        // Test FreezeAgent execution
+        let step = PlaybookStep::FreezeAgent {
+            reason: Some("Incident {{ incident.incident_id }}".to_string()),
+        };
+        let result = execute_step(&storage, &step, &incident, &agent)
+            .await
+            .unwrap();
+        assert_eq!(result.action, "freeze_agent");
+        assert!(!result.dry_run);
+
+        // Verify state change
+        let updated_agent = aegis_storage::db::get_agent_by_id(&pool, tenant_id, &agent.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated_agent.status, "frozen");
+        assert_eq!(
+            updated_agent.frozen_reason.unwrap(),
+            "Incident incident-789-id"
+        );
+
+        // Test ForceApproval execution
+        let step = PlaybookStep::ForceApproval;
+        let result = execute_step(&storage, &step, &incident, &agent)
+            .await
+            .unwrap();
+        assert_eq!(result.action, "force_approval");
+        assert!(!result.dry_run);
+
+        // Verify state change
+        let updated_agent = aegis_storage::db::get_agent_by_id(&pool, tenant_id, &agent.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated_agent.force_approval);
+
+        // Test QuarantineMcp execution
+        let server_key = "mcp-server-key";
+        let mcp_server = aegis_api::models::McpServerRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            server_key: server_key.to_string(),
+            name: "Test MCP".to_string(),
+            owner_team: None,
+            transport: "stdio".to_string(),
+            source: None,
+            trust_level: "low".to_string(),
+            endpoint: "node".to_string(),
+            version: None,
+            status: "active".to_string(),
+            manifest_hash: "".to_string(),
+            last_discovery_at: None,
+            inspection_enabled: false,
+            created_at: chrono::Utc::now(),
+        };
+        aegis_storage::db::register_mcp_server(&pool, &mcp_server)
+            .await
+            .unwrap();
+
+        let step = PlaybookStep::QuarantineMcp {
+            server_key: server_key.to_string(),
+        };
+        let result = execute_step(&storage, &step, &incident, &agent)
+            .await
+            .unwrap();
+        assert_eq!(result.action, "quarantine_mcp");
+        assert!(!result.dry_run);
+
+        // Verify state change
+        let updated_mcp = aegis_storage::db::get_mcp_server_by_key(&pool, tenant_id, server_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated_mcp.status, "quarantined");
+
+        // Clean up test DB
+        let db_path = db_url.strip_prefix("sqlite://").unwrap();
+        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_file(format!("{}-shm", db_path));
+        let _ = std::fs::remove_file(format!("{}-wal", db_path));
     }
 }

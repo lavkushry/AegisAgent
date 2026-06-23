@@ -114,9 +114,12 @@ pub async fn dispatch(
     }
 
     if !matched_playbooks.is_empty() {
+        let storage = aegis_storage::sqlite::SqliteStorage::new(pool.clone());
         for pb in &matched_playbooks {
             for step in &pb.steps {
-                if let Err(e) = crate::playbook::execute_step(pool, step, incident, &agent).await {
+                if let Err(e) =
+                    crate::playbook::execute_step(&storage, step, incident, &agent).await
+                {
                     tracing::error!(
                         "Failed to execute playbook '{}' step {:?}: {:?}",
                         pb.name,
