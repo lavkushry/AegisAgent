@@ -129,6 +129,9 @@ pub(crate) async fn write_decision_and_audit(
     // than as middleware, so it shares the exact `started_at` already used
     // for `decision_record.latency_ms`.
     metrics.authorize_duration.observe(started_at.elapsed());
+    // #1287: same sample, also recorded on the OTLP `authorize_latency_seconds`
+    // histogram (a no-op when OTel metrics aren't configured).
+    crate::otel::record_authorize_latency(started_at.elapsed());
     // OBS-002 (#1155): per-outcome decision counter.
     metrics.inc_decision(decision);
 

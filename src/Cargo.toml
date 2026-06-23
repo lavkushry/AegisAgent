@@ -86,7 +86,7 @@ x509-parser = "0.18"
 # what that thread needs and doesn't block the gateway's own async runtime.
 opentelemetry = "0.32.0"
 opentelemetry_sdk = "0.32.1"
-opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "http-proto", "reqwest-blocking-client"] }
 # `HeaderExtractor` — pulls the W3C `traceparent` context out of an
 # axum/http `HeaderMap` so a span can be parented to the SDK caller's trace.
 opentelemetry-http = "0.32.0"
