@@ -12,6 +12,7 @@ uuid = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 sha2 = { workspace = true }
+hmac = { workspace = true }
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }
 hex = "=0.4.3"
 sqlx = { workspace = true }

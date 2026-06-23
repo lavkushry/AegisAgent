@@ -227,7 +227,7 @@ pub async fn authorize_action(
                 return StatusError::unauthorized("missing_request_signature").into_response();
             }
         };
-        if !db::verify_request_signature(signing_key, &body, &sig_header) {
+        if !aegis_common::hash::verify_request_signature(signing_key, &body, &sig_header) {
             warn!(
                 "Request signature invalid for agent={} tenant={}",
                 agent_id, tenant_id
@@ -238,26 +238,22 @@ pub async fn authorize_action(
 
     // Environment restriction (#1391): deny if the agent is not permitted
     // to operate in the environment the caller declares. NULL = unrestricted.
-    if let Some(ref env_json) = agent.allowed_environments {
-        if let Ok(allowed) = serde_json::from_str::<Vec<String>>(env_json) {
-            if !allowed.is_empty() && !allowed.contains(&payload.agent.environment) {
-                warn!(
-                    "Environment restriction: agent={} tenant={} env={} not in allowed={:?}",
-                    agent_id, tenant_id, payload.agent.environment, allowed
-                );
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({
-                        "decision": "deny",
-                        "reason": format!(
-                            "agent not permitted in environment '{}'",
-                            payload.agent.environment
-                        )
-                    })),
-                )
-                    .into_response();
-            }
-        }
+    if let Err(reason) = aegis_policy::validation::validate_environment(
+        agent.allowed_environments.as_deref(),
+        &payload.agent.environment,
+    ) {
+        warn!(
+            "Environment restriction: agent={} tenant={} env={} error={}",
+            agent_id, tenant_id, payload.agent.environment, reason
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "decision": "deny",
+                "reason": reason
+            })),
+        )
+            .into_response();
     }
 
     // #1510: the agent-to-tool permission check and the idempotency lookup
@@ -332,17 +328,14 @@ pub async fn authorize_action(
         // window that large is itself suspicious and the same bound keeps
         // the check simple/symmetric; legitimate clients should always send
         // a current timestamp.
-        if let Some(ts) = payload.timestamp {
-            let age_secs = (now - ts).num_seconds().abs();
-            if age_secs > 300 {
-                warn!(
-                    "Replay protection: rejecting request with stale timestamp for tenant={} agent={} (age={}s)",
-                    tenant_id, agent_id, age_secs
-                );
-                return StatusError::conflict("Request timestamp outside the acceptable window")
-                    .with_details(serde_json::json!({"reason": "replay_timestamp_expired"}))
-                    .into_response();
-            }
+        if let Err(reason) = aegis_policy::validation::validate_replay_timestamp(now, payload.timestamp) {
+            warn!(
+                "Replay protection: rejecting request with stale timestamp for tenant={} agent={} (timestamp validation failed)",
+                tenant_id, agent_id
+            );
+            return StatusError::conflict(reason)
+                .with_details(serde_json::json!({"reason": "replay_timestamp_expired"}))
+                .into_response();
         }
 
         // Nonce dedup check (AC #2/#4/#6): scoped per (tenant, agent) so two
@@ -860,53 +853,32 @@ pub async fn authorize_action(
         };
 
     let decision_id = Uuid::new_v4();
-    let mut decision_str = policy_decision.decision.clone();
-    let mut reason = policy_decision.reason.clone();
-    let mut matched_policies = policy_decision.matched_policies.clone();
-    // #1385: redacted_fields is non-empty only when Cedar decision == "redact".
-    // Routes-layer escalations (critical risk, force_approval, etc.) that override
-    // the Cedar decision to require_approval/deny also clear this list so callers
-    // never receive stale redact metadata when the decision changed.
-    let mut redacted_fields = policy_decision.redacted_fields.clone();
 
     // Security metric: provenance_denials_total — count Cedar-level denials driven by
     // untrusted/malicious/unknown provenance on a mutating action (anti-confused-deputy).
-    if decision_str == "deny"
+    if policy_decision.decision == "deny"
         && payload.tool_call.mutates_state
         && is_untrusted_provenance(&payload.context.source_trust)
     {
         state.metrics.inc_provenance_denial();
     }
 
-    if decision_str == "allow" {
-        if action_default_decision == "deny" {
-            decision_str = "deny".to_string();
-            reason = "Registered action default decision is deny.".to_string();
-            matched_policies.push("registered_action_default_deny".to_string());
-        } else if action_default_decision == "require_approval" || action_approval_required {
-            decision_str = "require_approval".to_string();
-            reason = "Registered action requires approval.".to_string();
-            matched_policies.push("registered_action_approval_required".to_string());
-        }
-    }
+    let (mut decision_str, mut reason, mut matched_policies) =
+        aegis_policy::validation::apply_decision_overrides(
+            policy_decision.decision.clone(),
+            policy_decision.reason.clone(),
+            policy_decision.matched_policies.clone(),
+            &risk_level,
+            agent.force_approval,
+            &action_default_decision,
+            action_approval_required,
+        );
 
-    // Enforce secure defaults (fail-closed)
-    // If decision returns allow but action risk is critical, enforce require_approval by default if not set otherwise.
-    if decision_str == "allow" && risk_level == "critical" {
-        decision_str = "require_approval".to_string();
-        reason = "Critical-risk action requires approval by default.".to_string();
-        matched_policies.push("critical_risk_requires_approval".to_string());
-    }
-
-    // SOC Response Engine (#1184, Phase 4): a prior trust_escalation incident
-    // set agents.force_approval for this agent. Downgrade allow -> require_approval
-    // for every subsequent action until an operator clears it.
-    if decision_str == "allow" && agent.force_approval {
-        decision_str = "require_approval".to_string();
-        reason = "Agent requires approval for all actions following a trust escalation incident."
-            .to_string();
-        matched_policies.push("soc_response_force_approval".to_string());
-    }
+    // #1385: redacted_fields is non-empty only when Cedar decision == "redact".
+    // Routes-layer escalations (critical risk, force_approval, etc.) that override
+    // the Cedar decision to require_approval/deny also clear this list so callers
+    // never receive stale redact metadata when the decision changed.
+    let mut redacted_fields = policy_decision.redacted_fields.clone();
 
     let audit_event_type = if is_mcp_call {
         "mcp_tool_called"

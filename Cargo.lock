@@ -39,6 +39,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "hex",
+ "hmac",
  "serde",
  "serde_json",
  "sha2",
