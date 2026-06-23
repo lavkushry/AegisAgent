@@ -76,6 +76,7 @@ nav:
       - Overview: getting-started.md
       - 10-minute quickstart: quickstart.md
   - Installation: installation.md
+  - Deployment guide: deployment-guide.md
   - Demos:
       - Approve-then-swap blocked: approve-then-swap-demo.md
   - Integration & connectivity:
