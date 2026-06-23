@@ -1611,6 +1611,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             api_routes().layer(middleware::from_fn(routes::deprecation_middleware)),
         )
         .nest("/v2", api_routes())
+        .nest(
+            "/",
+            api_routes().layer(middleware::from_fn(routes::version_negotiation_middleware)),
+        )
         // Dashboard Console static serving (unversioned)
         .route(
             "/dashboard",
@@ -2516,6 +2520,10 @@ mod tests {
                 api_routes().layer(middleware::from_fn(routes::deprecation_middleware)),
             )
             .nest("/v2", api_routes())
+            .nest(
+                "/",
+                api_routes().layer(middleware::from_fn(routes::version_negotiation_middleware)),
+            )
             .route("/health", get(health_handler))
             .route("/livez", get(livez_handler))
             .route("/readyz", get(readyz_handler))
@@ -2987,6 +2995,76 @@ mod tests {
         let headers_livez = resp_livez.headers();
         assert!(headers_livez.get("deprecation").is_none());
         assert!(headers_livez.get("sunset").is_none());
+
+        cleanup_db(&db_url);
+    }
+
+    /// Test version content negotiation via Accept header for unversioned request paths.
+    #[tokio::test]
+    async fn test_api_versioning_via_accept_header() {
+        use tower::ServiceExt;
+
+        let (app, _state, db_url) = probe_test_app("api_accept_negotiation").await;
+
+        // 1. Accept: application/vnd.aegis.v2+json -> maps to /v2 (no deprecation/sunset headers)
+        let req_v2 = Request::builder()
+            .uri("/version")
+            .header(axum::http::header::ACCEPT, "application/vnd.aegis.v2+json")
+            .body(Body::empty())
+            .unwrap();
+        let resp_v2 = app.clone().oneshot(req_v2).await.unwrap();
+        assert_eq!(resp_v2.status(), StatusCode::OK);
+        
+        let headers_v2 = resp_v2.headers();
+        assert!(headers_v2.get("deprecation").is_none());
+        assert!(headers_v2.get("sunset").is_none());
+
+        // 2. Accept: application/vnd.aegis.v1+json -> maps to /v1 (returns deprecation/sunset headers)
+        let req_v1 = Request::builder()
+            .uri("/version")
+            .header(axum::http::header::ACCEPT, "application/vnd.aegis.v1+json")
+            .body(Body::empty())
+            .unwrap();
+        let resp_v1 = app.clone().oneshot(req_v1).await.unwrap();
+        assert_eq!(resp_v1.status(), StatusCode::OK);
+        
+        let headers_v1 = resp_v1.headers();
+        assert_eq!(
+            headers_v1.get("deprecation").unwrap().to_str().unwrap(),
+            "true"
+        );
+        assert_eq!(
+            headers_v1.get("sunset").unwrap().to_str().unwrap(),
+            "Wed, 31 Dec 2026 23:59:59 GMT"
+        );
+
+        // 3. No Accept header -> defaults to /v1 (returns deprecation/sunset headers)
+        let req_default = Request::builder()
+            .uri("/version")
+            .body(Body::empty())
+            .unwrap();
+        let resp_default = app.clone().oneshot(req_default).await.unwrap();
+        assert_eq!(resp_default.status(), StatusCode::OK);
+        
+        let headers_default = resp_default.headers();
+        assert_eq!(
+            headers_default.get("deprecation").unwrap().to_str().unwrap(),
+            "true"
+        );
+        assert_eq!(
+            headers_default.get("sunset").unwrap().to_str().unwrap(),
+            "Wed, 31 Dec 2026 23:59:59 GMT"
+        );
+
+        // 4. Exempt route (e.g. /livez) -> does not trigger prefixing and works fine
+        let req_livez = Request::builder()
+            .uri("/livez")
+            .header(axum::http::header::ACCEPT, "application/vnd.aegis.v2+json")
+            .body(Body::empty())
+            .unwrap();
+        let resp_livez = app.clone().oneshot(req_livez).await.unwrap();
+        assert_eq!(resp_livez.status(), StatusCode::OK);
+        assert!(resp_livez.headers().get("deprecation").is_none());
 
         cleanup_db(&db_url);
     }

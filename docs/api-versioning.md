@@ -59,3 +59,17 @@ When modifying existing handlers or adding new ones:
   1. Extract the route registration from the shared `api_routes` function.
   2. Implement/register the legacy handler explicitly under the `/v1` mount in `main.rs`.
   3. Register the new version of the handler explicitly under the `/v2` mount.
+
+---
+
+## 5. Content Negotiation
+
+Clients and SDKs can request version-specific endpoints without using the path prefixes `/v1/` or `/v2/` by supplying an `Accept` HTTP header. 
+
+When a request is sent to an unversioned route (e.g. `/authorize`, `/agents`), the gateway dynamically inspects the `Accept` header and rewrites the request URI path:
+* **`Accept: application/vnd.aegis.v2+json`**: Rewrites and routes the request internally as `/v2/...`.
+* **`Accept: application/vnd.aegis.v1+json`**: Rewrites and routes the request internally as `/v1/...`.
+* **Unspecified / Other Accept Headers**: Defaults to `/v1/...` for backward compatibility.
+
+Diagnostic and static endpoints (e.g., `/health`, `/livez`, `/readyz`, `/startupz`, `/metrics`, `/debug/runtime`, and `/dashboard/*`) are exempt from content negotiation and are always served directly from the root context.
+
