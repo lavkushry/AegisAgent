@@ -831,7 +831,9 @@ mod tests {
         .into_response();
         assert_eq!(approve.status(), StatusCode::OK);
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -860,7 +862,9 @@ mod tests {
         .into_response();
         assert_eq!(approve.status(), StatusCode::OK);
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -889,7 +893,9 @@ mod tests {
         .into_response();
         assert_eq!(reject.status(), StatusCode::OK);
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -937,7 +943,9 @@ mod tests {
 
         // The stored status must remain "created" — the conditional UPDATE
         // must not have stomped it.
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -988,7 +996,9 @@ mod tests {
         assert_eq!(json["details"]["reason"], "approval_already_decided");
         assert_eq!(json["details"]["status"], "APPROVED");
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -1034,7 +1044,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["details"]["reason"], "approval_expired");
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -1091,7 +1103,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["details"]["reason"], "approval_expired");
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -1160,7 +1174,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["details"]["reason"], "approval_already_decided");
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -1201,7 +1217,9 @@ mod tests {
         .into_response();
         assert_eq!(edit.status(), StatusCode::OK);
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -1438,7 +1456,9 @@ mod tests {
         let (approval_id, _hash) =
             create_pending_approval(&state, &tenant_id, &agent_token, "102").await;
 
-        let (_id, plaintext_key) = state.storage.create_api_key( &tenant_id, "admin-bypass")
+        let (_id, plaintext_key) = state
+            .storage
+            .create_api_key(&tenant_id, "admin-bypass")
             .await
             .expect("create api key");
 
@@ -1473,7 +1493,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_approvals_route() {
         let (state, tenant_id, agent_token) = setup_state("list_approvals").await;
-        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -1502,7 +1524,7 @@ mod tests {
             parent_run_id: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_decision( &record_dec).await.unwrap();
+        state.storage.insert_decision(&record_dec).await.unwrap();
 
         let approval_id1 = Uuid::new_v4().to_string();
         let record1 = ApprovalRecord {
@@ -1522,7 +1544,7 @@ mod tests {
             callback_secret_hash: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_approval( &record1).await.unwrap();
+        state.storage.insert_approval(&record1).await.unwrap();
 
         // Expired approval
         let approval_id2 = Uuid::new_v4().to_string();
@@ -1543,7 +1565,7 @@ mod tests {
             callback_secret_hash: None,
             created_at: Utc::now() - Duration::minutes(10),
         };
-        state.storage.insert_approval( &record2).await.unwrap();
+        state.storage.insert_approval(&record2).await.unwrap();
 
         // 1. List approvals (should only return non-expired record1)
         let response = list_approvals(
@@ -1569,7 +1591,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_approvals_route_includes_agent_id_and_tool_call() {
         let (state, tenant_id, agent_token) = setup_state("list_approvals_enriched").await;
-        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -1598,7 +1622,7 @@ mod tests {
             parent_run_id: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_decision( &record_dec).await.unwrap();
+        state.storage.insert_decision(&record_dec).await.unwrap();
 
         let tool_call_json = serde_json::json!({
             "tool": "github",
@@ -1627,7 +1651,7 @@ mod tests {
             callback_secret_hash: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_approval( &record).await.unwrap();
+        state.storage.insert_approval(&record).await.unwrap();
 
         let response = list_approvals(
             State(state.clone()),
@@ -1679,8 +1703,7 @@ mod tests {
             create_pending_approval(&state, &tenant_a, &agent_token, "40").await;
 
         let tenant_b = format!("tenant_b_{}", Uuid::new_v4().simple());
-        register_tenant_helper(state.storage.as_ref(), &tenant_b, "Tenant B", "developer")
-            .await;
+        register_tenant_helper(state.storage.as_ref(), &tenant_b, "Tenant B", "developer").await;
 
         // Owning tenant can fetch it.
         let own = get_approval(
@@ -1892,7 +1915,9 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");
@@ -1929,7 +1954,9 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval should exist");

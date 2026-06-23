@@ -1395,8 +1395,13 @@ mod tests {
         assert_eq!(validate_jwt(&wrong_token), None);
 
         let (state, _, _) = setup_state("jwt_tenant_extraction").await;
-        register_tenant_helper(state.storage.as_ref(), "tenant_from_claim", "JWT Tenant", "developer")
-            .await;
+        register_tenant_helper(
+            state.storage.as_ref(),
+            "tenant_from_claim",
+            "JWT Tenant",
+            "developer",
+        )
+        .await;
 
         // Test extractor
         let request = axum::http::Request::builder()
@@ -1803,7 +1808,6 @@ mod tests {
         // Create a custom app state with rate limit capacity = 1
         let policy_engine1 = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
-            
             storage: state_raw.storage.clone(),
             policy_engine: policy_engine1,
             events: state_raw.events.clone(),
@@ -1860,7 +1864,6 @@ mod tests {
         // Now test quota
         let policy_engine2 = PolicyEngine::init("policies.cedar").await.unwrap();
         let state_quota = Arc::new(AppState {
-            
             storage: state_raw.storage.clone(),
             policy_engine: policy_engine2,
             events: state_raw.events.clone(),
@@ -2407,7 +2410,9 @@ mod tests {
         .await
         .unwrap();
 
-        let receipt = state.storage.get_action_receipt_by_id( &tenant_id, &receipt_id)
+        let receipt = state
+            .storage
+            .get_action_receipt_by_id(&tenant_id, &receipt_id)
             .await
             .unwrap()
             .expect("emitted receipt should be retrievable");
@@ -2629,15 +2634,18 @@ mod tests {
             .drain(std::time::Duration::from_secs(5))
             .await;
 
-        let decisions = state.storage.list_decisions(&tenant_id, None, None, 10, None, None)
+        let decisions = state
+            .storage
+            .list_decisions(&tenant_id, None, None, 10, None, None)
             .await
             .unwrap()
             .0;
         let decision = decisions.first().expect("expected a decision row");
 
-        let scores = db::list_agent_risk_scores(state.storage.get_pool(), &tenant_id, &decision.agent_id)
-            .await
-            .unwrap();
+        let scores =
+            db::list_agent_risk_scores(state.storage.get_pool(), &tenant_id, &decision.agent_id)
+                .await
+                .unwrap();
         assert_eq!(scores.len(), 1);
         assert_eq!(scores[0].decision_id, decision.id);
         assert_eq!(scores[0].score, 10);
@@ -2663,7 +2671,9 @@ mod tests {
 
         // The decision row itself is written synchronously — visible with no
         // drain.
-        let decisions = state.storage.list_decisions(&tenant_id, None, None, 10, None, None)
+        let decisions = state
+            .storage
+            .list_decisions(&tenant_id, None, None, 10, None, None)
             .await
             .unwrap()
             .0;
@@ -2680,9 +2690,10 @@ mod tests {
             .await;
         assert!(drained, "deferred writes should drain within the timeout");
 
-        let scores = db::list_agent_risk_scores(state.storage.get_pool(), &tenant_id, &decision.agent_id)
-            .await
-            .unwrap();
+        let scores =
+            db::list_agent_risk_scores(state.storage.get_pool(), &tenant_id, &decision.agent_id)
+                .await
+                .unwrap();
         assert_eq!(
             scores.len(),
             1,
@@ -2781,11 +2792,12 @@ mod tests {
         let response = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
         assert_eq!(response.root_trust_level, "semi_trusted_customer");
 
-        let record =
-            state.storage.get_decision_by_id( &tenant_id, &response.decision_id.to_string())
-                .await
-                .unwrap()
-                .expect("decision row must exist");
+        let record = state
+            .storage
+            .get_decision_by_id(&tenant_id, &response.decision_id.to_string())
+            .await
+            .unwrap()
+            .expect("decision row must exist");
         assert_eq!(
             record.root_trust_level,
             Some("semi_trusted_customer".to_string())
@@ -2963,8 +2975,13 @@ mod tests {
     async fn get_audit_events_respects_tenant_scope_and_limit() {
         let (state, tenant_id, _agent_token) = setup_state("audit_events_scope_limit").await;
         let other_tenant = "audit_events_scope_limit_other";
-        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other Tenant", "developer")
-            .await;
+        register_tenant_helper(
+            state.storage.as_ref(),
+            other_tenant,
+            "Other Tenant",
+            "developer",
+        )
+        .await;
 
         fn audit_event(tenant_id: &str, n: usize) -> AuditEventRecord {
             AuditEventRecord {
@@ -2991,11 +3008,15 @@ mod tests {
         // 105 events for the caller's tenant (exceeds the 100-row cap) and one
         // for another tenant (must never be returned).
         for n in 0..105 {
-            state.storage.insert_audit_event( &audit_event(&tenant_id, n))
+            state
+                .storage
+                .insert_audit_event(&audit_event(&tenant_id, n))
                 .await
                 .unwrap();
         }
-        state.storage.insert_audit_event( &audit_event(other_tenant, 0))
+        state
+            .storage
+            .insert_audit_event(&audit_event(other_tenant, 0))
             .await
             .unwrap();
 
@@ -3256,7 +3277,9 @@ mod tests {
         assert_eq!(response.decision, "require_approval");
         let approval_id = response.approval.expect("approval info").approval_id;
 
-        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
+        let stored = state
+            .storage
+            .get_approval_by_id(&tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval row should exist");
@@ -3371,15 +3394,18 @@ mod tests {
         assert_eq!(second.risk_score, first.risk_score);
 
         // Only one decision row was written for this request_id.
-        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
-        let stored =
-            state.storage.get_decision_by_request_id( &tenant_id, &agent.id, "req-allow-1")
-                .await
-                .unwrap()
-                .unwrap();
+        let stored = state
+            .storage
+            .get_decision_by_request_id(&tenant_id, &agent.id, "req-allow-1")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.id, first.decision_id.to_string());
 
         // require_approval path: the second call must replay the SAME approval.
@@ -3407,7 +3433,9 @@ mod tests {
         assert_eq!(second_approval.action_hash, first_approval.action_hash);
 
         // Still exactly one pending approval for this decision.
-        let approvals = state.storage.list_pending_approvals( &tenant_id, 50, 0)
+        let approvals = state
+            .storage
+            .list_pending_approvals(&tenant_id, 50, 0)
             .await
             .unwrap();
         assert_eq!(
@@ -3434,11 +3462,12 @@ mod tests {
         .await;
         assert_eq!(response.decision, "allow");
 
-        let stored =
-            state.storage.get_decision_by_id( &tenant_id, &response.decision_id.to_string())
-                .await
-                .unwrap()
-                .unwrap();
+        let stored = state
+            .storage
+            .get_decision_by_id(&tenant_id, &response.decision_id.to_string())
+            .await
+            .unwrap()
+            .unwrap();
         let latency = stored.latency_ms.expect("latency_ms should be populated");
         assert!(latency >= 0);
     }
@@ -4360,20 +4389,28 @@ mod tests {
     #[tokio::test]
     async fn grant_and_list_tool_permissions() {
         let (state, tenant_id, _agent_token) = setup_state("perm_grant_list").await;
-        let agent_id = state.storage.get_agent_by_token( &tenant_id, &_agent_token)
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &_agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
 
-        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
+        state
+            .storage
+            .grant_agent_tool_permission(&tenant_id, &agent_id, "github")
             .await
             .unwrap();
-        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "filesystem")
+        state
+            .storage
+            .grant_agent_tool_permission(&tenant_id, &agent_id, "filesystem")
             .await
             .unwrap();
 
-        let perms = state.storage.get_agent_tool_permissions( &tenant_id, &agent_id)
+        let perms = state
+            .storage
+            .get_agent_tool_permissions(&tenant_id, &agent_id)
             .await
             .unwrap();
         assert_eq!(perms.len(), 2);
@@ -4386,29 +4423,37 @@ mod tests {
     #[tokio::test]
     async fn revoke_tool_permission_removes_binding() {
         let (state, tenant_id, agent_token) = setup_state("perm_revoke").await;
-        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
 
-        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
+        state
+            .storage
+            .grant_agent_tool_permission(&tenant_id, &agent_id, "github")
             .await
             .unwrap();
 
-        let deleted =
-            state.storage.revoke_agent_tool_permission( &tenant_id, &agent_id, "github")
-                .await
-                .unwrap();
+        let deleted = state
+            .storage
+            .revoke_agent_tool_permission(&tenant_id, &agent_id, "github")
+            .await
+            .unwrap();
         assert!(deleted, "first revoke must return true");
 
-        let deleted2 =
-            state.storage.revoke_agent_tool_permission( &tenant_id, &agent_id, "github")
-                .await
-                .unwrap();
+        let deleted2 = state
+            .storage
+            .revoke_agent_tool_permission(&tenant_id, &agent_id, "github")
+            .await
+            .unwrap();
         assert!(!deleted2, "duplicate revoke must return false");
 
-        let perms = state.storage.get_agent_tool_permissions( &tenant_id, &agent_id)
+        let perms = state
+            .storage
+            .get_agent_tool_permissions(&tenant_id, &agent_id)
             .await
             .unwrap();
         assert!(perms.is_empty());
@@ -4418,13 +4463,17 @@ mod tests {
     #[tokio::test]
     async fn authorize_action_denies_tool_not_in_permission_list() {
         let (state, tenant_id, agent_token) = setup_state("perm_deny_tool").await;
-        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
         // Grant only "github"; request will use "filesystem".
-        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
+        state
+            .storage
+            .grant_agent_tool_permission(&tenant_id, &agent_id, "github")
             .await
             .unwrap();
 
@@ -4452,12 +4501,16 @@ mod tests {
     #[tokio::test]
     async fn authorize_action_allows_tool_in_permission_list() {
         let (state, tenant_id, agent_token) = setup_state("perm_allow_tool").await;
-        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
-        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "filesystem")
+        state
+            .storage
+            .grant_agent_tool_permission(&tenant_id, &agent_id, "filesystem")
             .await
             .unwrap();
 
@@ -4531,7 +4584,9 @@ mod tests {
                 .await
                 .unwrap();
         // get_agent_by_id only filters `status != 'deleted'`, so quarantined rows are returned.
-        let agent_record = state.storage.get_agent_by_id( &tenant_id, &agent_id)
+        let agent_record = state
+            .storage
+            .get_agent_by_id(&tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -4752,7 +4807,12 @@ mod tests {
         .into_response();
         assert_eq!(resp_after.status(), StatusCode::OK);
 
-        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         assert!(events
             .iter()
             .any(|e| e.event_type == "agent_token_leak_detected_no_rotation"));
@@ -4949,7 +5009,9 @@ mod tests {
     async fn authorize_action_denies_frozen_and_revoked_agent() {
         let (state, tenant_id, agent_token) = setup_state("agent_frozen_revoked").await;
 
-        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -4962,11 +5024,11 @@ mod tests {
         assert_eq!(allowed.decision, "allow");
 
         // Freeze the agent
-        assert!(
-            state.storage.set_agent_status( &tenant_id, &agent_id, "frozen")
-                .await
-                .unwrap()
-        );
+        assert!(state
+            .storage
+            .set_agent_status(&tenant_id, &agent_id, "frozen")
+            .await
+            .unwrap());
 
         // Frozen agent should be denied
         let frozen_denied =
@@ -4977,11 +5039,11 @@ mod tests {
             .contains(&"agent_frozen".to_string()));
 
         // Revoke the agent
-        assert!(
-            state.storage.set_agent_status( &tenant_id, &agent_id, "revoked")
-                .await
-                .unwrap()
-        );
+        assert!(state
+            .storage
+            .set_agent_status(&tenant_id, &agent_id, "revoked")
+            .await
+            .unwrap());
 
         // Revoked agent should be denied
         let revoked_denied =
@@ -5011,15 +5073,20 @@ mod tests {
         assert_eq!(allowed.decision, "allow");
 
         // The decision row is written synchronously...
-        assert!(
-            state.storage.get_decision_by_id( &tenant_id, &allowed.decision_id.to_string())
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(state
+            .storage
+            .get_decision_by_id(&tenant_id, &allowed.decision_id.to_string())
+            .await
+            .unwrap()
+            .is_some());
         // ...but the matching audit_events row is sitting in the batch
         // channel, not yet flushed to the table.
-        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         assert!(events
             .iter()
             .all(|e| e.decision_id.as_deref() != Some(allowed.decision_id.to_string().as_str())));
@@ -5027,7 +5094,12 @@ mod tests {
         // Once the flush-interval timer fires, the batch writer flushes the
         // buffered row to the table.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         assert!(events
             .iter()
             .any(|e| e.decision_id.as_deref() == Some(allowed.decision_id.to_string().as_str())));
@@ -5040,21 +5112,28 @@ mod tests {
     async fn critical_denial_audit_row_is_written_synchronously() {
         let (state, tenant_id, agent_token) = setup_state("audit_batch_critical").await;
 
-        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
-        assert!(
-            state.storage.set_agent_status( &tenant_id, &agent.id, "frozen")
-                .await
-                .unwrap()
-        );
+        assert!(state
+            .storage
+            .set_agent_status(&tenant_id, &agent.id, "frozen")
+            .await
+            .unwrap());
 
         let request = mcp_authorize_request("filesystem", "read_file");
         let denied = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
         assert_eq!(denied.decision, "deny");
 
-        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         assert!(events
             .iter()
             .any(|e| e.decision_id.as_deref() == Some(denied.decision_id.to_string().as_str())));
@@ -5068,7 +5147,9 @@ mod tests {
     async fn force_approval_agent_downgrades_allow_to_require_approval() {
         let (state, tenant_id, agent_token) = setup_state("agent_force_approval").await;
 
-        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -5083,7 +5164,9 @@ mod tests {
 
         // Simulate the Response Engine setting force_approval after a
         // trust_escalation incident.
-        state.storage.set_agent_force_approval( &tenant_id, &agent_id, true)
+        state
+            .storage
+            .set_agent_force_approval(&tenant_id, &agent_id, true)
             .await
             .unwrap();
 
@@ -5095,7 +5178,9 @@ mod tests {
             .contains(&"soc_response_force_approval".to_string()));
 
         // Clearing force_approval restores the normal allow decision.
-        state.storage.set_agent_force_approval( &tenant_id, &agent_id, false)
+        state
+            .storage
+            .set_agent_force_approval(&tenant_id, &agent_id, false)
             .await
             .unwrap();
         let restored = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
@@ -5105,7 +5190,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_and_get_decisions_route() {
         let (state, tenant_id, agent_token) = setup_state("list_get_decisions").await;
-        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -5137,7 +5224,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        state.storage.insert_agent( &agent2).await.unwrap();
+        state.storage.insert_agent(&agent2).await.unwrap();
 
         let decision_id2 = Uuid::new_v4().to_string();
         let record2 = DecisionRecord {
@@ -5162,7 +5249,7 @@ mod tests {
             parent_run_id: None,
             created_at: Utc::now() - Duration::seconds(10),
         };
-        state.storage.insert_decision( &record2).await.unwrap();
+        state.storage.insert_decision(&record2).await.unwrap();
 
         let decision_id1 = Uuid::new_v4().to_string();
         let record1 = DecisionRecord {
@@ -5187,7 +5274,7 @@ mod tests {
             parent_run_id: None,
             created_at: Utc::now(),
         };
-        state.storage.insert_decision( &record1).await.unwrap();
+        state.storage.insert_decision(&record1).await.unwrap();
 
         // 1. List decisions without filters
         let response = list_decisions(
@@ -5295,8 +5382,13 @@ mod tests {
 
         // 4. Get decision detail cross-tenant (should return 404)
         let other_tenant = "tenant_other_decisions";
-        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other Tenant", "developer")
-            .await;
+        register_tenant_helper(
+            state.storage.as_ref(),
+            other_tenant,
+            "Other Tenant",
+            "developer",
+        )
+        .await;
         let response_cross = get_decision(
             State(state.clone()),
             TenantId(other_tenant.to_string()),
@@ -5311,8 +5403,13 @@ mod tests {
     async fn test_list_and_get_receipts_route() {
         let (state, tenant_id, _) = setup_state("list_get_receipts").await;
 
-        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
-            .map(|r| r.receipt_hash).unwrap_or_default();
+        let prev = state
+            .storage
+            .get_latest_action_receipt(&tenant_id)
+            .await
+            .unwrap()
+            .map(|r| r.receipt_hash)
+            .unwrap_or_default();
         let mut r = unsigned_receipt_template(&tenant_id);
         r.prev_receipt_hash = prev;
         r.receipt_hash = db::compute_receipt_hash(&r);
@@ -5351,8 +5448,13 @@ mod tests {
 
         // 3. Get receipt detail cross-tenant (should return 404)
         let other_tenant = "tenant_other_receipts";
-        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other Tenant", "developer")
-            .await;
+        register_tenant_helper(
+            state.storage.as_ref(),
+            other_tenant,
+            "Other Tenant",
+            "developer",
+        )
+        .await;
         let response_cross = get_receipt(
             State(state.clone()),
             TenantId(other_tenant.to_string()),
@@ -5546,7 +5648,9 @@ mod tests {
     async fn authorize_denies_when_tool_permission_revoked_even_with_request_id() {
         let (state, tenant_id, agent_token) =
             setup_state("perm_denied_concurrent_idempotency").await;
-        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
@@ -5554,7 +5658,9 @@ mod tests {
 
         // Any explicit binding makes the allow-list exclusive; "filesystem"
         // (the tool under test below) is deliberately left off it.
-        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
+        state
+            .storage
+            .grant_agent_tool_permission(&tenant_id, &agent_id, "github")
             .await
             .unwrap();
 
@@ -5710,13 +5816,17 @@ mod tests {
     #[tokio::test]
     async fn authorize_debounces_heartbeat_until_flushed() {
         let (state, tenant_id, agent_token) = setup_state("heartbeat_debounce").await;
-        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
 
-        let agent_before = state.storage.get_agent_by_id( &tenant_id, &agent_id)
+        let agent_before = state
+            .storage
+            .get_agent_by_id(&tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -5727,7 +5837,9 @@ mod tests {
 
         // The touch is buffered, not yet written.
         assert_eq!(state.heartbeat_debouncer.pending_count(), 1);
-        let agent_after_call = state.storage.get_agent_by_id( &tenant_id, &agent_id)
+        let agent_after_call = state
+            .storage
+            .get_agent_by_id(&tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -5736,7 +5848,9 @@ mod tests {
         // Flushing (what the periodic job does) writes it through.
         crate::jobs::flush_heartbeats(state.storage.get_pool(), &state.heartbeat_debouncer).await;
         assert_eq!(state.heartbeat_debouncer.pending_count(), 0);
-        let agent_after_flush = state.storage.get_agent_by_id( &tenant_id, &agent_id)
+        let agent_after_flush = state
+            .storage
+            .get_agent_by_id(&tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -5881,7 +5995,7 @@ mod tests {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
-                state.storage.insert_agent( &agent).await.unwrap();
+                state.storage.insert_agent(&agent).await.unwrap();
 
                 // Creates a decision row, a pending approval, and an action receipt
                 // all bound to this tenant.
@@ -5988,8 +6102,7 @@ mod tests {
         let tenant_a = "iso_tenant_a".to_string();
         let tenant_b = "iso_tenant_b".to_string();
         for (tid, name) in [(&tenant_a, "Iso Tenant A"), (&tenant_b, "Iso Tenant B")] {
-            register_tenant_helper(state.storage.as_ref(), tid, name, "developer")
-                .await;
+            register_tenant_helper(state.storage.as_ref(), tid, name, "developer").await;
         }
 
         // Seed agents for each tenant (needed as FK for decisions / alerts /
@@ -6364,10 +6477,10 @@ mod tests {
             Uuid::new_v4().simple()
         );
         let pool = db::init_db(&db_url).await.unwrap();
-        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)) as Arc<dyn aegis_storage::traits::StorageBackend>;
+        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool))
+            as Arc<dyn aegis_storage::traits::StorageBackend>;
         let tenant_id = "tenant_routes".to_string();
-        register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer")
-            .await;
+        register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer").await;
 
         let agent_id = Uuid::new_v4().to_string();
         let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
@@ -6570,10 +6683,10 @@ mod tests {
         let pool = db::init_db_with_busy_timeout(&db_url, Duration::from_millis(50))
             .await
             .unwrap();
-        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)) as Arc<dyn aegis_storage::traits::StorageBackend>;
+        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool))
+            as Arc<dyn aegis_storage::traits::StorageBackend>;
         let tenant_id = "tenant_routes".to_string();
-        register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer")
-            .await;
+        register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer").await;
 
         let agent_id = Uuid::new_v4().to_string();
         let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
@@ -6838,7 +6951,9 @@ mod tests {
         assert_eq!(response.decision, "allow");
         assert!(response.dry_run);
 
-        let decisions = state.storage.list_decisions(&tenant_id, None, None, 100, None, None)
+        let decisions = state
+            .storage
+            .list_decisions(&tenant_id, None, None, 100, None, None)
             .await
             .unwrap()
             .0;
@@ -6846,7 +6961,12 @@ mod tests {
             decisions.is_empty(),
             "dry-run must not write a decisions row"
         );
-        let audit_events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let audit_events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         assert!(
             audit_events.is_empty(),
             "dry-run must not write an audit_events row"
@@ -6874,7 +6994,9 @@ mod tests {
             "dry-run must not fabricate a real approval"
         );
 
-        let pending = state.storage.list_pending_approvals( &tenant_id, 100, 0)
+        let pending = state
+            .storage
+            .list_pending_approvals(&tenant_id, 100, 0)
             .await
             .unwrap();
         assert!(
@@ -6904,7 +7026,9 @@ mod tests {
                 .fetch_one(state.storage.get_pool())
                 .await
                 .unwrap();
-        let agent_record = state.storage.get_agent_by_id( &tenant_id, &agent_id)
+        let agent_record = state
+            .storage
+            .get_agent_by_id(&tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -6928,7 +7052,9 @@ mod tests {
         assert_eq!(response.decision, "allow");
         assert!(!response.dry_run);
 
-        let decisions = state.storage.list_decisions(&tenant_id, None, None, 100, None, None)
+        let decisions = state
+            .storage
+            .list_decisions(&tenant_id, None, None, 100, None, None)
             .await
             .unwrap()
             .0;
@@ -6941,7 +7067,9 @@ mod tests {
     #[tokio::test]
     async fn authorize_auto_escalates_risk_tier_after_repeated_denials() {
         let (state, tenant_id, agent_token) = setup_state("risk_escalation_e2e").await;
-        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
@@ -6977,13 +7105,20 @@ mod tests {
             assert_eq!(response.decision, "deny");
         }
 
-        let agent_record = state.storage.get_agent_by_token( &tenant_id, &agent_token)
+        let agent_record = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(agent_record.risk_tier, "medium");
 
-        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
         assert!(events
             .iter()
             .any(|e| e.event_type == "agent_risk_escalated"));

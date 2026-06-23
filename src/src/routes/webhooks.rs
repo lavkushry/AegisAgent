@@ -565,7 +565,9 @@ mod tests {
         // Give the background drain task a moment to persist the alert.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let alerts = state.storage.list_soc_alerts(&tenant_id, None, None, 10, None)
+        let alerts = state
+            .storage
+            .list_soc_alerts(&tenant_id, None, None, 10, None)
             .await
             .unwrap()
             .0;

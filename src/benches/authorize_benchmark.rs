@@ -68,19 +68,25 @@ fn authorize_allow_benchmark(c: &mut Criterion) {
             .await
             .expect("setup_bench_state");
 
-        benchutil::seed_extra_agents(&state.pool, &tenant_id, SEED_AGENTS)
+        benchutil::seed_extra_agents(state.storage.get_pool(), &tenant_id, SEED_AGENTS)
             .await
             .expect("seed_extra_agents");
 
         // Find the primary bench agent's id for decision seeding.
-        let agent = gateway::db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
-            .await
-            .expect("get_agent_by_token")
-            .expect("bench agent exists");
+        let agent =
+            gateway::db::get_agent_by_token(state.storage.get_pool(), &tenant_id, &agent_token)
+                .await
+                .expect("get_agent_by_token")
+                .expect("bench agent exists");
 
-        benchutil::seed_decisions(&state.pool, &tenant_id, &agent.id, SEED_DECISIONS)
-            .await
-            .expect("seed_decisions");
+        benchutil::seed_decisions(
+            state.storage.get_pool(),
+            &tenant_id,
+            &agent.id,
+            SEED_DECISIONS,
+        )
+        .await
+        .expect("seed_decisions");
 
         (state, tenant_id, agent_token)
     });

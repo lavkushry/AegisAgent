@@ -1621,61 +1621,6 @@ pub(crate) mod test_helpers {
             .unwrap();
     }
 
-    pub(crate) async fn upsert_mcp_server_helper(
-        storage: &dyn StorageBackend,
-        tenant_id: &str,
-        server_key: &str,
-        name: &str,
-        owner_team: Option<&str>,
-        transport: &str,
-        source: Option<&str>,
-        trust_level: &str,
-        endpoint: &str,
-    ) -> String {
-        if let Some(existing) = storage
-            .get_mcp_server_by_key(tenant_id, server_key)
-            .await
-            .unwrap()
-        {
-            storage
-                .update_mcp_server(
-                    tenant_id,
-                    server_key,
-                    Some(name),
-                    Some(owner_team),
-                    Some(transport),
-                    Some(source),
-                    Some(trust_level),
-                    Some(endpoint),
-                    Some("active"),
-                    None,
-                )
-                .await
-                .unwrap();
-            existing.id
-        } else {
-            let id = uuid::Uuid::new_v4().to_string();
-            let record = McpServerRecord {
-                id: id.clone(),
-                tenant_id: tenant_id.to_string(),
-                server_key: server_key.to_string(),
-                name: name.to_string(),
-                owner_team: owner_team.map(|s| s.to_string()),
-                transport: transport.to_string(),
-                source: source.map(|s| s.to_string()),
-                trust_level: trust_level.to_string(),
-                endpoint: endpoint.to_string(),
-                status: "active".to_string(),
-                inspection_enabled: false,
-                version: Some("1.0.0".to_string()),
-                created_at: chrono::Utc::now(),
-                last_discovery_at: None,
-                manifest_hash: "".to_string(),
-            };
-            storage.register_mcp_server(&record).await.unwrap();
-            id
-        }
-    }
     use axum::body::{to_bytes, Bytes};
     use axum::http::HeaderMap;
     use chrono::{DateTime, Utc};

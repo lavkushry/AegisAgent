@@ -122,15 +122,20 @@ fn evidence_graph_for_agent_benchmark(c: &mut Criterion) {
             .await
             .expect("setup_bench_state");
 
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = db::get_agent_by_token(state.storage.get_pool(), &tenant_id, &agent_token)
             .await
             .expect("get_agent_by_token")
             .expect("bench agent exists");
 
         for i in 0..SEED_DECISIONS {
-            seed_decision_with_approval_and_receipt(&state.pool, &tenant_id, &agent.id, i)
-                .await
-                .expect("seed_decision_with_approval_and_receipt");
+            seed_decision_with_approval_and_receipt(
+                state.storage.get_pool(),
+                &tenant_id,
+                &agent.id,
+                i,
+            )
+            .await
+            .expect("seed_decision_with_approval_and_receipt");
         }
 
         (state, tenant_id, agent.id)
