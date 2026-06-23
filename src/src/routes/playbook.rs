@@ -4,15 +4,15 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::info;
 
 use crate::error::StatusError;
 use crate::models::*;
-use crate::routes::TenantId;
 use crate::routes::AppState;
+use crate::routes::TenantId;
 
 #[derive(Debug, Deserialize)]
 pub struct MockIncidentRequest {
@@ -36,7 +36,7 @@ pub async fn create_playbook(
 ) -> Result<impl IntoResponse, StatusError> {
     let body_str = String::from_utf8(body.to_vec())
         .map_err(|_| StatusError::bad_request("Invalid UTF-8 payload"))?;
-    
+
     // Parse YAML or JSON
     let playbook: aegis_soc::playbook::ResponsePlaybook = if body_str.trim().starts_with('{') {
         serde_json::from_str(&body_str)
@@ -47,24 +47,27 @@ pub async fn create_playbook(
     };
 
     // Validate
-    playbook.validate()
+    playbook
+        .validate()
         .map_err(|e| StatusError::bad_request(format!("Playbook validation failed: {e}")))?;
 
     // Store trigger fields and steps_json
-    let steps_json = serde_json::to_string(&playbook.steps)
-        .map_err(|e| StatusError::internal(e.to_string()))?;
+    let steps_json =
+        serde_json::to_string(&playbook.steps).map_err(|e| StatusError::internal(e.to_string()))?;
 
-    let record = state.storage.insert_playbook(
-        &tenant_id,
-        &playbook.name,
-        &playbook.trigger.kind,
-        &playbook.trigger.get_severities(),
-        playbook.trigger.agent_id.as_deref(),
-        playbook.trigger.environment.as_deref(),
-        &steps_json,
-    )
-    .await
-    .map_err(|e| StatusError::internal(e.to_string()))?;
+    let record = state
+        .storage
+        .insert_playbook(
+            &tenant_id,
+            &playbook.name,
+            &playbook.trigger.kind,
+            &playbook.trigger.get_severities(),
+            playbook.trigger.agent_id.as_deref(),
+            playbook.trigger.environment.as_deref(),
+            &steps_json,
+        )
+        .await
+        .map_err(|e| StatusError::internal(e.to_string()))?;
 
     Ok((StatusCode::CREATED, Json(record)))
 }
@@ -73,7 +76,9 @@ pub async fn list_playbooks(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
 ) -> Result<impl IntoResponse, StatusError> {
-    let records = state.storage.list_playbooks(&tenant_id)
+    let records = state
+        .storage
+        .list_playbooks(&tenant_id)
         .await
         .map_err(|e| StatusError::internal(e.to_string()))?;
     Ok(Json(records))
@@ -84,7 +89,9 @@ pub async fn delete_playbook(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, StatusError> {
-    let success = state.storage.delete_playbook(&tenant_id, &id)
+    let success = state
+        .storage
+        .delete_playbook(&tenant_id, &id)
         .await
         .map_err(|e| StatusError::internal(e.to_string()))?;
     if success {
@@ -100,10 +107,12 @@ pub async fn test_playbook(
     Path(id): Path<String>,
     Json(req): Json<MockIncidentRequest>,
 ) -> Result<impl IntoResponse, StatusError> {
-    let record_opt = state.storage.get_playbook_by_id(&tenant_id, &id)
+    let record_opt = state
+        .storage
+        .get_playbook_by_id(&tenant_id, &id)
         .await
         .map_err(|e| StatusError::internal(e.to_string()))?;
-    
+
     let record = match record_opt {
         Some(r) => r,
         None => return Err(StatusError::not_found("Playbook not found")),
@@ -113,7 +122,11 @@ pub async fn test_playbook(
         .map_err(|e| StatusError::internal(format!("Failed to parse playbook: {e}")))?;
 
     // Fetch the agent or build a mock one if not found
-    let agent = match state.storage.get_agent_by_id(&tenant_id, &req.agent_id).await {
+    let agent = match state
+        .storage
+        .get_agent_by_id(&tenant_id, &req.agent_id)
+        .await
+    {
         Ok(Some(a)) => a,
         _ => aegis_api::models::AgentRecord {
             id: req.agent_id.clone(),
@@ -139,11 +152,11 @@ pub async fn test_playbook(
             mtls_cn: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
-        }
+        },
     };
 
     let incident_id = uuid::Uuid::new_v4().to_string();
-    
+
     let incident_json = serde_json::json!({
         "incident_id": incident_id,
         "opened_at": chrono::Utc::now().to_rfc3339(),
@@ -154,12 +167,12 @@ pub async fn test_playbook(
         "summary": req.summary,
         "source_event_ids": ["test_event_id"],
     });
-    
+
     let mock_incident: aegis_soc::correlate::Incident = serde_json::from_value(incident_json)
         .map_err(|e| StatusError::internal(format!("Failed to build mock incident: {e}")))?;
 
     let matched = playbook.matches(&mock_incident, &agent);
-    
+
     let steps_to_execute = if matched {
         playbook.steps.clone()
     } else {
@@ -213,7 +226,9 @@ steps:
             .await
             .into_response();
         assert_eq!(response_list.status(), StatusCode::OK);
-        let body_list = to_bytes(response_list.into_body(), usize::MAX).await.unwrap();
+        let body_list = to_bytes(response_list.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let list: Value = serde_json::from_slice(&body_list).unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
 
@@ -233,7 +248,9 @@ steps:
         .await
         .into_response();
         assert_eq!(response_test.status(), StatusCode::OK);
-        let body_test = to_bytes(response_test.into_body(), usize::MAX).await.unwrap();
+        let body_test = to_bytes(response_test.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let test_res: Value = serde_json::from_slice(&body_test).unwrap();
         assert!(test_res["matched"].as_bool().unwrap());
         assert_eq!(test_res["steps_to_execute"].as_array().unwrap().len(), 1);
@@ -253,7 +270,9 @@ steps:
         )
         .await
         .into_response();
-        let body_test_mismatch = to_bytes(response_test_mismatch.into_body(), usize::MAX).await.unwrap();
+        let body_test_mismatch = to_bytes(response_test_mismatch.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let test_res_mismatch: Value = serde_json::from_slice(&body_test_mismatch).unwrap();
         assert!(!test_res_mismatch["matched"].as_bool().unwrap());
 
@@ -271,7 +290,9 @@ steps:
         let response_list_empty = list_playbooks(State(state.clone()), TenantId(tenant_id.clone()))
             .await
             .into_response();
-        let body_list_empty = to_bytes(response_list_empty.into_body(), usize::MAX).await.unwrap();
+        let body_list_empty = to_bytes(response_list_empty.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let list_empty: Value = serde_json::from_slice(&body_list_empty).unwrap();
         assert!(list_empty.as_array().unwrap().is_empty());
     }

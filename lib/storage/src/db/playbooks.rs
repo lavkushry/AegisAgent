@@ -85,11 +85,12 @@ pub async fn set_playbook_enabled(
     enabled: bool,
 ) -> Result<bool, sqlx::Error> {
     let enabled_val = if enabled { 1 } else { 0 };
-    let result = sqlx::query("UPDATE response_playbooks SET enabled = ? WHERE tenant_id = ? AND id = ?")
-        .bind(enabled_val)
-        .bind(tenant_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let result =
+        sqlx::query("UPDATE response_playbooks SET enabled = ? WHERE tenant_id = ? AND id = ?")
+            .bind(enabled_val)
+            .bind(tenant_id)
+            .bind(id)
+            .execute(pool)
+            .await?;
     Ok(result.rows_affected() > 0)
 }

@@ -117,14 +117,23 @@ pub async fn dispatch(
         for pb in &matched_playbooks {
             for step in &pb.steps {
                 if let Err(e) = crate::playbook::execute_step(pool, step, incident, &agent).await {
-                    tracing::error!("Failed to execute playbook '{}' step {:?}: {:?}", pb.name, step, e);
+                    tracing::error!(
+                        "Failed to execute playbook '{}' step {:?}: {:?}",
+                        pb.name,
+                        step,
+                        e
+                    );
                 }
             }
         }
 
         let description = format!(
             "Executed playbook(s): {}",
-            matched_playbooks.iter().map(|pb| pb.name.clone()).collect::<Vec<_>>().join(", ")
+            matched_playbooks
+                .iter()
+                .map(|pb| pb.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         return Ok(Some(ResponseAction {
@@ -356,7 +365,7 @@ mod tests {
     #[tokio::test]
     async fn playbook_matching_and_execution_works() {
         let (pool, tenant_id, agent_id) = setup("playbook").await;
-        
+
         db::playbooks::insert_playbook(
             &pool,
             &tenant_id,
@@ -373,7 +382,9 @@ mod tests {
         let incident = make_incident(&tenant_id, &agent_id, "deny_storm");
         let action = dispatch(&pool, &incident).await.unwrap().unwrap();
         assert_eq!(action.action, "playbooks_executed");
-        assert!(action.description.contains("Quarantine and Notify Playbook"));
+        assert!(action
+            .description
+            .contains("Quarantine and Notify Playbook"));
 
         let agent = db::get_agent_by_id(&pool, &tenant_id, &agent_id)
             .await

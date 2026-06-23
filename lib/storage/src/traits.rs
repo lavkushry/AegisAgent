@@ -43,6 +43,11 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         agent_id: &str,
     ) -> Result<Option<AgentRecord>, AegisError>;
+    async fn get_agent_by_id_any_status(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+    ) -> Result<Option<AgentRecord>, AegisError>;
     async fn get_agent_risk_scoreboard(
         &self,
         tenant_id: &str,
@@ -595,7 +600,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
     ) -> Result<Vec<DetectionRuleRecord>, AegisError>;
     async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
-    
+
     // Playbooks
     async fn insert_playbook(
         &self,
