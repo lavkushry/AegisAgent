@@ -1,0 +1,154 @@
+# Default values for aegis-gateway.
+
+# -- Number of gateway replicas.
+# IMPORTANT: AegisAgent's relational backend is SQLite + WAL today (PostgreSQL,
+# #1194, is the documented production target for true concurrent MVCC writes —
+# see CLAUDE.md's Architecture & Performance Roadmap). SQLite serializes writes
+# through a single WAL journal and the default `persistence` volume below is
+# ReadWriteOnce, so more than one replica means multiple pods fighting over one
+# writer lock on one volume. Do not raise this above 1 until #1194 ships, unless
+# you've swapped in an external PostgreSQL yourself.
+replicaCount: 1
+
+image:
+  repository: aegisagent-gateway
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag; defaults to .Chart.AppVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Matches the distroless:nonroot image's built-in uid/gid (src/Dockerfile).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  restPort: 8080
+  grpcPort: 6334
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# -- Horizontal Pod Autoscaler. Disabled by default — see the replicaCount
+# note above; enabling this without an external PostgreSQL backend will not
+# give you working multi-writer concurrency.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: ""
+
+# -- With replicaCount: 1, minAvailable: 1 means voluntary disruptions (node
+# drain, cluster-autoscaler scale-down) will be blocked until you either
+# scale up or temporarily disable this. That's intentional for a
+# single-writer SQLite deployment — there's no graceful way to evict the
+# only writer without downtime.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# -- Restricts ingress to the gateway pod to known sources. By default this
+# permits traffic only from pods in the same namespace plus anything carrying
+# the `aegis-client: "true"` label, on the REST/gRPC ports. Set
+# `networkPolicy.allowedNamespaceSelectors`/`allowedPodSelectors` to widen it
+# (e.g. an ingress-controller namespace), or `networkPolicy.enabled: false` to
+# turn it off entirely.
+networkPolicy:
+  enabled: true
+  allowedNamespaceSelectors: []
+  allowedPodSelectors:
+    - matchLabels:
+        aegis-client: "true"
+
+# -- Prometheus Operator ServiceMonitor for the gateway's `/metrics`
+# endpoint. Requires the prometheus-operator CRDs to be installed in-cluster;
+# leave disabled if you don't run prometheus-operator.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClassName: ""
+  accessMode: ReadWriteOnce
+  # -- If set, use an existing PVC instead of creating one.
+  existingClaim: ""
+
+# -- Cedar policy bundle mounted at /app/policies.cedar via ConfigMap. Leave
+# unset to ship the repo's default policies.cedar (anti-confused-deputy
+# trust-provenance gate); set to your own Cedar source to override it.
+cedarPolicy: ""
+
+config:
+  databaseUrl: "sqlite:///data/aegis.db"
+  logLevel: "info,gateway=debug,sqlx=info"
+  corsOrigins: ""
+  jwtRequired: false
+
+# -- Secret values for sensitive env vars. When `secret.create` is true, the
+# chart creates a Secret from these values (use --set or a values override
+# file with real secrets — never commit real values here). When false, you
+# must pre-create a Secret named `secret.existingSecret` with the same keys
+# (AEGIS_JWT_SECRET, AEGIS_POLICY_SIGNING_KEY, AEGIS_GITHUB_WEBHOOK_SECRET).
+secret:
+  create: false
+  existingSecret: ""
+  jwtSecret: ""
+  policySigningKey: ""
+  githubWebhookSecret: ""
+
+# -- Extra raw environment variables appended to the gateway container.
+extraEnv: []
+
+probes:
+  liveness:
+    path: /livez
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    path: /startupz
+    periodSeconds: 2
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
