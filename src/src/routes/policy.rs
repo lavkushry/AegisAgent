@@ -839,9 +839,7 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         let event = events
             .iter()
             .find(|e| e.event_type == "config_change")
@@ -879,7 +877,7 @@ mod tests {
         assert_eq!(json_create["version"].as_i64(), Some(1));
 
         // No versions archived yet for a brand-new policy.
-        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+        let versions = state.storage.list_policy_versions( &tenant_id, &policy_id)
             .await
             .unwrap();
         assert!(versions.is_empty());
@@ -901,7 +899,7 @@ mod tests {
         .into_response();
         assert_eq!(response_update1.status(), StatusCode::OK);
 
-        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+        let versions = state.storage.list_policy_versions( &tenant_id, &policy_id)
             .await
             .unwrap();
         assert_eq!(versions.len(), 1, "v1 must be archived after first update");
@@ -928,7 +926,7 @@ mod tests {
         .into_response();
         assert_eq!(response_update2.status(), StatusCode::OK);
 
-        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+        let versions = state.storage.list_policy_versions( &tenant_id, &policy_id)
             .await
             .unwrap();
         assert_eq!(versions.len(), 2, "v2 must also be archived");
@@ -1019,7 +1017,7 @@ mod tests {
         );
 
         // The live record in the DB must match too.
-        let live = db::get_policy_by_id(&state.pool, &tenant_id, &policy_id)
+        let live = state.storage.get_policy_by_id( &tenant_id, &policy_id)
             .await
             .unwrap()
             .unwrap();
@@ -1078,9 +1076,7 @@ mod tests {
         .into_response();
         assert_eq!(response_rollback.status(), StatusCode::OK);
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         let rollback_event = events
             .iter()
             .find(|e| e.event_type == "policy_rolled_back")
@@ -1091,7 +1087,7 @@ mod tests {
         // Rollback must also have archived the row it rolled back FROM (v2),
         // so two versions are now archived: v1 (from the update) and v2
         // (from the rollback).
-        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+        let versions = state.storage.list_policy_versions( &tenant_id, &policy_id)
             .await
             .unwrap();
         assert_eq!(versions.len(), 2);
@@ -1164,9 +1160,8 @@ mod tests {
     async fn rollback_returns_404_cross_tenant() {
         let (state, tenant_id_a, _) = setup_state("policy_rollback_cross_tenant").await;
         let tenant_id_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
-        db::register_tenant(&state.pool, &tenant_id_b, "Tenant B", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), &tenant_id_b, "Tenant B", "developer")
+            .await;
 
         let create_payload = CreatePolicyRequest {
             policy_key: "allow-all".to_string(),
@@ -1235,12 +1230,12 @@ mod tests {
                 created_by: None,
                 created_at: Utc::now(),
             };
-            db::insert_policy_version(&state.pool, &record)
+            state.storage.insert_policy_version( &record)
                 .await
                 .unwrap();
         }
 
-        let versions = db::list_policy_versions(&state.pool, &tenant_id, &policy_id)
+        let versions = state.storage.list_policy_versions( &tenant_id, &policy_id)
             .await
             .unwrap();
         assert_eq!(versions.len(), 10, "must retain at most 10 versions");
@@ -1403,7 +1398,7 @@ mod tests {
         assert_eq!(updated.name, "Updated Name");
         assert_eq!(updated.body, "permit (principal, action, resource);");
 
-        let versions = db::list_policy_versions(&state.pool, &tenant_id, &existing.id)
+        let versions = state.storage.list_policy_versions( &tenant_id, &existing.id)
             .await
             .unwrap();
         assert_eq!(versions.len(), 1, "the prior version must be archived");

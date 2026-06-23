@@ -712,7 +712,6 @@ impl HeartbeatDebouncer {
 // Shared app state containing DB pool, Cedar policy engine, and the async SOC
 // event sink (Phase 0): the authorize hot path emits decisions onto it.
 pub struct AppState {
-    pub pool: sqlx::SqlitePool,
     pub storage: Arc<dyn StorageBackend>,
     pub policy_engine: PolicyEngine,
     pub events: EventSink,
@@ -1405,7 +1404,6 @@ pub mod benchutil {
         let (events, _events_rx) = EventSink::channel(100_000, metrics.clone());
 
         let state = Arc::new(AppState {
-            pool: pool.clone(),
             storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
@@ -1602,6 +1600,82 @@ pub(crate) mod test_helpers {
     use crate::events;
     use crate::models::*;
     use crate::policy::PolicyEngine;
+    use aegis_storage::traits::StorageBackend;
+
+    pub(crate) async fn register_tenant_helper(
+        storage: &dyn StorageBackend,
+        id: &str,
+        name: &str,
+        plan: &str,
+    ) {
+        storage
+            .insert_tenant(&TenantRecord {
+                id: id.to_string(),
+                name: name.to_string(),
+                plan: plan.to_string(),
+                auto_respond_enabled: true,
+                auto_rotate_token_on_leak_enabled: true,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+    }
+
+    pub(crate) async fn upsert_mcp_server_helper(
+        storage: &dyn StorageBackend,
+        tenant_id: &str,
+        server_key: &str,
+        name: &str,
+        owner_team: Option<&str>,
+        transport: &str,
+        source: Option<&str>,
+        trust_level: &str,
+        endpoint: &str,
+    ) -> String {
+        if let Some(existing) = storage
+            .get_mcp_server_by_key(tenant_id, server_key)
+            .await
+            .unwrap()
+        {
+            storage
+                .update_mcp_server(
+                    tenant_id,
+                    server_key,
+                    Some(name),
+                    Some(owner_team),
+                    Some(transport),
+                    Some(source),
+                    Some(trust_level),
+                    Some(endpoint),
+                    Some("active"),
+                    None,
+                )
+                .await
+                .unwrap();
+            existing.id
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            let record = McpServerRecord {
+                id: id.clone(),
+                tenant_id: tenant_id.to_string(),
+                server_key: server_key.to_string(),
+                name: name.to_string(),
+                owner_team: owner_team.map(|s| s.to_string()),
+                transport: transport.to_string(),
+                source: source.map(|s| s.to_string()),
+                trust_level: trust_level.to_string(),
+                endpoint: endpoint.to_string(),
+                status: "active".to_string(),
+                inspection_enabled: false,
+                version: Some("1.0.0".to_string()),
+                created_at: chrono::Utc::now(),
+                last_discovery_at: None,
+                manifest_hash: "".to_string(),
+            };
+            storage.register_mcp_server(&record).await.unwrap();
+            id
+        }
+    }
     use axum::body::{to_bytes, Bytes};
     use axum::http::HeaderMap;
     use chrono::{DateTime, Utc};
@@ -1641,14 +1715,13 @@ pub(crate) mod test_helpers {
             setup_state_with_events(test_name).await;
         tokio::spawn(events::drain(
             events_rx,
-            state_raw.pool.clone(),
+            state_raw.storage.get_pool().clone(),
             state_raw.metrics.clone(),
             None,
         ));
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
-            pool: state_raw.pool.clone(),
             storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
@@ -1690,14 +1763,13 @@ pub(crate) mod test_helpers {
             setup_state_with_events(test_name).await;
         tokio::spawn(events::drain(
             events_rx,
-            state_raw.pool.clone(),
+            state_raw.storage.get_pool().clone(),
             state_raw.metrics.clone(),
             None,
         ));
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
-            pool: state_raw.pool.clone(),
             storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
@@ -1741,14 +1813,13 @@ pub(crate) mod test_helpers {
             setup_state_with_events(test_name).await;
         tokio::spawn(events::drain(
             events_rx,
-            state_raw.pool.clone(),
+            state_raw.storage.get_pool().clone(),
             state_raw.metrics.clone(),
             None,
         ));
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
-            pool: state_raw.pool.clone(),
             storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
@@ -1794,14 +1865,13 @@ pub(crate) mod test_helpers {
             setup_state_with_events(test_name).await;
         tokio::spawn(events::drain(
             events_rx,
-            state_raw.pool.clone(),
+            state_raw.storage.get_pool().clone(),
             state_raw.metrics.clone(),
             None,
         ));
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
-            pool: state_raw.pool.clone(),
             storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),
@@ -1838,7 +1908,7 @@ pub(crate) mod test_helpers {
         // Phase 5: pass pool.clone() so the drain can persist alerts + incidents.
         tokio::spawn(events::drain(
             events_rx,
-            state.pool.clone(),
+            state.storage.get_pool().clone(),
             state.metrics.clone(),
             None,
         ));
@@ -1904,7 +1974,6 @@ pub(crate) mod test_helpers {
         let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
         let (events, events_rx) = EventSink::channel(capacity, metrics.clone());
         let state = Arc::new(AppState {
-            pool: pool.clone(),
             storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
@@ -1948,7 +2017,7 @@ pub(crate) mod test_helpers {
             setup_state_with_events(test_name).await;
         tokio::spawn(events::drain(
             events_rx,
-            state_raw.pool.clone(),
+            state_raw.storage.get_pool().clone(),
             state_raw.metrics.clone(),
             None,
         ));
@@ -1956,7 +2025,7 @@ pub(crate) mod test_helpers {
         let (audit_batch, audit_batch_rx) =
             crate::audit_batch::AuditBatchSink::channel(crate::audit_batch::DEFAULT_CAPACITY);
         tokio::spawn(crate::audit_batch::run_audit_batch_writer(
-            state_raw.pool.clone(),
+            state_raw.storage.get_pool().clone(),
             audit_batch_rx,
             batch_size,
             flush_interval,
@@ -1965,7 +2034,6 @@ pub(crate) mod test_helpers {
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
-            pool: state_raw.pool.clone(),
             storage: state_raw.storage.clone(),
             policy_engine,
             events: state_raw.events.clone(),

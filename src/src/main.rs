@@ -1539,7 +1539,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
-        pool: pool.clone(),
         storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
         policy_engine,
         events,
@@ -2188,7 +2187,6 @@ mod tests {
         let (events, _events_rx) =
             events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
-            pool: pool.clone(),
             storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
@@ -2482,7 +2480,6 @@ mod tests {
         let (events, _events_rx) =
             events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
-            pool: pool.clone(),
             storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,
@@ -2813,7 +2810,6 @@ mod tests {
         assert!(doomed_abort_handle.is_finished());
 
         let state = Arc::new(routes::AppState {
-            pool: pool.clone(),
             storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
             policy_engine,
             events,

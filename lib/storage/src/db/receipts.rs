@@ -359,8 +359,8 @@ pub async fn insert_action_receipt(
     record: &ActionReceiptRecord,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -382,6 +382,7 @@ pub async fn insert_action_receipt(
     .bind(&record.canon_version)
     .bind(&record.signature)
     .bind(&record.signer_public_key)
+    .bind(&record.signer_key_id)
     .execute(pool)
     .await?;
     Ok(())

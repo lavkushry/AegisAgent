@@ -1395,9 +1395,8 @@ mod tests {
         assert_eq!(validate_jwt(&wrong_token), None);
 
         let (state, _, _) = setup_state("jwt_tenant_extraction").await;
-        db::register_tenant(&state.pool, "tenant_from_claim", "JWT Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), "tenant_from_claim", "JWT Tenant", "developer")
+            .await;
 
         // Test extractor
         let request = axum::http::Request::builder()
@@ -1512,7 +1511,7 @@ mod tests {
         let _guard = get_env_lock().lock().await;
         let (state, _, _) = setup_state("hardened_tenant").await;
         db::register_tenant(
-            &state.pool,
+            state.storage.get_pool(),
             "tenant_custom_id",
             "Custom Tenant",
             "developer",
@@ -1596,7 +1595,7 @@ mod tests {
         let request = mcp_authorize_request("filesystem", "read_file");
         let headers = agent_headers(&agent_token, &tenant_id);
 
-        state.pool.close().await;
+        state.storage.get_pool().close().await;
 
         let response = authorize_action(
             State(state),
@@ -1796,7 +1795,7 @@ mod tests {
         // Drain events in background
         tokio::spawn(events::drain(
             events_rx,
-            state_raw.pool.clone(),
+            state_raw.storage.get_pool().clone(),
             state_raw.metrics.clone(),
             None,
         ));
@@ -1804,7 +1803,7 @@ mod tests {
         // Create a custom app state with rate limit capacity = 1
         let policy_engine1 = PolicyEngine::init("policies.cedar").await.unwrap();
         let state = Arc::new(AppState {
-            pool: state_raw.pool.clone(),
+            
             storage: state_raw.storage.clone(),
             policy_engine: policy_engine1,
             events: state_raw.events.clone(),
@@ -1861,7 +1860,7 @@ mod tests {
         // Now test quota
         let policy_engine2 = PolicyEngine::init("policies.cedar").await.unwrap();
         let state_quota = Arc::new(AppState {
-            pool: state_raw.pool.clone(),
+            
             storage: state_raw.storage.clone(),
             policy_engine: policy_engine2,
             events: state_raw.events.clone(),
@@ -2252,7 +2251,7 @@ mod tests {
         assert_eq!(ok_count, 1, "exactly one of 50 consumes must succeed");
         assert_eq!(conflict_count, 49, "the other 49 consumes must be rejected");
 
-        crate::jobs::verify_tenant_receipt_chain(&state.pool, &tenant_id)
+        crate::jobs::verify_tenant_receipt_chain(state.storage.get_pool(), &tenant_id)
             .await
             .expect("receipt chain must remain a single unbroken chain (no fork)");
     }
@@ -2286,7 +2285,7 @@ mod tests {
             .bind(Utc::now() - Duration::minutes(5))
             .bind(tenant_id.as_str())
             .bind(approval_id.to_string())
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -2359,7 +2358,7 @@ mod tests {
             "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
         )
         .bind(tenant_id.as_str())
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .expect("a receipt should have been emitted for the decision");
 
@@ -2404,11 +2403,11 @@ mod tests {
             "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
         )
         .bind(tenant_id.as_str())
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .unwrap();
 
-        let receipt = db::get_action_receipt_by_id(&state.pool, &tenant_id, &receipt_id)
+        let receipt = state.storage.get_action_receipt_by_id( &tenant_id, &receipt_id)
             .await
             .unwrap()
             .expect("emitted receipt should be retrievable");
@@ -2439,7 +2438,7 @@ mod tests {
             .bind(Utc::now() - Duration::minutes(5))
             .bind(tenant_id.as_str())
             .bind(approval_id.to_string())
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -2537,7 +2536,7 @@ mod tests {
     async fn authorize_allows_approved_mcp_tool_with_encoded_or_cased_identifier() {
         let (state, tenant_id, agent_token) = setup_state("approved_mcp_tool_encoded").await;
         let server_id = db::upsert_mcp_server(
-            &state.pool,
+            state.storage.get_pool(),
             &tenant_id,
             "github-mcp",
             "GitHub MCP",
@@ -2558,11 +2557,11 @@ mod tests {
             mutates_state: false,
             approval_required: false,
         };
-        db::upsert_mcp_tool(&state.pool, &tenant_id, &server_id, &tool)
+        db::upsert_mcp_tool(state.storage.get_pool(), &tenant_id, &server_id, &tool)
             .await
             .unwrap();
         db::set_mcp_tool_status(
-            &state.pool,
+            state.storage.get_pool(),
             &tenant_id,
             "github-mcp",
             "create_issue",
@@ -2630,12 +2629,13 @@ mod tests {
             .drain(std::time::Duration::from_secs(5))
             .await;
 
-        let decisions = db::list_decisions(&state.pool, &tenant_id, 10, 0, None, None)
+        let decisions = state.storage.list_decisions(&tenant_id, None, None, 10, None, None)
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         let decision = decisions.first().expect("expected a decision row");
 
-        let scores = db::list_agent_risk_scores(&state.pool, &tenant_id, &decision.agent_id)
+        let scores = db::list_agent_risk_scores(state.storage.get_pool(), &tenant_id, &decision.agent_id)
             .await
             .unwrap();
         assert_eq!(scores.len(), 1);
@@ -2663,9 +2663,10 @@ mod tests {
 
         // The decision row itself is written synchronously — visible with no
         // drain.
-        let decisions = db::list_decisions(&state.pool, &tenant_id, 10, 0, None, None)
+        let decisions = state.storage.list_decisions(&tenant_id, None, None, 10, None, None)
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         let decision = decisions
             .first()
             .expect("decision row must be visible without draining")
@@ -2679,7 +2680,7 @@ mod tests {
             .await;
         assert!(drained, "deferred writes should drain within the timeout");
 
-        let scores = db::list_agent_risk_scores(&state.pool, &tenant_id, &decision.agent_id)
+        let scores = db::list_agent_risk_scores(state.storage.get_pool(), &tenant_id, &decision.agent_id)
             .await
             .unwrap();
         assert_eq!(
@@ -2693,7 +2694,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(&decision.id)
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .unwrap();
         assert_eq!(
@@ -2781,7 +2782,7 @@ mod tests {
         assert_eq!(response.root_trust_level, "semi_trusted_customer");
 
         let record =
-            db::get_decision_by_id(&state.pool, &tenant_id, &response.decision_id.to_string())
+            state.storage.get_decision_by_id( &tenant_id, &response.decision_id.to_string())
                 .await
                 .unwrap()
                 .expect("decision row must exist");
@@ -2962,9 +2963,8 @@ mod tests {
     async fn get_audit_events_respects_tenant_scope_and_limit() {
         let (state, tenant_id, _agent_token) = setup_state("audit_events_scope_limit").await;
         let other_tenant = "audit_events_scope_limit_other";
-        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other Tenant", "developer")
+            .await;
 
         fn audit_event(tenant_id: &str, n: usize) -> AuditEventRecord {
             AuditEventRecord {
@@ -2991,11 +2991,11 @@ mod tests {
         // 105 events for the caller's tenant (exceeds the 100-row cap) and one
         // for another tenant (must never be returned).
         for n in 0..105 {
-            db::insert_audit_event(&state.pool, &audit_event(&tenant_id, n))
+            state.storage.insert_audit_event( &audit_event(&tenant_id, n))
                 .await
                 .unwrap();
         }
-        db::insert_audit_event(&state.pool, &audit_event(other_tenant, 0))
+        state.storage.insert_audit_event( &audit_event(other_tenant, 0))
             .await
             .unwrap();
 
@@ -3068,23 +3068,23 @@ mod tests {
 
         // Insert out of chronological order: "third" (oldest) last.
         insert_with_created_at(
-            &state.pool,
+            state.storage.get_pool(),
             &timeline_event(&tenant_id, run_id, "first", 10),
         )
         .await;
         insert_with_created_at(
-            &state.pool,
+            state.storage.get_pool(),
             &timeline_event(&tenant_id, run_id, "second", 5),
         )
         .await;
         insert_with_created_at(
-            &state.pool,
+            state.storage.get_pool(),
             &timeline_event(&tenant_id, run_id, "third", 20),
         )
         .await;
         // A different run — must not appear in this run's timeline.
         insert_with_created_at(
-            &state.pool,
+            state.storage.get_pool(),
             &timeline_event(&tenant_id, "run-timeline-other", "other-run", 1),
         )
         .await;
@@ -3157,7 +3157,7 @@ mod tests {
         // scrambled order — "first" (earliest) is inserted last.
         let base = Utc::now();
         db::insert_audit_event(
-            &state.pool,
+            state.storage.get_pool(),
             &event_at(
                 &tenant_id,
                 run_id,
@@ -3168,7 +3168,7 @@ mod tests {
         .await
         .unwrap();
         db::insert_audit_event(
-            &state.pool,
+            state.storage.get_pool(),
             &event_at(
                 &tenant_id,
                 run_id,
@@ -3179,7 +3179,7 @@ mod tests {
         .await
         .unwrap();
         db::insert_audit_event(
-            &state.pool,
+            state.storage.get_pool(),
             &event_at(
                 &tenant_id,
                 run_id,
@@ -3256,7 +3256,7 @@ mod tests {
         assert_eq!(response.decision, "require_approval");
         let approval_id = response.approval.expect("approval info").approval_id;
 
-        let stored = db::get_approval_by_id(&state.pool, &tenant_id, &approval_id.to_string())
+        let stored = state.storage.get_approval_by_id( &tenant_id, &approval_id.to_string())
             .await
             .unwrap()
             .expect("approval row should exist");
@@ -3371,12 +3371,12 @@ mod tests {
         assert_eq!(second.risk_score, first.risk_score);
 
         // Only one decision row was written for this request_id.
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
         let stored =
-            db::get_decision_by_request_id(&state.pool, &tenant_id, &agent.id, "req-allow-1")
+            state.storage.get_decision_by_request_id( &tenant_id, &agent.id, "req-allow-1")
                 .await
                 .unwrap()
                 .unwrap();
@@ -3407,7 +3407,7 @@ mod tests {
         assert_eq!(second_approval.action_hash, first_approval.action_hash);
 
         // Still exactly one pending approval for this decision.
-        let approvals = db::list_pending_approvals(&state.pool, &tenant_id, 50, 0)
+        let approvals = state.storage.list_pending_approvals( &tenant_id, 50, 0)
             .await
             .unwrap();
         assert_eq!(
@@ -3435,7 +3435,7 @@ mod tests {
         assert_eq!(response.decision, "allow");
 
         let stored =
-            db::get_decision_by_id(&state.pool, &tenant_id, &response.decision_id.to_string())
+            state.storage.get_decision_by_id( &tenant_id, &response.decision_id.to_string())
                 .await
                 .unwrap()
                 .unwrap();
@@ -3586,7 +3586,7 @@ mod tests {
         sqlx::query("UPDATE agents SET signing_key = ? WHERE tenant_id = ?")
             .bind(signing_key)
             .bind(&tenant_id)
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -3738,7 +3738,7 @@ mod tests {
     async fn authorize_requires_mcp_tool_approval() {
         let (state, tenant_id, agent_token) = setup_state("mcp_tool_approval").await;
         let server_id = db::upsert_mcp_server(
-            &state.pool,
+            state.storage.get_pool(),
             &tenant_id,
             "github-mcp",
             "GitHub MCP",
@@ -3759,7 +3759,7 @@ mod tests {
             mutates_state: false,
             approval_required: false,
         };
-        db::upsert_mcp_tool(&state.pool, &tenant_id, &server_id, &tool)
+        db::upsert_mcp_tool(state.storage.get_pool(), &tenant_id, &server_id, &tool)
             .await
             .unwrap();
 
@@ -3776,7 +3776,7 @@ mod tests {
             .contains(&"mcp_tool_status".to_string()));
 
         let updated = db::set_mcp_tool_status(
-            &state.pool,
+            state.storage.get_pool(),
             &tenant_id,
             "github-mcp",
             "create_issue",
@@ -3852,7 +3852,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .unwrap();
         assert_eq!(before, 0);
@@ -3872,7 +3872,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_all(&state.pool)
+        .fetch_all(state.storage.get_pool())
         .await
         .unwrap();
         assert_eq!(recs.len(), 1, "exactly one tamper receipt for the replay");
@@ -3889,7 +3889,7 @@ mod tests {
             "SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND event_type = 'tamper_attempt'",
         )
         .bind(tenant_id.as_str())
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .unwrap();
         assert_eq!(audit_count, 1);
@@ -3955,7 +3955,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .unwrap();
         assert_eq!(
@@ -4002,7 +4002,7 @@ mod tests {
             .bind(Utc::now() - Duration::minutes(5))
             .bind(tenant_id.as_str())
             .bind(approval_id.to_string())
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -4026,7 +4026,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_one(&state.pool)
+        .fetch_one(state.storage.get_pool())
         .await
         .unwrap();
         assert_eq!(
@@ -4281,7 +4281,7 @@ mod tests {
         sqlx::query("UPDATE agents SET allowed_environments = ? WHERE tenant_id = ?")
             .bind(&json)
             .bind(&tenant_id)
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
         (state, tenant_id, agent_token)
@@ -4360,20 +4360,20 @@ mod tests {
     #[tokio::test]
     async fn grant_and_list_tool_permissions() {
         let (state, tenant_id, _agent_token) = setup_state("perm_grant_list").await;
-        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &_agent_token)
+        let agent_id = state.storage.get_agent_by_token( &tenant_id, &_agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
 
-        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
             .await
             .unwrap();
-        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "filesystem")
+        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "filesystem")
             .await
             .unwrap();
 
-        let perms = db::get_agent_tool_permissions(&state.pool, &tenant_id, &agent_id)
+        let perms = state.storage.get_agent_tool_permissions( &tenant_id, &agent_id)
             .await
             .unwrap();
         assert_eq!(perms.len(), 2);
@@ -4386,29 +4386,29 @@ mod tests {
     #[tokio::test]
     async fn revoke_tool_permission_removes_binding() {
         let (state, tenant_id, agent_token) = setup_state("perm_revoke").await;
-        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
 
-        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
             .await
             .unwrap();
 
         let deleted =
-            db::revoke_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+            state.storage.revoke_agent_tool_permission( &tenant_id, &agent_id, "github")
                 .await
                 .unwrap();
         assert!(deleted, "first revoke must return true");
 
         let deleted2 =
-            db::revoke_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+            state.storage.revoke_agent_tool_permission( &tenant_id, &agent_id, "github")
                 .await
                 .unwrap();
         assert!(!deleted2, "duplicate revoke must return false");
 
-        let perms = db::get_agent_tool_permissions(&state.pool, &tenant_id, &agent_id)
+        let perms = state.storage.get_agent_tool_permissions( &tenant_id, &agent_id)
             .await
             .unwrap();
         assert!(perms.is_empty());
@@ -4418,13 +4418,13 @@ mod tests {
     #[tokio::test]
     async fn authorize_action_denies_tool_not_in_permission_list() {
         let (state, tenant_id, agent_token) = setup_state("perm_deny_tool").await;
-        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
         // Grant only "github"; request will use "filesystem".
-        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
             .await
             .unwrap();
 
@@ -4452,12 +4452,12 @@ mod tests {
     #[tokio::test]
     async fn authorize_action_allows_tool_in_permission_list() {
         let (state, tenant_id, agent_token) = setup_state("perm_allow_tool").await;
-        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
-        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "filesystem")
+        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "filesystem")
             .await
             .unwrap();
 
@@ -4527,11 +4527,11 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&agent_token))
-                .fetch_one(&state.pool)
+                .fetch_one(state.storage.get_pool())
                 .await
                 .unwrap();
         // get_agent_by_id only filters `status != 'deleted'`, so quarantined rows are returned.
-        let agent_record = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent_record = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -4673,7 +4673,7 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&old_token))
-                .fetch_one(&state.pool)
+                .fetch_one(state.storage.get_pool())
                 .await
                 .unwrap();
 
@@ -4715,13 +4715,13 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&token))
-                .fetch_one(&state.pool)
+                .fetch_one(state.storage.get_pool())
                 .await
                 .unwrap();
 
         sqlx::query("UPDATE tenants SET auto_rotate_token_on_leak_enabled = 0 WHERE id = ?")
             .bind(&tenant_id)
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -4752,9 +4752,7 @@ mod tests {
         .into_response();
         assert_eq!(resp_after.status(), StatusCode::OK);
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         assert!(events
             .iter()
             .any(|e| e.event_type == "agent_token_leak_detected_no_rotation"));
@@ -4951,7 +4949,7 @@ mod tests {
     async fn authorize_action_denies_frozen_and_revoked_agent() {
         let (state, tenant_id, agent_token) = setup_state("agent_frozen_revoked").await;
 
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -4965,7 +4963,7 @@ mod tests {
 
         // Freeze the agent
         assert!(
-            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "frozen")
+            state.storage.set_agent_status( &tenant_id, &agent_id, "frozen")
                 .await
                 .unwrap()
         );
@@ -4980,7 +4978,7 @@ mod tests {
 
         // Revoke the agent
         assert!(
-            db::set_agent_status(&state.pool, &tenant_id, &agent_id, "revoked")
+            state.storage.set_agent_status( &tenant_id, &agent_id, "revoked")
                 .await
                 .unwrap()
         );
@@ -5014,16 +5012,14 @@ mod tests {
 
         // The decision row is written synchronously...
         assert!(
-            db::get_decision_by_id(&state.pool, &tenant_id, &allowed.decision_id.to_string())
+            state.storage.get_decision_by_id( &tenant_id, &allowed.decision_id.to_string())
                 .await
                 .unwrap()
                 .is_some()
         );
         // ...but the matching audit_events row is sitting in the batch
         // channel, not yet flushed to the table.
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         assert!(events
             .iter()
             .all(|e| e.decision_id.as_deref() != Some(allowed.decision_id.to_string().as_str())));
@@ -5031,9 +5027,7 @@ mod tests {
         // Once the flush-interval timer fires, the batch writer flushes the
         // buffered row to the table.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         assert!(events
             .iter()
             .any(|e| e.decision_id.as_deref() == Some(allowed.decision_id.to_string().as_str())));
@@ -5046,12 +5040,12 @@ mod tests {
     async fn critical_denial_audit_row_is_written_synchronously() {
         let (state, tenant_id, agent_token) = setup_state("audit_batch_critical").await;
 
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
         assert!(
-            db::set_agent_status(&state.pool, &tenant_id, &agent.id, "frozen")
+            state.storage.set_agent_status( &tenant_id, &agent.id, "frozen")
                 .await
                 .unwrap()
         );
@@ -5060,9 +5054,7 @@ mod tests {
         let denied = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
         assert_eq!(denied.decision, "deny");
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         assert!(events
             .iter()
             .any(|e| e.decision_id.as_deref() == Some(denied.decision_id.to_string().as_str())));
@@ -5076,7 +5068,7 @@ mod tests {
     async fn force_approval_agent_downgrades_allow_to_require_approval() {
         let (state, tenant_id, agent_token) = setup_state("agent_force_approval").await;
 
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -5091,7 +5083,7 @@ mod tests {
 
         // Simulate the Response Engine setting force_approval after a
         // trust_escalation incident.
-        db::set_agent_force_approval(&state.pool, &tenant_id, &agent_id, true)
+        state.storage.set_agent_force_approval( &tenant_id, &agent_id, true)
             .await
             .unwrap();
 
@@ -5103,7 +5095,7 @@ mod tests {
             .contains(&"soc_response_force_approval".to_string()));
 
         // Clearing force_approval restores the normal allow decision.
-        db::set_agent_force_approval(&state.pool, &tenant_id, &agent_id, false)
+        state.storage.set_agent_force_approval( &tenant_id, &agent_id, false)
             .await
             .unwrap();
         let restored = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
@@ -5113,7 +5105,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_and_get_decisions_route() {
         let (state, tenant_id, agent_token) = setup_state("list_get_decisions").await;
-        let agent = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
@@ -5145,7 +5137,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&state.pool, &agent2).await.unwrap();
+        state.storage.insert_agent( &agent2).await.unwrap();
 
         let decision_id2 = Uuid::new_v4().to_string();
         let record2 = DecisionRecord {
@@ -5170,7 +5162,7 @@ mod tests {
             parent_run_id: None,
             created_at: Utc::now() - Duration::seconds(10),
         };
-        db::insert_decision(&state.pool, &record2).await.unwrap();
+        state.storage.insert_decision( &record2).await.unwrap();
 
         let decision_id1 = Uuid::new_v4().to_string();
         let record1 = DecisionRecord {
@@ -5195,7 +5187,7 @@ mod tests {
             parent_run_id: None,
             created_at: Utc::now(),
         };
-        db::insert_decision(&state.pool, &record1).await.unwrap();
+        state.storage.insert_decision( &record1).await.unwrap();
 
         // 1. List decisions without filters
         let response = list_decisions(
@@ -5303,9 +5295,8 @@ mod tests {
 
         // 4. Get decision detail cross-tenant (should return 404)
         let other_tenant = "tenant_other_decisions";
-        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other Tenant", "developer")
+            .await;
         let response_cross = get_decision(
             State(state.clone()),
             TenantId(other_tenant.to_string()),
@@ -5320,14 +5311,13 @@ mod tests {
     async fn test_list_and_get_receipts_route() {
         let (state, tenant_id, _) = setup_state("list_get_receipts").await;
 
-        let rec = db::append_action_receipt_atomic(&state.pool, &tenant_id, |prev| {
-            let mut r = unsigned_receipt_template(&tenant_id);
-            r.prev_receipt_hash = prev;
-            r.receipt_hash = compute_receipt_hash(&r);
-            r
-        })
-        .await
-        .unwrap();
+        let prev = state.storage.get_latest_action_receipt(&tenant_id).await.unwrap()
+            .map(|r| r.receipt_hash).unwrap_or_default();
+        let mut r = unsigned_receipt_template(&tenant_id);
+        r.prev_receipt_hash = prev;
+        r.receipt_hash = db::compute_receipt_hash(&r);
+        state.storage.insert_action_receipt(&r).await.unwrap();
+        let rec = r;
 
         // 1. List receipts
         let response = list_receipts(
@@ -5361,9 +5351,8 @@ mod tests {
 
         // 3. Get receipt detail cross-tenant (should return 404)
         let other_tenant = "tenant_other_receipts";
-        db::register_tenant(&state.pool, other_tenant, "Other Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other Tenant", "developer")
+            .await;
         let response_cross = get_receipt(
             State(state.clone()),
             TenantId(other_tenant.to_string()),
@@ -5557,7 +5546,7 @@ mod tests {
     async fn authorize_denies_when_tool_permission_revoked_even_with_request_id() {
         let (state, tenant_id, agent_token) =
             setup_state("perm_denied_concurrent_idempotency").await;
-        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
@@ -5565,7 +5554,7 @@ mod tests {
 
         // Any explicit binding makes the allow-list exclusive; "filesystem"
         // (the tool under test below) is deliberately left off it.
-        db::grant_agent_tool_permission(&state.pool, &tenant_id, &agent_id, "github")
+        state.storage.grant_agent_tool_permission( &tenant_id, &agent_id, "github")
             .await
             .unwrap();
 
@@ -5593,7 +5582,7 @@ mod tests {
         // concurrently-fetched (and necessarily empty) idempotency result was
         // never mistaken for a real replay.
         assert!(db::get_decision_by_request_id(
-            &state.pool,
+            state.storage.get_pool(),
             &tenant_id,
             &agent_id,
             "perm-denied-with-request-id"
@@ -5721,13 +5710,13 @@ mod tests {
     #[tokio::test]
     async fn authorize_debounces_heartbeat_until_flushed() {
         let (state, tenant_id, agent_token) = setup_state("heartbeat_debounce").await;
-        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
 
-        let agent_before = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent_before = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -5738,16 +5727,16 @@ mod tests {
 
         // The touch is buffered, not yet written.
         assert_eq!(state.heartbeat_debouncer.pending_count(), 1);
-        let agent_after_call = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent_after_call = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
         assert!(agent_after_call.last_seen_at.is_none());
 
         // Flushing (what the periodic job does) writes it through.
-        crate::jobs::flush_heartbeats(&state.pool, &state.heartbeat_debouncer).await;
+        crate::jobs::flush_heartbeats(state.storage.get_pool(), &state.heartbeat_debouncer).await;
         assert_eq!(state.heartbeat_debouncer.pending_count(), 0);
-        let agent_after_flush = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent_after_flush = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -5858,7 +5847,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let tenant_id = format!("tenant_stress_{i}");
                 db::register_tenant(
-                    &state.pool,
+                    state.storage.get_pool(),
                     &tenant_id,
                     &format!("Stress Tenant {i}"),
                     "developer",
@@ -5892,7 +5881,7 @@ mod tests {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
-                db::insert_agent(&state.pool, &agent).await.unwrap();
+                state.storage.insert_agent( &agent).await.unwrap();
 
                 // Creates a decision row, a pending approval, and an action receipt
                 // all bound to this tenant.
@@ -5999,9 +5988,8 @@ mod tests {
         let tenant_a = "iso_tenant_a".to_string();
         let tenant_b = "iso_tenant_b".to_string();
         for (tid, name) in [(&tenant_a, "Iso Tenant A"), (&tenant_b, "Iso Tenant B")] {
-            db::register_tenant(&state.pool, tid, name, "developer")
-                .await
-                .unwrap();
+            register_tenant_helper(state.storage.as_ref(), tid, name, "developer")
+                .await;
         }
 
         // Seed agents for each tenant (needed as FK for decisions / alerts /
@@ -6012,7 +6000,7 @@ mod tests {
         let tok_b = format!("tok_iso_b_{}", Uuid::new_v4().simple());
         for (tid, aid, tok) in [(&tenant_a, &agent_a, &tok_a), (&tenant_b, &agent_b, &tok_b)] {
             db::insert_agent(
-                &state.pool,
+                state.storage.get_pool(),
                 &AgentRecord {
                     id: aid.clone(),
                     tenant_id: tid.clone(),
@@ -6073,7 +6061,7 @@ mod tests {
             (&tenant_b, &agent_b, &alert_b_id),
         ] {
             db::insert_soc_alert(
-                &state.pool,
+                state.storage.get_pool(),
                 &crate::models::SocAlertRecord {
                     id: alert_id.clone(),
                     tenant_id: tid.clone(),
@@ -6096,7 +6084,7 @@ mod tests {
             (&tenant_b, &agent_b, &incident_b_id),
         ] {
             db::insert_soc_incident(
-                &state.pool,
+                state.storage.get_pool(),
                 &crate::models::SocIncidentRecord {
                     id: incident_id.clone(),
                     tenant_id: tid.clone(),
@@ -6376,10 +6364,10 @@ mod tests {
             Uuid::new_v4().simple()
         );
         let pool = db::init_db(&db_url).await.unwrap();
+        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)) as Arc<dyn aegis_storage::traits::StorageBackend>;
         let tenant_id = "tenant_routes".to_string();
-        db::register_tenant(&pool, &tenant_id, "Routes Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer")
+            .await;
 
         let agent_id = Uuid::new_v4().to_string();
         let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
@@ -6408,15 +6396,14 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&pool, &agent).await.unwrap();
+        storage.insert_agent(&agent).await.unwrap();
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
         // Capacity 1: one emit fills it completely (capacity() == 0 afterwards).
         let (events, _events_rx) = EventSink::channel(1, metrics.clone());
         let state = Arc::new(AppState {
-            pool: pool.clone(),
-            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+            storage,
             policy_engine,
             events,
             metrics,
@@ -6501,7 +6488,7 @@ mod tests {
         // and registered-action lookups (SELECTs against other tables)
         // still succeed.
         sqlx::query("DROP TABLE decisions")
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -6542,7 +6529,7 @@ mod tests {
         // and registered-action lookups (SELECTs against other tables)
         // still succeed.
         sqlx::query("DROP TABLE decisions")
-            .execute(&state.pool)
+            .execute(state.storage.get_pool())
             .await
             .unwrap();
 
@@ -6583,10 +6570,10 @@ mod tests {
         let pool = db::init_db_with_busy_timeout(&db_url, Duration::from_millis(50))
             .await
             .unwrap();
+        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)) as Arc<dyn aegis_storage::traits::StorageBackend>;
         let tenant_id = "tenant_routes".to_string();
-        db::register_tenant(&pool, &tenant_id, "Routes Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer")
+            .await;
 
         let agent_id = Uuid::new_v4().to_string();
         let agent_token = format!("agent_tok_{}", Uuid::new_v4().simple());
@@ -6615,14 +6602,13 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        db::insert_agent(&pool, &agent).await.unwrap();
+        storage.insert_agent(&agent).await.unwrap();
 
         let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
         let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
         let (events, _events_rx) = EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(AppState {
-            pool: pool.clone(),
-            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+            storage,
             policy_engine,
             events,
             metrics,
@@ -6790,7 +6776,7 @@ mod tests {
 
         let mut mutated = crate::risk::RiskWeights::DEFAULT;
         mutated.context_trust_penalty_trusted_internal_signed = 99;
-        db::upsert_risk_weights(&state.pool, &tenant_id, &mutated)
+        db::upsert_risk_weights(state.storage.get_pool(), &tenant_id, &mutated)
             .await
             .unwrap();
 
@@ -6852,16 +6838,15 @@ mod tests {
         assert_eq!(response.decision, "allow");
         assert!(response.dry_run);
 
-        let decisions = db::list_decisions(&state.pool, &tenant_id, 100, 0, None, None)
+        let decisions = state.storage.list_decisions(&tenant_id, None, None, 100, None, None)
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(
             decisions.is_empty(),
             "dry-run must not write a decisions row"
         );
-        let audit_events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let audit_events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         assert!(
             audit_events.is_empty(),
             "dry-run must not write an audit_events row"
@@ -6889,7 +6874,7 @@ mod tests {
             "dry-run must not fabricate a real approval"
         );
 
-        let pending = db::list_pending_approvals(&state.pool, &tenant_id, 100, 0)
+        let pending = state.storage.list_pending_approvals( &tenant_id, 100, 0)
             .await
             .unwrap();
         assert!(
@@ -6916,10 +6901,10 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&agent_token))
-                .fetch_one(&state.pool)
+                .fetch_one(state.storage.get_pool())
                 .await
                 .unwrap();
-        let agent_record = db::get_agent_by_id(&state.pool, &tenant_id, &agent_id)
+        let agent_record = state.storage.get_agent_by_id( &tenant_id, &agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -6943,9 +6928,10 @@ mod tests {
         assert_eq!(response.decision, "allow");
         assert!(!response.dry_run);
 
-        let decisions = db::list_decisions(&state.pool, &tenant_id, 100, 0, None, None)
+        let decisions = state.storage.list_decisions(&tenant_id, None, None, 100, None, None)
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(decisions.len(), 1);
     }
 
@@ -6955,18 +6941,18 @@ mod tests {
     #[tokio::test]
     async fn authorize_auto_escalates_risk_tier_after_repeated_denials() {
         let (state, tenant_id, agent_token) = setup_state("risk_escalation_e2e").await;
-        let agent_id = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent_id = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap()
             .id;
         // The test fixture agent defaults to risk_tier "high" (already maxed
         // out); reset to "low" so this test can observe an escalation.
-        db::update_agent_risk_tier(&state.pool, &tenant_id, &agent_id, "low")
+        db::update_agent_risk_tier(state.storage.get_pool(), &tenant_id, &agent_id, "low")
             .await
             .unwrap();
         db::upsert_risk_escalation_config(
-            &state.pool,
+            state.storage.get_pool(),
             &tenant_id,
             &RiskEscalationConfig {
                 denial_threshold: 1,
@@ -6991,15 +6977,13 @@ mod tests {
             assert_eq!(response.decision, "deny");
         }
 
-        let agent_record = db::get_agent_by_token(&state.pool, &tenant_id, &agent_token)
+        let agent_record = state.storage.get_agent_by_token( &tenant_id, &agent_token)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(agent_record.risk_tier, "medium");
 
-        let events = db::get_all_audit_events(&state.pool, &tenant_id, None)
-            .await
-            .unwrap();
+        let events = state.storage.get_audit_events(&tenant_id, None, None, None).await.unwrap().0;
         assert!(events
             .iter()
             .any(|e| e.event_type == "agent_risk_escalated"));
