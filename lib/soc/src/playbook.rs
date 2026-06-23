@@ -206,7 +206,7 @@ pub async fn execute_step(
 ) -> Result<(), AegisError> {
     match step {
         PlaybookStep::FreezeAgent { reason } => {
-            let default_reason = format!("auto-response: playbook freeze");
+            let default_reason = "auto-response: playbook freeze".to_string();
             let rendered_reason = reason
                 .as_ref()
                 .map(|r| render_template(r, incident, agent))
