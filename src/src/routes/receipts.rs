@@ -585,7 +585,6 @@ mod tests {
         const TASKS: usize = 24;
         let mut handles = Vec::with_capacity(TASKS);
         for i in 0..TASKS {
-            let pool = state.storage.get_pool().clone();
             let tenant = tenant_id.clone();
             let state = state.clone();
             handles.push(tokio::spawn(async move {

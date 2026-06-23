@@ -2001,7 +2001,6 @@ mod tests {
         use tower::ServiceExt;
 
         let (state, tenant_id, _agent_token) = setup_state("register_tool_creates").await;
-        let pool = state.storage.get_pool().clone();
         let app = register_tool_router(state.clone());
 
         let request = Request::builder()
