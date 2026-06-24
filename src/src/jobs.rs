@@ -616,6 +616,146 @@ mod tests {
             .any(|a| a.rule == "receipt_chain_integrity_failure" && a.severity == "critical"));
     }
 
+    /// #909: builds a genuinely valid `n`-entry hash chain for `tenant_id` and
+    /// inserts it in a single transaction (one commit, not `n`) so seeding a
+    /// 100k-entry chain stays fast in CI — `append_action_receipt_atomic`'s
+    /// per-call `BEGIN IMMEDIATE`/`COMMIT` overhead (~1ms/insert, measured)
+    /// would otherwise dominate runtime at this scale. The chain math
+    /// (`prev_receipt_hash`/`receipt_hash` linkage via the real
+    /// `compute_receipt_hash`) is identical to what the atomic appender
+    /// produces, so this is still genuine chain data — only the seeding
+    /// transaction count differs from production's one-per-append pattern.
+    async fn seed_receipt_chain(
+        pool: &SqlitePool,
+        tenant_id: &str,
+        n: usize,
+    ) -> Vec<ActionReceiptRecord> {
+        let mut tx = pool.begin().await.unwrap();
+        let mut prev = String::new();
+        let mut records = Vec::with_capacity(n);
+        for i in 0..n {
+            let rec = make_receipt(tenant_id, prev, &format!("bulk_op_{i}"));
+            sqlx::query(
+                "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&rec.id)
+            .bind(&rec.tenant_id)
+            .bind(&rec.decision_id)
+            .bind(&rec.ts)
+            .bind(&rec.agent_id)
+            .bind(&rec.user_id)
+            .bind(&rec.run_id)
+            .bind(&rec.trace_id)
+            .bind(&rec.tool)
+            .bind(&rec.action)
+            .bind(&rec.resource)
+            .bind(&rec.source_trust)
+            .bind(&rec.decision)
+            .bind(&rec.approver)
+            .bind(&rec.action_hash)
+            .bind(&rec.prev_receipt_hash)
+            .bind(&rec.receipt_hash)
+            .bind(&rec.canon_version)
+            .bind(&rec.signature)
+            .bind(&rec.signer_public_key)
+            .bind(&rec.signer_key_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            prev = rec.receipt_hash.clone();
+            records.push(rec);
+        }
+        tx.commit().await.unwrap();
+        records
+    }
+
+    /// #909: a tenant's receipt chain must still verify correctly once it has
+    /// grown to production scale (100k entries) — no O(n^2) blowup, no
+    /// silent truncation from the unpaginated chain-order query, no drift
+    /// between insertion order and verified chain order.
+    ///
+    /// `#[ignore]`d by default: even with single-transaction seeding
+    /// (removing per-row commit overhead), computing `aegis-jcs-1` canonical
+    /// JSON + SHA-256 over 100k receipt bodies twice (once seeding, once
+    /// verifying) takes ~60-75s in an unoptimized debug build — measured via
+    /// this exact test. That's too slow to pay on every `cargo test
+    /// --workspace` run; exercise on demand with `cargo test --workspace --
+    /// --ignored receipt_chain_verification_scales_to_100k_entries`.
+    #[tokio::test]
+    #[ignore]
+    async fn receipt_chain_verification_scales_to_100k_entries() {
+        const N: usize = 100_000;
+        let pool = setup_pool("jobs_100k_chain").await;
+        db::register_tenant(&pool, "tenant_100k", "100k Tenant", "developer")
+            .await
+            .unwrap();
+
+        let seeded = seed_receipt_chain(&pool, "tenant_100k", N).await;
+        assert_eq!(seeded.len(), N);
+
+        let chain = db::list_action_receipts_chain_order(&pool, "tenant_100k")
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), N);
+        assert_eq!(chain[0].prev_receipt_hash, "", "genesis must have no prev");
+        for i in 1..N {
+            assert_eq!(
+                chain[i].prev_receipt_hash,
+                chain[i - 1].receipt_hash,
+                "chain link broken at index {i}"
+            );
+        }
+
+        assert!(
+            verify_tenant_receipt_chain(&pool, "tenant_100k")
+                .await
+                .is_ok(),
+            "a valid 100k-entry chain must pass full integrity verification"
+        );
+    }
+
+    /// #909: a single tampered receipt buried deep inside a 100k-entry chain
+    /// (not just at the head or tail) must still be caught — guards against
+    /// an implementation that only checks chain boundaries or short-circuits
+    /// before walking the full chain.
+    ///
+    /// `#[ignore]`d by default — see the sibling
+    /// `receipt_chain_verification_scales_to_100k_entries`'s doc comment for
+    /// the runtime rationale. Run with `cargo test --workspace --
+    /// --ignored receipt_chain_verification_detects_tamper_deep_in_100k_chain`.
+    #[tokio::test]
+    #[ignore]
+    async fn receipt_chain_verification_detects_tamper_deep_in_100k_chain() {
+        const N: usize = 100_000;
+        const TAMPER_INDEX: usize = 50_000;
+        let pool = setup_pool("jobs_100k_tamper").await;
+        db::register_tenant(
+            &pool,
+            "tenant_100k_tamper",
+            "100k Tamper Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
+
+        let seeded = seed_receipt_chain(&pool, "tenant_100k_tamper", N).await;
+        let victim = &seeded[TAMPER_INDEX];
+
+        sqlx::query("UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE id = ?")
+            .bind(&victim.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = verify_tenant_receipt_chain(&pool, "tenant_100k_tamper").await;
+        let err = result.expect_err("a tampered receipt anywhere in the chain must be detected");
+        assert!(
+            err.contains(&victim.id),
+            "error should identify the tampered receipt: {err}"
+        );
+    }
+
     /// REL-003 (#1149): the sole instance running `run_leader_election_loop`
     /// must acquire leadership (transition `is_leader` to `true`) within a
     /// couple of ticks.
