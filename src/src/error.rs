@@ -5,6 +5,7 @@
 //! which handler produced it — has the same shape and a typed `reason` an
 //! SDK or dashboard can branch on instead of pattern-matching free-text.
 
+use aegis_common::errors::AegisError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -160,7 +161,39 @@ impl StatusError {
 impl IntoResponse for StatusError {
     fn into_response(self) -> Response {
         let code = self.reason.status_code();
-        (code, Json(self)).into_response()
+        if self.reason == ErrorReason::ServiceUnavailable {
+            (code, [("Retry-After", "5")], Json(self)).into_response()
+        } else {
+            (code, Json(self)).into_response()
+        }
+    }
+}
+
+impl From<sqlx::Error> for StatusError {
+    fn from(err: sqlx::Error) -> Self {
+        match err {
+            sqlx::Error::PoolTimedOut => {
+                StatusError::service_unavailable("Database connection pool exhausted")
+            }
+            sqlx::Error::PoolClosed => StatusError::internal("Database error"),
+            _ => StatusError::internal("Database error"),
+        }
+    }
+}
+
+impl From<AegisError> for StatusError {
+    fn from(err: AegisError) -> Self {
+        match err {
+            AegisError::Database(sqlx_err) => StatusError::from(sqlx_err),
+            AegisError::NotFound(msg) => StatusError::not_found(msg),
+            AegisError::Unauthorized(msg) => StatusError::unauthorized(msg),
+            AegisError::BadRequest(msg) => StatusError::bad_request(msg),
+            AegisError::Conflict(msg) => StatusError::conflict(msg),
+            AegisError::Internal(msg) => StatusError::internal(msg),
+            AegisError::Serialization(e) => {
+                StatusError::bad_request(format!("Serialization error: {e}"))
+            }
+        }
     }
 }
 

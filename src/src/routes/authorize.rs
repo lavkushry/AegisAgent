@@ -176,7 +176,7 @@ pub async fn authorize_action(
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
-                return StatusError::internal("Database error").into_response();
+                return StatusError::from(e).into_response();
             }
         }
     } else {
@@ -201,7 +201,7 @@ pub async fn authorize_action(
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
-                return StatusError::internal("Database error").into_response();
+                return StatusError::from(e).into_response();
             }
         }
     };
@@ -318,7 +318,7 @@ pub async fn authorize_action(
         Ok(true) => {}
         Err(e) => {
             error!("DB error checking tool permissions: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return StatusError::from(e).into_response();
         }
     }
 
@@ -389,7 +389,7 @@ pub async fn authorize_action(
             Ok(None) => {}
             Err(e) => {
                 error!("Idempotency lookup failed: {:?}", e);
-                return StatusError::internal("Database error").into_response();
+                return StatusError::from(e).into_response();
             }
         }
 
@@ -452,7 +452,7 @@ pub async fn authorize_action(
             Ok(score) => score,
             Err(e) => {
                 error!("Failed to write agent-frozen denial: {:?}", e);
-                return StatusError::internal("Database error").into_response();
+                return StatusError::from(e).into_response();
             }
         };
 
@@ -521,7 +521,7 @@ pub async fn authorize_action(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write admission-webhook denial: {:?}", e);
-                        return StatusError::internal("Database error").into_response();
+                        return StatusError::from(e).into_response();
                     }
                 };
 
@@ -626,7 +626,7 @@ pub async fn authorize_action(
             Ok(None) => None,
             Err(e) => {
                 error!("Failed to look up registered action: {:?}", e);
-                return StatusError::internal("Database error").into_response();
+                return StatusError::from(e).into_response();
             }
         },
     };
@@ -651,7 +651,7 @@ pub async fn authorize_action(
                 Ok(None) => None,
                 Err(e) => {
                     error!("Failed to look up MCP server status: {:?}", e);
-                    return StatusError::internal("Database error").into_response();
+                    return StatusError::from(e).into_response();
                 }
             },
         };
@@ -691,7 +691,7 @@ pub async fn authorize_action(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write quarantined-server denial: {:?}", e);
-                        return StatusError::internal("Database error").into_response();
+                        return StatusError::from(e).into_response();
                     }
                 };
 
@@ -732,7 +732,7 @@ pub async fn authorize_action(
                 Ok(None) => None,
                 Err(e) => {
                     error!("Failed to look up MCP tool: {:?}", e);
-                    return StatusError::internal("Database error").into_response();
+                    return StatusError::from(e).into_response();
                 }
             },
         };
@@ -775,7 +775,7 @@ pub async fn authorize_action(
                         Ok(score) => score,
                         Err(e) => {
                             error!("Failed to write MCP denial decision: {:?}", e);
-                            return StatusError::internal("Database error").into_response();
+                            return StatusError::from(e).into_response();
                         }
                     };
 
@@ -832,7 +832,7 @@ pub async fn authorize_action(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write unknown MCP denial decision: {:?}", e);
-                        return StatusError::internal("Database error").into_response();
+                        return StatusError::from(e).into_response();
                     }
                 };
 
@@ -863,11 +863,7 @@ pub async fn authorize_action(
             Ok(p) => p,
             Err(e) => {
                 error!("Failed to fetch policies for reloading: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "Database error"})),
-                )
-                    .into_response();
+                return StatusError::from(e).into_response();
             }
         };
         if let Err(e) = state
@@ -1635,6 +1631,51 @@ mod tests {
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(json["message"], "Database error");
+    }
+
+    #[tokio::test]
+    async fn authorize_action_returns_503_under_pool_exhaustion() {
+        let _guard = get_env_lock().lock().await;
+        std::env::set_var("AEGIS_DB_MAX_CONNECTIONS", "1");
+        std::env::set_var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS", "1");
+
+        let (state, tenant_id, agent_token) = setup_state("authorize_pool_exhausted").await;
+
+        // Exhaust the pool by acquiring the single connection.
+        // We must hold it in scope so it isn't released.
+        let pool = state.storage.get_pool();
+        let _conn = pool.acquire().await.unwrap();
+
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let headers = agent_headers(&agent_token, &tenant_id);
+
+        let response = authorize_action(
+            State(state),
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
+
+        // Verify Retry-After header
+        let retry_after = response
+            .headers()
+            .get("Retry-After")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["reason"], "ServiceUnavailable");
+        assert_eq!(json["message"], "Database connection pool exhausted");
+        assert_eq!(retry_after, "5");
+
+        // Clean up environment variables
+        std::env::remove_var("AEGIS_DB_MAX_CONNECTIONS");
+        std::env::remove_var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS");
     }
 
     /// #1143 (API-004, AC #3): a `reject` admission-webhook decision denies
