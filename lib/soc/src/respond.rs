@@ -5,8 +5,10 @@
 //! `correlator.observe()` — strictly out-of-band (design law 3): never
 //! touches the `/v1/authorize` hot path.
 //!
-//! Per-tenant kill switch: `tenants.auto_respond_enabled` (default `true`,
+//! Per-tenant kill switch: `tenants.auto_respond_enabled` (default `false`,
 //! #1184). When disabled, `dispatch` is a no-op and returns `Ok(None)`.
+//! Additionally, auto-response requires `soc_autonomy_level` to be `L3` or
+//! `L4` (#1572). Both gates must be satisfied.
 //!
 //! Verdict → action mapping (from the issue acceptance criteria):
 //! - `deny_storm`         → freeze the agent (fail-closed containment).
@@ -89,6 +91,14 @@ pub async fn dispatch(
     incident: &Incident,
 ) -> Result<Option<ResponseAction>, sqlx::Error> {
     if !db::is_auto_respond_enabled(pool, &incident.tenant_id).await? {
+        return Ok(None);
+    }
+
+    // #1572: the autonomy level is the *authoritative* gate for auto-response.
+    // L0-L2 suppress auto-response regardless of the `auto_respond_enabled`
+    // boolean (which acts as an explicit kill-switch, not an enable switch).
+    let autonomy = db::get_soc_autonomy_level(pool, &incident.tenant_id).await;
+    if autonomy != "L3" && autonomy != "L4" {
         return Ok(None);
     }
 
@@ -207,6 +217,13 @@ mod tests {
         db::register_tenant(&pool, &tenant_id, "Respond Tenant", "developer")
             .await
             .unwrap();
+
+        aegis_storage::execute_query!(
+            pool,
+            "UPDATE tenants SET auto_respond_enabled = 1, soc_autonomy_level = 'L3' WHERE id = ?",
+            &tenant_id
+        )
+        .unwrap();
 
         let agent = aegis_api::models::AgentRecord {
             id: uuid::Uuid::new_v4().to_string(),
@@ -395,6 +412,28 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(agent.force_approval);
+        assert_eq!(agent.status, "active");
+    }
+
+    #[tokio::test]
+    async fn default_autonomy_l1_does_not_auto_respond() {
+        let (pool, tenant_id, agent_id) = setup("default_autonomy").await;
+        // Reset to default/L1 autonomy level:
+        aegis_storage::execute_query!(
+            pool,
+            "UPDATE tenants SET auto_respond_enabled = 1, soc_autonomy_level = NULL WHERE id = ?",
+            &tenant_id
+        )
+        .unwrap();
+
+        let incident = make_incident(&tenant_id, &agent_id, "deny_storm");
+        let action = dispatch(&pool, &incident).await.unwrap();
+        assert!(action.is_none());
+
+        let agent = db::get_agent_by_id(&pool, &tenant_id, &agent_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(agent.status, "active");
     }
 }

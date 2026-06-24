@@ -496,6 +496,7 @@ mod tests {
     use crate::models::ActionReceiptRecord;
     use crate::routes::{compute_receipt_hash, CANON_VERSION};
     use chrono::Utc;
+    use sqlx::SqlitePool;
     use uuid::Uuid;
 
     async fn setup_pool(test_name: &str) -> DbPool {
@@ -689,7 +690,7 @@ mod tests {
             .await
             .unwrap();
 
-        let seeded = seed_receipt_chain(&pool, "tenant_100k", N).await;
+        let seeded = seed_receipt_chain(pool.sqlite_pool(), "tenant_100k", N).await;
         assert_eq!(seeded.len(), N);
 
         let chain = db::list_action_receipts_chain_order(&pool, "tenant_100k")
@@ -737,14 +738,15 @@ mod tests {
         .await
         .unwrap();
 
-        let seeded = seed_receipt_chain(&pool, "tenant_100k_tamper", N).await;
+        let seeded = seed_receipt_chain(pool.sqlite_pool(), "tenant_100k_tamper", N).await;
         let victim = &seeded[TAMPER_INDEX];
 
-        sqlx::query("UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE id = ?")
-            .bind(&victim.id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            &pool,
+            "UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE id = ?",
+            &victim.id
+        )
+        .unwrap();
 
         let result = verify_tenant_receipt_chain(&pool, "tenant_100k_tamper").await;
         let err = result.expect_err("a tampered receipt anywhere in the chain must be detected");

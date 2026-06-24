@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     name TEXT NOT NULL,
     plan TEXT NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    auto_respond_enabled INTEGER NOT NULL DEFAULT 1,
+    auto_respond_enabled INTEGER NOT NULL DEFAULT 0,
     soc_autonomy_level TEXT
 );
 

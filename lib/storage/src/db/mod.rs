@@ -1348,9 +1348,9 @@ async fn ensure_agents_lifecycle_columns(pool: &SqlitePool) -> Result<(), sqlx::
 }
 
 /// Additive migration (#1184): per-tenant kill switch for the SOC Response
-/// Engine's auto-dispatch (Phase 4 completion). Defaults to enabled (`1`) so
-/// the containment behaviour described in `respond.rs` is on by default;
-/// tenants can opt out via `PATCH`-style tenant config.
+/// Engine's auto-dispatch (Phase 4 completion). Defaults to disabled (`0`) so
+/// that it is safe by default, requiring both autonomy level L3/L4 and
+/// auto-respond to be enabled.
 async fn ensure_tenants_auto_respond_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
         sqlx::query_as("PRAGMA table_info(tenants)")
@@ -1364,7 +1364,7 @@ async fn ensure_tenants_auto_respond_column(pool: &SqlitePool) -> Result<(), sql
         return Ok(());
     }
 
-    sqlx::query("ALTER TABLE tenants ADD COLUMN auto_respond_enabled INTEGER NOT NULL DEFAULT 1")
+    sqlx::query("ALTER TABLE tenants ADD COLUMN auto_respond_enabled INTEGER NOT NULL DEFAULT 0")
         .execute(pool)
         .await?;
     Ok(())
