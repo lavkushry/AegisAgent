@@ -821,13 +821,136 @@ pub async fn soc_summary(
         tenant_id
     )?;
 
+    let (agents_total,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM agents WHERE tenant_id = ?",
+        tenant_id
+    )?;
+
+    let now = chrono::Utc::now();
+    let (approvals_pending,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM approvals WHERE tenant_id = ? AND status = 'created' AND (expires_at IS NULL OR expires_at > ?)",
+        tenant_id,
+        now
+    )?;
+
+    let (decisions_today,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND created_at >= datetime('now', '-24 hours')",
+        tenant_id
+    )?;
+
+    let (denies_today,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'deny' AND created_at >= datetime('now', '-24 hours')",
+        tenant_id
+    )?;
+
+    let deny_rate_today = if decisions_today > 0 {
+        (denies_today as f64 / decisions_today as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let (incidents_critical_high,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ? AND status = 'open' AND severity IN ('critical', 'high')",
+        tenant_id
+    )?;
+
+    let (incidents_medium,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ? AND status = 'open' AND severity = 'medium'",
+        tenant_id
+    )?;
+
+    let (alerts_high_24h,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_alerts WHERE tenant_id = ? AND severity = 'high' AND created_at >= datetime('now', '-24 hours')",
+        tenant_id
+    )?;
+
+    let risk_posture = if incidents_critical_high > 0 {
+        "critical".to_string()
+    } else if incidents_medium > 0 || alerts_high_24h > 0 {
+        "degraded".to_string()
+    } else {
+        "healthy".to_string()
+    };
+
+    let rows: Vec<(String, i64)> = if pool.is_postgres() {
+        #[cfg(feature = "postgres")]
+        {
+            crate::fetch_all_as!(
+                (String, i64),
+                pool,
+                "SELECT to_char(created_at, 'YYYY-MM-DD\"T\"HH24') AS hour_bucket, COUNT(*) AS count \
+                 FROM decisions \
+                 WHERE tenant_id = ? AND created_at >= NOW() - INTERVAL '24 hours' \
+                 GROUP BY hour_bucket \
+                 ORDER BY hour_bucket ASC",
+                tenant_id
+            )?
+        }
+        #[cfg(not(feature = "postgres"))]
+        {
+            vec![]
+        }
+    } else {
+        crate::fetch_all_as!(
+            (String, i64),
+            pool,
+            "SELECT strftime('%Y-%m-%dT%H', created_at) AS hour_bucket, COUNT(*) AS count \
+             FROM decisions \
+             WHERE tenant_id = ? AND created_at >= datetime('now', '-24 hours') \
+             GROUP BY hour_bucket \
+             ORDER BY hour_bucket ASC",
+            tenant_id
+        )?
+    };
+
+    let hourly_decisions_24h = map_hourly_rows_to_24h(rows);
+
     Ok(aegis_api::models::SocSummary {
         alerts_total,
         alerts_high,
         incidents_total,
         incidents_open,
         incidents_closed,
+        agents_total,
+        approvals_pending,
+        decisions_today,
+        denies_today,
+        deny_rate_today,
+        risk_posture,
+        hourly_decisions_24h,
     })
+}
+
+fn map_hourly_rows_to_24h(rows: Vec<(String, i64)>) -> Vec<i64> {
+    let mut map = std::collections::HashMap::new();
+    for (bucket, count) in rows {
+        // Handle potential formatting variance by normalizing space to T if needed
+        let normalized = bucket.replace(' ', "T");
+        map.insert(normalized, count);
+    }
+
+    let now = chrono::Utc::now();
+    let mut result = Vec::with_capacity(24);
+    for i in (0..24).rev() {
+        let hour = now - chrono::Duration::hours(i);
+        let bucket = hour.format("%Y-%m-%dT%H").to_string();
+        result.push(*map.get(&bucket).unwrap_or(&0));
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1213,6 +1336,125 @@ mod tests {
         assert_eq!(b_summary.incidents_total, 1);
         assert_eq!(b_summary.incidents_open, 1);
         assert_eq!(b_summary.incidents_closed, 0);
+    }
+
+    #[tokio::test]
+    async fn soc_summary_extended_metrics_are_correct() {
+        let pool = setup_pool("soc_summary_extended").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        // 1. Insert 2 agents
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status) \
+             VALUES ('ag1', 'tenant_a', 'key1', 'tok1', 'Agent 1', 'prod', 'high', 'active')",
+        )
+        .unwrap();
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status) \
+             VALUES ('ag2', 'tenant_a', 'key2', 'tok2', 'Agent 2', 'prod', 'low', 'active')",
+        )
+        .unwrap();
+
+        // 2. Insert decisions (3 allowed, 1 denied in last 24h, 1 old decision)
+        let now = chrono::Utc::now();
+        let old_time = now - chrono::Duration::hours(30);
+        let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+        let old_time_str = old_time.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO decisions (id, tenant_id, agent_id, skill, action, input_json, decision, risk_score, created_at) \
+             VALUES ('dec1', 'tenant_a', 'ag1', 'skill1', 'act1', '{}', 'allow', 10, ?)",
+            &now_str
+        )
+        .unwrap();
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO decisions (id, tenant_id, agent_id, skill, action, input_json, decision, risk_score, created_at) \
+             VALUES ('dec2', 'tenant_a', 'ag1', 'skill1', 'act1', '{}', 'allow', 10, ?)",
+            &now_str
+        )
+        .unwrap();
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO decisions (id, tenant_id, agent_id, skill, action, input_json, decision, risk_score, created_at) \
+             VALUES ('dec3', 'tenant_a', 'ag1', 'skill1', 'act1', '{}', 'allow', 10, ?)",
+            &now_str
+        )
+        .unwrap();
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO decisions (id, tenant_id, agent_id, skill, action, input_json, decision, risk_score, created_at) \
+             VALUES ('dec4', 'tenant_a', 'ag1', 'skill1', 'act1', '{}', 'deny', 90, ?)",
+            &now_str
+        )
+        .unwrap();
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO decisions (id, tenant_id, agent_id, skill, action, input_json, decision, risk_score, created_at) \
+             VALUES ('dec5', 'tenant_a', 'ag1', 'skill1', 'act1', '{}', 'deny', 90, ?)",
+            &old_time_str
+        )
+        .unwrap();
+
+        // 3. Insert approvals (1 pending, 1 expired/decided)
+        let future_expiry = chrono::Utc::now() + chrono::Duration::hours(1);
+        let past_expiry = chrono::Utc::now() - chrono::Duration::hours(1);
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, original_skill_call, expires_at) \
+             VALUES ('app1', 'tenant_a', 'dec1', 'created', 'group1', 'skill1', ?)",
+            future_expiry
+        )
+        .unwrap();
+
+        crate::execute_query!(
+            &pool,
+            "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, original_skill_call, expires_at) \
+             VALUES ('app2', 'tenant_a', 'dec2', 'created', 'group1', 'skill1', ?)",
+            past_expiry
+        )
+        .unwrap();
+
+        // 4. Incidents & alerts for risk posture evaluation
+        // Let's keep it healthy first
+        let summary_healthy = soc_summary(&pool, "tenant_a").await.unwrap();
+        assert_eq!(summary_healthy.agents_total, 2);
+        assert_eq!(summary_healthy.approvals_pending, 1);
+        assert_eq!(summary_healthy.decisions_today, 4);
+        assert_eq!(summary_healthy.denies_today, 1);
+        assert_eq!(summary_healthy.deny_rate_today, 25.0);
+        assert_eq!(summary_healthy.risk_posture, "healthy");
+        assert_eq!(summary_healthy.hourly_decisions_24h.iter().sum::<i64>(), 4);
+
+        // Add a high alert to make it degraded
+        insert_soc_alert(&pool, &make_alert_with("sal1", "tenant_a", "high", "ag1"))
+            .await
+            .unwrap();
+
+        let summary_degraded = soc_summary(&pool, "tenant_a").await.unwrap();
+        assert_eq!(summary_degraded.risk_posture, "degraded");
+
+        // Add a critical open incident to make it critical
+        insert_soc_incident(
+            &pool,
+            &make_incident_with("sinc1", "tenant_a", "critical", "ag1"),
+        )
+        .await
+        .unwrap();
+
+        let summary_critical = soc_summary(&pool, "tenant_a").await.unwrap();
+        assert_eq!(summary_critical.risk_posture, "critical");
     }
 
     #[tokio::test]

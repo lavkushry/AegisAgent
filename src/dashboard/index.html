@@ -92,7 +92,7 @@
           
           <label class="auto-refresh-label">
             <input type="checkbox" id="global-auto-refresh" checked>
-            <span>Auto (5s)</span>
+            <span>Auto (10s)</span>
           </label>
         </div>
       </header>
@@ -125,25 +125,28 @@
         <div class="overview-grid">
           <!-- Stat Cards -->
           <div class="stats-row">
-            <div class="stat-card">
-              <h3>Protected Actions</h3>
-              <div class="stat-value" id="stat-protected">0</div>
+            <div class="stat-card hoverable" data-target-view="agents">
+              <h3>Total Agents</h3>
+              <div class="stat-value" id="stat-agents-total">0</div>
             </div>
-            <div class="stat-card">
-              <h3>Blocked (Denies)</h3>
-              <div class="stat-value text-error" id="stat-denied">0</div>
-            </div>
-            <div class="stat-card hoverable" data-target-view="explore">
-              <h3>Untrusted Sources</h3>
-              <div class="stat-value text-warning" id="stat-untrusted-pct">0%</div>
+            <div class="stat-card hoverable" data-target-view="incidents">
+              <h3>Active Incidents</h3>
+              <div class="stat-value text-critical" id="stat-incidents">0</div>
             </div>
             <div class="stat-card hoverable" data-target-view="approvals">
               <h3>Pending Approvals</h3>
               <div class="stat-value text-warning" id="stat-approvals">0</div>
             </div>
-            <div class="stat-card hoverable" data-target-view="incidents">
-              <h3>Open Incidents</h3>
-              <div class="stat-value text-critical" id="stat-incidents">0</div>
+            <div class="stat-card hoverable" data-target-view="explore">
+              <h3>Decisions Today</h3>
+              <div class="stat-value-with-spark">
+                <div class="stat-value" id="stat-protected">0</div>
+                <svg class="sparkline" id="sparkline-decisions" width="80" height="30"></svg>
+              </div>
+            </div>
+            <div class="stat-card hoverable" data-target-view="explore">
+              <h3>Deny Rate</h3>
+              <div class="stat-value text-error" id="stat-deny-rate">0%</div>
             </div>
             <div class="stat-card hoverable" data-target-view="alerts">
               <h3>Detections / Alerts</h3>
@@ -152,6 +155,10 @@
             <div class="stat-card hoverable" data-target-view="receipts">
               <h3>Receipt Chain</h3>
               <div class="stat-value text-success" id="stat-chain-status">✓ Verified</div>
+            </div>
+            <div class="stat-card hoverable" data-target-view="risk-scoreboard">
+              <h3>Risk Posture</h3>
+              <div class="stat-value text-success" id="stat-risk-posture">Healthy</div>
             </div>
           </div>
 

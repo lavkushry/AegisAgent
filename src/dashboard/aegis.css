@@ -517,6 +517,20 @@ select:focus {
 .text-success { color: var(--color-success); }
 .text-muted { color: var(--text-muted); }
 
+.stat-value-with-spark {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  width: 100%;
+}
+
+.sparkline {
+  overflow: visible;
+  stroke: var(--color-primary);
+  stroke-width: 1.5;
+  fill: none;
+}
+
 /* ── DASHBOARD BODY & PANELS ── */
 .dashboard-body {
   display: grid;

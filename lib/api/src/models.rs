@@ -735,6 +735,13 @@ pub struct SocSummary {
     pub incidents_total: i64,
     pub incidents_open: i64,
     pub incidents_closed: i64,
+    pub agents_total: i64,
+    pub approvals_pending: i64,
+    pub decisions_today: i64,
+    pub denies_today: i64,
+    pub deny_rate_today: f64,
+    pub risk_posture: String,
+    pub hourly_decisions_24h: Vec<i64>,
 }
 
 /// Tamper-evident, hash-chained action receipt. The hashed body is every field

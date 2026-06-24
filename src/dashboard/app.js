@@ -65,6 +65,10 @@
     statAlerts: document.getElementById("stat-alerts"),
     statChainStatus: document.getElementById("stat-chain-status"),
     statUntrustedPct: document.getElementById("stat-untrusted-pct"),
+    statAgentsTotal: document.getElementById("stat-agents-total"),
+    statDenyRate: document.getElementById("stat-deny-rate"),
+    statRiskPosture: document.getElementById("stat-risk-posture"),
+    sparklineDecisions: document.getElementById("sparkline-decisions"),
 
     // Overview elements
     liveFeed: document.getElementById("live-feed-events"),
@@ -338,7 +342,7 @@
       state.refreshInterval = null;
     }
     if (enabled) {
-      state.refreshInterval = setInterval(refreshAllData, 5000);
+      state.refreshInterval = setInterval(refreshAllData, 10000);
     }
   }
 
@@ -391,37 +395,42 @@
 
   // Fetch Overview Counters & Badges
   function fetchOverviewCounters() {
-    // Stat 1: Open Incidents
-    apiFetch("/v1/incidents?limit=50&offset=0").then(function (data) {
-      var count = Array.isArray(data) ? data.length : (data.incidents ? data.incidents.length : 0);
-      refs.menuIncidentsCount.textContent = count;
-      refs.menuIncidentsCount.style.display = count > 0 ? "inline-block" : "none";
-      refs.statIncidents.textContent = count;
-      if (refs.tileIncidents) refs.tileIncidents.textContent = count;
+    // Stat 1, 2, 3, 5, 6, 8: Get metrics from /v1/soc/summary
+    apiFetch("/v1/soc/summary").then(function (data) {
+      // Menu badges
+      refs.menuIncidentsCount.textContent = data.incidents_open;
+      refs.menuIncidentsCount.style.display = data.incidents_open > 0 ? "inline-block" : "none";
+      refs.menuAlertsCount.textContent = data.alerts_total;
+      refs.menuAlertsCount.style.display = data.alerts_total > 0 ? "inline-block" : "none";
+      refs.menuApprovalsCount.textContent = data.approvals_pending;
+      refs.menuApprovalsCount.style.display = data.approvals_pending > 0 ? "inline-block" : "none";
+
+      // Overview stat cards
+      refs.statAgentsTotal.textContent = data.agents_total || 0;
+      refs.statIncidents.textContent = data.incidents_open || 0;
+      refs.statApprovals.textContent = data.approvals_pending || 0;
+      refs.statProtected.textContent = data.decisions_today || 0;
+      refs.statDenyRate.textContent = Math.round(data.deny_rate_today || 0) + "%";
+      refs.statAlerts.textContent = data.alerts_total || 0;
+
+      // Risk Posture
+      var posture = data.risk_posture || "healthy";
+      refs.statRiskPosture.textContent = posture.charAt(0).toUpperCase() + posture.slice(1);
+      if (posture === "critical") {
+        refs.statRiskPosture.className = "stat-value text-critical";
+      } else if (posture === "degraded") {
+        refs.statRiskPosture.className = "stat-value text-warning";
+      } else {
+        refs.statRiskPosture.className = "stat-value text-success";
+      }
+
+      // Sparklines & Charts
+      renderSparkline(data.hourly_decisions_24h || []);
+      renderDecisionChart(data.hourly_decisions_24h || []);
     }).catch(console.error);
 
-    // Stat 2: Firing Alerts
-    apiFetch("/v1/alerts?limit=50&offset=0").then(function (data) {
-      var count = Array.isArray(data) ? data.length : (data.alerts ? data.alerts.length : 0);
-      refs.menuAlertsCount.textContent = count;
-      refs.menuAlertsCount.style.display = count > 0 ? "inline-block" : "none";
-      refs.statAlerts.textContent = count;
-      if (refs.tileAlerts) refs.tileAlerts.textContent = count;
-    }).catch(console.error);
-
-    // Stat 3: Approvals Queue — GET /v1/approvals already server-side filters
-    // to non-expired, undecided ("created") rows, so every row returned here
-    // is pending by construction.
-    apiFetch("/v1/approvals").then(function (data) {
-      refs.menuApprovalsCount.textContent = data.length;
-      refs.menuApprovalsCount.style.display = data.length > 0 ? "inline-block" : "none";
-      refs.statApprovals.textContent = data.length;
-    }).catch(console.error);
-
-    // Stat 4: Tenant statistics (Protected and Denies count)
+    // Stat 4 & 7: Get overall stats and trust distribution from /v1/stats
     apiFetch("/v1/stats").then(function (data) {
-      refs.statProtected.textContent = data.total_decisions || 0;
-      refs.statDenied.textContent = data.decisions_deny || 0;
       renderTrustLevelDistribution(data.trust_level_breakdown || [], data.total_decisions || 0);
       refs.globalStatusDot.className = "status-dot green";
       refs.globalStatusText.textContent = "Connected";
@@ -440,7 +449,6 @@
     apiFetch("/v1/decisions?limit=25&offset=0").then(function(data) {
       var rows = Array.isArray(data) ? data : (data.decisions ? data.decisions : []);
       renderLiveFeed(rows);
-      renderDecisionChart(rows);
     }).catch(console.error);
 
     // Fetch top incident
@@ -485,36 +493,34 @@
   }
 
   // Render SVG Chart using decisions
-  function renderDecisionChart(decisions) {
-    // Generate simulated/aggregated points over time
-    var countsByMinute = {};
-    decisions.forEach(function (d) {
-      var time = new Date(d.created_at);
-      var min = time.getHours() + ":" + String(time.getMinutes()).padStart(2, '0');
-      countsByMinute[min] = (countsByMinute[min] || 0) + 1;
-    });
-
-    var keys = Object.keys(countsByMinute).sort();
-    if (keys.length < 5) {
-      // Add fake/seed timeline points if there are too few live decisions
-      keys = ["10:00", "11:00", "12:00", "13:00", "14:00", "15:00"];
-      countsByMinute = { "10:00": 10, "11:00": 34, "12:00": 55, "13:00": 12, "14:00": 89, "15:00": 102 };
+  function renderDecisionChart(hourlySeries) {
+    var series = Array.isArray(hourlySeries) ? hourlySeries : [];
+    if (series.length === 0) {
+      series = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    }
+    
+    // Generate labels for the last 24h
+    var labelsList = [];
+    var now = new Date();
+    for (var i = 0; i < series.length; i++) {
+      var h = new Date(now.getTime() - (23 - i) * 60 * 60 * 1000);
+      var label = h.getHours() + ":00";
+      labelsList.push(label);
     }
 
-    var values = keys.map(function(k) { return countsByMinute[k]; });
-    var maxVal = Math.max.apply(null, values) || 10;
+    var maxVal = Math.max.apply(null, series) || 10;
     
     // Draw SVG Chart
     var width = 600;
     var height = 180;
     var padding = 20;
-    var step = (width - padding * 2) / (keys.length - 1);
+    var step = (width - padding * 2) / (series.length - 1);
     
     var points = [];
-    for (var i = 0; i < keys.length; i++) {
+    for (var i = 0; i < series.length; i++) {
       var x = padding + i * step;
-      var y = height - padding - ((values[i] / maxVal) * (height - padding * 2));
-      points.push({ x: x, y: y, label: keys[i], val: values[i] });
+      var y = height - padding - ((series[i] / maxVal) * (height - padding * 2));
+      points.push({ x: x, y: y, label: labelsList[i], val: series[i], showLabel: i % 4 === 0 || i === series.length - 1 });
     }
 
     var linePath = "M " + points[0].x + " " + points[0].y;
@@ -536,11 +542,17 @@
     // Draw grid labels
     var labels = "";
     points.forEach(function(pt) {
-      labels += `
-        <circle cx="${pt.x}" cy="${pt.y}" r="3" fill="#6366f1" />
-        <text x="${pt.x}" y="${height - 2}" font-size="9" fill="#64748b" text-anchor="middle">${pt.label}</text>
-        <text x="${pt.x}" y="${pt.y - 6}" font-size="9" font-weight="bold" fill="#fff" text-anchor="middle">${pt.val}</text>
-      `;
+      labels += `<circle cx="${pt.x}" cy="${pt.y}" r="2" fill="#6366f1" />`;
+      if (pt.showLabel) {
+        labels += `
+          <text x="${pt.x}" y="${height - 2}" font-size="8" fill="#64748b" text-anchor="middle">${pt.label}</text>
+        `;
+        if (pt.val > 0) {
+          labels += `
+            <text x="${pt.x}" y="${pt.y - 6}" font-size="8" font-weight="bold" fill="#fff" text-anchor="middle">${pt.val}</text>
+          `;
+        }
+      }
     });
 
     refs.svgDecisionChart.innerHTML = `
@@ -552,9 +564,32 @@
       </defs>
       ${grid}
       <path d="${areaPath}" fill="url(#area-grad)" />
-      <path d="${linePath}" fill="none" stroke="#6366f1" stroke-width="2.5" />
+      <path d="${linePath}" fill="none" stroke="#6366f1" stroke-width="2" />
       ${labels}
     `;
+  }
+
+  // Draw small vector sparkline inside Overview cards
+  function renderSparkline(series) {
+    if (!refs.sparklineDecisions) return;
+    if (series.length === 0) {
+      refs.sparklineDecisions.innerHTML = "";
+      return;
+    }
+    var width = 80;
+    var height = 30;
+    var maxVal = Math.max.apply(null, series) || 10;
+    
+    var points = [];
+    var step = width / (series.length - 1);
+    for (var i = 0; i < series.length; i++) {
+      var x = i * step;
+      var y = height - ((series[i] / maxVal) * (height - 4)) - 2;
+      points.push(x + "," + y);
+    }
+    
+    var pathData = "M " + points.join(" L ");
+    refs.sparklineDecisions.innerHTML = `<path d="${pathData}" />`;
   }
 
   // #1294: renders the per-trust-level decision breakdown as a bar list and
