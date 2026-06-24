@@ -27,6 +27,7 @@ async-trait = "0.1.89"
 [features]
 default = []
 local-embeddings = ["dep:fastembed"]
+postgres = ["aegis-storage/postgres", "sqlx/postgres"]
 
 [dev-dependencies]
 axum = { workspace = true }

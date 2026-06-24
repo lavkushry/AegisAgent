@@ -26,7 +26,7 @@ use uuid::Uuid;
 const SEED_DECISIONS: usize = 50;
 
 async fn seed_decision_with_approval_and_receipt(
-    pool: &sqlx::SqlitePool,
+    pool: &db::DbPool,
     tenant_id: &str,
     agent_id: &str,
     i: usize,

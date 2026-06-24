@@ -28,7 +28,7 @@
 
 use crate::notify::hmac_sha256;
 use aegis_api::models::WebhookSubscriptionRecord;
-use sqlx::SqlitePool;
+use aegis_storage::db::DbPool;
 use tracing::warn;
 
 /// A redacted, serializable envelope for one delivered event — identifiers
@@ -117,7 +117,7 @@ fn render_body(
 /// Look up this tenant's subscriptions matching `payload.event_type`, filter
 /// by severity, and spawn one fire-and-forget delivery task per match. Never
 /// blocks the caller (the SOC drain loop) and never panics — Law 3.
-pub async fn dispatch(pool: &SqlitePool, client: &reqwest::Client, payload: &WebhookExportPayload) {
+pub async fn dispatch(pool: &DbPool, client: &reqwest::Client, payload: &WebhookExportPayload) {
     let subscriptions = match aegis_storage::db::list_matching_webhook_subscriptions(
         pool,
         &payload.tenant_id,
@@ -150,7 +150,7 @@ pub async fn dispatch(pool: &SqlitePool, client: &reqwest::Client, payload: &Web
 /// subscription's server-generated `delivery_secret`) on `X-Aegis-Signature`.
 /// Records the final outcome via `db::record_webhook_delivery_result`.
 async fn deliver_with_retry(
-    pool: &SqlitePool,
+    pool: &DbPool,
     client: &reqwest::Client,
     subscription: &WebhookSubscriptionRecord,
     payload: &WebhookExportPayload,
@@ -289,10 +289,7 @@ mod tests {
         url: &str,
         min_severity: &str,
         format: &str,
-    ) -> (
-        sqlx::SqlitePool,
-        aegis_api::models::WebhookSubscriptionRecord,
-    ) {
+    ) -> (DbPool, aegis_api::models::WebhookSubscriptionRecord) {
         let pool = aegis_storage::db::init_db("sqlite::memory:").await.unwrap();
         aegis_storage::db::register_tenant(&pool, "tenant_1", "Tenant One", "developer")
             .await

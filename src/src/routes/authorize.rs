@@ -1841,11 +1841,11 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
+            canonical_hash_cache: CanonicalHashCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
-            canonical_hash_cache: CanonicalHashCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -1900,11 +1900,11 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
+            canonical_hash_cache: CanonicalHashCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
-            canonical_hash_cache: CanonicalHashCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -2315,7 +2315,7 @@ mod tests {
             .bind(Utc::now() - Duration::minutes(5))
             .bind(tenant_id.as_str())
             .bind(approval_id.to_string())
-            .execute(state.storage.get_pool())
+            .execute(state.storage.get_pool().sqlite_pool())
             .await
             .unwrap();
 
@@ -2388,7 +2388,7 @@ mod tests {
             "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
         )
         .bind(tenant_id.as_str())
-        .fetch_one(state.storage.get_pool())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
         .await
         .expect("a receipt should have been emitted for the decision");
 
@@ -2433,7 +2433,7 @@ mod tests {
             "SELECT id FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
         )
         .bind(tenant_id.as_str())
-        .fetch_one(state.storage.get_pool())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
         .await
         .unwrap();
 
@@ -2470,7 +2470,7 @@ mod tests {
             .bind(Utc::now() - Duration::minutes(5))
             .bind(tenant_id.as_str())
             .bind(approval_id.to_string())
-            .execute(state.storage.get_pool())
+            .execute(state.storage.get_pool().sqlite_pool())
             .await
             .unwrap();
 
@@ -2732,7 +2732,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(&decision.id)
-        .fetch_one(state.storage.get_pool())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
         .await
         .unwrap();
         assert_eq!(
@@ -3104,14 +3104,15 @@ mod tests {
         // insert_audit_event relies on the column's DEFAULT CURRENT_TIMESTAMP and
         // does not bind `created_at`, so set the desired timestamps directly
         // after each insert to exercise ORDER BY created_at ASC deterministically.
-        async fn insert_with_created_at(pool: &sqlx::SqlitePool, event: &AuditEventRecord) {
+        async fn insert_with_created_at(pool: &db::DbPool, event: &AuditEventRecord) {
             db::insert_audit_event(pool, event).await.unwrap();
-            sqlx::query("UPDATE audit_events SET created_at = ? WHERE id = ?")
-                .bind(event.created_at)
-                .bind(&event.id)
-                .execute(pool)
-                .await
-                .unwrap();
+            aegis_storage::execute_query!(
+                pool,
+                "UPDATE audit_events SET created_at = ? WHERE id = ?",
+                event.created_at,
+                &event.id
+            )
+            .unwrap();
         }
 
         // Insert out of chronological order: "third" (oldest) last.
@@ -3642,7 +3643,7 @@ mod tests {
         sqlx::query("UPDATE agents SET signing_key = ? WHERE tenant_id = ?")
             .bind(signing_key)
             .bind(&tenant_id)
-            .execute(state.storage.get_pool())
+            .execute(state.storage.get_pool().sqlite_pool())
             .await
             .unwrap();
 
@@ -3913,7 +3914,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_one(state.storage.get_pool())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
         .await
         .unwrap();
         assert_eq!(before, 0);
@@ -3933,7 +3934,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_all(state.storage.get_pool())
+        .fetch_all(state.storage.get_pool().sqlite_pool())
         .await
         .unwrap();
         assert_eq!(recs.len(), 1, "exactly one tamper receipt for the replay");
@@ -3950,7 +3951,7 @@ mod tests {
             "SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND event_type = 'tamper_attempt'",
         )
         .bind(tenant_id.as_str())
-        .fetch_one(state.storage.get_pool())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
         .await
         .unwrap();
         assert_eq!(audit_count, 1);
@@ -4016,7 +4017,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_one(state.storage.get_pool())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
         .await
         .unwrap();
         assert_eq!(
@@ -4063,7 +4064,7 @@ mod tests {
             .bind(Utc::now() - Duration::minutes(5))
             .bind(tenant_id.as_str())
             .bind(approval_id.to_string())
-            .execute(state.storage.get_pool())
+            .execute(state.storage.get_pool().sqlite_pool())
             .await
             .unwrap();
 
@@ -4087,7 +4088,7 @@ mod tests {
         )
         .bind(tenant_id.as_str())
         .bind(TAMPER_DECISION)
-        .fetch_one(state.storage.get_pool())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
         .await
         .unwrap();
         assert_eq!(
@@ -4342,7 +4343,7 @@ mod tests {
         sqlx::query("UPDATE agents SET allowed_environments = ? WHERE tenant_id = ?")
             .bind(&json)
             .bind(&tenant_id)
-            .execute(state.storage.get_pool())
+            .execute(state.storage.get_pool().sqlite_pool())
             .await
             .unwrap();
         (state, tenant_id, agent_token)
@@ -4612,7 +4613,7 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&agent_token))
-                .fetch_one(state.storage.get_pool())
+                .fetch_one(state.storage.get_pool().sqlite_pool())
                 .await
                 .unwrap();
         // get_agent_by_id only filters `status != 'deleted'`, so quarantined rows are returned.
@@ -4760,7 +4761,7 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&old_token))
-                .fetch_one(state.storage.get_pool())
+                .fetch_one(state.storage.get_pool().sqlite_pool())
                 .await
                 .unwrap();
 
@@ -4802,13 +4803,13 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&token))
-                .fetch_one(state.storage.get_pool())
+                .fetch_one(state.storage.get_pool().sqlite_pool())
                 .await
                 .unwrap();
 
         sqlx::query("UPDATE tenants SET auto_rotate_token_on_leak_enabled = 0 WHERE id = ?")
             .bind(&tenant_id)
-            .execute(state.storage.get_pool())
+            .execute(state.storage.get_pool().sqlite_pool())
             .await
             .unwrap();
 
@@ -6670,7 +6671,7 @@ mod tests {
             Uuid::new_v4().simple()
         );
         let pool = db::init_db(&db_url).await.unwrap();
-        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool))
+        let storage = Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool))
             as Arc<dyn aegis_storage::traits::StorageBackend>;
         let tenant_id = "tenant_routes".to_string();
         register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer").await;
@@ -6721,11 +6722,11 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
+            canonical_hash_cache: CanonicalHashCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
-            canonical_hash_cache: CanonicalHashCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -6797,7 +6798,7 @@ mod tests {
         // and registered-action lookups (SELECTs against other tables)
         // still succeed.
         sqlx::query("DROP TABLE decisions")
-            .execute(state.storage.get_pool())
+            .execute(state.storage.get_pool().sqlite_pool())
             .await
             .unwrap();
 
@@ -6837,10 +6838,7 @@ mod tests {
         // drop the `decisions` table so `insert_decision` fails while agent
         // and registered-action lookups (SELECTs against other tables)
         // still succeed.
-        sqlx::query("DROP TABLE decisions")
-            .execute(state.storage.get_pool())
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(state.storage.get_pool(), "DROP TABLE decisions").unwrap();
 
         let response = call_authorize(
             state.clone(),
@@ -6879,7 +6877,7 @@ mod tests {
         let pool = db::init_db_with_busy_timeout(&db_url, Duration::from_millis(50))
             .await
             .unwrap();
-        let storage = Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool))
+        let storage = Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool))
             as Arc<dyn aegis_storage::traits::StorageBackend>;
         let tenant_id = "tenant_routes".to_string();
         register_tenant_helper(storage.as_ref(), &tenant_id, "Routes Tenant", "developer").await;
@@ -6929,11 +6927,11 @@ mod tests {
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
+            canonical_hash_cache: CanonicalHashCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
-            canonical_hash_cache: CanonicalHashCache::new(1024),
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -7218,13 +7216,14 @@ mod tests {
         assert_eq!(response.decision, "quarantine");
         assert!(response.dry_run);
 
-        let agent_id: String =
-            sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
-                .bind(&tenant_id)
-                .bind(db::hash_token(&agent_token))
-                .fetch_one(state.storage.get_pool())
-                .await
-                .unwrap();
+        let agent_id: String = aegis_storage::fetch_one_scalar!(
+            String,
+            state.storage.get_pool(),
+            "SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?",
+            &tenant_id,
+            db::hash_token(&agent_token)
+        )
+        .unwrap();
         let agent_record = state
             .storage
             .get_agent_by_id(&tenant_id, &agent_id)

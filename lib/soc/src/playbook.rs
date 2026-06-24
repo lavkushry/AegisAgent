@@ -619,7 +619,7 @@ mod tests {
         );
         let _ = std::fs::remove_file(db_url.strip_prefix("sqlite://").unwrap());
         let pool = aegis_storage::db::init_db(&db_url).await.unwrap();
-        let storage = aegis_storage::sqlite::SqliteStorage::new(pool.clone());
+        let storage = aegis_storage::sqlite::SqlDbStorage::new(pool.clone());
 
         let tenant_id = "tenant-abc";
         aegis_storage::db::register_tenant(&pool, tenant_id, "Test Tenant", "developer")

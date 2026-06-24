@@ -16,9 +16,9 @@ use crate::respond;
 use aegis_api::models::{AuditEventRecord, SocAlertRecord, SocIncidentRecord};
 use aegis_common::metrics::SecurityMetrics;
 use aegis_storage::db;
+use aegis_storage::db::DbPool;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -166,7 +166,7 @@ impl EventSink {
 async fn handle_alert(
     alert: &crate::detect::Alert,
     sink: &dyn NotifySink,
-    pool: &SqlitePool,
+    pool: &DbPool,
     webhook_export_client: &reqwest::Client,
     notify_enabled: bool,
     metrics: &SecurityMetrics,
@@ -262,7 +262,7 @@ async fn handle_alert(
 
 pub async fn drain(
     mut rx: mpsc::Receiver<AseEvent>,
-    pool: SqlitePool,
+    pool: DbPool,
     metrics: Arc<SecurityMetrics>,
     exporter: Option<Arc<crate::qdrant::QdrantExporter>>,
 ) -> usize {

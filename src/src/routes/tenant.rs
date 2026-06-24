@@ -1190,12 +1190,12 @@ mod tests {
             .await;
 
         // Reuse the decision row created above so the approval's FK is valid.
-        let decision_id: String = sqlx::query_scalar(
+        let decision_id: String = aegis_storage::fetch_one_scalar!(
+            String,
+            state.storage.get_pool(),
             "SELECT id FROM decisions WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1",
+            tenant_id
         )
-        .bind(tenant_id)
-        .fetch_one(state.storage.get_pool())
-        .await
         .unwrap();
 
         // Approval with approver identity set.
@@ -1331,18 +1331,20 @@ mod tests {
             .drain(std::time::Duration::from_secs(5))
             .await;
         let old_time = Utc::now() - Duration::days(10);
-        sqlx::query("UPDATE action_receipts SET created_at = ? WHERE tenant_id = ?")
-            .bind(old_time)
-            .bind(&tenant_id)
-            .execute(state.storage.get_pool())
-            .await
-            .unwrap();
-        sqlx::query("UPDATE audit_events SET created_at = ? WHERE tenant_id = ?")
-            .bind(old_time)
-            .bind(&tenant_id)
-            .execute(state.storage.get_pool())
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            state.storage.get_pool(),
+            "UPDATE action_receipts SET created_at = ? WHERE tenant_id = ?",
+            old_time,
+            &tenant_id
+        )
+        .unwrap();
+        aegis_storage::execute_query!(
+            state.storage.get_pool(),
+            "UPDATE audit_events SET created_at = ? WHERE tenant_id = ?",
+            old_time,
+            &tenant_id
+        )
+        .unwrap();
 
         // New receipt + audit event (inside range).
         let _ = call_authorize(

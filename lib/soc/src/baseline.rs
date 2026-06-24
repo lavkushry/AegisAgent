@@ -20,8 +20,8 @@
 use crate::detect::Alert;
 use crate::events::AseEvent;
 use aegis_storage::db;
+use aegis_storage::db::DbPool;
 use chrono::{DateTime, Duration, Utc};
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
 /// Minimum number of trailing hourly buckets required before the rate-anomaly
@@ -60,7 +60,7 @@ fn bucket_minus_window(current_bucket: &str) -> Option<String> {
 ///
 /// Database errors propagate to the caller, which logs and discards them
 /// (best-effort, out-of-band — design law 3, matching `respond::dispatch`).
-pub async fn evaluate(pool: &SqlitePool, event: &AseEvent) -> Result<Vec<Alert>, sqlx::Error> {
+pub async fn evaluate(pool: &DbPool, event: &AseEvent) -> Result<Vec<Alert>, sqlx::Error> {
     let mut alerts = Vec::new();
 
     // New tool/action signal.
@@ -168,7 +168,7 @@ mod tests {
         }
     }
 
-    async fn setup_pool(test_name: &str) -> SqlitePool {
+    async fn setup_pool(test_name: &str) -> DbPool {
         std::fs::create_dir_all("target").unwrap();
         let db_url = format!(
             "sqlite://target/baseline_{}_{}.db",

@@ -1,9 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 
+use crate::db::DbPool;
 use aegis_api::models::*;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
 use std::collections::HashMap;
 
 #[async_trait::async_trait]
@@ -672,5 +672,7 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn get_database_size_bytes(&self) -> Result<i64, AegisError>;
     async fn get_table_row_counts(&self) -> Result<Vec<TableRowCount>, AegisError>;
     async fn backup_database_to(&self, dest_path: &str) -> Result<(), AegisError>;
-    fn get_pool(&self) -> &SqlitePool;
+    fn get_pool(&self) -> &DbPool;
+    fn get_pool_metrics(&self) -> (u32, u32);
+    async fn close(&self);
 }

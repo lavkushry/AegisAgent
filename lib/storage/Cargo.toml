@@ -12,7 +12,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { workspace = true, features = ["any"] }
 tracing = { workspace = true }
 tokio = { workspace = true }
 sha2 = { workspace = true }
@@ -31,3 +31,4 @@ libsqlite3-sys = { version = "0.30", features = ["bundled-sqlcipher-vendored-ope
 default = []
 test-utils = []
 sqlcipher = ["dep:libsqlite3-sys"]
+postgres = ["sqlx/postgres"]

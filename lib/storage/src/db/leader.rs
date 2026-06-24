@@ -6,8 +6,8 @@
 //! Global (not tenant-scoped) — same precedent as `schema_meta` for
 //! cross-tenant infrastructure state, not tenant-owned data.
 
+use crate::db::DbPool;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
 
 /// `leader_lock` holds exactly one row, identified by this constant.
 const LOCK_ID: &str = "singleton";
@@ -25,46 +25,44 @@ const LOCK_ID: &str = "singleton";
 /// boot before the row exists at all; if two instances race that, only one
 /// insert lands and the other no-ops.
 pub async fn try_acquire_or_renew_leadership(
-    pool: &SqlitePool,
+    pool: &DbPool,
     instance_id: &str,
     lease_duration: chrono::Duration,
 ) -> Result<bool, sqlx::Error> {
     let now = Utc::now();
     let new_expiry = now + lease_duration;
 
-    let renewed = sqlx::query(
+    let renewed = crate::execute_query!(
+        pool,
         "UPDATE leader_lock
          SET holder_id = ?,
              lease_expires_at = ?,
              acquired_at = CASE WHEN holder_id = ? THEN acquired_at ELSE ? END
          WHERE id = ? AND (holder_id = ? OR lease_expires_at < ?)",
-    )
-    .bind(instance_id)
-    .bind(new_expiry)
-    .bind(instance_id)
-    .bind(now)
-    .bind(LOCK_ID)
-    .bind(instance_id)
-    .bind(now)
-    .execute(pool)
-    .await?;
+        instance_id,
+        new_expiry,
+        instance_id,
+        now,
+        LOCK_ID,
+        instance_id,
+        now
+    )?;
 
     if renewed.rows_affected() > 0 {
         return Ok(true);
     }
 
     // Either no row exists yet (first boot) or another instance holds a
-    // live lease. INSERT OR IGNORE only succeeds in the first case.
-    let inserted = sqlx::query(
-        "INSERT OR IGNORE INTO leader_lock (id, holder_id, lease_expires_at, acquired_at)
-         VALUES (?, ?, ?, ?)",
-    )
-    .bind(LOCK_ID)
-    .bind(instance_id)
-    .bind(new_expiry)
-    .bind(now)
-    .execute(pool)
-    .await?;
+    // live lease. ON CONFLICT DO NOTHING only succeeds in the first case.
+    let inserted = crate::execute_query!(
+        pool,
+        "INSERT INTO leader_lock (id, holder_id, lease_expires_at, acquired_at)
+         VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+        LOCK_ID,
+        instance_id,
+        new_expiry,
+        now
+    )?;
 
     Ok(inserted.rows_affected() > 0)
 }
@@ -72,14 +70,13 @@ pub async fn try_acquire_or_renew_leadership(
 /// Current leader's id and lease expiry, or `None` if no instance has ever
 /// acquired the lock. Read-only introspection — never used to decide
 /// leadership itself (see `try_acquire_or_renew_leadership`).
-pub async fn current_leader(
-    pool: &SqlitePool,
-) -> Result<Option<(String, DateTime<Utc>)>, sqlx::Error> {
-    let row: Option<(String, DateTime<Utc>)> =
-        sqlx::query_as("SELECT holder_id, lease_expires_at FROM leader_lock WHERE id = ?")
-            .bind(LOCK_ID)
-            .fetch_optional(pool)
-            .await?;
+pub async fn current_leader(pool: &DbPool) -> Result<Option<(String, DateTime<Utc>)>, sqlx::Error> {
+    let row: Option<(String, DateTime<Utc>)> = crate::fetch_optional_as!(
+        (String, DateTime<Utc>),
+        pool,
+        "SELECT holder_id, lease_expires_at FROM leader_lock WHERE id = ?",
+        LOCK_ID
+    )?;
     Ok(row)
 }
 

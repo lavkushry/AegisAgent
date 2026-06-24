@@ -1,12 +1,13 @@
 use super::{SOC_MAX_LIMIT, SOC_WATCH_BATCH_LIMIT};
+use crate::db::DbPool;
 use aegis_api::models::*;
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, Row, SqlitePool};
+use sqlx::{FromRow, Row};
 
 /// #1296: count `deny` decisions for `agent_id` since `since` (inclusive).
 /// Tenant-scoped, parameterized.
 pub async fn count_recent_denials(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     since: chrono::DateTime<chrono::Utc>,
@@ -18,31 +19,32 @@ pub async fn count_recent_denials(
     // a plain string comparison. Format explicitly to match (same scheme as
     // `format_audit_created_at`).
     let since_str = since.format("%F %T%.6f").to_string();
-    let (count,): (i64,) = sqlx::query_as(
+    let (count,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*) FROM decisions
          WHERE tenant_id = ? AND agent_id = ? AND decision = 'deny' AND created_at >= ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(since_str)
-    .fetch_one(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        since_str
+    )?;
     Ok(count)
 }
 
 /// #1296: persist an auto-escalated `risk_tier` for an agent. Tenant-scoped, parameterized.
 pub async fn update_agent_risk_tier(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     new_tier: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE agents SET risk_tier = ? WHERE id = ? AND tenant_id = ?")
-        .bind(new_tier)
-        .bind(agent_id)
-        .bind(tenant_id)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(
+        pool,
+        "UPDATE agents SET risk_tier = ? WHERE id = ? AND tenant_id = ?",
+        new_tier,
+        agent_id,
+        tenant_id
+    )?;
     Ok(())
 }
 
@@ -53,35 +55,26 @@ pub async fn update_agent_risk_tier(
 /// passed as RFC-3339 strings for a lexicographic comparison that matches
 /// chronological order.
 pub async fn list_soc_incidents_in_range(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
 ) -> Result<Vec<SocIncidentRecord>, sqlx::Error> {
     let from = from.map(|d| d.to_rfc3339());
     let to = to.map(|d| d.to_rfc3339());
-    sqlx::query_as::<_, SocIncidentRecord>(
-        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
+    crate::fetch_all_as!(SocIncidentRecord, pool, "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
          FROM soc_incidents
          WHERE tenant_id = ?
            AND (? IS NULL OR opened_at >= ?)
            AND (? IS NULL OR opened_at <= ?)
-         ORDER BY opened_at ASC",
-    )
-    .bind(tenant_id)
-    .bind(&from)
-    .bind(&from)
-    .bind(&to)
-    .bind(&to)
-    .fetch_all(pool)
-    .await
+         ORDER BY opened_at ASC", tenant_id, &from, &from, &to, &to)
 }
 
 /// TASK-0088 (#934): create or update (upsert by `(tenant_id, rule_key)`) a
 /// tenant-managed detection rule. First step toward SOC-003 (#1186).
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_detection_rule(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     rule_key: &str,
     name: &str,
@@ -91,58 +84,47 @@ pub async fn upsert_detection_rule(
     enabled: bool,
 ) -> Result<DetectionRuleRecord, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO detection_rules (id, tenant_id, rule_key, name, severity, condition, summary_template, enabled) \
+    crate::execute_query!(pool, "INSERT INTO detection_rules (id, tenant_id, rule_key, name, severity, condition, summary_template, enabled) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(tenant_id, rule_key) DO UPDATE SET \
            name=excluded.name, severity=excluded.severity, condition=excluded.condition, \
-           summary_template=excluded.summary_template, enabled=excluded.enabled",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(rule_key)
-    .bind(name)
-    .bind(severity)
-    .bind(condition)
-    .bind(summary_template)
-    .bind(enabled)
-    .execute(pool)
-    .await?;
+           summary_template=excluded.summary_template, enabled=excluded.enabled", &id, tenant_id, rule_key, name, severity, condition, summary_template, enabled)?;
 
-    sqlx::query_as::<_, DetectionRuleRecord>(
+    crate::fetch_one_as!(
+        DetectionRuleRecord,
+        pool,
         "SELECT * FROM detection_rules WHERE tenant_id = ? AND rule_key = ?",
+        tenant_id,
+        rule_key
     )
-    .bind(tenant_id)
-    .bind(rule_key)
-    .fetch_one(pool)
-    .await
 }
 
 /// TASK-0088 (#934): list detection rules for a tenant, most recent first.
 pub async fn list_detection_rules(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<DetectionRuleRecord>, sqlx::Error> {
-    sqlx::query_as::<_, DetectionRuleRecord>(
+    crate::fetch_all_as!(
+        DetectionRuleRecord,
+        pool,
         "SELECT * FROM detection_rules WHERE tenant_id = ? ORDER BY created_at DESC",
+        tenant_id
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
 }
 
 /// TASK-0088 (#934): delete a tenant's detection rule. Returns `true` if a
 /// row was deleted.
 pub async fn delete_detection_rule(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM detection_rules WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let result = crate::execute_query!(
+        pool,
+        "DELETE FROM detection_rules WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        id
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -152,32 +134,31 @@ pub async fn delete_detection_rule(
 /// return the new count. `hour_bucket` is an opaque, sortable string (e.g.
 /// `"2026-06-10T12"`) — comparisons are purely lexicographic.
 pub async fn increment_agent_hourly_count(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     hour_bucket: &str,
 ) -> Result<i64, sqlx::Error> {
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "INSERT INTO agent_hourly_action_counts (tenant_id, agent_id, hour_bucket, action_count)
          VALUES (?, ?, ?, 1)
          ON CONFLICT (tenant_id, agent_id, hour_bucket)
          DO UPDATE SET action_count = action_count + 1",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(hour_bucket)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        hour_bucket
+    )?;
 
-    let count: i64 = sqlx::query_scalar(
+    let count: i64 = crate::fetch_one_scalar!(
+        _,
+        pool,
         "SELECT action_count FROM agent_hourly_action_counts
          WHERE tenant_id = ? AND agent_id = ? AND hour_bucket = ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(hour_bucket)
-    .fetch_one(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        hour_bucket
+    )?;
 
     Ok(count)
 }
@@ -187,23 +168,23 @@ pub async fn increment_agent_hourly_count(
 /// (still-accumulating) hour. Lexicographic string comparison works because
 /// `hour_bucket` is zero-padded `YYYY-MM-DDTHH`.
 pub async fn get_recent_hourly_counts(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     since_bucket: &str,
     current_bucket: &str,
 ) -> Result<Vec<i64>, sqlx::Error> {
-    let counts: Vec<(i64,)> = sqlx::query_as(
+    let counts: Vec<(i64,)> = crate::fetch_all_as!(
+        _,
+        pool,
         "SELECT action_count FROM agent_hourly_action_counts
          WHERE tenant_id = ? AND agent_id = ?
            AND hour_bucket >= ? AND hour_bucket < ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(since_bucket)
-    .bind(current_bucket)
-    .fetch_all(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        since_bucket,
+        current_bucket
+    )?;
 
     Ok(counts.into_iter().map(|(c,)| c).collect())
 }
@@ -213,41 +194,40 @@ pub async fn get_recent_hourly_counts(
 /// agent has used this tool/action (a deterministic novelty signal), `false`
 /// if it was already known.
 pub async fn record_known_tool_action(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     tool_key: &str,
     action_key: &str,
     occurred_at: &str,
 ) -> Result<bool, sqlx::Error> {
-    let existing: Option<(i64,)> = sqlx::query_as(
+    let existing: Option<(i64,)> = crate::fetch_optional_as!(
+        _,
+        pool,
         "SELECT 1 FROM agent_known_tool_actions
          WHERE tenant_id = ? AND agent_id = ? AND tool_key = ? AND action_key = ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(tool_key)
-    .bind(action_key)
-    .fetch_optional(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        tool_key,
+        action_key
+    )?;
 
     if existing.is_some() {
         return Ok(false);
     }
 
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "INSERT INTO agent_known_tool_actions
             (tenant_id, agent_id, tool_key, action_key, first_seen_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (tenant_id, agent_id, tool_key, action_key) DO NOTHING",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(tool_key)
-    .bind(action_key)
-    .bind(occurred_at)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        tool_key,
+        action_key,
+        occurred_at
+    )?;
 
     Ok(true)
 }
@@ -257,24 +237,9 @@ pub async fn record_known_tool_action(
 /// Persist one detection alert. Tenant-scoped, parameterized. Best-effort: the
 /// drain task logs errors but never panics on insert failure (design law 3).
 /// Stores ids/summary/severity only — never raw payloads (redaction invariant).
-pub async fn insert_soc_alert(
-    pool: &SqlitePool,
-    record: &SocAlertRecord,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO soc_alerts (id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.rule)
-    .bind(&record.severity)
-    .bind(&record.agent_id)
-    .bind(&record.source_event_id)
-    .bind(&record.summary)
-    .bind(&record.created_at)
-    .execute(pool)
-    .await?;
+pub async fn insert_soc_alert(pool: &DbPool, record: &SocAlertRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(pool, "INSERT INTO soc_alerts (id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.rule, &record.severity, &record.agent_id, &record.source_event_id, &record.summary, &record.created_at)?;
     Ok(())
 }
 
@@ -283,23 +248,11 @@ pub async fn insert_soc_alert(
 /// New incidents always start with `status='open'` and `closed_at=NULL`; the
 /// lifecycle is advanced via [`close_soc_incident`].
 pub async fn insert_soc_incident(
-    pool: &SqlitePool,
+    pool: &DbPool,
     record: &SocIncidentRecord,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO soc_incidents (id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL)",
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.kind)
-    .bind(&record.severity)
-    .bind(&record.agent_id)
-    .bind(&record.summary)
-    .bind(&record.source_event_ids)
-    .bind(&record.opened_at)
-    .execute(pool)
-    .await?;
+    crate::execute_query!(pool, "INSERT INTO soc_incidents (id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL)", &record.id, &record.tenant_id, &record.kind, &record.severity, &record.agent_id, &record.summary, &record.source_event_ids, &record.opened_at)?;
     Ok(())
 }
 
@@ -328,7 +281,7 @@ const DEFAULT_INCIDENT_DEDUP_WINDOW_SECS: i64 = 3600;
 ///
 /// Tenant-scoped and parameterized throughout (CWE-284 / CWE-89).
 pub async fn upsert_soc_incident(
-    pool: &SqlitePool,
+    pool: &DbPool,
     record: &SocIncidentRecord,
 ) -> Result<IncidentUpsertResult, sqlx::Error> {
     let window_secs: i64 = std::env::var("AEGIS_SOC_INCIDENT_DEDUP_WINDOW_SECS")
@@ -338,17 +291,17 @@ pub async fn upsert_soc_incident(
         .unwrap_or(DEFAULT_INCIDENT_DEDUP_WINDOW_SECS);
     let cutoff = (Utc::now() - chrono::Duration::seconds(window_secs)).to_rfc3339();
 
-    let existing: Option<(String, String)> = sqlx::query_as(
+    let existing: Option<(String, String)> = crate::fetch_optional_as!(
+        _,
+        pool,
         "SELECT id, source_event_ids FROM soc_incidents
          WHERE tenant_id = ? AND agent_id = ? AND kind = ? AND status = 'open' AND opened_at >= ?
          ORDER BY opened_at DESC LIMIT 1",
-    )
-    .bind(&record.tenant_id)
-    .bind(&record.agent_id)
-    .bind(&record.kind)
-    .bind(&cutoff)
-    .fetch_optional(pool)
-    .await?;
+        &record.tenant_id,
+        &record.agent_id,
+        &record.kind,
+        &cutoff
+    )?;
 
     if let Some((id, existing_ids_json)) = existing {
         let mut merged_ids: Vec<String> =
@@ -362,17 +315,16 @@ pub async fn upsert_soc_incident(
         }
         let merged_json = serde_json::to_string(&merged_ids).unwrap_or_else(|_| "[]".to_string());
 
-        sqlx::query(
+        crate::execute_query!(
+            pool,
             "UPDATE soc_incidents SET source_event_ids = ?, opened_at = ?, summary = ?
              WHERE id = ? AND tenant_id = ?",
-        )
-        .bind(&merged_json)
-        .bind(&record.opened_at)
-        .bind(&record.summary)
-        .bind(&id)
-        .bind(&record.tenant_id)
-        .execute(pool)
-        .await?;
+            &merged_json,
+            &record.opened_at,
+            &record.summary,
+            &id,
+            &record.tenant_id
+        )?;
 
         return Ok(IncidentUpsertResult::Merged { id });
     }
@@ -389,7 +341,7 @@ pub async fn upsert_soc_incident(
 /// because SQLite does not support referencing a positional placeholder twice.
 /// Every query binds `tenant_id` first — cross-tenant isolation guaranteed (CWE-284).
 pub async fn list_soc_alerts(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
@@ -397,7 +349,9 @@ pub async fn list_soc_alerts(
     agent_id: Option<&str>,
 ) -> Result<Vec<SocAlertRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    sqlx::query_as::<_, SocAlertRecord>(
+    crate::fetch_all_as!(
+        SocAlertRecord,
+        pool,
         "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at
          FROM soc_alerts
          WHERE tenant_id = ?
@@ -405,16 +359,14 @@ pub async fn list_soc_alerts(
            AND (? IS NULL OR agent_id = ?)
          ORDER BY created_at DESC
          LIMIT ? OFFSET ?",
+        tenant_id,
+        severity,
+        severity,
+        agent_id,
+        agent_id,
+        limit,
+        offset
     )
-    .bind(tenant_id)
-    .bind(severity)
-    .bind(severity)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
 }
 
 /// Cursor-paginated sibling of [`list_soc_alerts`] (#1142), used only by the
@@ -422,7 +374,7 @@ pub async fn list_soc_alerts(
 /// `decisions::list_decisions_cursor`'s doc comment for why this is a
 /// separate function rather than a change to `list_soc_alerts` itself.
 pub async fn list_soc_alerts_cursor(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
@@ -431,28 +383,48 @@ pub async fn list_soc_alerts_cursor(
     cursor: Option<i64>,
 ) -> Result<(Vec<SocAlertRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    let rows = sqlx::query(
-        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
+    let query = "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
          FROM soc_alerts
          WHERE tenant_id = ?
            AND (? IS NULL OR severity = ?)
            AND (? IS NULL OR agent_id = ?)
            AND (? IS NULL OR rowid < ?)
          ORDER BY rowid DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(severity)
-    .bind(severity)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(cursor)
-    .bind(cursor)
-    .bind(limit + 1)
-    .bind(if cursor.is_some() { 0 } else { offset })
-    .fetch_all(pool)
-    .await?;
-    super::paginate_rows(rows, limit)
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
 }
 
 /// Batch-fetch alerts whose `source_event_id` is one of `event_ids`
@@ -462,7 +434,7 @@ pub async fn list_soc_alerts_cursor(
 /// `AseEvent.event_id`, so a direct `IN (...)` match is exact, not heuristic.
 /// Empty `event_ids` short-circuits to an empty result without querying.
 pub async fn list_soc_alerts_by_source_event_ids(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     event_ids: &[String],
 ) -> Result<Vec<SocAlertRecord>, sqlx::Error> {
@@ -475,11 +447,24 @@ pub async fn list_soc_alerts_by_source_event_ids(
          FROM soc_alerts
          WHERE tenant_id = ? AND source_event_id IN ({placeholders})"
     );
-    let mut q = sqlx::query_as::<_, SocAlertRecord>(&query).bind(tenant_id);
-    for id in event_ids {
-        q = q.bind(id);
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut q = sqlx::query_as::<_, SocAlertRecord>(&query).bind(tenant_id);
+            for id in event_ids {
+                q = q.bind(id);
+            }
+            q.fetch_all(p).await
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(&query);
+            let mut q = sqlx::query_as::<_, SocAlertRecord>(&pg_sql).bind(tenant_id);
+            for id in event_ids {
+                q = q.bind(id);
+            }
+            q.fetch_all(p).await
+        }
     }
-    q.fetch_all(pool).await
 }
 
 /// Highest `rowid` currently in `soc_alerts` for `tenant_id`, or `0` if none.
@@ -487,12 +472,13 @@ pub async fn list_soc_alerts_by_source_event_ids(
 /// starting point — only alerts created *after* the watch connects are
 /// streamed, matching Kubernetes `?watch=true` semantics (no historical
 /// backfill; pair with a normal `GET /v1/alerts` call for that).
-pub async fn max_soc_alert_rowid(pool: &SqlitePool, tenant_id: &str) -> Result<i64, sqlx::Error> {
-    let (max_rowid,): (Option<i64>,) =
-        sqlx::query_as("SELECT MAX(rowid) FROM soc_alerts WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+pub async fn max_soc_alert_rowid(pool: &DbPool, tenant_id: &str) -> Result<i64, sqlx::Error> {
+    let (max_rowid,): (Option<i64>,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT MAX(rowid) FROM soc_alerts WHERE tenant_id = ?",
+        tenant_id
+    )?;
     Ok(max_rowid.unwrap_or(0))
 }
 
@@ -502,39 +488,62 @@ pub async fn max_soc_alert_rowid(pool: &SqlitePool, tenant_id: &str) -> Result<i
 /// `since_rowid`). Used to poll for new alerts to push over
 /// `GET /v1/alerts?watch=true`'s SSE stream.
 pub async fn list_soc_alerts_since(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     since_rowid: i64,
     severity: Option<&str>,
     agent_id: Option<&str>,
 ) -> Result<Vec<(SocAlertRecord, i64)>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
+    let query = "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
          FROM soc_alerts
          WHERE tenant_id = ?
            AND rowid > ?
            AND (? IS NULL OR severity = ?)
            AND (? IS NULL OR agent_id = ?)
          ORDER BY rowid ASC
-         LIMIT ?",
-    )
-    .bind(tenant_id)
-    .bind(since_rowid)
-    .bind(severity)
-    .bind(severity)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(SOC_WATCH_BATCH_LIMIT)
-    .fetch_all(pool)
-    .await?;
-
-    rows.iter()
-        .map(|row| {
-            let record = SocAlertRecord::from_row(row)?;
-            let rowid: i64 = row.try_get("rowid")?;
-            Ok((record, rowid))
-        })
-        .collect()
+         LIMIT ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(since_rowid)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(SOC_WATCH_BATCH_LIMIT)
+                .fetch_all(p)
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    let record = SocAlertRecord::from_row(row)?;
+                    let rowid: i64 = row.try_get("rowid")?;
+                    Ok((record, rowid))
+                })
+                .collect()
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(since_rowid)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(SOC_WATCH_BATCH_LIMIT)
+                .fetch_all(p)
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    let record = SocAlertRecord::from_row(row)?;
+                    let rowid: i64 = row.try_get("rowid")?;
+                    Ok((record, rowid))
+                })
+                .collect()
+        }
+    }
 }
 
 /// List incidents for a tenant, newest-first, with pagination and optional equality filters.
@@ -545,7 +554,7 @@ pub async fn list_soc_alerts_since(
 /// stays STATIC — no concatenation occurs (CWE-89 safe). Every query binds
 /// `tenant_id` first — cross-tenant isolation guaranteed (CWE-284).
 pub async fn list_soc_incidents(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
@@ -554,27 +563,14 @@ pub async fn list_soc_incidents(
     agent_id: Option<&str>,
 ) -> Result<Vec<SocIncidentRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    sqlx::query_as::<_, SocIncidentRecord>(
-        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
+    crate::fetch_all_as!(SocIncidentRecord, pool, "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
          FROM soc_incidents
          WHERE tenant_id = ?
            AND (? IS NULL OR status = ?)
            AND (? IS NULL OR severity = ?)
            AND (? IS NULL OR agent_id = ?)
          ORDER BY opened_at DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(status_filter)
-    .bind(status_filter)
-    .bind(severity)
-    .bind(severity)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
+         LIMIT ? OFFSET ?", tenant_id, status_filter, status_filter, severity, severity, agent_id, agent_id, limit, offset)
 }
 
 /// Cursor-paginated sibling of [`list_soc_incidents`] (#1142), used only by
@@ -586,7 +582,7 @@ pub async fn list_soc_incidents(
 /// (incidents are opened in insertion order).
 #[allow(clippy::too_many_arguments)]
 pub async fn list_soc_incidents_cursor(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
@@ -597,8 +593,7 @@ pub async fn list_soc_incidents_cursor(
     cursor: Option<i64>,
 ) -> Result<(Vec<SocIncidentRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    let rows = sqlx::query(
-        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at, rowid
+    let query = "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at, rowid
          FROM soc_incidents
          WHERE tenant_id = ?
            AND (? IS NULL OR status = ?)
@@ -607,38 +602,61 @@ pub async fn list_soc_incidents_cursor(
            AND (? IS NULL OR kind = ?)
            AND (? IS NULL OR rowid < ?)
          ORDER BY rowid DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(status_filter)
-    .bind(status_filter)
-    .bind(severity)
-    .bind(severity)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(kind)
-    .bind(kind)
-    .bind(cursor)
-    .bind(cursor)
-    .bind(limit + 1)
-    .bind(if cursor.is_some() { 0 } else { offset })
-    .fetch_all(pool)
-    .await?;
-    super::paginate_rows(rows, limit)
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(status_filter)
+                .bind(status_filter)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(kind)
+                .bind(kind)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(status_filter)
+                .bind(status_filter)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(kind)
+                .bind(kind)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
 }
 
 /// Highest `rowid` currently in `soc_incidents` for `tenant_id`, or `0` if
 /// none. Watch-start counterpart to [`max_soc_alert_rowid`] for
 /// `GET /v1/incidents?watch=true` (#1146).
-pub async fn max_soc_incident_rowid(
-    pool: &SqlitePool,
-    tenant_id: &str,
-) -> Result<i64, sqlx::Error> {
-    let (max_rowid,): (Option<i64>,) =
-        sqlx::query_as("SELECT MAX(rowid) FROM soc_incidents WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+pub async fn max_soc_incident_rowid(pool: &DbPool, tenant_id: &str) -> Result<i64, sqlx::Error> {
+    let (max_rowid,): (Option<i64>,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT MAX(rowid) FROM soc_incidents WHERE tenant_id = ?",
+        tenant_id
+    )?;
     Ok(max_rowid.unwrap_or(0))
 }
 
@@ -649,7 +667,7 @@ pub async fn max_soc_incident_rowid(
 /// `GET /v1/incidents?watch=true`'s SSE stream.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_soc_incidents_since(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     since_rowid: i64,
     status_filter: Option<&str>,
@@ -657,8 +675,7 @@ pub async fn list_soc_incidents_since(
     agent_id: Option<&str>,
     kind: Option<&str>,
 ) -> Result<Vec<(SocIncidentRecord, i64)>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at, rowid
+    let query = "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at, rowid
          FROM soc_incidents
          WHERE tenant_id = ?
            AND rowid > ?
@@ -667,29 +684,57 @@ pub async fn list_soc_incidents_since(
            AND (? IS NULL OR agent_id = ?)
            AND (? IS NULL OR kind = ?)
          ORDER BY rowid ASC
-         LIMIT ?",
-    )
-    .bind(tenant_id)
-    .bind(since_rowid)
-    .bind(status_filter)
-    .bind(status_filter)
-    .bind(severity)
-    .bind(severity)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(kind)
-    .bind(kind)
-    .bind(SOC_WATCH_BATCH_LIMIT)
-    .fetch_all(pool)
-    .await?;
-
-    rows.iter()
-        .map(|row| {
-            let record = SocIncidentRecord::from_row(row)?;
-            let rowid: i64 = row.try_get("rowid")?;
-            Ok((record, rowid))
-        })
-        .collect()
+         LIMIT ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(since_rowid)
+                .bind(status_filter)
+                .bind(status_filter)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(kind)
+                .bind(kind)
+                .bind(SOC_WATCH_BATCH_LIMIT)
+                .fetch_all(p)
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    let record = SocIncidentRecord::from_row(row)?;
+                    let rowid: i64 = row.try_get("rowid")?;
+                    Ok((record, rowid))
+                })
+                .collect()
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(since_rowid)
+                .bind(status_filter)
+                .bind(status_filter)
+                .bind(severity)
+                .bind(severity)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(kind)
+                .bind(kind)
+                .bind(SOC_WATCH_BATCH_LIMIT)
+                .fetch_all(p)
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    let record = SocIncidentRecord::from_row(row)?;
+                    let rowid: i64 = row.try_get("rowid")?;
+                    Ok((record, rowid))
+                })
+                .collect()
+        }
+    }
 }
 
 /// Fetch a single SOC incident by id, scoped to the given tenant.
@@ -698,19 +743,13 @@ pub async fn list_soc_incidents_since(
 /// leaks another tenant's row.  The two binds are positional and parameterized;
 /// no string concatenation occurs (CWE-89 / CWE-284).
 pub async fn get_soc_incident(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     incident_id: &str,
 ) -> Result<Option<SocIncidentRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SocIncidentRecord>(
-        "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
+    crate::fetch_optional_as!(SocIncidentRecord, pool, "SELECT id, tenant_id, kind, severity, agent_id, summary, source_event_ids, opened_at, status, closed_at
          FROM soc_incidents
-         WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(tenant_id)
-    .bind(incident_id)
-    .fetch_optional(pool)
-    .await
+         WHERE tenant_id = ? AND id = ?", tenant_id, incident_id)
 }
 
 /// Close a SOC incident — flip its lifecycle status from `'open'` to `'closed'`
@@ -722,21 +761,20 @@ pub async fn get_soc_incident(
 /// Returns `true` if a row was updated (i.e. the incident existed, belonged to
 /// this tenant, and was still open), `false` otherwise.
 pub async fn close_soc_incident(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     incident_id: &str,
 ) -> Result<bool, sqlx::Error> {
     let closed_at = Utc::now().to_rfc3339();
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "UPDATE soc_incidents
          SET status = 'closed', closed_at = ?
          WHERE tenant_id = ? AND id = ? AND status != 'closed'",
-    )
-    .bind(&closed_at)
-    .bind(tenant_id)
-    .bind(incident_id)
-    .execute(pool)
-    .await?;
+        &closed_at,
+        tenant_id,
+        incident_id
+    )?;
     Ok(result.rows_affected() == 1)
 }
 
@@ -745,40 +783,43 @@ pub async fn close_soc_incident(
 /// are static (CWE-89). `alerts_high` counts only alerts with `severity = 'high'`;
 /// `incidents_open` / `incidents_closed` use the lifecycle `status` column.
 pub async fn soc_summary(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<aegis_api::models::SocSummary, sqlx::Error> {
-    let (alerts_total,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM soc_alerts WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let (alerts_total,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_alerts WHERE tenant_id = ?",
+        tenant_id
+    )?;
 
-    let (alerts_high,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM soc_alerts WHERE tenant_id = ? AND severity = 'high'")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let (alerts_high,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_alerts WHERE tenant_id = ? AND severity = 'high'",
+        tenant_id
+    )?;
 
-    let (incidents_total,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let (incidents_total,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ?",
+        tenant_id
+    )?;
 
-    let (incidents_open,): (i64,) = sqlx::query_as(
+    let (incidents_open,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ? AND status = 'open'",
-    )
-    .bind(tenant_id)
-    .fetch_one(pool)
-    .await?;
+        tenant_id
+    )?;
 
-    let (incidents_closed,): (i64,) = sqlx::query_as(
+    let (incidents_closed,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*) FROM soc_incidents WHERE tenant_id = ? AND status = 'closed'",
-    )
-    .bind(tenant_id)
-    .fetch_one(pool)
-    .await?;
+        tenant_id
+    )?;
 
     Ok(aegis_api::models::SocSummary {
         alerts_total,
@@ -1469,7 +1510,7 @@ mod tests {
 }
 
 pub async fn get_action_count_last_24h(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<i64, sqlx::Error> {
@@ -1478,34 +1519,34 @@ pub async fn get_action_count_last_24h(
 
 /// Get agent hourly action counts for the last 7 days.
 pub async fn get_agent_hourly_action_counts_7d(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<Vec<(String, i64)>, sqlx::Error> {
-    sqlx::query_as::<_, (String, i64)>(
+    crate::fetch_all_as!(
+        (String, i64),
+        pool,
         "SELECT hour_bucket, action_count FROM agent_hourly_action_counts \
          WHERE tenant_id = ? AND agent_id = ? \
            AND hour_bucket >= strftime('%Y-%m-%dT%H', datetime('now', '-7 days')) \
          ORDER BY hour_bucket ASC",
+        tenant_id,
+        agent_id
     )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await
 }
 
 /// Get agent known tool actions.
 pub async fn get_agent_known_tool_actions(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<Vec<(String, String)>, sqlx::Error> {
-    sqlx::query_as::<_, (String, String)>(
+    crate::fetch_all_as!(
+        (String, String),
+        pool,
         "SELECT tool_key, action_key FROM agent_known_tool_actions \
          WHERE tenant_id = ? AND agent_id = ?",
+        tenant_id,
+        agent_id
     )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await
 }

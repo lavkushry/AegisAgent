@@ -22,8 +22,8 @@
 //!   returning, mirroring the `events::drain` graceful-shutdown pattern.
 
 use crate::db;
+use crate::db::DbPool;
 use aegis_api::models::AuditEventRecord;
-use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,11 +78,7 @@ impl AuditBatchSink {
     /// Enqueue `record` for batched insertion. If the channel is full or the
     /// writer task has shut down, falls back to a synchronous
     /// [`db::insert_audit_event`] so the row is never silently dropped.
-    pub async fn emit(
-        &self,
-        pool: &SqlitePool,
-        record: AuditEventRecord,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn emit(&self, pool: &DbPool, record: AuditEventRecord) -> Result<(), sqlx::Error> {
         match self.tx.try_send(record) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(record)) => {
@@ -101,7 +97,7 @@ impl AuditBatchSink {
 /// `audit_writer_unhealthy` on success/failure, and clear it. Returns the
 /// number of records the flush attempted (0 if `buf` was empty).
 async fn flush(
-    pool: &SqlitePool,
+    pool: &DbPool,
     buf: &mut Vec<AuditEventRecord>,
     audit_writer_unhealthy: &Arc<AtomicBool>,
 ) -> usize {
@@ -127,7 +123,7 @@ async fn flush(
 /// to be `tokio::spawn`ed once at startup. Returns the total number of
 /// records flushed.
 pub async fn run_audit_batch_writer(
-    pool: SqlitePool,
+    pool: DbPool,
     mut rx: mpsc::Receiver<AuditEventRecord>,
     batch_size: usize,
     flush_interval: Duration,
@@ -169,7 +165,7 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    async fn setup_pool(test_name: &str) -> SqlitePool {
+    async fn setup_pool(test_name: &str) -> DbPool {
         std::fs::create_dir_all("target").unwrap();
         let db_url = format!(
             "sqlite://target/{}_{}.db",
@@ -201,7 +197,7 @@ mod tests {
         }
     }
 
-    async fn count_audit_rows(pool: &SqlitePool, tenant_id: &str) -> i64 {
+    async fn count_audit_rows(pool: &DbPool, tenant_id: &str) -> i64 {
         db::get_all_audit_events(pool, tenant_id, None)
             .await
             .unwrap()

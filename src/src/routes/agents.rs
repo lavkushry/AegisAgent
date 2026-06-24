@@ -1504,7 +1504,7 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&agent_token))
-                .fetch_one(state.storage.get_pool())
+                .fetch_one(state.storage.get_pool().sqlite_pool())
                 .await
                 .unwrap();
 
@@ -1564,7 +1564,7 @@ mod tests {
             sqlx::query_scalar("SELECT id FROM agents WHERE tenant_id = ? AND agent_token = ?")
                 .bind(&tenant_id)
                 .bind(db::hash_token(&old_token))
-                .fetch_one(state.storage.get_pool())
+                .fetch_one(state.storage.get_pool().sqlite_pool())
                 .await
                 .unwrap();
 
@@ -2080,7 +2080,7 @@ mod tests {
             "SELECT COUNT(*) FROM skills WHERE tenant_id = ? AND skill_key = 'deployer'",
         )
         .bind(&tenant_id)
-        .fetch_one(&pool)
+        .fetch_one(pool.sqlite_pool())
         .await
         .unwrap();
         assert_eq!(

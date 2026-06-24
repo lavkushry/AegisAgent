@@ -1,9 +1,9 @@
+use crate::db::DbPool;
 use aegis_api::models::PlaybookRecord;
-use sqlx::SqlitePool;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_playbook(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     name: &str,
     trigger_kind: &str,
@@ -16,82 +16,71 @@ pub async fn insert_playbook(
     let trigger_severity_json = serde_json::to_string(trigger_severity)
         .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
 
-    sqlx::query(
-        "INSERT INTO response_playbooks (id, tenant_id, name, trigger_kind, trigger_severity, trigger_agent_id, trigger_environment, steps_json, enabled) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(name)
-    .bind(trigger_kind)
-    .bind(&trigger_severity_json)
-    .bind(trigger_agent_id)
-    .bind(trigger_environment)
-    .bind(steps_json)
-    .execute(pool)
-    .await?;
+    crate::execute_query!(pool, "INSERT INTO response_playbooks (id, tenant_id, name, trigger_kind, trigger_severity, trigger_agent_id, trigger_environment, steps_json, enabled) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)", &id, tenant_id, name, trigger_kind, &trigger_severity_json, trigger_agent_id, trigger_environment, steps_json)?;
 
-    sqlx::query_as::<_, PlaybookRecord>(
+    crate::fetch_one_as!(
+        PlaybookRecord,
+        pool,
         "SELECT * FROM response_playbooks WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        &id
     )
-    .bind(tenant_id)
-    .bind(&id)
-    .fetch_one(pool)
-    .await
 }
 
 pub async fn list_playbooks(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<PlaybookRecord>, sqlx::Error> {
-    sqlx::query_as::<_, PlaybookRecord>(
+    crate::fetch_all_as!(
+        PlaybookRecord,
+        pool,
         "SELECT * FROM response_playbooks WHERE tenant_id = ? ORDER BY created_at DESC",
+        tenant_id
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
 }
 
 pub async fn get_playbook_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<Option<PlaybookRecord>, sqlx::Error> {
-    sqlx::query_as::<_, PlaybookRecord>(
+    crate::fetch_optional_as!(
+        PlaybookRecord,
+        pool,
         "SELECT * FROM response_playbooks WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        id
     )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(pool)
-    .await
 }
 
 pub async fn delete_playbook(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM response_playbooks WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let result = crate::execute_query!(
+        pool,
+        "DELETE FROM response_playbooks WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        id
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn set_playbook_enabled(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
     enabled: bool,
 ) -> Result<bool, sqlx::Error> {
     let enabled_val = if enabled { 1 } else { 0 };
-    let result =
-        sqlx::query("UPDATE response_playbooks SET enabled = ? WHERE tenant_id = ? AND id = ?")
-            .bind(enabled_val)
-            .bind(tenant_id)
-            .bind(id)
-            .execute(pool)
-            .await?;
+    let result = crate::execute_query!(
+        pool,
+        "UPDATE response_playbooks SET enabled = ? WHERE tenant_id = ? AND id = ?",
+        enabled_val,
+        tenant_id,
+        id
+    )?;
     Ok(result.rows_affected() > 0)
 }

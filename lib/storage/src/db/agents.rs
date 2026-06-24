@@ -1,5 +1,5 @@
+use crate::db::DbPool;
 use aegis_api::models::*;
-use sqlx::SqlitePool;
 
 pub fn hash_token(token: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -11,18 +11,13 @@ pub fn hash_token(token: &str) -> String {
 /// Rotate an agent's token: persist the SHA-256 hash of `new_token`,
 /// scoped by `tenant_id` and `agent_id` (CWE-284 tenant isolation).
 pub async fn rotate_agent_token(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     new_token: &str,
 ) -> Result<(), sqlx::Error> {
     let hashed = hash_token(new_token);
-    sqlx::query("UPDATE agents SET agent_token = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND id = ?")
-        .bind(hashed)
-        .bind(tenant_id)
-        .bind(agent_id)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(pool, "UPDATE agents SET agent_token = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND id = ?", hashed, tenant_id, agent_id)?;
     Ok(())
 }
 
@@ -32,53 +27,57 @@ pub async fn rotate_agent_token(
 /// frozen/revoked status check, which never accounted for "deleted" and so
 /// let a deleted agent's calls proceed unchallenged.
 pub async fn get_agent_by_token(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     token: &str,
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
     let hashed = hash_token(token);
-    sqlx::query_as::<_, AgentRecord>(
-        "SELECT * FROM agents WHERE tenant_id = ? AND agent_token = ? AND status NOT IN ('quarantined', 'deleted')",
-    )
-    .bind(tenant_id)
-    .bind(hashed)
-    .fetch_optional(pool)
-    .await
+    crate::fetch_optional_as!(AgentRecord, pool, "SELECT * FROM agents WHERE tenant_id = ? AND agent_token = ? AND status NOT IN ('quarantined', 'deleted')", tenant_id, hashed)
 }
 
-pub async fn migrate_agent_tokens(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let agents = sqlx::query("SELECT id, agent_token FROM agents")
-        .fetch_all(pool)
-        .await?;
+pub async fn migrate_agent_tokens(pool: &DbPool) -> Result<(), sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct MigrateAgentToken {
+        id: String,
+        agent_token: String,
+    }
+
+    let agents = crate::fetch_all_as!(
+        MigrateAgentToken,
+        pool,
+        "SELECT id, agent_token FROM agents"
+    )?;
 
     for row in agents {
-        use sqlx::Row;
-        let id: String = row.get("id");
-        let token: String = row.get("agent_token");
+        let id = row.id;
+        let token = row.agent_token;
 
         let is_hash = token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit());
         if !is_hash {
             let hashed = hash_token(&token);
-            sqlx::query("UPDATE agents SET agent_token = ? WHERE id = ?")
-                .bind(hashed)
-                .bind(id)
-                .execute(pool)
-                .await?;
+            crate::execute_query!(
+                pool,
+                "UPDATE agents SET agent_token = ? WHERE id = ?",
+                hashed,
+                id
+            )?;
         }
     }
     Ok(())
 }
 
 pub async fn get_agent_by_key(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_key: &str,
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRecord>("SELECT * FROM agents WHERE tenant_id = ? AND agent_key = ?")
-        .bind(tenant_id)
-        .bind(agent_key)
-        .fetch_optional(pool)
-        .await
+    crate::fetch_optional_as!(
+        AgentRecord,
+        pool,
+        "SELECT * FROM agents WHERE tenant_id = ? AND agent_key = ?",
+        tenant_id,
+        agent_key
+    )
 }
 
 /// Resolve an agent by its bound mTLS client-certificate Subject CN (#1310).
@@ -89,17 +88,11 @@ pub async fn get_agent_by_key(
 /// other (mTLS) path to the same `authorize_action`, so it must fail closed
 /// identically for a deleted agent.
 pub async fn get_agent_by_mtls_cn(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     cn: &str,
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRecord>(
-        "SELECT * FROM agents WHERE tenant_id = ? AND mtls_cn = ? AND status NOT IN ('quarantined', 'deleted')",
-    )
-    .bind(tenant_id)
-    .bind(cn)
-    .fetch_optional(pool)
-    .await
+    crate::fetch_optional_as!(AgentRecord, pool, "SELECT * FROM agents WHERE tenant_id = ? AND mtls_cn = ? AND status NOT IN ('quarantined', 'deleted')", tenant_id, cn)
 }
 
 /// #1145: `?status=` field filtering. When `status_filter` is `None`, the
@@ -107,13 +100,15 @@ pub async fn get_agent_by_mtls_cn(
 /// pre-#1145 behavior; when set, it's an exact match instead (so explicitly
 /// requesting `status=deleted` is honored rather than always hidden).
 pub async fn list_agents(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
     status_filter: Option<&str>,
 ) -> Result<Vec<AgentRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRecord>(
+    crate::fetch_all_as!(
+        AgentRecord,
+        pool,
         "SELECT * FROM agents
          WHERE tenant_id = ?
            AND (
@@ -121,28 +116,26 @@ pub async fn list_agents(
              OR status = ?
            )
          ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        tenant_id,
+        status_filter,
+        status_filter,
+        limit,
+        offset
     )
-    .bind(tenant_id)
-    .bind(status_filter)
-    .bind(status_filter)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
 }
 
 pub async fn get_agent_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRecord>(
+    crate::fetch_optional_as!(
+        AgentRecord,
+        pool,
         "SELECT * FROM agents WHERE tenant_id = ? AND id = ? AND status != 'deleted'",
+        tenant_id,
+        id
     )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(pool)
-    .await
 }
 
 /// Like [`get_agent_by_id`], but also returns soft-deleted agents
@@ -151,15 +144,17 @@ pub async fn get_agent_by_id(
 /// `Agent` node — and the edges pointing at it — after the agent is deleted,
 /// rather than leaving a dangling edge reference.
 pub async fn get_agent_by_id_any_status(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<Option<AgentRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRecord>("SELECT * FROM agents WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(id)
-        .fetch_optional(pool)
-        .await
+    crate::fetch_optional_as!(
+        AgentRecord,
+        pool,
+        "SELECT * FROM agents WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        id
+    )
 }
 
 /// #1290: rolling 24h average `composite_risk_score` per agent, ranked
@@ -177,10 +172,12 @@ pub async fn get_agent_by_id_any_status(
 type RiskScoreboardRow = (String, String, Option<f64>, i64, Option<f64>);
 
 pub async fn get_agent_risk_scoreboard(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<AgentRiskScoreboardEntry>, sqlx::Error> {
-    let rows: Vec<RiskScoreboardRow> = sqlx::query_as(
+    let rows: Vec<RiskScoreboardRow> = crate::fetch_all_as!(
+        _,
+        pool,
         "SELECT a.id, a.agent_key, cur.avg_score, COALESCE(cur.decision_count, 0), prev.avg_score
          FROM agents a
          LEFT JOIN (
@@ -200,12 +197,10 @@ pub async fn get_agent_risk_scoreboard(
          ) prev ON prev.agent_id = a.id
          WHERE a.tenant_id = ? AND a.status != 'deleted'
          ORDER BY COALESCE(cur.avg_score, 0) DESC",
-    )
-    .bind(tenant_id)
-    .bind(tenant_id)
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id,
+        tenant_id,
+        tenant_id
+    )?;
 
     Ok(rows
         .into_iter()
@@ -239,30 +234,9 @@ pub async fn get_agent_risk_scoreboard(
         .collect())
 }
 
-pub async fn insert_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key, allowed_environments, mtls_cn)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.agent_key)
-    .bind(&record.agent_token)
-    .bind(&record.name)
-    .bind(&record.owner_team)
-    .bind(&record.owner_email)
-    .bind(&record.environment)
-    .bind(&record.framework)
-    .bind(&record.model_provider)
-    .bind(&record.model_name)
-    .bind(&record.purpose)
-    .bind(&record.risk_tier)
-    .bind(&record.status)
-    .bind(&record.signing_key)
-    .bind(&record.allowed_environments)
-    .bind(&record.mtls_cn)
-    .execute(pool)
-    .await?;
+pub async fn insert_agent(pool: &DbPool, record: &AgentRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, owner_team, owner_email, environment, framework, model_provider, model_name, purpose, risk_tier, status, signing_key, allowed_environments, mtls_cn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.agent_key, &record.agent_token, &record.name, &record.owner_team, &record.owner_email, &record.environment, &record.framework, &record.model_provider, &record.model_name, &record.purpose, &record.risk_tier, &record.status, &record.signing_key, &record.allowed_environments, &record.mtls_cn)?;
     Ok(())
 }
 
@@ -270,8 +244,9 @@ pub fn verify_request_signature(signing_key: &str, body: &[u8], sig_header: &str
     aegis_common::hash::verify_request_signature(signing_key, body, sig_header)
 }
 
-pub async fn update_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(), sqlx::Error> {
-    sqlx::query(
+pub async fn update_agent(pool: &DbPool, record: &AgentRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(
+        pool,
         "UPDATE agents SET
             name = ?,
             owner_team = ?,
@@ -286,28 +261,26 @@ pub async fn update_agent(pool: &SqlitePool, record: &AgentRecord) -> Result<(),
             mtls_cn = ?,
             updated_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(&record.name)
-    .bind(&record.owner_team)
-    .bind(&record.owner_email)
-    .bind(&record.environment)
-    .bind(&record.framework)
-    .bind(&record.model_provider)
-    .bind(&record.model_name)
-    .bind(&record.purpose)
-    .bind(&record.risk_tier)
-    .bind(&record.status)
-    .bind(&record.mtls_cn)
-    .bind(&record.tenant_id)
-    .bind(&record.id)
-    .execute(pool)
-    .await?;
+        &record.name,
+        &record.owner_team,
+        &record.owner_email,
+        &record.environment,
+        &record.framework,
+        &record.model_provider,
+        &record.model_name,
+        &record.purpose,
+        &record.risk_tier,
+        &record.status,
+        &record.mtls_cn,
+        &record.tenant_id,
+        &record.id
+    )?;
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_skill(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     skill_key: &str,
     name: &str,
@@ -317,35 +290,24 @@ pub async fn insert_skill(
     default_risk: Option<&str>,
 ) -> Result<String, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO skills (id, tenant_id, skill_key, name, type, auth_type, owner_team, default_risk)
+    crate::execute_query!(pool, "INSERT INTO skills (id, tenant_id, skill_key, name, type, auth_type, owner_team, default_risk)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(tenant_id, skill_key) DO UPDATE SET name=excluded.name, type=excluded.type, auth_type=excluded.auth_type, owner_team=excluded.owner_team, default_risk=excluded.default_risk"
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(skill_key)
-    .bind(name)
-    .bind(r#type)
-    .bind(auth_type)
-    .bind(owner_team)
-    .bind(default_risk)
-    .execute(pool)
-    .await?;
+         ON CONFLICT(tenant_id, skill_key) DO UPDATE SET name=excluded.name, type=excluded.type, auth_type=excluded.auth_type, owner_team=excluded.owner_team, default_risk=excluded.default_risk", &id, tenant_id, skill_key, name, r#type, auth_type, owner_team, default_risk)?;
 
-    let row: (String,) =
-        sqlx::query_as("SELECT id FROM skills WHERE tenant_id = ? AND skill_key = ?")
-            .bind(tenant_id)
-            .bind(skill_key)
-            .fetch_one(pool)
-            .await?;
+    let row: (String,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT id FROM skills WHERE tenant_id = ? AND skill_key = ?",
+        tenant_id,
+        skill_key
+    )?;
 
     Ok(row.0)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_skill_action(
-    pool: &SqlitePool,
+    pool: &DbPool,
     skill_id: &str,
     action_key: &str,
     description: Option<&str>,
@@ -356,42 +318,29 @@ pub async fn insert_skill_action(
     default_decision: &str,
 ) -> Result<(), sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO skill_actions (id, skill_id, action_key, description, risk, mutates_state, data_access, approval_required, default_decision)
+    crate::execute_query!(pool, "INSERT INTO skill_actions (id, skill_id, action_key, description, risk, mutates_state, data_access, approval_required, default_decision)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(skill_id, action_key) DO UPDATE SET description=excluded.description, risk=excluded.risk, mutates_state=excluded.mutates_state, data_access=excluded.data_access, approval_required=excluded.approval_required, default_decision=excluded.default_decision"
-    )
-    .bind(&id)
-    .bind(skill_id)
-    .bind(action_key)
-    .bind(description)
-    .bind(risk)
-    .bind(mutates_state)
-    .bind(data_access)
-    .bind(approval_required)
-    .bind(default_decision)
-    .execute(pool)
-    .await?;
+         ON CONFLICT(skill_id, action_key) DO UPDATE SET description=excluded.description, risk=excluded.risk, mutates_state=excluded.mutates_state, data_access=excluded.data_access, approval_required=excluded.approval_required, default_decision=excluded.default_decision", &id, skill_id, action_key, description, risk, mutates_state, data_access, approval_required, default_decision)?;
     Ok(())
 }
 
 pub async fn get_skill_action(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     skill_key: &str,
     action_key: &str,
 ) -> Result<Option<SkillActionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SkillActionRecord>(
+    crate::fetch_optional_as!(
+        SkillActionRecord,
+        pool,
         "SELECT sa.*
          FROM skill_actions sa
          JOIN skills s ON sa.skill_id = s.id
          WHERE s.tenant_id = ? AND s.skill_key = ? AND sa.action_key = ?",
+        tenant_id,
+        skill_key,
+        action_key
     )
-    .bind(tenant_id)
-    .bind(skill_key)
-    .bind(action_key)
-    .fetch_optional(pool)
-    .await
 }
 
 /// --- SOC Phase 4: Response API ---
@@ -405,41 +354,41 @@ pub async fn get_skill_action(
 /// other status; `frozen_reason` is cleared whenever the new status isn't
 /// `frozen` (set separately via [`set_agent_frozen_reason`]).
 pub async fn set_agent_status(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     status: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP,
          quarantined_at = CASE WHEN ? = 'quarantined' THEN CURRENT_TIMESTAMP ELSE NULL END,
          frozen_reason = CASE WHEN ? = 'frozen' THEN frozen_reason ELSE NULL END
          WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(status)
-    .bind(status)
-    .bind(status)
-    .bind(tenant_id)
-    .bind(agent_id)
-    .execute(pool)
-    .await?;
+        status,
+        status,
+        status,
+        tenant_id,
+        agent_id
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
 /// Records the operator-supplied reason for a freeze (#0079). Tenant-scoped;
 /// no-op if the agent doesn't belong to this tenant.
 pub async fn set_agent_frozen_reason(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     reason: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE agents SET frozen_reason = ? WHERE tenant_id = ? AND id = ?")
-        .bind(reason)
-        .bind(tenant_id)
-        .bind(agent_id)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(
+        pool,
+        "UPDATE agents SET frozen_reason = ? WHERE tenant_id = ? AND id = ?",
+        reason,
+        tenant_id,
+        agent_id
+    )?;
     Ok(())
 }
 
@@ -448,17 +397,18 @@ pub async fn set_agent_frozen_reason(
 /// decision for this agent to `require_approval` (set in `routes.rs`).
 /// Tenant-scoped; no-op if the agent doesn't belong to this tenant.
 pub async fn set_agent_force_approval(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     value: bool,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE agents SET force_approval = ? WHERE tenant_id = ? AND id = ?")
-        .bind(value)
-        .bind(tenant_id)
-        .bind(agent_id)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(
+        pool,
+        "UPDATE agents SET force_approval = ? WHERE tenant_id = ? AND id = ?",
+        value,
+        tenant_id,
+        agent_id
+    )?;
     Ok(())
 }
 
@@ -466,17 +416,16 @@ pub async fn set_agent_force_approval(
 /// `/v1/authorize` call. Tenant-scoped, parameterized, best-effort (callers
 /// should not fail the request if this errors).
 pub async fn touch_agent_last_seen(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "UPDATE agents SET last_seen_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        agent_id
+    )?;
     Ok(())
 }
 
@@ -484,16 +433,17 @@ pub async fn touch_agent_last_seen(
 /// Called by the authorize hot path — must be fast (indexed on tenant_id).
 #[allow(dead_code)] // Reserved for authorize hot-path status check (PR-043 follow-up)
 pub async fn is_agent_active(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT status FROM agents WHERE tenant_id = ? AND id = ?")
-            .bind(tenant_id)
-            .bind(agent_id)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(String,)> = crate::fetch_optional_as!(
+        _,
+        pool,
+        "SELECT status FROM agents WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        agent_id
+    )?;
     Ok(row.map(|(s,)| s == "active").unwrap_or(false))
 }
 
@@ -502,71 +452,54 @@ pub async fn is_agent_active(
 /// Grant a tool permission for an agent. Idempotent — a duplicate (tenant_id,
 /// agent_id, tool_key) triple is silently ignored (UNIQUE constraint).
 pub async fn grant_agent_tool_permission(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     tool_key: &str,
 ) -> Result<aegis_api::models::AgentToolPermission, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
     let now_str = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT OR IGNORE INTO agent_tool_permissions (id, tenant_id, agent_id, tool_key, created_at)
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(tool_key)
-    .bind(&now_str)
-    .execute(pool)
-    .await?;
+    crate::execute_query!(pool, "INSERT OR IGNORE INTO agent_tool_permissions (id, tenant_id, agent_id, tool_key, created_at)
+         VALUES (?, ?, ?, ?, ?)", &id, tenant_id, agent_id, tool_key, &now_str)?;
 
-    let row = sqlx::query_as::<_, aegis_api::models::AgentToolPermission>(
-        "SELECT id, tenant_id, agent_id, tool_key, created_at FROM agent_tool_permissions WHERE tenant_id = ? AND agent_id = ? AND tool_key = ?"
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(tool_key)
-    .fetch_one(pool)
-    .await?;
+    let row = crate::fetch_one_as!(aegis_api::models::AgentToolPermission, pool, "SELECT id, tenant_id, agent_id, tool_key, created_at FROM agent_tool_permissions WHERE tenant_id = ? AND agent_id = ? AND tool_key = ?", tenant_id, agent_id, tool_key)?;
 
     Ok(row)
 }
 
 /// Return all tool permissions for `agent_id` within `tenant_id`.
 pub async fn get_agent_tool_permissions(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<Vec<aegis_api::models::AgentToolPermission>, sqlx::Error> {
-    sqlx::query_as::<_, aegis_api::models::AgentToolPermission>(
+    crate::fetch_all_as!(
+        aegis_api::models::AgentToolPermission,
+        pool,
         "SELECT id, tenant_id, agent_id, tool_key, created_at
          FROM agent_tool_permissions
          WHERE tenant_id = ? AND agent_id = ?
          ORDER BY created_at ASC",
+        tenant_id,
+        agent_id
     )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await
 }
 
 /// Revoke a single tool permission. Returns `true` if a row was deleted.
 pub async fn revoke_agent_tool_permission(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     tool_key: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "DELETE FROM agent_tool_permissions
          WHERE tenant_id = ? AND agent_id = ? AND tool_key = ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(tool_key)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        tool_key
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -577,34 +510,34 @@ pub async fn revoke_agent_tool_permission(
 /// - `Some(true)` — the specific tool is in the agent's allow-list.
 /// - `Some(false)` — permissions exist but this tool is not allowed (deny).
 pub async fn agent_tool_permission_status(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     tool_key: &str,
 ) -> Result<Option<bool>, sqlx::Error> {
     // First check if any permission rows exist for this agent.
-    let count: (i64,) = sqlx::query_as(
+    let count: (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*) FROM agent_tool_permissions WHERE tenant_id = ? AND agent_id = ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .fetch_one(pool)
-    .await?;
+        tenant_id,
+        agent_id
+    )?;
 
     if count.0 == 0 {
         return Ok(None); // unrestricted
     }
 
     // Permissions exist — check if this specific tool is allowed.
-    let row: (i64,) = sqlx::query_as(
+    let row: (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*) FROM agent_tool_permissions
          WHERE tenant_id = ? AND agent_id = ? AND tool_key = ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(tool_key)
-    .fetch_one(pool)
-    .await?;
+        tenant_id,
+        agent_id,
+        tool_key
+    )?;
 
     Ok(Some(row.0 > 0))
 }
@@ -735,15 +668,8 @@ mod tests {
             ("agent_falling", "agent_falling"),
             ("agent_idle", "agent_idle"),
         ] {
-            sqlx::query(
-                "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-                 VALUES (?, 'tenant_scoreboard', ?, ?, 'Scoreboard Agent', 'dev', 'low', 'active')",
-            )
-            .bind(id)
-            .bind(key)
-            .bind(format!("token_{id}"))
-            .execute(&pool)
-            .await
+            crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES (?, 'tenant_scoreboard', ?, ?, 'Scoreboard Agent', 'dev', 'low', 'active')", id, key, format!("token_{id}"))
             .unwrap();
         }
 
@@ -759,9 +685,7 @@ mod tests {
         prior_rising.agent_id = "agent_rising".to_string();
         prior_rising.composite_risk_score = Some(50);
         insert_decision(&pool, &prior_rising).await.unwrap();
-        sqlx::query("UPDATE decisions SET created_at = datetime('now', '-30 hours') WHERE id = 'dec_r_prior'")
-            .execute(&pool)
-            .await
+        crate::execute_query!(pool, "UPDATE decisions SET created_at = datetime('now', '-30 hours') WHERE id = 'dec_r_prior'")
             .unwrap();
 
         // agent_falling: current-window avg 10, prior-window avg 80 ->
@@ -774,9 +698,7 @@ mod tests {
         prior_falling.agent_id = "agent_falling".to_string();
         prior_falling.composite_risk_score = Some(80);
         insert_decision(&pool, &prior_falling).await.unwrap();
-        sqlx::query("UPDATE decisions SET created_at = datetime('now', '-30 hours') WHERE id = 'dec_f_prior'")
-            .execute(&pool)
-            .await
+        crate::execute_query!(pool, "UPDATE decisions SET created_at = datetime('now', '-30 hours') WHERE id = 'dec_f_prior'")
             .unwrap();
 
         // agent_idle: no decisions at all.

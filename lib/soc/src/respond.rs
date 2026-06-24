@@ -23,7 +23,7 @@
 
 use crate::correlate::Incident;
 use aegis_storage::db;
-use sqlx::SqlitePool;
+use aegis_storage::db::DbPool;
 
 /// A containment action taken by the Response Engine for one incident.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +85,7 @@ pub fn recommended_action(incident: &Incident) -> Option<ResponseAction> {
 /// Database errors propagate to the caller, which logs and discards them
 /// (best-effort, out-of-band — design law 3).
 pub async fn dispatch(
-    pool: &SqlitePool,
+    pool: &DbPool,
     incident: &Incident,
 ) -> Result<Option<ResponseAction>, sqlx::Error> {
     if !db::is_auto_respond_enabled(pool, &incident.tenant_id).await? {
@@ -114,7 +114,7 @@ pub async fn dispatch(
     }
 
     if !matched_playbooks.is_empty() {
-        let storage = aegis_storage::sqlite::SqliteStorage::new(pool.clone());
+        let storage = aegis_storage::sqlite::SqlDbStorage::new(pool.clone());
         for pb in &matched_playbooks {
             for step in &pb.steps {
                 if let Err(e) =
@@ -163,7 +163,7 @@ pub async fn dispatch(
     Ok(Some(action))
 }
 
-async fn freeze_agent(pool: &SqlitePool, incident: &Incident) -> Result<(), sqlx::Error> {
+async fn freeze_agent(pool: &DbPool, incident: &Incident) -> Result<(), sqlx::Error> {
     db::set_agent_status(pool, &incident.tenant_id, &incident.agent_id, "frozen").await?;
     db::set_agent_frozen_reason(
         pool,
@@ -199,7 +199,7 @@ mod tests {
         serde_json::from_value(json).unwrap()
     }
 
-    async fn setup(test_name: &str) -> (SqlitePool, String, String) {
+    async fn setup(test_name: &str) -> (DbPool, String, String) {
         let db_url = format!("sqlite://target/test_respond_{}.db", test_name);
         let _ = std::fs::remove_file(db_url.strip_prefix("sqlite://").unwrap());
         let pool = db::init_db(&db_url).await.unwrap();
@@ -321,11 +321,12 @@ mod tests {
     #[tokio::test]
     async fn auto_respond_disabled_is_noop() {
         let (pool, tenant_id, agent_id) = setup("disabled").await;
-        sqlx::query("UPDATE tenants SET auto_respond_enabled = 0 WHERE id = ?")
-            .bind(&tenant_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            pool,
+            "UPDATE tenants SET auto_respond_enabled = 0 WHERE id = ?",
+            &tenant_id
+        )
+        .unwrap();
 
         let incident = make_incident(&tenant_id, &agent_id, "deny_storm");
         let action = dispatch(&pool, &incident).await.unwrap();

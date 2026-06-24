@@ -1,31 +1,30 @@
 use super::{retry_on_busy, SOC_MAX_LIMIT};
+use crate::db::DbPool;
 use aegis_api::models::*;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
 
 /// Atomically consume an APPROVED approval (single-use). Returns `true` only if
 /// THIS call consumed it (one row updated); `false` if it was already consumed,
 /// expired, not approved, or not found. The `consumed_at IS NULL` guard makes
 /// concurrent double-consume safe — at most one UPDATE matches.
 pub async fn consume_approval(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     approval_id: &str,
 ) -> Result<bool, sqlx::Error> {
     retry_on_busy(3, || async {
         let now = Utc::now();
-        let result = sqlx::query(
+        let result = crate::execute_query!(
+            pool,
             "UPDATE approvals
              SET consumed_at = ?
              WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
                AND (expires_at IS NULL OR expires_at > ?)",
-        )
-        .bind(now)
-        .bind(tenant_id)
-        .bind(approval_id)
-        .bind(now)
-        .execute(pool)
-        .await?;
+            now,
+            tenant_id,
+            approval_id,
+            now
+        )?;
         Ok(result.rows_affected() == 1)
     })
     .await
@@ -36,42 +35,42 @@ pub async fn consume_approval(
 /// and `decided_at` as-is — human-oversight evidence for SOC 2 / EU AI Act
 /// Art. 14.
 pub async fn list_approvals_in_range(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
 ) -> Result<Vec<ApprovalRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ApprovalRecord>(
+    crate::fetch_all_as!(
+        ApprovalRecord,
+        pool,
         "SELECT * FROM approvals
          WHERE tenant_id = ?
            AND (? IS NULL OR created_at >= ?)
            AND (? IS NULL OR created_at <= ?)
          ORDER BY created_at ASC",
+        tenant_id,
+        from,
+        from,
+        to,
+        to
     )
-    .bind(tenant_id)
-    .bind(from)
-    .bind(from)
-    .bind(to)
-    .bind(to)
-    .fetch_all(pool)
-    .await
 }
 
 /// Fetch the approval record (if any) created for a given decision. Used by the
 /// idempotency replay path (#0072) to reconstruct `ApprovalResponseInfo` for a
 /// `require_approval` decision without creating a second approval row.
 pub async fn get_approval_by_decision_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_id: &str,
 ) -> Result<Option<ApprovalRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ApprovalRecord>(
+    crate::fetch_optional_as!(
+        ApprovalRecord,
+        pool,
         "SELECT * FROM approvals WHERE tenant_id = ? AND decision_id = ?",
+        tenant_id,
+        decision_id
     )
-    .bind(tenant_id)
-    .bind(decision_id)
-    .fetch_optional(pool)
-    .await
 }
 
 /// #1316: batch-fetch the approval (if any) for each of `decision_ids` in a
@@ -80,7 +79,7 @@ pub async fn get_approval_by_decision_id(
 /// when building an evidence-graph subgraph for N decisions. Tenant-scoped.
 /// Empty input returns an empty map without querying.
 pub async fn list_approvals_by_decision_ids(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_ids: &[String],
 ) -> Result<std::collections::HashMap<String, ApprovalRecord>, sqlx::Error> {
@@ -94,80 +93,71 @@ pub async fn list_approvals_by_decision_ids(
         .join(", ");
     let query =
         format!("SELECT * FROM approvals WHERE tenant_id = ? AND decision_id IN ({placeholders})");
-    let mut q = sqlx::query_as::<_, ApprovalRecord>(&query).bind(tenant_id);
-    for id in decision_ids {
-        q = q.bind(id);
+
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut q = sqlx::query_as::<_, ApprovalRecord>(&query).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            let rows = q.fetch_all(p).await?;
+            Ok(rows
+                .into_iter()
+                .map(|r| (r.decision_id.clone(), r))
+                .collect())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(&query);
+            let mut q = sqlx::query_as::<_, ApprovalRecord>(&pg_sql).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            let rows = q.fetch_all(p).await?;
+            Ok(rows
+                .into_iter()
+                .map(|r| (r.decision_id.clone(), r))
+                .collect())
+        }
     }
-    let rows = q.fetch_all(pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.decision_id.clone(), r))
-        .collect())
 }
 
 #[tracing::instrument(name = "approval_create", skip_all)]
-pub async fn insert_approval(
-    pool: &SqlitePool,
-    record: &ApprovalRecord,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, callback_url, callback_secret_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.decision_id)
-    .bind(&record.status)
-    .bind(&record.approver_group)
-    .bind(&record.approver_user_id)
-    .bind(&record.reason)
-    .bind(&record.original_skill_call)
-    .bind(&record.original_call_hash)
-    .bind(&record.edited_skill_call)
-    .bind(record.expires_at)
-    .bind(record.decided_at)
-    .bind(&record.callback_url)
-    .bind(&record.callback_secret_hash)
-    .execute(pool)
-    .await?;
+pub async fn insert_approval(pool: &DbPool, record: &ApprovalRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(pool, "INSERT INTO approvals (id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, callback_url, callback_secret_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.decision_id, &record.status, &record.approver_group, &record.approver_user_id, &record.reason, &record.original_skill_call, &record.original_call_hash, &record.edited_skill_call, record.expires_at, record.decided_at, &record.callback_url, &record.callback_secret_hash)?;
     Ok(())
 }
 
 pub async fn list_pending_approvals(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<ApprovalRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let now = Utc::now();
-    sqlx::query_as::<_, ApprovalRecord>(
-        "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, callback_url, callback_secret_hash, created_at
+    crate::fetch_all_as!(ApprovalRecord, pool, "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, callback_url, callback_secret_hash, created_at
          FROM approvals
          WHERE tenant_id = ?
            AND status = 'created'
            AND (expires_at IS NULL OR expires_at > ?)
          ORDER BY created_at DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(now)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
+         LIMIT ? OFFSET ?", tenant_id, now, limit, offset)
 }
 
 pub async fn get_approval_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     approval_id: &str,
 ) -> Result<Option<ApprovalRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ApprovalRecord>("SELECT * FROM approvals WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(approval_id)
-        .fetch_optional(pool)
-        .await
+    crate::fetch_optional_as!(
+        ApprovalRecord,
+        pool,
+        "SELECT * FROM approvals WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        approval_id
+    )
 }
 
 /// Apply an edit to a pending approval (#0130): the edited tool call is
@@ -182,7 +172,7 @@ pub async fn get_approval_by_id(
 /// performed the transition (one row updated); `false` if the approval was
 /// already decided or has expired.
 pub async fn update_approval_edit(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     approval_id: &str,
     user_id: &str,
@@ -192,23 +182,22 @@ pub async fn update_approval_edit(
 ) -> Result<bool, sqlx::Error> {
     retry_on_busy(3, || async {
         let now = Utc::now();
-        let result = sqlx::query(
+        let result = crate::execute_query!(
+            pool,
             "UPDATE approvals
              SET status = 'EDITED', approver_user_id = ?, reason = ?, edited_skill_call = ?,
                  original_call_hash = ?, decided_at = ?
              WHERE tenant_id = ? AND id = ? AND status = 'created'
                AND (expires_at IS NULL OR expires_at > ?)",
-        )
-        .bind(user_id)
-        .bind(reason)
-        .bind(edited_call)
-        .bind(new_action_hash)
-        .bind(now)
-        .bind(tenant_id)
-        .bind(approval_id)
-        .bind(now)
-        .execute(pool)
-        .await?;
+            user_id,
+            reason,
+            edited_call,
+            new_action_hash,
+            now,
+            tenant_id,
+            approval_id,
+            now
+        )?;
         Ok(result.rows_affected() == 1)
     })
     .await
@@ -226,7 +215,7 @@ pub async fn update_approval_edit(
 /// transition (one row updated); `false` if the approval was already decided
 /// or has expired — callers must treat `false` as a 409, never as success.
 pub async fn update_approval_status(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     approval_id: &str,
     status: &str,
@@ -237,21 +226,20 @@ pub async fn update_approval_status(
     retry_on_busy(3, || async {
         let now = Utc::now();
         let dec_at = decided_at.unwrap_or(now);
-        let result = sqlx::query(
+        let result = crate::execute_query!(
+            pool,
             "UPDATE approvals
              SET status = ?, approver_user_id = ?, reason = ?, decided_at = ?
              WHERE tenant_id = ? AND id = ? AND status = 'created'
                AND (expires_at IS NULL OR expires_at > ?)",
-        )
-        .bind(status)
-        .bind(user_id)
-        .bind(reason)
-        .bind(dec_at)
-        .bind(tenant_id)
-        .bind(approval_id)
-        .bind(now)
-        .execute(pool)
-        .await?;
+            status,
+            user_id,
+            reason,
+            dec_at,
+            tenant_id,
+            approval_id,
+            now
+        )?;
         Ok(result.rows_affected() == 1)
     })
     .await
@@ -263,19 +251,18 @@ pub async fn update_approval_status(
 /// deleted. This keeps the `approvals` table bounded without removing
 /// approvals a reviewer might still need to act on.
 pub async fn delete_expired_approvals_older_than(
-    pool: &SqlitePool,
+    pool: &DbPool,
     cutoff: DateTime<Utc>,
 ) -> Result<u64, sqlx::Error> {
     let now = Utc::now();
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "DELETE FROM approvals
          WHERE created_at < ?
            AND (status != 'created' OR (expires_at IS NOT NULL AND expires_at < ?))",
-    )
-    .bind(cutoff)
-    .bind(now)
-    .execute(pool)
-    .await?;
+        cutoff,
+        now
+    )?;
     Ok(result.rows_affected())
 }
 
@@ -296,12 +283,8 @@ mod tests {
         register_tenant(&pool, "tenant_cleanup", "Cleanup Tenant", "developer")
             .await
             .unwrap();
-        sqlx::query(
-                "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-                 VALUES ('agent_cleanup', 'tenant_cleanup', 'agent_cleanup', 'token_cleanup', 'Cleanup Agent', 'dev', 'low', 'active')",
-            )
-            .execute(&pool)
-            .await
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES ('agent_cleanup', 'tenant_cleanup', 'agent_cleanup', 'token_cleanup', 'Cleanup Agent', 'dev', 'low', 'active')")
             .unwrap();
 
         let make_decision = |id: &str| DecisionRecord {
@@ -398,11 +381,12 @@ mod tests {
 
         // Backdate everything except appr_new_decided so they fall before the cutoff.
         for id in ["appr_old_decided", "appr_old_expired", "appr_old_pending"] {
-            sqlx::query("UPDATE approvals SET created_at = '2000-01-01T00:00:00Z' WHERE id = ?")
-                .bind(id)
-                .execute(&pool)
-                .await
-                .unwrap();
+            crate::execute_query!(
+                pool,
+                "UPDATE approvals SET created_at = '2000-01-01T00:00:00Z' WHERE id = ?",
+                id
+            )
+            .unwrap();
         }
 
         let cutoff = Utc::now() - chrono::Duration::days(30);
@@ -411,10 +395,9 @@ mod tests {
             .unwrap();
         assert_eq!(deleted, 2);
 
-        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM approvals ORDER BY id")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+        let remaining: Vec<(String,)> =
+            crate::fetch_all_as!(_, pool, "SELECT id FROM approvals ORDER BY id").unwrap();
+        let remaining: Vec<String> = remaining.into_iter().map(|(id,)| id).collect();
         assert_eq!(remaining, vec!["appr_new_decided", "appr_old_pending"]);
     }
 }

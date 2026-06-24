@@ -1515,7 +1515,7 @@ mod tests {
 
     /// Helper: insert a bare-minimum incident row for a tenant (no agent required).
     async fn insert_test_incident(
-        pool: &sqlx::SqlitePool,
+        pool: &db::DbPool,
         tenant_id: &str,
         incident_id: &str,
         kind: &str,

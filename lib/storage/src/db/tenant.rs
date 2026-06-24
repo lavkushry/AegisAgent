@@ -1,7 +1,7 @@
 use super::hash_token;
+use crate::db::DbPool;
 use aegis_api::models::*;
 use chrono::Utc;
-use sqlx::SqlitePool;
 
 /// Row shape for `tenant_risk_weights`, matching [`aegis_api::models::RiskWeights`]'s
 /// field order. Factored out to satisfy `clippy::type_complexity`.
@@ -11,10 +11,12 @@ type RiskWeightsRow = (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32);
 /// [`aegis_api::models::RiskWeights::from_env`] when no override row exists.
 /// Tenant-scoped, parameterized.
 pub async fn get_risk_weights(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<aegis_api::models::RiskWeights, sqlx::Error> {
-    let row: Option<RiskWeightsRow> = sqlx::query_as(
+    let row: Option<RiskWeightsRow> = crate::fetch_optional_as!(
+        _,
+        pool,
         "SELECT environment_weight_mutating,
                 context_trust_penalty_trusted_internal_signed,
                 context_trust_penalty_trusted_internal_unsigned,
@@ -26,10 +28,8 @@ pub async fn get_risk_weights(
                 anomaly_weight_pct,
                 approval_credit
          FROM tenant_risk_weights WHERE tenant_id = ?",
-    )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await?;
+        tenant_id
+    )?;
 
     Ok(match row {
         Some((
@@ -62,12 +62,11 @@ pub async fn get_risk_weights(
 /// #1289: upsert per-tenant composite-risk-score weight overrides.
 /// Tenant-scoped, parameterized.
 pub async fn upsert_risk_weights(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     weights: &aegis_api::models::RiskWeights,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO tenant_risk_weights (
+    crate::execute_query!(pool, "INSERT INTO tenant_risk_weights (
             tenant_id,
             environment_weight_mutating,
             context_trust_penalty_trusted_internal_signed,
@@ -90,21 +89,7 @@ pub async fn upsert_risk_weights(
             context_trust_penalty_unknown = excluded.context_trust_penalty_unknown,
             mcp_trust_penalty = excluded.mcp_trust_penalty,
             anomaly_weight_pct = excluded.anomaly_weight_pct,
-            approval_credit = excluded.approval_credit",
-    )
-    .bind(tenant_id)
-    .bind(weights.environment_weight_mutating)
-    .bind(weights.context_trust_penalty_trusted_internal_signed)
-    .bind(weights.context_trust_penalty_trusted_internal_unsigned)
-    .bind(weights.context_trust_penalty_semi_trusted_customer)
-    .bind(weights.context_trust_penalty_untrusted_external)
-    .bind(weights.context_trust_penalty_malicious_suspected)
-    .bind(weights.context_trust_penalty_unknown)
-    .bind(weights.mcp_trust_penalty)
-    .bind(weights.anomaly_weight_pct)
-    .bind(weights.approval_credit)
-    .execute(pool)
-    .await?;
+            approval_credit = excluded.approval_credit", tenant_id, weights.environment_weight_mutating, weights.context_trust_penalty_trusted_internal_signed, weights.context_trust_penalty_trusted_internal_unsigned, weights.context_trust_penalty_semi_trusted_customer, weights.context_trust_penalty_untrusted_external, weights.context_trust_penalty_malicious_suspected, weights.context_trust_penalty_unknown, weights.mcp_trust_penalty, weights.anomaly_weight_pct, weights.approval_credit)?;
     Ok(())
 }
 
@@ -112,15 +97,10 @@ pub async fn upsert_risk_weights(
 /// [`aegis_api::models::RiskEscalationConfig::default`] when no override
 /// row exists. Tenant-scoped, parameterized.
 pub async fn get_risk_escalation_config(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<aegis_api::models::RiskEscalationConfig, sqlx::Error> {
-    let row: Option<(i64, i64)> = sqlx::query_as(
-        "SELECT denial_threshold, window_minutes FROM tenant_risk_escalation_config WHERE tenant_id = ?",
-    )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(i64, i64)> = crate::fetch_optional_as!(_, pool, "SELECT denial_threshold, window_minutes FROM tenant_risk_escalation_config WHERE tenant_id = ?", tenant_id)?;
 
     Ok(match row {
         Some((denial_threshold, window_minutes)) => aegis_api::models::RiskEscalationConfig {
@@ -133,35 +113,36 @@ pub async fn get_risk_escalation_config(
 
 /// #1296: upsert per-tenant risk-escalation thresholds. Tenant-scoped, parameterized.
 pub async fn upsert_risk_escalation_config(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     config: &aegis_api::models::RiskEscalationConfig,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "INSERT INTO tenant_risk_escalation_config (tenant_id, denial_threshold, window_minutes)
          VALUES (?, ?, ?)
          ON CONFLICT(tenant_id) DO UPDATE SET
             denial_threshold = excluded.denial_threshold,
             window_minutes = excluded.window_minutes",
-    )
-    .bind(tenant_id)
-    .bind(config.denial_threshold)
-    .bind(config.window_minutes)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        config.denial_threshold,
+        config.window_minutes
+    )?;
     Ok(())
 }
 
 // --- Multi-Tenant CRUD Operations ---
 
 pub async fn get_tenant_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Option<TenantRecord>, sqlx::Error> {
-    sqlx::query_as::<_, TenantRecord>("SELECT * FROM tenants WHERE id = ?")
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await
+    crate::fetch_optional_as!(
+        TenantRecord,
+        pool,
+        "SELECT * FROM tenants WHERE id = ?",
+        tenant_id
+    )
 }
 
 /// GDPR data-portability (#946): assemble the complete set of one tenant's
@@ -169,52 +150,52 @@ pub async fn get_tenant_by_id(
 /// parameterized; rows are returned in full (no pagination cap) so the export is
 /// complete. Read-only.
 pub async fn export_tenant_data(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<TenantExport, sqlx::Error> {
     let tenant = get_tenant_by_id(pool, tenant_id).await?;
 
-    let agents = sqlx::query_as::<_, AgentRecord>(
+    let agents = crate::fetch_all_as!(
+        AgentRecord,
+        pool,
         "SELECT * FROM agents WHERE tenant_id = ? ORDER BY created_at ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id
+    )?;
 
-    let decisions = sqlx::query_as::<_, DecisionRecord>(
+    let decisions = crate::fetch_all_as!(
+        DecisionRecord,
+        pool,
         "SELECT * FROM decisions WHERE tenant_id = ? ORDER BY created_at ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id
+    )?;
 
-    let approvals = sqlx::query_as::<_, ApprovalRecord>(
+    let approvals = crate::fetch_all_as!(
+        ApprovalRecord,
+        pool,
         "SELECT * FROM approvals WHERE tenant_id = ? ORDER BY created_at ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id
+    )?;
 
-    let action_receipts = sqlx::query_as::<_, ActionReceiptRecord>(
+    let action_receipts = crate::fetch_all_as!(
+        ActionReceiptRecord,
+        pool,
         "SELECT * FROM action_receipts WHERE tenant_id = ? ORDER BY created_at ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id
+    )?;
 
-    let audit_events = sqlx::query_as::<_, AuditEventRecord>(
+    let audit_events = crate::fetch_all_as!(
+        AuditEventRecord,
+        pool,
         "SELECT * FROM audit_events WHERE tenant_id = ? ORDER BY created_at ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id
+    )?;
 
-    let mcp_servers = sqlx::query_as::<_, McpServerRecord>(
+    let mcp_servers = crate::fetch_all_as!(
+        McpServerRecord,
+        pool,
         "SELECT * FROM mcp_servers WHERE tenant_id = ? ORDER BY created_at ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id
+    )?;
 
     Ok(TenantExport {
         schema: "aegis-tenant-export-1".to_string(),
@@ -236,93 +217,162 @@ pub async fn export_tenant_data(
 /// `FOREIGN KEY` constraints enforced by [`init_db`] are satisfied
 /// throughout. Callers should call [`export_tenant_data`] first if a
 /// portability copy is needed — this is irreversible.
-pub async fn delete_tenant_data(pool: &SqlitePool, tenant_id: &str) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
+pub async fn delete_tenant_data(pool: &DbPool, tenant_id: &str) -> Result<(), sqlx::Error> {
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut tx = p.begin().await?;
 
-    // action_receipts, audit_events*, soc_alerts/incidents, approvals
-    // reference decisions/tenants but nothing references them.
-    sqlx::query("DELETE FROM action_receipts WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM audit_events WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM audit_events_archive WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM soc_alerts WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM soc_incidents WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM approvals WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
+            sqlx::query("DELETE FROM action_receipts WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM audit_events WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM audit_events_archive WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM soc_alerts WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM soc_incidents WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM approvals WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
 
-    // decisions reference agents; agents and decisions both reference tenants.
-    sqlx::query("DELETE FROM decisions WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
+            sqlx::query("DELETE FROM decisions WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
 
-    // mcp_tools references mcp_servers.
-    sqlx::query("DELETE FROM mcp_tools WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM mcp_servers WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
+            sqlx::query("DELETE FROM mcp_tools WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM mcp_servers WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
 
-    // skill_actions references skills (no direct tenant_id column).
-    sqlx::query(
-        "DELETE FROM skill_actions WHERE skill_id IN (SELECT id FROM skills WHERE tenant_id = ?)",
-    )
-    .bind(tenant_id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("DELETE FROM skills WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
+            sqlx::query(
+                "DELETE FROM skill_actions WHERE skill_id IN (SELECT id FROM skills WHERE tenant_id = ?)",
+            )
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM skills WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
 
-    sqlx::query("DELETE FROM policies WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM agents WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM tenants WHERE id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
+            sqlx::query("DELETE FROM policies WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM agents WHERE tenant_id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM tenants WHERE id = ?")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
 
-    tx.commit().await?;
+            tx.commit().await?;
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let mut tx = p.begin().await?;
+
+            sqlx::query("DELETE FROM action_receipts WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM audit_events WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM audit_events_archive WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM soc_alerts WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM soc_incidents WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM approvals WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query("DELETE FROM decisions WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query("DELETE FROM mcp_tools WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM mcp_servers WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query(
+                "DELETE FROM skill_actions WHERE skill_id IN (SELECT id FROM skills WHERE tenant_id = $1)",
+            )
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM skills WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query("DELETE FROM policies WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM agents WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM tenants WHERE id = $1")
+                .bind(tenant_id)
+                .execute(&mut *tx)
+                .await?;
+
+            tx.commit().await?;
+        }
+    }
     Ok(())
 }
 
 pub async fn register_tenant(
-    pool: &SqlitePool,
+    pool: &DbPool,
     id: &str,
     name: &str,
     plan: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO tenants (id, name, plan) VALUES (?, ?, ?)")
-        .bind(id)
-        .bind(name)
-        .bind(plan)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(
+        pool,
+        "INSERT INTO tenants (id, name, plan) VALUES (?, ?, ?)",
+        id,
+        name,
+        plan
+    )?;
     Ok(())
 }
 
@@ -330,7 +380,7 @@ pub async fn register_tenant(
 /// returned exactly once (caller must surface it to the user); only
 /// `sha256(key)` is persisted, mirroring `hash_token` / `agents.agent_token`.
 pub async fn create_api_key(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     name: &str,
 ) -> Result<(String, String), sqlx::Error> {
@@ -342,16 +392,15 @@ pub async fn create_api_key(
     );
     let key_hash = hash_token(&key);
 
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "INSERT INTO api_keys (id, tenant_id, key_hash, name, status) \
          VALUES (?, ?, ?, ?, 'active')",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(&key_hash)
-    .bind(name)
-    .execute(pool)
-    .await?;
+        &id,
+        tenant_id,
+        &key_hash,
+        name
+    )?;
 
     Ok((id, key))
 }
@@ -359,15 +408,15 @@ pub async fn create_api_key(
 /// TASK-0093 (#939): list a tenant's API keys, most recent first. `key_hash`
 /// is included (it is not a secret); the plaintext key is never persisted.
 pub async fn list_api_keys(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<ApiKeyRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ApiKeyRecord>(
+    crate::fetch_all_as!(
+        ApiKeyRecord,
+        pool,
         "SELECT * FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC",
+        tenant_id
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
 }
 
 /// #1307 (AC#4): check whether `key_hash` matches an `active` API key for
@@ -377,44 +426,37 @@ pub async fn list_api_keys(
 /// `create_api_key` / #939). Tenant-scoped and parameterized; fails closed
 /// (returns `false`) for any non-`active` or unknown hash.
 pub async fn is_active_api_key(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     key_hash: &str,
 ) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query(
+    let row: Option<i32> = crate::fetch_optional_scalar!(
+        i32,
+        pool,
         "SELECT 1 FROM api_keys WHERE tenant_id = ? AND key_hash = ? AND status = 'active'",
-    )
-    .bind(tenant_id)
-    .bind(key_hash)
-    .fetch_optional(pool)
-    .await?;
+        tenant_id,
+        key_hash
+    )?;
     Ok(row.is_some())
 }
 
 /// TASK-0093 (#939): revoke a tenant's API key. Returns `true` if a row was
 /// updated.
-pub async fn revoke_api_key(
-    pool: &SqlitePool,
-    tenant_id: &str,
-    id: &str,
-) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+pub async fn revoke_api_key(pool: &DbPool, tenant_id: &str, id: &str) -> Result<bool, sqlx::Error> {
+    let result = crate::execute_query!(
+        pool,
         "UPDATE api_keys SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP \
          WHERE tenant_id = ? AND id = ? AND status != 'revoked'",
-    )
-    .bind(tenant_id)
-    .bind(id)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        id
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
 /// All tenant IDs, for jobs (e.g. the receipt chain integrity check, #0107)
 /// that must run per-tenant rather than globally.
-pub async fn list_all_tenant_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
-    let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM tenants")
-        .fetch_all(pool)
-        .await?;
+pub async fn list_all_tenant_ids(pool: &DbPool) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = crate::fetch_all_as!(_, pool, "SELECT id FROM tenants")?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
@@ -422,15 +464,13 @@ pub async fn list_all_tenant_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx:
 /// enabled for `tenant_id`. Defaults to `true` (the column is `NOT NULL
 /// DEFAULT 1`); an unknown tenant is treated as disabled (fail-safe — no
 /// automated containment for a tenant the gateway can't find).
-pub async fn is_auto_respond_enabled(
-    pool: &SqlitePool,
-    tenant_id: &str,
-) -> Result<bool, sqlx::Error> {
-    let row: Option<(bool,)> =
-        sqlx::query_as("SELECT auto_respond_enabled FROM tenants WHERE id = ?")
-            .bind(tenant_id)
-            .fetch_optional(pool)
-            .await?;
+pub async fn is_auto_respond_enabled(pool: &DbPool, tenant_id: &str) -> Result<bool, sqlx::Error> {
+    let row: Option<(bool,)> = crate::fetch_optional_as!(
+        _,
+        pool,
+        "SELECT auto_respond_enabled FROM tenants WHERE id = ?",
+        tenant_id
+    )?;
     Ok(row.map(|(v,)| v).unwrap_or(false))
 }
 
@@ -451,14 +491,15 @@ pub async fn is_auto_respond_enabled(
 /// recognised `L0`-`L4` value) > `AEGIS_SOC_AUTONOMY_LEVEL` env var (if set
 /// to a recognised value) > default `"L1"`. An unrecognised value at either
 /// level is ignored (falls through), keeping the default fail-safe.
-pub async fn get_soc_autonomy_level(pool: &SqlitePool, tenant_id: &str) -> String {
+pub async fn get_soc_autonomy_level(pool: &DbPool, tenant_id: &str) -> String {
     const LEVELS: [&str; 5] = ["L0", "L1", "L2", "L3", "L4"];
 
-    let row: Result<Option<(Option<String>,)>, sqlx::Error> =
-        sqlx::query_as("SELECT soc_autonomy_level FROM tenants WHERE id = ?")
-            .bind(tenant_id)
-            .fetch_optional(pool)
-            .await;
+    let row: Result<Option<(Option<String>,)>, sqlx::Error> = crate::fetch_optional_as!(
+        _,
+        pool,
+        "SELECT soc_autonomy_level FROM tenants WHERE id = ?",
+        tenant_id
+    );
 
     if let Ok(Some((Some(level),))) = row {
         let upper = level.to_uppercase();
@@ -478,55 +519,61 @@ pub async fn get_soc_autonomy_level(pool: &SqlitePool, tenant_id: &str) -> Strin
 }
 
 pub async fn get_tenant_stats(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<aegis_api::models::TenantStats, sqlx::Error> {
-    let (total_decisions,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let (total_decisions,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ?",
+        tenant_id
+    )?;
 
-    let (decisions_allow,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'allow'")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let (decisions_allow,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'allow'",
+        tenant_id
+    )?;
 
-    let (decisions_deny,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'deny'")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let (decisions_deny,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'deny'",
+        tenant_id
+    )?;
 
-    let (decisions_require_approval,): (i64,) = sqlx::query_as(
+    let (decisions_require_approval,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*) FROM decisions WHERE tenant_id = ? AND decision = 'require_approval'",
-    )
-    .bind(tenant_id)
-    .fetch_one(pool)
-    .await?;
+        tenant_id
+    )?;
 
-    let (total_agents,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM agents WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .fetch_one(pool)
-        .await?;
+    let (total_agents,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM agents WHERE tenant_id = ?",
+        tenant_id
+    )?;
 
-    let (total_receipts,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let (total_receipts,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ?",
+        tenant_id
+    )?;
 
     // #1294: per-trust-level breakdown for the dashboard's Trust Level
     // Distribution chart. COALESCE groups pre-#1293 rows (NULL
     // root_trust_level) under "unknown" rather than leaving a NULL group key.
-    let trust_level_rows: Vec<(String, i64)> = sqlx::query_as(
+    let trust_level_rows: Vec<(String, i64)> = crate::fetch_all_as!(
+        _,
+        pool,
         "SELECT COALESCE(root_trust_level, 'unknown') AS trust_level, COUNT(*) AS count \
          FROM decisions WHERE tenant_id = ? GROUP BY trust_level",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?;
+        tenant_id
+    )?;
     let trust_level_breakdown = trust_level_rows
         .into_iter()
         .map(|(trust_level, count)| aegis_api::models::TrustLevelCount { trust_level, count })
@@ -939,12 +986,8 @@ mod tests {
         register_tenant(&pool, "tenant_other", "Other Tenant", "developer")
             .await
             .unwrap();
-        sqlx::query(
-                "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-                 VALUES ('agent_graph_perf', 'tenant_graph_perf', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
-            )
-            .execute(&pool)
-            .await
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES ('agent_graph_perf', 'tenant_graph_perf', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')")
             .unwrap();
 
         insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_graph_perf"))
@@ -1001,12 +1044,8 @@ mod tests {
         register_tenant(&pool, "tenant_other", "Other Tenant", "developer")
             .await
             .unwrap();
-        sqlx::query(
-                "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-                 VALUES ('agent_graph_perf', 'tenant_graph_perf', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
-            )
-            .execute(&pool)
-            .await
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES ('agent_graph_perf', 'tenant_graph_perf', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')")
             .unwrap();
 
         insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_graph_perf"))
@@ -1053,12 +1092,8 @@ mod tests {
         )
         .await
         .unwrap();
-        sqlx::query(
-                "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-                 VALUES ('agent_graph_perf', 'tenant_trust_breakdown', 'agent_graph_perf', 'token_trust_breakdown', 'Trust Breakdown Agent', 'dev', 'low', 'active')",
-            )
-            .execute(&pool)
-            .await
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES ('agent_graph_perf', 'tenant_trust_breakdown', 'agent_graph_perf', 'token_trust_breakdown', 'Trust Breakdown Agent', 'dev', 'low', 'active')")
             .unwrap();
 
         let mut signed = graph_perf_decision("dec_signed", "tenant_trust_breakdown");
@@ -1094,34 +1129,25 @@ mod tests {
 }
 
 /// Insert a tenant record.
-pub async fn insert_tenant(pool: &SqlitePool, record: &TenantRecord) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO tenants (id, name, plan, auto_respond_enabled, auto_rotate_token_on_leak_enabled) \
-         VALUES (?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.name)
-    .bind(&record.plan)
-    .bind(record.auto_respond_enabled)
-    .bind(record.auto_rotate_token_on_leak_enabled)
-    .execute(pool)
-    .await?;
+pub async fn insert_tenant(pool: &DbPool, record: &TenantRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(pool, "INSERT INTO tenants (id, name, plan, auto_respond_enabled, auto_rotate_token_on_leak_enabled) \
+         VALUES (?, ?, ?, ?, ?)", &record.id, &record.name, &record.plan, record.auto_respond_enabled, record.auto_rotate_token_on_leak_enabled)?;
     Ok(())
 }
 
 /// List all tenants.
-pub async fn list_tenants(pool: &SqlitePool) -> Result<Vec<TenantRecord>, sqlx::Error> {
-    sqlx::query_as::<_, TenantRecord>("SELECT * FROM tenants ORDER BY created_at DESC")
-        .fetch_all(pool)
-        .await
+pub async fn list_tenants(pool: &DbPool) -> Result<Vec<TenantRecord>, sqlx::Error> {
+    crate::fetch_all_as!(
+        TenantRecord,
+        pool,
+        "SELECT * FROM tenants ORDER BY created_at DESC"
+    )
 }
 
 /// Delete a tenant by ID, cascade deleting all other associated tables inside a transaction.
-pub async fn delete_tenant_by_id(pool: &SqlitePool, tenant_id: &str) -> Result<bool, sqlx::Error> {
-    let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM tenants WHERE id = ?")
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn delete_tenant_by_id(pool: &DbPool, tenant_id: &str) -> Result<bool, sqlx::Error> {
+    let exists: Option<(String,)> =
+        crate::fetch_optional_as!(_, pool, "SELECT id FROM tenants WHERE id = ?", tenant_id)?;
 
     if exists.is_none() {
         return Ok(false);
@@ -1133,59 +1159,62 @@ pub async fn delete_tenant_by_id(pool: &SqlitePool, tenant_id: &str) -> Result<b
 
 /// Set auto respond enable toggle for a tenant.
 pub async fn set_tenant_auto_respond(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     enabled: bool,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE tenants SET auto_respond_enabled = ? WHERE id = ?")
-        .bind(enabled)
-        .bind(tenant_id)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(
+        pool,
+        "UPDATE tenants SET auto_respond_enabled = ? WHERE id = ?",
+        enabled,
+        tenant_id
+    )?;
     Ok(())
 }
 
 /// Set auto rotate token on leak toggle for a tenant.
 pub async fn set_tenant_auto_rotate_token_on_leak(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     enabled: bool,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE tenants SET auto_rotate_token_on_leak_enabled = ? WHERE id = ?")
-        .bind(enabled)
-        .bind(tenant_id)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(
+        pool,
+        "UPDATE tenants SET auto_rotate_token_on_leak_enabled = ? WHERE id = ?",
+        enabled,
+        tenant_id
+    )?;
     Ok(())
 }
 
 /// Fetch an API key record by id.
 pub async fn get_api_key_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<Option<ApiKeyRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ApiKeyRecord>("SELECT * FROM api_keys WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(id)
-        .fetch_optional(pool)
-        .await
+    crate::fetch_optional_as!(
+        ApiKeyRecord,
+        pool,
+        "SELECT * FROM api_keys WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        id
+    )
 }
 
 /// Insert an API key record.
-pub async fn insert_api_key(pool: &SqlitePool, record: &ApiKeyRecord) -> Result<(), sqlx::Error> {
-    sqlx::query(
+pub async fn insert_api_key(pool: &DbPool, record: &ApiKeyRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(
+        pool,
         "INSERT INTO api_keys (id, tenant_id, key_hash, name, status, created_at, revoked_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.key_hash)
-    .bind(&record.name)
-    .bind(&record.status)
-    .bind(record.created_at)
-    .bind(record.revoked_at)
-    .execute(pool)
-    .await?;
+        &record.id,
+        &record.tenant_id,
+        &record.key_hash,
+        &record.name,
+        &record.status,
+        record.created_at,
+        record.revoked_at
+    )?;
     Ok(())
 }
