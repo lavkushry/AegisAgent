@@ -9,7 +9,7 @@ use aegis_api::grpc::aegis::{
     DiscoverMcpToolsResponse, ListAlertsRequest, ListAlertsResponse, ListIncidentsRequest,
     ListIncidentsResponse, ListPlaybooksRequest, ListPlaybooksResponse, McpToolStatusResponse,
     RegisterAgentRequest, RegisterAgentResponse, RegisterMcpServerRequest,
-    RegisterMcpServerResponse,
+    RegisterMcpServerResponse, SemanticSearchRequest, SemanticSearchResponse, SemanticSearchResult,
 };
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
@@ -756,6 +756,85 @@ impl SocService for SocGrpcServiceImpl {
             Ok(success) => Ok(Response::new(DeletePlaybookResponse { success })),
             Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
         }
+    }
+
+    /// #1451: gRPC counterpart of `GET /v1/soc/semantic-search`.
+    ///
+    /// Thin protocol adapter — delegates to `QdrantExporter::search_similar_events`
+    /// (the same service method the REST handler calls).
+    async fn semantic_search(
+        &self,
+        request: Request<SemanticSearchRequest>,
+    ) -> Result<Response<SemanticSearchResponse>, Status> {
+        let req = request.into_inner();
+
+        // Validate: query must be non-empty.
+        if req.query.trim().is_empty() {
+            return Err(Status::invalid_argument("Query parameter cannot be empty"));
+        }
+
+        // Check that the Qdrant exporter is configured.
+        let exporter = self._state.qdrant_exporter.as_ref().ok_or_else(|| {
+            Status::unimplemented("Qdrant semantic search is not configured on this gateway")
+        })?;
+
+        let limit = if req.limit <= 0 {
+            10
+        } else {
+            req.limit as usize
+        };
+
+        let raw_results = exporter
+            .search_similar_events(&req.tenant_id, &req.query, limit)
+            .await
+            .map_err(|e| Status::internal(format!("Semantic search error: {}", e)))?;
+
+        // Map untyped JSON results into typed proto messages.
+        let results = raw_results
+            .into_iter()
+            .map(|val| {
+                let obj = val.as_object();
+                let s = |key: &str| -> String {
+                    obj.and_then(|m| m.get(key))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                SemanticSearchResult {
+                    event_id: s("event_id"),
+                    occurred_at: s("occurred_at"),
+                    tenant_id: s("tenant_id"),
+                    kind: s("kind"),
+                    agent_id: s("agent_id"),
+                    decision: s("decision"),
+                    tool: s("tool"),
+                    action: s("action"),
+                    resource: s("resource"),
+                    risk_score: obj
+                        .and_then(|m| m.get("risk_score"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0),
+                    reason: s("reason"),
+                    run_id: s("run_id"),
+                    trace_id: s("trace_id"),
+                    matched_policies: obj
+                        .and_then(|m| m.get("matched_policies"))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    similarity_score: obj
+                        .and_then(|m| m.get("similarity_score"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0),
+                }
+            })
+            .collect();
+
+        Ok(Response::new(SemanticSearchResponse { results }))
     }
 }
 

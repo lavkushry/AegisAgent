@@ -9,6 +9,7 @@ service SocService {
     rpc CreatePlaybook (CreatePlaybookRequest) returns (CreatePlaybookResponse);
     rpc ListPlaybooks (ListPlaybooksRequest) returns (ListPlaybooksResponse);
     rpc DeletePlaybook (DeletePlaybookRequest) returns (DeletePlaybookResponse);
+    rpc SemanticSearch (SemanticSearchRequest) returns (SemanticSearchResponse);
 }
 
 message CreatePlaybookRequest {
@@ -112,4 +113,33 @@ message CloseIncidentRequest {
 message CloseIncidentResponse {
     string status = 1;
     string incident_id = 2;
+}
+
+// #1451: Semantic search over Qdrant-indexed audit events.
+message SemanticSearchRequest {
+    string tenant_id = 1;
+    string query = 2;
+    int64 limit = 3; // 0 means server default (10)
+}
+
+message SemanticSearchResult {
+    string event_id = 1;
+    string occurred_at = 2;
+    string tenant_id = 3;
+    string kind = 4;
+    string agent_id = 5;
+    string decision = 6;
+    string tool = 7;
+    string action = 8;
+    string resource = 9;
+    int64 risk_score = 10;
+    string reason = 11;
+    string run_id = 12;
+    string trace_id = 13;
+    repeated string matched_policies = 14;
+    double similarity_score = 15;
+}
+
+message SemanticSearchResponse {
+    repeated SemanticSearchResult results = 1;
 }
