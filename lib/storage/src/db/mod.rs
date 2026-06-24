@@ -536,6 +536,21 @@ pub fn statement_cache_capacity_from_env() -> usize {
         .unwrap_or(DEFAULT_STATEMENT_CACHE_CAPACITY)
 }
 
+/// Read `AEGIS_DB_MMAP_SIZE` (#919) — the byte size SQLite should memory-map
+/// for reads via `PRAGMA mmap_size`. Unset, unparseable, or negative values
+/// all resolve to `None`, meaning "issue no `PRAGMA mmap_size` at all" —
+/// i.e. today's behavior (whatever the linked SQLite's compiled-in default
+/// is) stays unchanged. `0` is a valid, meaningful value: SQLite itself
+/// treats `PRAGMA mmap_size = 0` as "disable mmap", so it is intentionally
+/// `Some(0)` here rather than falling back to `None`, mirroring
+/// [`statement_cache_capacity_from_env`]'s "0 is meaningful" precedent (#906).
+pub fn mmap_size_bytes_from_env() -> Option<i64> {
+    std::env::var("AEGIS_DB_MMAP_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|&n| n >= 0)
+}
+
 pub async fn init_db(db_url: &str) -> Result<DbPool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }
@@ -652,6 +667,20 @@ async fn init_sqlite_db_with_busy_timeout(
     // hosts, `0` to disable caching entirely for debugging.
     connection_options =
         connection_options.statement_cache_capacity(statement_cache_capacity_from_env());
+
+    // #919: memory-mapped I/O for read-heavy workloads. Opt-in via
+    // `AEGIS_DB_MMAP_SIZE` (bytes) — unset leaves SQLite's compiled-in
+    // default untouched. `mmap_size` is a per-connection PRAGMA (unlike
+    // `journal_mode=WAL`, which is persisted in the database file itself),
+    // so it's added to `connection_options` here — like `journal_mode`,
+    // `busy_timeout`, and `foreign_keys` above — rather than run as a
+    // one-off `sqlx::query(...).execute(&pool)` after the pool exists; that
+    // would only reach whichever single connection happened to service that
+    // query, not every connection the pool opens (including ones opened
+    // later to grow the pool under load).
+    if let Some(mmap_bytes) = mmap_size_bytes_from_env() {
+        connection_options = connection_options.pragma("mmap_size", mmap_bytes.to_string());
+    }
 
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections)
@@ -1787,6 +1816,86 @@ mod tests {
         assert_eq!(one_again, 1);
 
         std::env::remove_var("AEGIS_DB_STATEMENT_CACHE_CAPACITY");
+    }
+
+    /// #919: unset env var means "issue no PRAGMA at all".
+    #[tokio::test]
+    async fn mmap_size_bytes_from_env_defaults_to_none_when_unset() {
+        let _guard = crate::db::test_utils::MMAP_SIZE_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_DB_MMAP_SIZE");
+        assert_eq!(mmap_size_bytes_from_env(), None);
+    }
+
+    /// #919: a configured value is read and parsed.
+    #[tokio::test]
+    async fn mmap_size_bytes_from_env_reads_configured_value() {
+        let _guard = crate::db::test_utils::MMAP_SIZE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_MMAP_SIZE", "16777216");
+        assert_eq!(mmap_size_bytes_from_env(), Some(16777216));
+        std::env::remove_var("AEGIS_DB_MMAP_SIZE");
+    }
+
+    /// #919: `0` is a valid, meaningful value (explicitly disables mmap) —
+    /// not filtered out, mirroring the statement-cache-capacity precedent.
+    #[tokio::test]
+    async fn mmap_size_bytes_from_env_allows_zero() {
+        let _guard = crate::db::test_utils::MMAP_SIZE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_MMAP_SIZE", "0");
+        assert_eq!(mmap_size_bytes_from_env(), Some(0));
+        std::env::remove_var("AEGIS_DB_MMAP_SIZE");
+    }
+
+    /// #919: a negative value is nonsensical for a byte size — treated the
+    /// same as unset rather than handed to SQLite to reject at startup.
+    #[tokio::test]
+    async fn mmap_size_bytes_from_env_rejects_negative_value() {
+        let _guard = crate::db::test_utils::MMAP_SIZE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_MMAP_SIZE", "-1");
+        assert_eq!(mmap_size_bytes_from_env(), None);
+        std::env::remove_var("AEGIS_DB_MMAP_SIZE");
+    }
+
+    /// #919: an unparseable value falls back to `None` instead of failing
+    /// startup.
+    #[tokio::test]
+    async fn mmap_size_bytes_from_env_falls_back_on_garbage_value() {
+        let _guard = crate::db::test_utils::MMAP_SIZE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_MMAP_SIZE", "not-a-number");
+        assert_eq!(mmap_size_bytes_from_env(), None);
+        std::env::remove_var("AEGIS_DB_MMAP_SIZE");
+    }
+
+    /// #919: a configured `AEGIS_DB_MMAP_SIZE` is actually applied to pooled
+    /// connections — verified by reading the PRAGMA back, not just trusting
+    /// that `init_db` didn't error.
+    #[tokio::test]
+    async fn init_db_applies_configured_mmap_size() {
+        let _guard = crate::db::test_utils::MMAP_SIZE_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_MMAP_SIZE", "16777216");
+        let pool = setup_pool("mmap_size_configured").await;
+
+        let (mmap_size,): (i64,) = sqlx::query_as("PRAGMA mmap_size;")
+            .fetch_one(pool.sqlite_pool())
+            .await
+            .expect("PRAGMA mmap_size should be queryable");
+        assert_eq!(mmap_size, 16777216);
+
+        std::env::remove_var("AEGIS_DB_MMAP_SIZE");
+    }
+
+    /// #919: leaving `AEGIS_DB_MMAP_SIZE` unset must not change behavior —
+    /// `init_db` must still succeed and basic queries still work.
+    #[tokio::test]
+    async fn init_db_succeeds_with_mmap_size_unset() {
+        let _guard = crate::db::test_utils::MMAP_SIZE_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_DB_MMAP_SIZE");
+        let pool = setup_pool("mmap_size_unset").await;
+
+        let (one,): (i64,) = sqlx::query_as("SELECT 1")
+            .fetch_one(pool.sqlite_pool())
+            .await
+            .expect("a basic query should still succeed");
+        assert_eq!(one, 1);
     }
 
     #[tokio::test]
