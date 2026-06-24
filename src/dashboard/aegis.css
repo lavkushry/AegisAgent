@@ -1021,6 +1021,72 @@ tbody tr:hover td {
   margin-top: 16px;
 }
 
+/* ── EVIDENCE GRAPH VISUALIZATION (#1273) ── */
+.evidence-graph-wrap {
+  position: relative;
+}
+
+.evidence-graph-container {
+  height: 480px;
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.01);
+}
+
+.evidence-graph-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  background-color: rgba(10, 10, 14, 0.6);
+  border-radius: 10px;
+  z-index: 2;
+}
+
+.evidence-graph-loading[hidden] {
+  display: none;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.graph-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.graph-node-metadata {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-main);
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 /* ── APPROVALS QUEUE ── */
 .approvals-grid {
   display: grid;
