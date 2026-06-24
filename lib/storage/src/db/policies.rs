@@ -1,76 +1,37 @@
 use super::SOC_MAX_LIMIT;
+use crate::db::DbPool;
 use aegis_api::models::*;
-use sqlx::SqlitePool;
 
 pub async fn list_policies(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<PolicyRecord>, sqlx::Error> {
-    sqlx::query_as::<_, PolicyRecord>(
-        "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
+    crate::fetch_all_as!(PolicyRecord, pool, "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
          FROM policies
          WHERE tenant_id = ? AND deleted_at IS NULL
-         ORDER BY created_at DESC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
+         ORDER BY created_at DESC", tenant_id)
 }
 
 pub async fn get_policy_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     policy_id: &str,
 ) -> Result<Option<PolicyRecord>, sqlx::Error> {
-    sqlx::query_as::<_, PolicyRecord>(
-        "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
+    crate::fetch_optional_as!(PolicyRecord, pool, "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at
          FROM policies
-         WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
-    )
-    .bind(tenant_id)
-    .bind(policy_id)
-    .fetch_optional(pool)
-    .await
+         WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL", tenant_id, policy_id)
 }
 
-pub async fn insert_policy(pool: &SqlitePool, record: &PolicyRecord) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO policies (id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.policy_key)
-    .bind(&record.name)
-    .bind(&record.language)
-    .bind(&record.body)
-    .bind(record.version)
-    .bind(&record.status)
-    .bind(&record.created_by)
-    .bind(record.created_at)
-    .execute(pool)
-    .await?;
+pub async fn insert_policy(pool: &DbPool, record: &PolicyRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(pool, "INSERT INTO policies (id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.policy_key, &record.name, &record.language, &record.body, record.version, &record.status, &record.created_by, record.created_at)?;
     Ok(())
 }
 
-pub async fn update_policy(pool: &SqlitePool, record: &PolicyRecord) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE policies
+pub async fn update_policy(pool: &DbPool, record: &PolicyRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(pool, "UPDATE policies
          SET policy_key = ?, name = ?, language = ?, body = ?, version = ?, status = ?, created_by = ?, created_at = ?
-         WHERE tenant_id = ? AND id = ?"
-    )
-    .bind(&record.policy_key)
-    .bind(&record.name)
-    .bind(&record.language)
-    .bind(&record.body)
-    .bind(record.version)
-    .bind(&record.status)
-    .bind(&record.created_by)
-    .bind(record.created_at)
-    .bind(&record.tenant_id)
-    .bind(&record.id)
-    .execute(pool)
-    .await?;
+         WHERE tenant_id = ? AND id = ?", &record.policy_key, &record.name, &record.language, &record.body, record.version, &record.status, &record.created_by, record.created_at, &record.tenant_id, &record.id)?;
     Ok(())
 }
 
@@ -79,30 +40,16 @@ pub async fn update_policy(pool: &SqlitePool, record: &PolicyRecord) -> Result<(
 /// `routes::update_policy` before the `policies` row is overwritten in place.
 /// Tenant-scoped, parameterized.
 pub async fn insert_policy_version(
-    pool: &SqlitePool,
+    pool: &DbPool,
     record: &PolicyRecord,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO policy_versions (id, tenant_id, policy_id, policy_key, name, language, body, version, status, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(&record.tenant_id)
-    .bind(&record.id)
-    .bind(&record.policy_key)
-    .bind(&record.name)
-    .bind(&record.language)
-    .bind(&record.body)
-    .bind(record.version)
-    .bind(&record.status)
-    .bind(&record.created_by)
-    .bind(record.created_at)
-    .execute(pool)
-    .await?;
+    crate::execute_query!(pool, "INSERT INTO policy_versions (id, tenant_id, policy_id, policy_key, name, language, body, version, status, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", uuid::Uuid::new_v4().to_string(), &record.tenant_id, &record.id, &record.policy_key, &record.name, &record.language, &record.body, record.version, &record.status, &record.created_by, record.created_at)?;
 
     // #1302: cap archived versions at 10 per (tenant_id, policy_id) — delete
     // anything beyond the 10 most recent (by version) to bound table growth.
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "DELETE FROM policy_versions
          WHERE tenant_id = ? AND policy_id = ?
            AND id NOT IN (
@@ -110,13 +57,11 @@ pub async fn insert_policy_version(
              WHERE tenant_id = ? AND policy_id = ?
              ORDER BY version DESC LIMIT 10
            )",
-    )
-    .bind(&record.tenant_id)
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.id)
-    .execute(pool)
-    .await?;
+        &record.tenant_id,
+        &record.id,
+        &record.tenant_id,
+        &record.id
+    )?;
 
     Ok(())
 }
@@ -124,17 +69,17 @@ pub async fn insert_policy_version(
 /// TASK-0091 (#937): list archived versions of a policy, most recent first.
 /// Tenant-scoped, parameterized.
 pub async fn list_policy_versions(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     policy_id: &str,
 ) -> Result<Vec<PolicyVersionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, PolicyVersionRecord>(
+    crate::fetch_all_as!(
+        PolicyVersionRecord,
+        pool,
         "SELECT * FROM policy_versions WHERE tenant_id = ? AND policy_id = ? ORDER BY version DESC",
+        tenant_id,
+        policy_id
     )
-    .bind(tenant_id)
-    .bind(policy_id)
-    .fetch_all(pool)
-    .await
 }
 
 /// #1193: soft delete — marks `deleted_at` instead of removing the row, so
@@ -144,18 +89,17 @@ pub async fn list_policy_versions(
 /// already-deleted policy affects zero rows, matching the existing
 /// "delete non-existent policy returns 404" contract callers rely on.
 pub async fn delete_policy(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     policy_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "UPDATE policies SET deleted_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
-    )
-    .bind(tenant_id)
-    .bind(policy_id)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        policy_id
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -168,80 +112,119 @@ pub async fn delete_policy(
 /// has SQLite triggers that abort any `UPDATE`/`DELETE`, making the chain
 /// tamper-evident at the database level.
 pub async fn append_policy_audit_log_entry_atomic<F>(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     build: F,
 ) -> Result<PolicyAuditLogRecord, sqlx::Error>
 where
     F: FnOnce(String) -> PolicyAuditLogRecord,
 {
-    let mut conn = pool.acquire().await?;
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut conn = p.acquire().await?;
 
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
-    async fn rollback(conn: &mut sqlx::SqliteConnection) {
-        let _ = sqlx::query("ROLLBACK").execute(conn).await;
-    }
+            async fn rollback(conn: &mut sqlx::SqliteConnection) {
+                let _ = sqlx::query("ROLLBACK").execute(conn).await;
+            }
 
-    let head: Option<(String,)> = match sqlx::query_as(
-        "SELECT entry_hash FROM policy_audit_log WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(&mut *conn)
-    .await
-    {
-        Ok(h) => h,
-        Err(e) => {
-            rollback(&mut conn).await;
-            return Err(e);
+            let head: Option<(String,)> = match sqlx::query_as(
+                "SELECT entry_hash FROM policy_audit_log WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+            )
+            .bind(tenant_id)
+            .fetch_optional(&mut *conn)
+            .await
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    rollback(&mut conn).await;
+                    return Err(e);
+                }
+            };
+            let prev = head.map(|(h,)| h).unwrap_or_default();
+
+            let record = build(prev);
+
+            if let Err(e) = sqlx::query(
+                "INSERT INTO policy_audit_log (id, tenant_id, policy_id, policy_key, action, changed_by, body_hash, diff_summary, prev_hash, entry_hash)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&record.id)
+            .bind(&record.tenant_id)
+            .bind(&record.policy_id)
+            .bind(&record.policy_key)
+            .bind(&record.action)
+            .bind(&record.changed_by)
+            .bind(&record.body_hash)
+            .bind(&record.diff_summary)
+            .bind(&record.prev_hash)
+            .bind(&record.entry_hash)
+            .execute(&mut *conn)
+            .await
+            {
+                rollback(&mut conn).await;
+                return Err(e);
+            }
+
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            Ok(record)
         }
-    };
-    let prev = head.map(|(h,)| h).unwrap_or_default();
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let mut tx = p.begin().await?;
 
-    let record = build(prev);
+            let head: Option<(String,)> = sqlx::query_as(
+                "SELECT entry_hash FROM policy_audit_log WHERE tenant_id = $1 ORDER BY rowid DESC LIMIT 1"
+            )
+            .bind(tenant_id)
+            .fetch_optional(&mut *tx)
+            .await?;
 
-    if let Err(e) = sqlx::query(
-        "INSERT INTO policy_audit_log (id, tenant_id, policy_id, policy_key, action, changed_by, body_hash, diff_summary, prev_hash, entry_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.policy_id)
-    .bind(&record.policy_key)
-    .bind(&record.action)
-    .bind(&record.changed_by)
-    .bind(&record.body_hash)
-    .bind(&record.diff_summary)
-    .bind(&record.prev_hash)
-    .bind(&record.entry_hash)
-    .execute(&mut *conn)
-    .await
-    {
-        rollback(&mut conn).await;
-        return Err(e);
+            let prev = head.map(|(h,)| h).unwrap_or_default();
+
+            let record = build(prev);
+
+            sqlx::query(
+                "INSERT INTO policy_audit_log (id, tenant_id, policy_id, policy_key, action, changed_by, body_hash, diff_summary, prev_hash, entry_hash)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+            )
+            .bind(&record.id)
+            .bind(&record.tenant_id)
+            .bind(&record.policy_id)
+            .bind(&record.policy_key)
+            .bind(&record.action)
+            .bind(&record.changed_by)
+            .bind(&record.body_hash)
+            .bind(&record.diff_summary)
+            .bind(&record.prev_hash)
+            .bind(&record.entry_hash)
+            .execute(&mut *tx)
+            .await?;
+
+            tx.commit().await?;
+            Ok(record)
+        }
     }
-
-    sqlx::query("COMMIT").execute(&mut *conn).await?;
-    Ok(record)
 }
 
 /// #1312: tenant-scoped, paginated listing of the policy transparency log,
 /// newest first.
 pub async fn list_policy_audit_log(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<PolicyAuditLogRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    sqlx::query_as::<_, PolicyAuditLogRecord>(
+    crate::fetch_all_as!(
+        PolicyAuditLogRecord,
+        pool,
         "SELECT * FROM policy_audit_log WHERE tenant_id = ? ORDER BY rowid DESC LIMIT ? OFFSET ?",
+        tenant_id,
+        limit,
+        offset
     )
-    .bind(tenant_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
 }
 
 #[cfg(test)]
@@ -292,13 +275,14 @@ mod tests {
         );
 
         // The row itself must still exist (soft, not hard, delete).
-        let raw: (Option<String>,) =
-            sqlx::query_as("SELECT deleted_at FROM policies WHERE tenant_id = ? AND id = ?")
-                .bind("tenant_a")
-                .bind("pol_1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let raw: (Option<String>,) = crate::fetch_one_as!(
+            _,
+            pool,
+            "SELECT deleted_at FROM policies WHERE tenant_id = ? AND id = ?",
+            "tenant_a",
+            "pol_1"
+        )
+        .unwrap();
         assert!(
             raw.0.is_some(),
             "the row must persist with deleted_at set, not be removed"

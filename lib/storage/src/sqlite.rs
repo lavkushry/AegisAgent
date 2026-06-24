@@ -1,23 +1,23 @@
 use crate::db;
+use crate::db::DbPool;
 use crate::traits::StorageBackend;
 use aegis_api::models::*;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
 use std::collections::HashMap;
 
-pub struct SqliteStorage {
-    pub pool: SqlitePool,
+pub struct SqlDbStorage {
+    pub pool: DbPool,
 }
 
-impl SqliteStorage {
-    pub fn new(pool: SqlitePool) -> Self {
+impl SqlDbStorage {
+    pub fn new(pool: DbPool) -> Self {
         Self { pool }
     }
 }
 
 #[async_trait::async_trait]
-impl StorageBackend for SqliteStorage {
+impl StorageBackend for SqlDbStorage {
     // Agents & Skills
     async fn rotate_agent_token(
         &self,
@@ -1545,7 +1545,15 @@ impl StorageBackend for SqliteStorage {
             .map_err(AegisError::Database)
     }
 
-    fn get_pool(&self) -> &SqlitePool {
+    fn get_pool(&self) -> &DbPool {
         &self.pool
+    }
+
+    fn get_pool_metrics(&self) -> (u32, u32) {
+        self.pool.get_pool_metrics()
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
     }
 }

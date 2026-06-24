@@ -363,12 +363,13 @@ mod tests {
         state.storage.insert_action_receipt(&r).await.unwrap();
         let rec = r;
 
-        sqlx::query("UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE tenant_id = ? AND id = ?")
-            .bind(tenant_id.as_str())
-            .bind(&rec.id)
-            .execute(state.storage.get_pool())
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            state.storage.get_pool(),
+            "UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE tenant_id = ? AND id = ?",
+            tenant_id.as_str(),
+            &rec.id
+        )
+        .unwrap();
 
         let response = verify_receipt(
             State(state.clone()),
@@ -622,13 +623,13 @@ mod tests {
             h.await.unwrap().expect("atomic append must succeed");
         }
 
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String)> = aegis_storage::fetch_all_as!(
+            (String, String),
+            state.storage.get_pool(),
             "SELECT prev_receipt_hash, receipt_hash FROM action_receipts
              WHERE tenant_id = ? ORDER BY rowid ASC",
+            tenant_id.as_str()
         )
-        .bind(tenant_id.as_str())
-        .fetch_all(state.storage.get_pool())
-        .await
         .unwrap();
         assert_eq!(rows.len(), TASKS, "every append must commit exactly once");
 

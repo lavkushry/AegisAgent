@@ -1573,7 +1573,7 @@ pub mod benchutil {
         let (events, _events_rx) = EventSink::channel(100_000, metrics.clone());
 
         let state = Arc::new(AppState {
-            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+            storage: Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -1613,7 +1613,7 @@ pub mod benchutil {
     /// table makes the agent lookup query representative of a populated
     /// tenant rather than a near-empty table.
     pub async fn seed_extra_agents(
-        pool: &sqlx::SqlitePool,
+        pool: &db::DbPool,
         tenant_id: &str,
         n: usize,
     ) -> Result<(), sqlx::Error> {
@@ -1656,7 +1656,7 @@ pub mod benchutil {
     /// touch `GET /v1/decisions` or audit endpoints, and exercises realistic
     /// SQLite file sizes/indexes.
     pub async fn seed_decisions(
-        pool: &sqlx::SqlitePool,
+        pool: &db::DbPool,
         tenant_id: &str,
         agent_id: &str,
         n: usize,
@@ -2137,7 +2137,7 @@ pub(crate) mod test_helpers {
         let metrics = Arc::new(crate::metrics::SecurityMetrics::new());
         let (events, events_rx) = EventSink::channel(capacity, metrics.clone());
         let state = Arc::new(AppState {
-            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+            storage: Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool)),
             policy_engine,
             events,
             metrics,

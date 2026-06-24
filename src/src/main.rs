@@ -238,8 +238,7 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
     // pool at scrape time — no separate sampling/storage needed for these two
     // (unlike `db_pool_acquire_wait_seconds`, which needs a timed probe and is
     // rendered as part of `render_prometheus` above).
-    let idle = state.storage.get_pool().num_idle() as u32;
-    let active = state.storage.get_pool().size().saturating_sub(idle);
+    let (idle, active) = state.storage.get_pool_metrics();
     body.push_str(&format!(
         "# HELP db_pool_connections_active Number of SQLite pool connections currently checked out\n\
          # TYPE db_pool_connections_active gauge\n\
@@ -1566,7 +1565,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
-        storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+        storage: Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool)),
         policy_engine,
         events,
         metrics,
@@ -2225,7 +2224,7 @@ mod tests {
         let (events, _events_rx) =
             events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
-            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+            storage: Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -2521,7 +2520,7 @@ mod tests {
         let (events, _events_rx) =
             events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
         let state = Arc::new(routes::AppState {
-            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+            storage: Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool)),
             policy_engine,
             events,
             metrics,
@@ -2858,7 +2857,7 @@ mod tests {
         assert!(doomed_abort_handle.is_finished());
 
         let state = Arc::new(routes::AppState {
-            storage: Arc::new(aegis_storage::sqlite::SqliteStorage::new(pool)),
+            storage: Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool)),
             policy_engine,
             events,
             metrics,

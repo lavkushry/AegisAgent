@@ -913,13 +913,14 @@ mod tests {
             create_pending_approval(&state, &tenant_id, &agent_token, "30").await;
 
         // Force the approval past its window before it is ever decided.
-        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
-            .bind(Utc::now() - Duration::minutes(5))
-            .bind(tenant_id.as_str())
-            .bind(approval_id.to_string())
-            .execute(state.storage.get_pool())
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            state.storage.get_pool(),
+            "UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?",
+            Utc::now() - Duration::minutes(5),
+            tenant_id.as_str(),
+            approval_id.to_string()
+        )
+        .unwrap();
 
         let approve_resp = approve_approval(
             State(state.clone()),
@@ -1018,13 +1019,14 @@ mod tests {
             create_pending_approval(&state, &tenant_id, &agent_token, "32").await;
 
         // Age the approval out while it is still pending.
-        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
-            .bind(Utc::now() - Duration::minutes(5))
-            .bind(tenant_id.as_str())
-            .bind(approval_id.to_string())
-            .execute(state.storage.get_pool())
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            state.storage.get_pool(),
+            "UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?",
+            Utc::now() - Duration::minutes(5),
+            tenant_id.as_str(),
+            approval_id.to_string()
+        )
+        .unwrap();
 
         let reject = reject_approval(
             State(state.clone()),
@@ -1070,13 +1072,14 @@ mod tests {
         let approval_id = response.approval.expect("approval created").approval_id;
 
         // Age the approval out while it is still pending.
-        sqlx::query("UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?")
-            .bind(Utc::now() - Duration::minutes(5))
-            .bind(tenant_id.as_str())
-            .bind(approval_id.to_string())
-            .execute(state.storage.get_pool())
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            state.storage.get_pool(),
+            "UPDATE approvals SET expires_at = ? WHERE tenant_id = ? AND id = ?",
+            Utc::now() - Duration::minutes(5),
+            tenant_id.as_str(),
+            approval_id.to_string()
+        )
+        .unwrap();
 
         let edit_resp = edit_approval(
             State(state.clone()),

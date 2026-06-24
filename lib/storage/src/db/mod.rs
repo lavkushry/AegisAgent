@@ -1,6 +1,363 @@
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::str::FromStr;
 
+#[derive(Debug, Clone)]
+pub enum DbPool {
+    Sqlite(SqlitePool),
+    #[cfg(feature = "postgres")]
+    Postgres(sqlx::PgPool),
+}
+
+impl DbPool {
+    pub fn is_postgres(&self) -> bool {
+        match self {
+            Self::Sqlite(_) => false,
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => true,
+        }
+    }
+
+    pub fn sqlite_pool(&self) -> &SqlitePool {
+        match self {
+            Self::Sqlite(p) => p,
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => panic!("Expected SQLite pool, found Postgres"),
+        }
+    }
+
+    pub fn num_idle(&self) -> u32 {
+        match self {
+            Self::Sqlite(p) => p.num_idle() as u32,
+            #[cfg(feature = "postgres")]
+            Self::Postgres(p) => p.num_idle() as u32,
+        }
+    }
+
+    pub fn size(&self) -> u32 {
+        match self {
+            Self::Sqlite(p) => p.size(),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(p) => p.size(),
+        }
+    }
+
+    pub fn get_pool_metrics(&self) -> (u32, u32) {
+        match self {
+            Self::Sqlite(p) => {
+                let idle = p.num_idle() as u32;
+                let size = p.size();
+                (idle, size.saturating_sub(idle))
+            }
+            #[cfg(feature = "postgres")]
+            Self::Postgres(p) => {
+                let idle = p.num_idle() as u32;
+                let size = p.size();
+                (idle, size.saturating_sub(idle))
+            }
+        }
+    }
+
+    pub async fn close(&self) {
+        match self {
+            Self::Sqlite(p) => p.close().await,
+            #[cfg(feature = "postgres")]
+            Self::Postgres(p) => p.close().await,
+        }
+    }
+
+    pub fn max_connections(&self) -> u32 {
+        match self {
+            Self::Sqlite(p) => p.options().get_max_connections(),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(p) => p.options().get_max_connections(),
+        }
+    }
+
+    pub async fn acquire(&self) -> Result<DbPoolConnection, sqlx::Error> {
+        match self {
+            Self::Sqlite(p) => p.acquire().await.map(DbPoolConnection::Sqlite),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(p) => p.acquire().await.map(DbPoolConnection::Postgres),
+        }
+    }
+}
+
+pub enum DbPoolConnection {
+    Sqlite(sqlx::pool::PoolConnection<sqlx::Sqlite>),
+    #[cfg(feature = "postgres")]
+    Postgres(sqlx::pool::PoolConnection<sqlx::Postgres>),
+}
+
+#[derive(Debug)]
+pub enum DbQueryResult {
+    Sqlite(sqlx::sqlite::SqliteQueryResult),
+    #[cfg(feature = "postgres")]
+    Postgres(sqlx::postgres::PgQueryResult),
+}
+
+impl DbQueryResult {
+    pub fn rows_affected(&self) -> u64 {
+        match self {
+            Self::Sqlite(r) => r.rows_affected(),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(r) => r.rows_affected(),
+        }
+    }
+}
+
+pub fn to_postgres_sql(sql: &str) -> String {
+    let mut sql_str = sql.to_string();
+    if sql_str.contains("INSERT OR IGNORE INTO leader_lock") {
+        sql_str = sql_str.replace(
+            "INSERT OR IGNORE INTO leader_lock",
+            "INSERT INTO leader_lock",
+        );
+        sql_str.push_str(" ON CONFLICT (id) DO NOTHING");
+    } else if sql_str.contains("INSERT OR IGNORE INTO agent_tool_permissions") {
+        sql_str = sql_str.replace(
+            "INSERT OR IGNORE INTO agent_tool_permissions",
+            "INSERT INTO agent_tool_permissions",
+        );
+        sql_str.push_str(" ON CONFLICT (tenant_id, agent_id, tool_key) DO NOTHING");
+    }
+
+    // Convert datetime functions
+    sql_str = sql_str.replace(
+        "datetime('now', '-24 hours')",
+        "NOW() - INTERVAL '24 hours'",
+    );
+    sql_str = sql_str.replace(
+        "datetime('now', '-48 hours')",
+        "NOW() - INTERVAL '48 hours'",
+    );
+    sql_str = sql_str.replace(
+        "datetime('now', '-30 hours')",
+        "NOW() - INTERVAL '30 hours'",
+    );
+    sql_str = sql_str.replace("datetime('now', '-7 days')", "NOW() - INTERVAL '7 days'");
+    sql_str = sql_str.replace(
+        "strftime('%Y-%m-%dT%H', datetime('now', '-7 days'))",
+        "to_char(NOW() - INTERVAL '7 days', 'YYYY-MM-DD\"T\"HH24')",
+    );
+
+    // Convert FTS MATCH operator
+    sql_str = sql_str.replace("searchable_text MATCH ?", "searchable_text ILIKE ?");
+
+    // Convert parameter placeholders ? to $1, $2, etc.
+    let mut result = String::new();
+    let mut param_index = 1;
+    let chars = sql_str.chars().peekable();
+    for c in chars {
+        if c == '?' {
+            result.push_str(&format!("${}", param_index));
+            param_index += 1;
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+#[macro_export]
+macro_rules! execute_query {
+    ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query($sql)
+                    $(.bind($bind))*
+                    .execute(p)
+                    .await
+                    .map($crate::db::DbQueryResult::Sqlite)
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query(&pg_sql)
+                    $(.bind($bind))*
+                    .execute(p)
+                    .await
+                    .map($crate::db::DbQueryResult::Postgres)
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_optional {
+    ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query($sql)
+                    $(.bind($bind))*
+                    .fetch_optional(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_optional(p)
+                    .await
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_all {
+    ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query($sql)
+                    $(.bind($bind))*
+                    .fetch_all(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_all(p)
+                    .await
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_one {
+    ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query($sql)
+                    $(.bind($bind))*
+                    .fetch_one(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_one(p)
+                    .await
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_one_as {
+    ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query_as::<_, $ty>($sql)
+                    $(.bind($bind))*
+                    .fetch_one(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query_as::<_, $ty>(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_one(p)
+                    .await
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_optional_as {
+    ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query_as::<_, $ty>($sql)
+                    $(.bind($bind))*
+                    .fetch_optional(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query_as::<_, $ty>(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_optional(p)
+                    .await
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_all_as {
+    ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query_as::<_, $ty>($sql)
+                    $(.bind($bind))*
+                    .fetch_all(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query_as::<_, $ty>(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_all(p)
+                    .await
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_one_scalar {
+    ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query_scalar::<_, $ty>($sql)
+                    $(.bind($bind))*
+                    .fetch_one(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query_scalar::<_, $ty>(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_one(p)
+                    .await
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fetch_optional_scalar {
+    ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
+        match &$pool {
+            $crate::db::DbPool::Sqlite(p) => {
+                sqlx::query_scalar::<_, $ty>($sql)
+                    $(.bind($bind))*
+                    .fetch_optional(p)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            $crate::db::DbPool::Postgres(p) => {
+                let pg_sql = $crate::db::to_postgres_sql($sql);
+                sqlx::query_scalar::<_, $ty>(&pg_sql)
+                    $(.bind($bind))*
+                    .fetch_optional(p)
+                    .await
+            }
+        }
+    };
+}
+
 // Submodules
 pub mod agents;
 pub mod approvals;
@@ -43,11 +400,8 @@ pub const CURRENT_SCHEMA_VERSION: i64 = 1;
 /// Liveness/readiness ping for the `/health` endpoint: a trivial `SELECT 1`
 /// that confirms the pool can acquire a connection and the store answers.
 /// Returns `Err` (fail-closed) on any pool/query failure.
-pub async fn health_check(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::query_scalar::<_, i64>("SELECT 1")
-        .fetch_one(pool)
-        .await
-        .map(|_| ())
+pub async fn health_check(pool: &DbPool) -> Result<(), sqlx::Error> {
+    fetch_one_scalar!(i64, pool, "SELECT 1").map(|_| ())
 }
 
 /// Returns `true` if `err` is a transient SQLite "database is locked"
@@ -107,14 +461,17 @@ pub const SOC_WATCH_BATCH_LIMIT: i64 = 100;
 /// presence is what tells us a next page exists; truncating to `limit` and
 /// checking `rows.len() >= limit` instead would wrongly emit a next-cursor
 /// whenever the result set ends exactly on a page boundary (off-by-one).
-pub(crate) fn paginate_rows<T>(
-    mut rows: Vec<sqlx::sqlite::SqliteRow>,
+pub(crate) fn paginate_rows<T, R>(
+    mut rows: Vec<R>,
     limit: i64,
 ) -> Result<(Vec<T>, Option<i64>), sqlx::Error>
 where
-    T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+    R: sqlx::Row,
+    T: for<'r> sqlx::FromRow<'r, R>,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+    i64: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
 {
-    use sqlx::Row;
     let has_more = rows.len() as i64 > limit;
     if has_more {
         rows.truncate(limit as usize);
@@ -179,16 +536,67 @@ pub fn statement_cache_capacity_from_env() -> usize {
         .unwrap_or(DEFAULT_STATEMENT_CACHE_CAPACITY)
 }
 
-pub async fn init_db(db_url: &str) -> Result<SqlitePool, sqlx::Error> {
+pub async fn init_db(db_url: &str) -> Result<DbPool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }
 
-/// Like [`init_db`], but allows overriding the SQLite `busy_timeout`. Used by
-/// the #1399 chaos tests to construct a pool with `busy_timeout(0)` so a
-/// concurrent writer lock surfaces as an immediate `SQLITE_BUSY` (code 5)
-/// rather than waiting up to 5 s — exercising the app-level `retry_on_busy`
-/// path deterministically without multi-second waits.
 pub async fn init_db_with_busy_timeout(
+    db_url: &str,
+    busy_timeout: std::time::Duration,
+) -> Result<DbPool, sqlx::Error> {
+    if db_url.starts_with("postgres://") || db_url.starts_with("postgresql://") {
+        #[cfg(feature = "postgres")]
+        {
+            sqlx::any::install_default_drivers();
+
+            let max_connections = std::env::var("AEGIS_DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(5);
+
+            let idle_timeout = std::env::var("AEGIS_DB_IDLE_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(30);
+
+            let acquire_timeout = std::env::var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(5);
+
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(max_connections)
+                .idle_timeout(std::time::Duration::from_secs(idle_timeout))
+                .acquire_timeout(std::time::Duration::from_secs(acquire_timeout))
+                .connect(db_url)
+                .await?;
+
+            sqlx::migrate!("./migrations_postgres")
+                .run(&pool)
+                .await
+                .map_err(|e| sqlx::Error::Protocol(format!("migration failed: {e}")))?;
+
+            // Initialize schema version
+            sqlx::query("INSERT INTO schema_meta (version) VALUES ($1) ON CONFLICT DO NOTHING")
+                .bind(CURRENT_SCHEMA_VERSION)
+                .execute(&pool)
+                .await?;
+
+            Ok(DbPool::Postgres(pool))
+        }
+        #[cfg(not(feature = "postgres"))]
+        {
+            Err(sqlx::Error::Configuration(
+                "PostgreSQL feature not enabled".into(),
+            ))
+        }
+    } else {
+        let pool = init_sqlite_db_with_busy_timeout(db_url, busy_timeout).await?;
+        Ok(DbPool::Sqlite(pool))
+    }
+}
+
+async fn init_sqlite_db_with_busy_timeout(
     db_url: &str,
     busy_timeout: std::time::Duration,
 ) -> Result<SqlitePool, sqlx::Error> {
@@ -287,7 +695,7 @@ pub async fn init_db_with_busy_timeout(
         .await
         .map_err(|e| sqlx::Error::Protocol(format!("migration failed: {e}")))?;
 
-    migrate_agent_tokens(&pool).await?;
+    migrate_agent_tokens(&DbPool::Sqlite(pool.clone())).await?;
 
     check_schema_version(&pool).await?;
 
@@ -1198,37 +1606,70 @@ async fn ensure_action_receipt_signature_columns(pool: &SqlitePool) -> Result<()
 
 /// On-disk size of the SQLite database file in bytes (#949), computed as
 /// `page_count * page_size` via the corresponding `PRAGMA`s.
-pub async fn get_database_size_bytes(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
-    let (page_count,): (i64,) = sqlx::query_as("PRAGMA page_count").fetch_one(pool).await?;
-    let (page_size,): (i64,) = sqlx::query_as("PRAGMA page_size").fetch_one(pool).await?;
-    Ok(page_count * page_size)
+pub async fn get_database_size_bytes(pool: &DbPool) -> Result<i64, sqlx::Error> {
+    match pool {
+        DbPool::Sqlite(p) => {
+            let (page_count,): (i64,) = sqlx::query_as("PRAGMA page_count").fetch_one(p).await?;
+            let (page_size,): (i64,) = sqlx::query_as("PRAGMA page_size").fetch_one(p).await?;
+            Ok(page_count * page_size)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let (size,): (i64,) = sqlx::query_as("SELECT pg_database_size(current_database())")
+                .fetch_one(p)
+                .await?;
+            Ok(size)
+        }
+    }
 }
 
 /// Row count for every user table in the database (#950), ordered by table
 /// name. Reads table names from `sqlite_master`, excluding internal
 /// `sqlite_*` tables.
 pub async fn get_table_row_counts(
-    pool: &SqlitePool,
+    pool: &DbPool,
 ) -> Result<Vec<aegis_api::models::TableRowCount>, sqlx::Error> {
-    let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master
-         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-         ORDER BY name",
-    )
-    .fetch_all(pool)
-    .await?;
+    match pool {
+        DbPool::Sqlite(p) => {
+            let tables: Vec<(String,)> = sqlx::query_as(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                 ORDER BY name",
+            )
+            .fetch_all(p)
+            .await?;
 
-    let mut counts = Vec::with_capacity(tables.len());
-    for (table,) in tables {
-        let query = format!("SELECT COUNT(*) FROM \"{}\"", table);
-        let (row_count,): (i64,) = sqlx::query_as(&query).fetch_one(pool).await?;
-        counts.push(aegis_api::models::TableRowCount { table, row_count });
+            let mut counts = Vec::with_capacity(tables.len());
+            for (table,) in tables {
+                let query = format!("SELECT COUNT(*) FROM \"{}\"", table);
+                let (row_count,): (i64,) = sqlx::query_as(&query).fetch_one(p).await?;
+                counts.push(aegis_api::models::TableRowCount { table, row_count });
+            }
+            Ok(counts)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let tables: Vec<(String,)> = sqlx::query_as(
+                "SELECT table_name FROM information_schema.tables 
+                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                 ORDER BY table_name",
+            )
+            .fetch_all(p)
+            .await?;
+
+            let mut counts = Vec::with_capacity(tables.len());
+            for (table,) in tables {
+                let query = format!("SELECT COUNT(*) FROM \"{}\"", table);
+                let (row_count,): (i64,) = sqlx::query_as(&query).fetch_one(p).await?;
+                counts.push(aegis_api::models::TableRowCount { table, row_count });
+            }
+            Ok(counts)
+        }
     }
-    Ok(counts)
 }
 
 /// Combined database-level monitoring snapshot (#949, #950).
-pub async fn get_db_stats(pool: &SqlitePool) -> Result<aegis_api::models::DbStats, sqlx::Error> {
+pub async fn get_db_stats(pool: &DbPool) -> Result<aegis_api::models::DbStats, sqlx::Error> {
     let size_bytes = get_database_size_bytes(pool).await?;
     let tables = get_table_row_counts(pool).await?;
     Ok(aegis_api::models::DbStats { size_bytes, tables })
@@ -1237,12 +1678,20 @@ pub async fn get_db_stats(pool: &SqlitePool) -> Result<aegis_api::models::DbStat
 /// Write a consistent point-in-time copy of the database to `dest_path`
 /// (#945) using SQLite's `VACUUM INTO`, which also compacts the copy. The
 /// live database is untouched and remains available throughout.
-pub async fn backup_database_to(pool: &SqlitePool, dest_path: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("VACUUM INTO ?")
-        .bind(dest_path)
-        .execute(pool)
-        .await?;
-    Ok(())
+pub async fn backup_database_to(pool: &DbPool, dest_path: &str) -> Result<(), sqlx::Error> {
+    match pool {
+        DbPool::Sqlite(p) => {
+            sqlx::query("VACUUM INTO ?")
+                .bind(dest_path)
+                .execute(p)
+                .await?;
+            Ok(())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(_) => Err(sqlx::Error::Configuration(
+            "Backup database not supported on PostgreSQL backend".into(),
+        )),
+    }
 }
 
 /// Reclaim free space left behind by the audit-event archival (#0106) and
@@ -1251,9 +1700,18 @@ pub async fn backup_database_to(pool: &SqlitePool, dest_path: &str) -> Result<()
 /// copy and requires no other connection hold a transaction open, so this
 /// is run on a periodic schedule (see `jobs::run_vacuum_job`) rather than on
 /// the request hot path. `VACUUM` takes no bind parameters in SQLite.
-pub async fn vacuum_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::query("VACUUM").execute(pool).await?;
-    Ok(())
+pub async fn vacuum_database(pool: &DbPool) -> Result<(), sqlx::Error> {
+    match pool {
+        DbPool::Sqlite(p) => {
+            sqlx::query("VACUUM").execute(p).await?;
+            Ok(())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(_) => {
+            tracing::info!("PostgreSQL autovacuum is active; skipping manual VACUUM database job.");
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1316,14 +1774,14 @@ mod tests {
         let pool = setup_pool("stmt_cache_capacity_zero").await;
 
         let (one,): (i64,) = sqlx::query_as("SELECT 1")
-            .fetch_one(&pool)
+            .fetch_one(pool.sqlite_pool())
             .await
             .expect("a basic query should still succeed");
         assert_eq!(one, 1);
         // Run the same query again to exercise the (disabled) cache path
         // a second time — must still succeed identically.
         let (one_again,): (i64,) = sqlx::query_as("SELECT 1")
-            .fetch_one(&pool)
+            .fetch_one(pool.sqlite_pool())
             .await
             .expect("a repeated query should still succeed with caching disabled");
         assert_eq!(one_again, 1);
@@ -1465,7 +1923,7 @@ mod tests {
             let found: Option<(String,)> =
                 sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
                     .bind(name)
-                    .fetch_optional(&pool)
+                    .fetch_optional(pool.sqlite_pool())
                     .await
                     .unwrap();
             assert!(found.is_some(), "composite index {name} must be created");
@@ -1480,7 +1938,7 @@ mod tests {
         let pool = setup_pool("fk_pragma").await;
 
         let fk_enabled: (i64,) = sqlx::query_as("PRAGMA foreign_keys")
-            .fetch_one(&pool)
+            .fetch_one(pool.sqlite_pool())
             .await
             .unwrap();
         assert_eq!(fk_enabled.0, 1, "foreign_keys pragma must be ON");
@@ -1493,7 +1951,7 @@ mod tests {
         .bind("orphan_skill")
         .bind("Orphan Skill")
         .bind("static")
-        .execute(&pool)
+        .execute(pool.sqlite_pool())
         .await;
 
         assert!(
@@ -1529,8 +1987,11 @@ mod tests {
 
         // Running the migration set a third time on the live pool must also
         // be a no-op (no duplicate-column or duplicate-table errors).
-        bootstrap_legacy_schema(&pool2).await.unwrap();
-        sqlx::migrate!("./migrations").run(&pool2).await.unwrap();
+        bootstrap_legacy_schema(pool2.sqlite_pool()).await.unwrap();
+        sqlx::migrate!("./migrations")
+            .run(pool2.sqlite_pool())
+            .await
+            .unwrap();
     }
 
     /// DB-001 (#1191): `init_db` must record the baseline migration in
@@ -1544,7 +2005,7 @@ mod tests {
         let rows: Vec<(i64, String, bool)> = sqlx::query_as(
             "SELECT version, description, success FROM _sqlx_migrations ORDER BY version",
         )
-        .fetch_all(&pool)
+        .fetch_all(pool.sqlite_pool())
         .await
         .unwrap();
 
@@ -1583,7 +2044,7 @@ mod tests {
         let pool = setup_pool("schema_version_fresh").await;
 
         let version: i64 = sqlx::query_scalar("SELECT version FROM schema_meta WHERE id = 1")
-            .fetch_one(&pool)
+            .fetch_one(pool.sqlite_pool())
             .await
             .unwrap();
 
@@ -1602,7 +2063,7 @@ mod tests {
 
         let pool = init_db(&db_url).await.unwrap();
         let version: i64 = sqlx::query_scalar("SELECT version FROM schema_meta WHERE id = 1")
-            .fetch_one(&pool)
+            .fetch_one(pool.sqlite_pool())
             .await
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
@@ -1620,7 +2081,7 @@ mod tests {
         let pool = init_db(&db_url).await.unwrap();
         sqlx::query("UPDATE schema_meta SET version = ? WHERE id = 1")
             .bind(CURRENT_SCHEMA_VERSION + 1)
-            .execute(&pool)
+            .execute(pool.sqlite_pool())
             .await
             .unwrap();
         drop(pool);
@@ -1642,14 +2103,14 @@ mod tests {
 
         // Simulate a pre-#1195 DB: drop the row that init_db just inserted.
         sqlx::query("DELETE FROM schema_meta WHERE id = 1")
-            .execute(&pool)
+            .execute(pool.sqlite_pool())
             .await
             .unwrap();
 
-        check_schema_version(&pool).await.unwrap();
+        check_schema_version(pool.sqlite_pool()).await.unwrap();
 
         let version: i64 = sqlx::query_scalar("SELECT version FROM schema_meta WHERE id = 1")
-            .fetch_one(&pool)
+            .fetch_one(pool.sqlite_pool())
             .await
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
@@ -1660,7 +2121,7 @@ mod tests {
     #[tokio::test]
     async fn verify_encryption_or_fail_closed_is_noop_when_no_key_configured() {
         let pool = setup_pool("verify_encryption_noop").await;
-        verify_encryption_or_fail_closed(&pool, false)
+        verify_encryption_or_fail_closed(pool.sqlite_pool(), false)
             .await
             .unwrap();
     }
@@ -1677,7 +2138,7 @@ mod tests {
     #[tokio::test]
     async fn verify_encryption_or_fail_closed_errors_when_key_configured_without_sqlcipher() {
         let pool = setup_pool("verify_encryption_no_cipher").await;
-        let result = verify_encryption_or_fail_closed(&pool, true).await;
+        let result = verify_encryption_or_fail_closed(pool.sqlite_pool(), true).await;
         assert!(result.is_err());
         let message = result.unwrap_err().to_string();
         assert!(
@@ -1695,10 +2156,12 @@ mod tests {
     async fn verify_encryption_or_fail_closed_passes_with_real_sqlcipher() {
         let pool = setup_pool("verify_encryption_real_cipher").await;
         sqlx::query("PRAGMA key = 'test-encryption-key';")
-            .execute(&pool)
+            .execute(pool.sqlite_pool())
             .await
             .unwrap();
-        verify_encryption_or_fail_closed(&pool, true).await.unwrap();
+        verify_encryption_or_fail_closed(pool.sqlite_pool(), true)
+            .await
+            .unwrap();
     }
 
     // Deliberately no test exercises `init_db`/`init_db_with_busy_timeout`

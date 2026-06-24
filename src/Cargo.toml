@@ -103,6 +103,7 @@ local-embeddings = ["dep:fastembed"]
 # swaps the linked SQLite library for the SQLCipher amalgamation — see
 # lib/storage/Cargo.toml for why this can't be a pure runtime toggle.
 sqlcipher = ["aegis-storage/sqlcipher"]
+postgres = ["aegis-storage/postgres", "sqlx/postgres"]
 
 [dev-dependencies]
 aegis-storage = { path = "../lib/storage", features = ["test-utils"] }

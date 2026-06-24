@@ -1,7 +1,7 @@
 use super::SOC_MAX_LIMIT;
+use crate::db::DbPool;
 use aegis_api::models::*;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
 
 /// #1298 (Compliance Evidence Pack): tenant-scoped `action_receipts`,
 /// optionally bounded by a `[from, to]` `created_at` window. Either bound may
@@ -9,43 +9,37 @@ use sqlx::SqlitePool;
 /// are bound twice for the `(? IS NULL OR created_at >= ?)` pattern, matching
 /// [`get_all_audit_events`]'s optional-filter style.
 pub async fn list_action_receipts_in_range(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
 ) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ActionReceiptRecord>(
+    crate::fetch_all_as!(
+        ActionReceiptRecord,
+        pool,
         "SELECT * FROM action_receipts
          WHERE tenant_id = ?
            AND (? IS NULL OR created_at >= ?)
            AND (? IS NULL OR created_at <= ?)
          ORDER BY created_at ASC",
+        tenant_id,
+        from,
+        from,
+        to,
+        to
     )
-    .bind(tenant_id)
-    .bind(from)
-    .bind(from)
-    .bind(to)
-    .bind(to)
-    .fetch_all(pool)
-    .await
 }
 
 /// #1272: the receipt produced for a decision (if any), tenant-scoped. Used
 /// to add a `Receipt` node to the `GET /v1/graph/*` evidence subgraph.
 pub async fn get_action_receipt_by_decision_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_id: &str,
 ) -> Result<Option<ActionReceiptRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ActionReceiptRecord>(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
+    crate::fetch_optional_as!(ActionReceiptRecord, pool, "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
          FROM action_receipts
-         WHERE tenant_id = ? AND decision_id = ?",
-    )
-    .bind(tenant_id)
-    .bind(decision_id)
-    .fetch_optional(pool)
-    .await
+         WHERE tenant_id = ? AND decision_id = ?", tenant_id, decision_id)
 }
 
 /// #1316: batch-fetch the receipt (if any) for each of `decision_ids` in a
@@ -54,7 +48,7 @@ pub async fn get_action_receipt_by_decision_id(
 /// N+1 pattern when building an evidence-graph subgraph for N decisions.
 /// Tenant-scoped. Empty input returns an empty map without querying.
 pub async fn list_action_receipts_by_decision_ids(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_ids: &[String],
 ) -> Result<std::collections::HashMap<String, ActionReceiptRecord>, sqlx::Error> {
@@ -71,54 +65,59 @@ pub async fn list_action_receipts_by_decision_ids(
          FROM action_receipts
          WHERE tenant_id = ? AND decision_id IN ({placeholders})"
     );
-    let mut q = sqlx::query_as::<_, ActionReceiptRecord>(&query).bind(tenant_id);
-    for id in decision_ids {
-        q = q.bind(id);
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut q = sqlx::query_as::<_, ActionReceiptRecord>(&query).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            let rows = q.fetch_all(p).await?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|r| r.decision_id.clone().map(|id| (id, r)))
+                .collect())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(&query);
+            let mut q = sqlx::query_as::<_, ActionReceiptRecord>(&pg_sql).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            let rows = q.fetch_all(p).await?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|r| r.decision_id.clone().map(|id| (id, r)))
+                .collect())
+        }
     }
-    let rows = q.fetch_all(pool).await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| r.decision_id.clone().map(|id| (id, r)))
-        .collect())
 }
 
 /// Every receipt for a tenant, oldest-first (chain order). Unlike
 /// `list_action_receipts`, this is unpaginated — used by the receipt chain
 /// integrity check (#0107), which must walk the whole chain.
 pub async fn list_action_receipts_chain_order(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ActionReceiptRecord>(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
+    crate::fetch_all_as!(ActionReceiptRecord, pool, "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
          FROM action_receipts
          WHERE tenant_id = ?
-         ORDER BY created_at ASC",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
+         ORDER BY created_at ASC", tenant_id)
 }
 
 pub async fn list_action_receipts(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<ActionReceiptRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    sqlx::query_as::<_, ActionReceiptRecord>(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
+    crate::fetch_all_as!(ActionReceiptRecord, pool, "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at
          FROM action_receipts
          WHERE tenant_id = ?
          ORDER BY created_at DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
+         LIMIT ? OFFSET ?", tenant_id, limit, offset)
 }
 
 /// Cursor-paginated sibling of [`list_action_receipts`] (#1142), used only
@@ -126,29 +125,45 @@ pub async fn list_action_receipts(
 /// `decisions::list_decisions_cursor`'s doc comment for why this is a
 /// separate function rather than a change to `list_action_receipts` itself.
 pub async fn list_action_receipts_cursor(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
     cursor: Option<i64>,
 ) -> Result<(Vec<ActionReceiptRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    let rows = sqlx::query(
-        "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at, rowid
+    let query = "SELECT id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id, created_at, rowid
          FROM action_receipts
          WHERE tenant_id = ?
            AND (? IS NULL OR rowid < ?)
          ORDER BY rowid DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(cursor)
-    .bind(cursor)
-    .bind(limit + 1)
-    .bind(if cursor.is_some() { 0 } else { offset })
-    .fetch_all(pool)
-    .await?;
-    super::paginate_rows(rows, limit)
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
 }
 
 /// Atomically append a receipt to a tenant's hash chain (T-D hardening).
@@ -165,90 +180,140 @@ pub async fn list_action_receipts_cursor(
 /// caller so the hashed body remains byte-parity-locked. All access is tenant-scoped
 /// and parameterized. Returns the record actually committed.
 pub async fn append_action_receipt_atomic<F>(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     build: F,
 ) -> Result<ActionReceiptRecord, sqlx::Error>
 where
     F: FnOnce(String) -> ActionReceiptRecord,
 {
-    let mut conn = pool.acquire().await?;
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut conn = p.acquire().await?;
 
-    // IMMEDIATE acquires the write lock now, serializing concurrent appenders so the
-    // head read below can't be raced by another insert before this txn commits.
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+            // IMMEDIATE acquires the write lock now, serializing concurrent appenders so the
+            // head read below can't be raced by another insert before this txn commits.
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
-    // Helper: roll back and surface the original error if any step fails mid-txn,
-    // so we never leave a dangling write lock or a half-applied chain link.
-    async fn rollback(conn: &mut sqlx::SqliteConnection) {
-        let _ = sqlx::query("ROLLBACK").execute(conn).await;
-    }
+            // Helper: roll back and surface the original error if any step fails mid-txn,
+            // so we never leave a dangling write lock or a half-applied chain link.
+            async fn rollback(conn: &mut sqlx::SqliteConnection) {
+                let _ = sqlx::query("ROLLBACK").execute(conn).await;
+            }
 
-    let head: Option<(String,)> = match sqlx::query_as(
-        "SELECT receipt_hash FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(&mut *conn)
-    .await
-    {
-        Ok(h) => h,
-        Err(e) => {
-            rollback(&mut conn).await;
-            return Err(e);
+            let head: Option<(String,)> = match sqlx::query_as(
+                "SELECT receipt_hash FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+            )
+            .bind(tenant_id)
+            .fetch_optional(&mut *conn)
+            .await
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    rollback(&mut conn).await;
+                    return Err(e);
+                }
+            };
+            let prev = head.map(|(h,)| h).unwrap_or_default();
+
+            let record = build(prev);
+
+            if let Err(e) = sqlx::query(
+                "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&record.id)
+            .bind(&record.tenant_id)
+            .bind(&record.decision_id)
+            .bind(&record.ts)
+            .bind(&record.agent_id)
+            .bind(&record.user_id)
+            .bind(&record.run_id)
+            .bind(&record.trace_id)
+            .bind(&record.tool)
+            .bind(&record.action)
+            .bind(&record.resource)
+            .bind(&record.source_trust)
+            .bind(&record.decision)
+            .bind(&record.approver)
+            .bind(&record.action_hash)
+            .bind(&record.prev_receipt_hash)
+            .bind(&record.receipt_hash)
+            .bind(&record.canon_version)
+            .bind(&record.signature)
+            .bind(&record.signer_public_key)
+            .bind(&record.signer_key_id)
+            .execute(&mut *conn)
+            .await
+            {
+                rollback(&mut conn).await;
+                return Err(e);
+            }
+
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            Ok(record)
         }
-    };
-    let prev = head.map(|(h,)| h).unwrap_or_default();
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let mut tx = p.begin().await?;
 
-    let record = build(prev);
+            let head: Option<(String,)> = sqlx::query_as(
+                "SELECT receipt_hash FROM action_receipts WHERE tenant_id = $1 ORDER BY rowid DESC LIMIT 1"
+            )
+            .bind(tenant_id)
+            .fetch_optional(&mut *tx)
+            .await?;
 
-    if let Err(e) = sqlx::query(
-        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.decision_id)
-    .bind(&record.ts)
-    .bind(&record.agent_id)
-    .bind(&record.user_id)
-    .bind(&record.run_id)
-    .bind(&record.trace_id)
-    .bind(&record.tool)
-    .bind(&record.action)
-    .bind(&record.resource)
-    .bind(&record.source_trust)
-    .bind(&record.decision)
-    .bind(&record.approver)
-    .bind(&record.action_hash)
-    .bind(&record.prev_receipt_hash)
-    .bind(&record.receipt_hash)
-    .bind(&record.canon_version)
-    .bind(&record.signature)
-    .bind(&record.signer_public_key)
-    .bind(&record.signer_key_id)
-    .execute(&mut *conn)
-    .await
-    {
-        rollback(&mut conn).await;
-        return Err(e);
+            let prev = head.map(|(h,)| h).unwrap_or_default();
+
+            let record = build(prev);
+
+            sqlx::query(
+                "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"
+            )
+            .bind(&record.id)
+            .bind(&record.tenant_id)
+            .bind(&record.decision_id)
+            .bind(&record.ts)
+            .bind(&record.agent_id)
+            .bind(&record.user_id)
+            .bind(&record.run_id)
+            .bind(&record.trace_id)
+            .bind(&record.tool)
+            .bind(&record.action)
+            .bind(&record.resource)
+            .bind(&record.source_trust)
+            .bind(&record.decision)
+            .bind(&record.approver)
+            .bind(&record.action_hash)
+            .bind(&record.prev_receipt_hash)
+            .bind(&record.receipt_hash)
+            .bind(&record.canon_version)
+            .bind(&record.signature)
+            .bind(&record.signer_public_key)
+            .bind(&record.signer_key_id)
+            .execute(&mut *tx)
+            .await?;
+
+            tx.commit().await?;
+            Ok(record)
+        }
     }
-
-    sqlx::query("COMMIT").execute(&mut *conn).await?;
-    Ok(record)
 }
 
 pub async fn get_action_receipt_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     receipt_id: &str,
 ) -> Result<Option<ActionReceiptRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ActionReceiptRecord>(
+    crate::fetch_optional_as!(
+        ActionReceiptRecord,
+        pool,
         "SELECT * FROM action_receipts WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        receipt_id
     )
-    .bind(tenant_id)
-    .bind(receipt_id)
-    .fetch_optional(pool)
-    .await
 }
 
 #[cfg(test)]
@@ -343,56 +408,32 @@ pub fn compute_receipt_hash(rec: &ActionReceiptRecord) -> String {
 }
 
 pub async fn get_latest_action_receipt(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Option<ActionReceiptRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ActionReceiptRecord>(
+    crate::fetch_optional_as!(
+        ActionReceiptRecord,
+        pool,
         "SELECT * FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+        tenant_id
     )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await
 }
 
 pub async fn insert_action_receipt(
-    pool: &SqlitePool,
+    pool: &DbPool,
     record: &ActionReceiptRecord,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.decision_id)
-    .bind(&record.ts)
-    .bind(&record.agent_id)
-    .bind(&record.user_id)
-    .bind(&record.run_id)
-    .bind(&record.trace_id)
-    .bind(&record.tool)
-    .bind(&record.action)
-    .bind(&record.resource)
-    .bind(&record.source_trust)
-    .bind(&record.decision)
-    .bind(&record.approver)
-    .bind(&record.action_hash)
-    .bind(&record.prev_receipt_hash)
-    .bind(&record.receipt_hash)
-    .bind(&record.canon_version)
-    .bind(&record.signature)
-    .bind(&record.signer_public_key)
-    .bind(&record.signer_key_id)
-    .execute(pool)
-    .await?;
+    crate::execute_query!(pool, "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.decision_id, &record.ts, &record.agent_id, &record.user_id, &record.run_id, &record.trace_id, &record.tool, &record.action, &record.resource, &record.source_trust, &record.decision, &record.approver, &record.action_hash, &record.prev_receipt_hash, &record.receipt_hash, &record.canon_version, &record.signature, &record.signer_public_key, &record.signer_key_id)?;
     Ok(())
 }
 
-pub async fn count_receipts(pool: &SqlitePool, tenant_id: &str) -> Result<i64, sqlx::Error> {
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+pub async fn count_receipts(pool: &DbPool, tenant_id: &str) -> Result<i64, sqlx::Error> {
+    let (count,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ?",
+        tenant_id
+    )?;
     Ok(count)
 }

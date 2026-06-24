@@ -1,37 +1,38 @@
+use crate::db::DbPool;
 use aegis_api::models::*;
-use sqlx::SqlitePool;
 
 /// Read the pinned MCP tool-manifest hash for a server (`""` if never pinned).
 /// Tenant-scoped, parameterized.
 pub async fn get_mcp_server_manifest_hash(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
 ) -> Result<String, sqlx::Error> {
-    let row: Option<(String,)> = sqlx::query_as(
+    let res: Option<String> = crate::fetch_optional_scalar!(
+        String,
+        pool,
         "SELECT manifest_hash FROM mcp_servers WHERE tenant_id = ? AND server_key = ?",
-    )
-    .bind(tenant_id)
-    .bind(server_key)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|r| r.0).unwrap_or_default())
+        tenant_id,
+        server_key,
+    )?;
+    Ok(res.unwrap_or_default())
 }
 
 /// Pin (or re-pin) the MCP tool-manifest hash for a server. Tenant-scoped,
 /// parameterized.
 pub async fn set_mcp_server_manifest_hash(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     manifest_hash: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE mcp_servers SET manifest_hash = ? WHERE tenant_id = ? AND server_key = ?")
-        .bind(manifest_hash)
-        .bind(tenant_id)
-        .bind(server_key)
-        .execute(pool)
-        .await?;
+    crate::execute_query!(
+        pool,
+        "UPDATE mcp_servers SET manifest_hash = ? WHERE tenant_id = ? AND server_key = ?",
+        manifest_hash,
+        tenant_id,
+        server_key
+    )?;
     Ok(())
 }
 
@@ -39,18 +40,17 @@ pub async fn set_mcp_server_manifest_hash(
 /// (re-)discovered via `POST /v1/mcp/servers/:server_key/tools`. Tenant-scoped,
 /// parameterized.
 pub async fn touch_mcp_server_discovery(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "UPDATE mcp_servers SET last_discovery_at = CURRENT_TIMESTAMP \
          WHERE tenant_id = ? AND server_key = ?",
-    )
-    .bind(tenant_id)
-    .bind(server_key)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        server_key
+    )?;
     Ok(())
 }
 
@@ -59,24 +59,15 @@ pub async fn touch_mcp_server_discovery(
 /// `POST /v1/mcp/servers/:server_key/tools` discovery call. Tenant-scoped,
 /// parameterized. Returns the new snapshot's id.
 pub async fn insert_mcp_manifest_snapshot(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     manifest_hash: &str,
     manifest_json: &str,
 ) -> Result<String, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO mcp_manifest_snapshots (id, tenant_id, server_key, manifest_hash, manifest_json) \
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(server_key)
-    .bind(manifest_hash)
-    .bind(manifest_json)
-    .execute(pool)
-    .await?;
+    crate::execute_query!(pool, "INSERT INTO mcp_manifest_snapshots (id, tenant_id, server_key, manifest_hash, manifest_json) \
+         VALUES (?, ?, ?, ?, ?)", &id, tenant_id, server_key, manifest_hash, manifest_json)?;
     Ok(id)
 }
 
@@ -84,20 +75,20 @@ pub async fn insert_mcp_manifest_snapshot(
 /// Tenant-scoped, parameterized. Also used by #1336 drift-severity classification
 /// to diff the newly discovered manifest against the previous snapshot.
 pub async fn list_mcp_manifest_snapshots(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     limit: i64,
 ) -> Result<Vec<McpManifestSnapshotRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpManifestSnapshotRecord>(
+    crate::fetch_all_as!(
+        McpManifestSnapshotRecord,
+        pool,
         "SELECT * FROM mcp_manifest_snapshots WHERE tenant_id = ? AND server_key = ? \
          ORDER BY created_at DESC LIMIT ?",
+        tenant_id,
+        server_key,
+        limit,
     )
-    .bind(tenant_id)
-    .bind(server_key)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
 }
 
 /// #1193: re-registering a previously soft-deleted `server_key` revives it
@@ -106,7 +97,7 @@ pub async fn list_mcp_manifest_snapshots(
 /// key, so "register again" is the only way back in without a hard delete.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_mcp_server(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     name: &str,
@@ -117,8 +108,7 @@ pub async fn upsert_mcp_server(
     endpoint: &str,
 ) -> Result<String, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO mcp_servers (id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint, status)
+    crate::execute_query!(pool, "INSERT INTO mcp_servers (id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
          ON CONFLICT(tenant_id, server_key) DO UPDATE SET
             name=excluded.name,
@@ -128,46 +118,35 @@ pub async fn upsert_mcp_server(
             trust_level=excluded.trust_level,
             endpoint=excluded.endpoint,
             status='active',
-            deleted_at=NULL",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(server_key)
-    .bind(name)
-    .bind(owner_team)
-    .bind(transport)
-    .bind(source)
-    .bind(trust_level)
-    .bind(endpoint)
-    .execute(pool)
-    .await?;
+            deleted_at=NULL", &id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint)?;
 
-    let row: (String,) =
-        sqlx::query_as("SELECT id FROM mcp_servers WHERE tenant_id = ? AND server_key = ?")
-            .bind(tenant_id)
-            .bind(server_key)
-            .fetch_one(pool)
-            .await?;
+    let id: String = crate::fetch_one_scalar!(
+        String,
+        pool,
+        "SELECT id FROM mcp_servers WHERE tenant_id = ? AND server_key = ?",
+        tenant_id,
+        server_key,
+    )?;
 
-    Ok(row.0)
+    Ok(id)
 }
 
 pub async fn get_mcp_server_by_key(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
 ) -> Result<Option<McpServerRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpServerRecord>(
+    crate::fetch_optional_as!(
+        McpServerRecord,
+        pool,
         "SELECT * FROM mcp_servers WHERE tenant_id = ? AND server_key = ? AND deleted_at IS NULL",
+        tenant_id,
+        server_key,
     )
-    .bind(tenant_id)
-    .bind(server_key)
-    .fetch_optional(pool)
-    .await
 }
 
 pub async fn upsert_mcp_tool(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_id: &str,
     tool: &McpToolManifestItem,
@@ -175,8 +154,7 @@ pub async fn upsert_mcp_tool(
     let id = uuid::Uuid::new_v4().to_string();
     let input_schema = tool.input_schema.as_ref().map(|schema| schema.to_string());
 
-    sqlx::query(
-        "INSERT INTO mcp_tools (id, tenant_id, server_id, tool_key, name, description, input_schema, risk, mutates_state, approval_required, status)
+    crate::execute_query!(pool, "INSERT INTO mcp_tools (id, tenant_id, server_id, tool_key, name, description, input_schema, risk, mutates_state, approval_required, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
          ON CONFLICT(tenant_id, server_id, tool_key) DO UPDATE SET
             name=excluded.name,
@@ -186,91 +164,77 @@ pub async fn upsert_mcp_tool(
             mutates_state=excluded.mutates_state,
             approval_required=excluded.approval_required,
             status='pending',
-            updated_at=CURRENT_TIMESTAMP",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(server_id)
-    .bind(&tool.tool_key)
-    .bind(&tool.name)
-    .bind(&tool.description)
-    .bind(&input_schema)
-    .bind(&tool.risk)
-    .bind(tool.mutates_state)
-    .bind(tool.approval_required)
-    .execute(pool)
-    .await?;
+            updated_at=CURRENT_TIMESTAMP", &id, tenant_id, server_id, &tool.tool_key, &tool.name, &tool.description, &input_schema, &tool.risk, tool.mutates_state, tool.approval_required)?;
 
-    let row: (String,) = sqlx::query_as(
+    let id: String = crate::fetch_one_scalar!(
+        String,
+        pool,
         "SELECT id FROM mcp_tools WHERE tenant_id = ? AND server_id = ? AND tool_key = ?",
-    )
-    .bind(tenant_id)
-    .bind(server_id)
-    .bind(&tool.tool_key)
-    .fetch_one(pool)
-    .await?;
+        tenant_id,
+        server_id,
+        &tool.tool_key,
+    )?;
 
-    Ok(row.0)
+    Ok(id)
 }
 
 pub async fn list_mcp_tools(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
 ) -> Result<Vec<McpToolRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpToolRecord>(
+    crate::fetch_all_as!(
+        McpToolRecord,
+        pool,
         "SELECT mt.*
          FROM mcp_tools mt
          JOIN mcp_servers ms ON mt.server_id = ms.id AND mt.tenant_id = ms.tenant_id
          WHERE mt.tenant_id = ? AND ms.server_key = ?
          ORDER BY mt.tool_key ASC",
+        tenant_id,
+        server_key
     )
-    .bind(tenant_id)
-    .bind(server_key)
-    .fetch_all(pool)
-    .await
 }
 
 pub async fn get_mcp_tool_by_key(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     tool_key: &str,
 ) -> Result<Option<McpToolRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpToolRecord>(
+    crate::fetch_optional_as!(
+        McpToolRecord,
+        pool,
         "SELECT mt.*
          FROM mcp_tools mt
          JOIN mcp_servers ms ON mt.server_id = ms.id AND mt.tenant_id = ms.tenant_id
          WHERE mt.tenant_id = ? AND ms.server_key = ? AND mt.tool_key = ?",
+        tenant_id,
+        server_key,
+        tool_key
     )
-    .bind(tenant_id)
-    .bind(server_key)
-    .bind(tool_key)
-    .fetch_optional(pool)
-    .await
 }
 
 pub async fn set_mcp_tool_status(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     tool_key: &str,
     status: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "UPDATE mcp_tools
          SET status = ?, updated_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ?
            AND tool_key = ?
            AND server_id = (SELECT id FROM mcp_servers WHERE tenant_id = ? AND server_key = ?)",
-    )
-    .bind(status)
-    .bind(tenant_id)
-    .bind(tool_key)
-    .bind(tenant_id)
-    .bind(server_key)
-    .execute(pool)
-    .await?;
+        status,
+        tenant_id,
+        tool_key,
+        tenant_id,
+        server_key
+    )?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -278,38 +242,37 @@ pub async fn set_mcp_tool_status(
 /// Quarantine an MCP server — all its tools become deny-by-default.
 /// Sets `status = 'quarantined'` on the server; the authorize path checks this.
 pub async fn set_mcp_server_status(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     status: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "UPDATE mcp_servers SET status = ?
          WHERE tenant_id = ? AND server_key = ?",
-    )
-    .bind(status)
-    .bind(tenant_id)
-    .bind(server_key)
-    .execute(pool)
-    .await?;
+        status,
+        tenant_id,
+        server_key
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn list_mcp_servers(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<McpServerRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpServerRecord>(
+    crate::fetch_all_as!(
+        McpServerRecord,
+        pool,
         "SELECT * FROM mcp_servers WHERE tenant_id = ? AND deleted_at IS NULL
          ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        tenant_id,
+        limit,
+        offset
     )
-    .bind(tenant_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
 }
 
 /// #1193: soft delete — marks `deleted_at` instead of removing the row.
@@ -320,85 +283,68 @@ pub async fn list_mcp_servers(
 /// own lookups — a deleted server's tools stop being callable, not just
 /// hidden from the management UI.
 pub async fn delete_mcp_server(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "UPDATE mcp_servers SET deleted_at = CURRENT_TIMESTAMP
          WHERE tenant_id = ? AND server_key = ? AND deleted_at IS NULL",
-    )
-    .bind(tenant_id)
-    .bind(server_key)
-    .execute(pool)
-    .await?;
+        tenant_id,
+        server_key
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
 /// #1193: same revive-on-conflict reasoning as [`upsert_mcp_server`] —
 /// re-registering a soft-deleted `server_key` clears `deleted_at`.
 pub async fn register_mcp_server(
-    pool: &SqlitePool,
+    pool: &DbPool,
     record: &McpServerRecord,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO mcp_servers (id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint, status, inspection_enabled, version) \
+    crate::execute_query!(pool, "INSERT INTO mcp_servers (id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint, status, inspection_enabled, version) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(tenant_id, server_key) DO UPDATE SET \
             name=excluded.name, owner_team=excluded.owner_team, transport=excluded.transport, \
             source=excluded.source, trust_level=excluded.trust_level, endpoint=excluded.endpoint, \
             status=excluded.status, inspection_enabled=excluded.inspection_enabled, version=excluded.version, \
-            deleted_at=NULL",
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.server_key)
-    .bind(&record.name)
-    .bind(&record.owner_team)
-    .bind(&record.transport)
-    .bind(&record.source)
-    .bind(&record.trust_level)
-    .bind(&record.endpoint)
-    .bind(&record.status)
-    .bind(record.inspection_enabled)
-    .bind(&record.version)
-    .execute(pool)
-    .await?;
+            deleted_at=NULL", &record.id, &record.tenant_id, &record.server_key, &record.name, &record.owner_team, &record.transport, &record.source, &record.trust_level, &record.endpoint, &record.status, record.inspection_enabled, &record.version)?;
     Ok(())
 }
 
 pub async fn get_mcp_server_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_id: &str,
 ) -> Result<Option<McpServerRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpServerRecord>(
+    crate::fetch_optional_as!(
+        McpServerRecord,
+        pool,
         "SELECT * FROM mcp_servers WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL",
+        tenant_id,
+        server_id
     )
-    .bind(tenant_id)
-    .bind(server_id)
-    .fetch_optional(pool)
-    .await
 }
 
 pub async fn get_last_mcp_manifest_snapshot(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
 ) -> Result<Option<McpManifestSnapshotRecord>, sqlx::Error> {
-    sqlx::query_as::<_, McpManifestSnapshotRecord>(
+    crate::fetch_optional_as!(
+        McpManifestSnapshotRecord,
+        pool,
         "SELECT * FROM mcp_manifest_snapshots WHERE tenant_id = ? AND server_key = ? \
          ORDER BY created_at DESC LIMIT 1",
+        tenant_id,
+        server_key
     )
-    .bind(tenant_id)
-    .bind(server_key)
-    .fetch_optional(pool)
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_mcp_server(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     name: Option<&str>,
@@ -448,38 +394,51 @@ pub async fn update_mcp_server(
 
     query_str.push_str(" WHERE tenant_id = ? AND server_key = ?");
 
-    let mut q = sqlx::query(&query_str);
-    for val in bindings {
-        q = q.bind(val);
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut q = sqlx::query(&query_str);
+            for val in bindings {
+                q = q.bind(val);
+            }
+            q = q.bind(tenant_id).bind(server_key);
+            let result = q.execute(p).await?;
+            Ok(result.rows_affected() > 0)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(&query_str);
+            let mut q = sqlx::query(&pg_sql);
+            for val in bindings {
+                q = q.bind(val);
+            }
+            q = q.bind(tenant_id).bind(server_key);
+            let result = q.execute(p).await?;
+            Ok(result.rows_affected() > 0)
+        }
     }
-    q = q.bind(tenant_id).bind(server_key);
-
-    let result = q.execute(pool).await?;
-    Ok(result.rows_affected() > 0)
 }
 
 /// Set the per-server MCP response-inspection toggle (#1333). Tenant-scoped;
 /// no-op (returns `Ok(false)`) if the server doesn't belong to this tenant.
 pub async fn set_mcp_server_inspection_enabled(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     enabled: bool,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = crate::execute_query!(
+        pool,
         "UPDATE mcp_servers SET inspection_enabled = ? WHERE tenant_id = ? AND server_key = ?",
-    )
-    .bind(enabled)
-    .bind(tenant_id)
-    .bind(server_key)
-    .execute(pool)
-    .await?;
+        enabled,
+        tenant_id,
+        server_key
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
 /// Discover MCP tools and register corresponding skills and actions.
 pub async fn discover_mcp_tools(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     server_key: &str,
     tools: &[McpToolManifestItem],
@@ -652,15 +611,16 @@ mod tests {
             "a soft-deleted server must not appear in list_mcp_servers"
         );
 
-        let raw: (Option<String>,) =
-            sqlx::query_as("SELECT deleted_at FROM mcp_servers WHERE tenant_id = ? AND id = ?")
-                .bind("tenant_a")
-                .bind(&id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let deleted_at: Option<String> = crate::fetch_one_scalar!(
+            Option<String>,
+            &pool,
+            "SELECT deleted_at FROM mcp_servers WHERE tenant_id = ? AND id = ?",
+            "tenant_a",
+            &id,
+        )
+        .unwrap();
         assert!(
-            raw.0.is_some(),
+            deleted_at.is_some(),
             "the row must persist with deleted_at set, not be removed"
         );
     }

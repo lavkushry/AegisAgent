@@ -1,5 +1,5 @@
+use crate::db::DbPool;
 use aegis_api::models::*;
-use sqlx::SqlitePool;
 
 /// TASK-0092 (#938): register a tenant-managed webhook subscription.
 /// `secret_hash` is `sha256(secret)`, computed by the caller — the plaintext
@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 /// outbound delivery to this subscription. Tenant-scoped, parameterized.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_webhook_subscription(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     url: &str,
     secret_hash: Option<&str>,
@@ -18,41 +18,28 @@ pub async fn insert_webhook_subscription(
     format: &str,
 ) -> Result<WebhookSubscriptionRecord, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO webhook_subscriptions (id, tenant_id, url, secret_hash, event_types, status, delivery_secret, min_severity, format, delivery_status) \
-         VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, 'healthy')",
-    )
-    .bind(&id)
-    .bind(tenant_id)
-    .bind(url)
-    .bind(secret_hash)
-    .bind(event_types)
-    .bind(delivery_secret)
-    .bind(min_severity)
-    .bind(format)
-    .execute(pool)
-    .await?;
-
-    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+    crate::execute_query!(pool, "INSERT INTO webhook_subscriptions (id, tenant_id, url, secret_hash, event_types, status, delivery_secret, min_severity, format, delivery_status) \
+         VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, 'healthy')", &id, tenant_id, url, secret_hash, event_types, delivery_secret, min_severity, format)?;
+    crate::fetch_one_as!(
+        WebhookSubscriptionRecord,
+        pool,
         "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        &id
     )
-    .bind(tenant_id)
-    .bind(&id)
-    .fetch_one(pool)
-    .await
 }
 
 /// TASK-0092 (#938): list webhook subscriptions for a tenant, most recent first.
 pub async fn list_webhook_subscriptions(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<WebhookSubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+    crate::fetch_all_as!(
+        WebhookSubscriptionRecord,
+        pool,
         "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? ORDER BY created_at DESC",
+        tenant_id
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
 }
 
 /// #1285: tenant-scoped subscriptions whose `event_types` filter matches
@@ -60,48 +47,49 @@ pub async fn list_webhook_subscriptions(
 /// is checked separately in application code (`webhook_export::passes_severity_filter`)
 /// since SQLite has no clean way to rank a string enum in SQL.
 pub async fn list_matching_webhook_subscriptions(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     event_kind: &str,
 ) -> Result<Vec<WebhookSubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+    crate::fetch_all_as!(
+        WebhookSubscriptionRecord,
+        pool,
         "SELECT * FROM webhook_subscriptions
          WHERE tenant_id = ?
            AND (event_types = '*' OR ',' || event_types || ',' LIKE '%,' || ? || ',%')",
+        tenant_id,
+        event_kind
     )
-    .bind(tenant_id)
-    .bind(event_kind)
-    .fetch_all(pool)
-    .await
 }
 
 /// #1285: fetch a single tenant-scoped webhook subscription by id.
 pub async fn get_webhook_subscription(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<Option<WebhookSubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, WebhookSubscriptionRecord>(
+    crate::fetch_optional_as!(
+        WebhookSubscriptionRecord,
+        pool,
         "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        id
     )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(pool)
-    .await
 }
 
 /// TASK-0092 (#938): delete a tenant's webhook subscription. Returns `true`
 /// if a row was deleted.
 pub async fn delete_webhook_subscription(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?")
-        .bind(tenant_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let result = crate::execute_query!(
+        pool,
+        "DELETE FROM webhook_subscriptions WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        id
+    )?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -110,24 +98,24 @@ pub async fn delete_webhook_subscription(
 /// `consecutive_failures >= 10` -> `"dead"`, `>= 3` -> `"degraded"`,
 /// else `"healthy"`.
 pub async fn record_webhook_delivery_result(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     id: &str,
     success: bool,
 ) -> Result<(), sqlx::Error> {
     if success {
-        sqlx::query(
+        crate::execute_query!(
+            pool,
             "UPDATE webhook_subscriptions
              SET consecutive_failures = 0, delivery_status = 'healthy',
                  last_delivery_at = CURRENT_TIMESTAMP, last_success_at = CURRENT_TIMESTAMP
              WHERE tenant_id = ? AND id = ?",
-        )
-        .bind(tenant_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
+            tenant_id,
+            id
+        )?;
     } else {
-        sqlx::query(
+        crate::execute_query!(
+            pool,
             "UPDATE webhook_subscriptions
              SET consecutive_failures = consecutive_failures + 1,
                  last_delivery_at = CURRENT_TIMESTAMP,
@@ -137,53 +125,50 @@ pub async fn record_webhook_delivery_result(
                      ELSE 'healthy'
                  END
              WHERE tenant_id = ? AND id = ?",
-        )
-        .bind(tenant_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
+            tenant_id,
+            id
+        )?;
     }
     Ok(())
 }
 
 /// Fetch all active (non-dead) webhook subscriptions for a tenant.
 pub async fn get_active_webhook_subscriptions(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<Vec<WebhookSubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, WebhookSubscriptionRecord>(
-        "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? AND status = 'active' AND delivery_status != 'dead'"
+    crate::fetch_all_as!(
+        WebhookSubscriptionRecord,
+        pool,
+        "SELECT * FROM webhook_subscriptions WHERE tenant_id = ? AND status = 'active' AND delivery_status != 'dead'",
+        tenant_id
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
 }
 
 pub async fn update_webhook_subscription(
-    pool: &SqlitePool,
+    pool: &DbPool,
     record: &WebhookSubscriptionRecord,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "UPDATE webhook_subscriptions SET \
          url = ?, secret_hash = ?, event_types = ?, status = ?, delivery_secret = ?, \
          min_severity = ?, format = ?, delivery_status = ?, consecutive_failures = ?, \
          last_delivery_at = ?, last_success_at = ? \
          WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(&record.url)
-    .bind(&record.secret_hash)
-    .bind(&record.event_types)
-    .bind(&record.status)
-    .bind(&record.delivery_secret)
-    .bind(&record.min_severity)
-    .bind(&record.format)
-    .bind(&record.delivery_status)
-    .bind(record.consecutive_failures)
-    .bind(record.last_delivery_at)
-    .bind(record.last_success_at)
-    .bind(&record.tenant_id)
-    .bind(&record.id)
-    .execute(pool)
-    .await?;
+        &record.url,
+        &record.secret_hash,
+        &record.event_types,
+        &record.status,
+        &record.delivery_secret,
+        &record.min_severity,
+        &record.format,
+        &record.delivery_status,
+        record.consecutive_failures,
+        record.last_delivery_at,
+        record.last_success_at,
+        &record.tenant_id,
+        &record.id
+    )?;
     Ok(())
 }

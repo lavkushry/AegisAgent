@@ -2,9 +2,9 @@
 // This module is declared with `#[cfg(test)] pub(crate) mod test_utils;` in mod.rs,
 // so we don't wrap the contents in another module here.
 
+use crate::db::DbPool;
 use aegis_api::models::*;
 use chrono::Utc;
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
 /// Serializes tests that mutate the process-wide
@@ -15,7 +15,7 @@ pub static DEDUP_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_ne
 /// `AEGIS_DB_STATEMENT_CACHE_CAPACITY` env var (#906).
 pub static STATEMENT_CACHE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-pub async fn setup_pool(test_name: &str) -> SqlitePool {
+pub async fn setup_pool(test_name: &str) -> DbPool {
     std::fs::create_dir_all("target").unwrap();
     let db_url = format!(
         "sqlite://target/{}_{}.db",
@@ -210,33 +210,32 @@ pub fn graph_perf_receipt(id: &str, tenant_id: &str, decision_id: &str) -> Actio
     }
 }
 
-pub async fn insert_test_receipt(pool: &SqlitePool, r: &ActionReceiptRecord) {
-    sqlx::query(
+pub async fn insert_test_receipt(pool: &DbPool, r: &ActionReceiptRecord) {
+    execute_query!(
+        pool,
         "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        &r.id,
+        &r.tenant_id,
+        &r.decision_id,
+        &r.ts,
+        &r.agent_id,
+        &r.user_id,
+        &r.run_id,
+        &r.trace_id,
+        &r.tool,
+        &r.action,
+        &r.resource,
+        &r.source_trust,
+        &r.decision,
+        &r.approver,
+        &r.action_hash,
+        &r.prev_receipt_hash,
+        &r.receipt_hash,
+        &r.canon_version,
+        &r.signature,
+        &r.signer_public_key
     )
-    .bind(&r.id)
-    .bind(&r.tenant_id)
-    .bind(&r.decision_id)
-    .bind(&r.ts)
-    .bind(&r.agent_id)
-    .bind(&r.user_id)
-    .bind(&r.run_id)
-    .bind(&r.trace_id)
-    .bind(&r.tool)
-    .bind(&r.action)
-    .bind(&r.resource)
-    .bind(&r.source_trust)
-    .bind(&r.decision)
-    .bind(&r.approver)
-    .bind(&r.action_hash)
-    .bind(&r.prev_receipt_hash)
-    .bind(&r.receipt_hash)
-    .bind(&r.canon_version)
-    .bind(&r.signature)
-    .bind(&r.signer_public_key)
-    .execute(pool)
-    .await
     .unwrap();
 }
 

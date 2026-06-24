@@ -9,9 +9,9 @@
 //! network I/O) immediately after a `deny` decision is recorded, so the
 //! very next call from this agent already sees the tightened tier.
 
+use crate::db::DbPool;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Duration, Utc};
-use sqlx::SqlitePool;
 
 /// One step up the tier ladder, or `None` if `current` is already at the
 /// top (`"high"`) or is an unrecognized value — escalation never guesses at
@@ -30,7 +30,7 @@ pub fn escalate_tier(current: &str) -> Option<&'static str> {
 /// for the caller to audit-log. Returns `Ok(None)` when no escalation
 /// happens (below threshold, already `"high"`, or an unrecognized tier).
 pub async fn maybe_escalate_agent_risk_tier(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     current_tier: &str,
@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(config.window_minutes, 60);
     }
 
-    async fn setup_pool() -> SqlitePool {
+    async fn setup_pool() -> DbPool {
         let pool = crate::db::init_db("sqlite::memory:").await.unwrap();
         crate::db::register_tenant(&pool, "tenant_1", "Tenant One", "developer")
             .await
@@ -98,7 +98,7 @@ mod tests {
         pool
     }
 
-    async fn insert_agent(pool: &SqlitePool, agent_id: &str, risk_tier: &str) {
+    async fn insert_agent(pool: &DbPool, agent_id: &str, risk_tier: &str) {
         sqlx::query(
             "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
              VALUES (?, 'tenant_1', ?, 'tok', 'Test Agent', 'production', ?, 'active')",
@@ -106,12 +106,12 @@ mod tests {
         .bind(agent_id)
         .bind(agent_id)
         .bind(risk_tier)
-        .execute(pool)
+        .execute(pool.sqlite_pool())
         .await
         .unwrap();
     }
 
-    async fn insert_deny_decision(pool: &SqlitePool, agent_id: &str, created_at: DateTime<Utc>) {
+    async fn insert_deny_decision(pool: &DbPool, agent_id: &str, created_at: DateTime<Utc>) {
         // Match the space-separated format SQLite's own `DEFAULT
         // CURRENT_TIMESTAMP` produces in the real `db::insert_decision`
         // path (no column-list entry there) — binding a raw `DateTime<Utc>`
@@ -125,7 +125,7 @@ mod tests {
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(agent_id)
         .bind(created_at_str)
-        .execute(pool)
+        .execute(pool.sqlite_pool())
         .await
         .unwrap();
     }
@@ -145,7 +145,7 @@ mod tests {
 
         let (stored_tier,): (String,) = sqlx::query_as("SELECT risk_tier FROM agents WHERE id = ?")
             .bind("agent_1")
-            .fetch_one(&pool)
+            .fetch_one(pool.sqlite_pool())
             .await
             .unwrap();
         assert_eq!(stored_tier, "medium");

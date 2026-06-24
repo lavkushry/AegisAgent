@@ -1,63 +1,38 @@
 use super::SOC_MAX_LIMIT;
+use crate::db::DbPool;
 use aegis_api::models::*;
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, Row, SqlitePool};
+use sqlx::{FromRow, Row};
 
 /// #1298 (Compliance Evidence Pack): tenant-scoped `audit_events`, optionally
 /// bounded by a `[from, to]` `created_at` window. Distinct from
 /// [`get_all_audit_events`] (which filters by `decision_id` and caps at 100
 /// rows) — evidence packs need the full date-bounded set, uncapped.
 pub async fn get_audit_events_in_range(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AuditEventRecord>(
+    crate::fetch_all_as!(
+        AuditEventRecord,
+        pool,
         "SELECT * FROM audit_events
          WHERE tenant_id = ?
            AND (? IS NULL OR created_at >= ?)
            AND (? IS NULL OR created_at <= ?)
          ORDER BY created_at ASC",
+        tenant_id,
+        from,
+        from,
+        to,
+        to
     )
-    .bind(tenant_id)
-    .bind(from)
-    .bind(from)
-    .bind(to)
-    .bind(to)
-    .fetch_all(pool)
-    .await
 }
 
-pub async fn insert_decision(
-    pool: &SqlitePool,
-    record: &DecisionRecord,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.agent_id)
-    .bind(&record.user_id)
-    .bind(&record.run_id)
-    .bind(&record.trace_id)
-    .bind(&record.skill)
-    .bind(&record.action)
-    .bind(&record.resource)
-    .bind(&record.input_json)
-    .bind(&record.decision)
-    .bind(record.risk_score)
-    .bind(&record.reason)
-    .bind(&record.matched_policy_ids)
-    .bind(&record.request_id)
-    .bind(record.latency_ms)
-    .bind(record.composite_risk_score)
-    .bind(&record.root_trust_level)
-    .bind(&record.parent_run_id)
-    .execute(pool)
-    .await?;
+pub async fn insert_decision(pool: &DbPool, record: &DecisionRecord) -> Result<(), sqlx::Error> {
+    crate::execute_query!(pool, "INSERT INTO decisions (id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.agent_id, &record.user_id, &record.run_id, &record.trace_id, &record.skill, &record.action, &record.resource, &record.input_json, &record.decision, record.risk_score, &record.reason, &record.matched_policy_ids, &record.request_id, record.latency_ms, record.composite_risk_score, &record.root_trust_level, &record.parent_run_id)?;
     Ok(())
 }
 
@@ -66,42 +41,35 @@ pub async fn insert_decision(
 /// `routes::write_decision_and_audit` for every `/v1/authorize` decision.
 /// Tenant-scoped, parameterized.
 pub async fn insert_agent_risk_score(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     decision_id: &str,
     score: i32,
     reason: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    crate::execute_query!(
+        pool,
         "INSERT INTO agent_risk_scores (id, tenant_id, agent_id, decision_id, score, reason) \
          VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(decision_id)
-    .bind(score)
-    .bind(reason)
-    .execute(pool)
-    .await?;
+        uuid::Uuid::new_v4().to_string(),
+        tenant_id,
+        agent_id,
+        decision_id,
+        score,
+        reason
+    )?;
     Ok(())
 }
 
 /// TASK-0089 (#935): list historical risk-score samples for `agent_id`, most
 /// recent first. Tenant-scoped, parameterized.
 pub async fn list_agent_risk_scores(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<Vec<AgentRiskScoreRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRiskScoreRecord>(
-        "SELECT * FROM agent_risk_scores WHERE tenant_id = ? AND agent_id = ? ORDER BY created_at DESC",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await
+    crate::fetch_all_as!(AgentRiskScoreRecord, pool, "SELECT * FROM agent_risk_scores WHERE tenant_id = ? AND agent_id = ? ORDER BY created_at DESC", tenant_id, agent_id)
 }
 
 /// Idempotency lookup (#0072): find a previously-recorded decision for the same
@@ -109,25 +77,18 @@ pub async fn list_agent_risk_scores(
 /// repeat requests instead of re-evaluating Cedar / writing duplicate side
 /// effects (audit events, approvals, receipts).
 pub async fn get_decision_by_request_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
     request_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+    crate::fetch_optional_as!(DecisionRecord, pool, "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
-         WHERE tenant_id = ? AND agent_id = ? AND request_id = ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(request_id)
-    .fetch_optional(pool)
-    .await
+         WHERE tenant_id = ? AND agent_id = ? AND request_id = ?", tenant_id, agent_id, request_id)
 }
 
 pub async fn list_decisions(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
@@ -135,24 +96,13 @@ pub async fn list_decisions(
     decision: Option<&str>,
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+    crate::fetch_all_as!(DecisionRecord, pool, "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
            AND (? IS NULL OR decision = ?)
          ORDER BY created_at DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(decision)
-    .bind(decision)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
+         LIMIT ? OFFSET ?", tenant_id, agent_id, agent_id, decision, decision, limit, offset)
 }
 
 /// Cursor-paginated sibling of [`list_decisions`] (#1142), used only by the
@@ -176,7 +126,7 @@ pub async fn list_decisions(
 /// source table's rows.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_decisions_cursor(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
@@ -186,8 +136,7 @@ pub async fn list_decisions_cursor(
     q: Option<&str>,
 ) -> Result<(Vec<DecisionRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    let rows = sqlx::query(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
+    let query = "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
          FROM decisions
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
@@ -198,23 +147,47 @@ pub async fn list_decisions_cursor(
                  WHERE searchable_text MATCH ? AND source_table = 'decisions' AND tenant_id = ?
                ))
          ORDER BY rowid DESC
-         LIMIT ? OFFSET ?",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .bind(agent_id)
-    .bind(decision)
-    .bind(decision)
-    .bind(cursor)
-    .bind(cursor)
-    .bind(q)
-    .bind(q)
-    .bind(tenant_id)
-    .bind(limit + 1)
-    .bind(if cursor.is_some() { 0 } else { offset })
-    .fetch_all(pool)
-    .await?;
-    super::paginate_rows(rows, limit)
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(decision)
+                .bind(decision)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(q)
+                .bind(q)
+                .bind(tenant_id)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(decision)
+                .bind(decision)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(q)
+                .bind(q)
+                .bind(tenant_id)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
 }
 
 /// #1283: cap on decisions scanned per backtest run. Higher than
@@ -235,42 +208,28 @@ pub const BACKTEST_MAX_DECISIONS: i64 = 50_000;
 /// `DateTime<Utc>` bind serializes RFC3339-style with a `T` separator, which
 /// sorts incorrectly against the column's format in a string comparison.
 pub async fn list_decisions_in_range(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     from: chrono::DateTime<chrono::Utc>,
     to: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
     let from_str = from.format("%F %T%.6f").to_string();
     let to_str = to.format("%F %T%.6f").to_string();
-    sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+    crate::fetch_all_as!(DecisionRecord, pool, "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
          WHERE tenant_id = ? AND created_at >= ? AND created_at <= ?
          ORDER BY created_at ASC
-         LIMIT ?",
-    )
-    .bind(tenant_id)
-    .bind(from_str)
-    .bind(to_str)
-    .bind(BACKTEST_MAX_DECISIONS)
-    .fetch_all(pool)
-    .await
+         LIMIT ?", tenant_id, from_str, to_str, BACKTEST_MAX_DECISIONS)
 }
 
 pub async fn get_decision_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_id: &str,
 ) -> Result<Option<DecisionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+    crate::fetch_optional_as!(DecisionRecord, pool, "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
-         WHERE tenant_id = ? AND id = ?",
-    )
-    .bind(tenant_id)
-    .bind(decision_id)
-    .fetch_optional(pool)
-    .await
+         WHERE tenant_id = ? AND id = ?", tenant_id, decision_id)
 }
 
 /// #1326: batch-fetch decisions by id, tenant-scoped. Used to enrich a page
@@ -278,7 +237,7 @@ pub async fn get_decision_by_id(
 /// query, mirroring `list_approvals_by_decision_ids`'s batching to avoid an
 /// N+1 query per row.
 pub async fn list_decisions_by_ids(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_ids: &[String],
 ) -> Result<std::collections::HashMap<String, DecisionRecord>, sqlx::Error> {
@@ -294,44 +253,52 @@ pub async fn list_decisions_by_ids(
         "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions WHERE tenant_id = ? AND id IN ({placeholders})"
     );
-    let mut q = sqlx::query_as::<_, DecisionRecord>(&query).bind(tenant_id);
-    for id in decision_ids {
-        q = q.bind(id);
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut q = sqlx::query_as::<_, DecisionRecord>(&query).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            let rows = q.fetch_all(p).await?;
+            Ok(rows.into_iter().map(|r| (r.id.clone(), r)).collect())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(&query);
+            let mut q = sqlx::query_as::<_, DecisionRecord>(&pg_sql).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            let rows = q.fetch_all(p).await?;
+            Ok(rows.into_iter().map(|r| (r.id.clone(), r)).collect())
+        }
     }
-    let rows = q.fetch_all(pool).await?;
-    Ok(rows.into_iter().map(|r| (r.id.clone(), r)).collect())
 }
 
 /// #1272: all decisions for a single agent run, tenant-scoped. Used to build
 /// the `GET /v1/graph/run/:run_id` evidence subgraph.
 pub async fn list_decisions_by_run_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     run_id: &str,
 ) -> Result<Vec<DecisionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, DecisionRecord>(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
+    crate::fetch_all_as!(DecisionRecord, pool, "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at
          FROM decisions
          WHERE tenant_id = ? AND run_id = ?
          ORDER BY created_at ASC
-         LIMIT ?",
-    )
-    .bind(tenant_id)
-    .bind(run_id)
-    .bind(SOC_MAX_LIMIT)
-    .fetch_all(pool)
-    .await
+         LIMIT ?", tenant_id, run_id, SOC_MAX_LIMIT)
 }
 
 /// #1286: highest `rowid` currently in `decisions` for `tenant_id` — used to
 /// seed a forward-watch cursor at "everything from now on" rather than
 /// replaying full history. Mirrors [`super::soc::max_soc_alert_rowid`].
-pub async fn max_decision_rowid(pool: &SqlitePool, tenant_id: &str) -> Result<i64, sqlx::Error> {
-    let (max_rowid,): (Option<i64>,) =
-        sqlx::query_as("SELECT MAX(rowid) FROM decisions WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+pub async fn max_decision_rowid(pool: &DbPool, tenant_id: &str) -> Result<i64, sqlx::Error> {
+    let (max_rowid,): (Option<i64>,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT MAX(rowid) FROM decisions WHERE tenant_id = ?",
+        tenant_id
+    )?;
     Ok(max_rowid.unwrap_or(0))
 }
 
@@ -342,48 +309,67 @@ pub async fn max_decision_rowid(pool: &SqlitePool, tenant_id: &str) -> Result<i6
 /// `since_rowid`). Used by the Splunk HEC export job to poll for newly
 /// authorized decisions to forward.
 pub async fn list_decisions_since(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     since_rowid: i64,
 ) -> Result<Vec<(DecisionRecord, i64)>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
+    let query = "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
          FROM decisions
          WHERE tenant_id = ?
            AND rowid > ?
          ORDER BY rowid ASC
-         LIMIT ?",
-    )
-    .bind(tenant_id)
-    .bind(since_rowid)
-    .bind(super::SOC_WATCH_BATCH_LIMIT)
-    .fetch_all(pool)
-    .await?;
-
-    rows.iter()
-        .map(|row| {
-            let record = DecisionRecord::from_row(row)?;
-            let rowid: i64 = row.try_get("rowid")?;
-            Ok((record, rowid))
-        })
-        .collect()
+         LIMIT ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(since_rowid)
+                .bind(super::SOC_WATCH_BATCH_LIMIT)
+                .fetch_all(p)
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    let record = DecisionRecord::from_row(row)?;
+                    let rowid: i64 = row.try_get("rowid")?;
+                    Ok((record, rowid))
+                })
+                .collect()
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(since_rowid)
+                .bind(super::SOC_WATCH_BATCH_LIMIT)
+                .fetch_all(p)
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    let record = DecisionRecord::from_row(row)?;
+                    let rowid: i64 = row.try_get("rowid")?;
+                    Ok((record, rowid))
+                })
+                .collect()
+        }
+    }
 }
 
 /// #1272: the `decision_id` an audit event was linked to (#1301), tenant-scoped.
 /// Used to walk `soc_incidents.source_event_ids` -> `decisions` for the
 /// `GET /v1/graph/incident/:incident_id` evidence subgraph.
 pub async fn get_audit_event_decision_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     event_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar::<_, Option<String>>(
+    crate::fetch_optional_scalar!(
+        Option<String>,
+        pool,
         "SELECT decision_id FROM audit_events WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        event_id
     )
-    .bind(tenant_id)
-    .bind(event_id)
-    .fetch_optional(pool)
-    .await
     .map(|opt| opt.flatten())
 }
 
@@ -394,7 +380,7 @@ pub async fn get_audit_event_decision_id(
 /// 1:1 with a decision, so this returns a flat `Vec`, not a map. Empty
 /// `decision_ids` short-circuits to an empty result without querying.
 pub async fn list_audit_events_by_decision_ids(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_ids: &[String],
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
@@ -409,11 +395,24 @@ pub async fn list_audit_events_by_decision_ids(
     let query = format!(
         "SELECT * FROM audit_events WHERE tenant_id = ? AND decision_id IN ({placeholders}) ORDER BY created_at ASC, rowid ASC"
     );
-    let mut q = sqlx::query_as::<_, AuditEventRecord>(&query).bind(tenant_id);
-    for id in decision_ids {
-        q = q.bind(id);
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut q = sqlx::query_as::<_, AuditEventRecord>(&query).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            q.fetch_all(p).await
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(&query);
+            let mut q = sqlx::query_as::<_, AuditEventRecord>(&pg_sql).bind(tenant_id);
+            for id in decision_ids {
+                q = q.bind(id);
+            }
+            q.fetch_all(p).await
+        }
     }
-    q.fetch_all(pool).await
 }
 
 /// Format an [`AuditEventRecord::created_at`] at microsecond precision
@@ -430,33 +429,12 @@ fn format_audit_created_at(created_at: chrono::DateTime<Utc>) -> String {
 }
 
 pub async fn insert_audit_event(
-    pool: &SqlitePool,
+    pool: &DbPool,
     record: &AuditEventRecord,
 ) -> Result<(), sqlx::Error> {
     let created_at = format_audit_created_at(record.created_at);
-    sqlx::query(
-        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&record.id)
-    .bind(&record.tenant_id)
-    .bind(&record.event_type)
-    .bind(&record.agent_id)
-    .bind(&record.user_id)
-    .bind(&record.run_id)
-    .bind(&record.trace_id)
-    .bind(&record.span_id)
-    .bind(&record.skill)
-    .bind(&record.action)
-    .bind(&record.resource)
-    .bind(&record.event_json)
-    .bind(&record.input_hash)
-    .bind(&record.output_hash)
-    .bind(&record.decision_id)
-    .bind(&record.approval_id)
-    .bind(created_at)
-    .execute(pool)
-    .await?;
+    crate::execute_query!(pool, "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.event_type, &record.agent_id, &record.user_id, &record.run_id, &record.trace_id, &record.span_id, &record.skill, &record.action, &record.resource, &record.event_json, &record.input_hash, &record.output_hash, &record.decision_id, &record.approval_id, created_at)?;
     Ok(())
 }
 
@@ -466,40 +444,74 @@ pub async fn insert_audit_event(
 /// identical rows (including the microsecond-precision `created_at`) to
 /// calling [`insert_audit_event`] once per record.
 pub async fn insert_audit_events_batch(
-    pool: &SqlitePool,
+    pool: &DbPool,
     records: &[AuditEventRecord],
 ) -> Result<(), sqlx::Error> {
     if records.is_empty() {
         return Ok(());
     }
 
-    let mut tx = pool.begin().await?;
-    let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
-        "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at) "
-    );
-    qb.push_values(records, |mut b, record| {
-        let created_at = format_audit_created_at(record.created_at);
-        b.push_bind(record.id.clone())
-            .push_bind(record.tenant_id.clone())
-            .push_bind(record.event_type.clone())
-            .push_bind(record.agent_id.clone())
-            .push_bind(record.user_id.clone())
-            .push_bind(record.run_id.clone())
-            .push_bind(record.trace_id.clone())
-            .push_bind(record.span_id.clone())
-            .push_bind(record.skill.clone())
-            .push_bind(record.action.clone())
-            .push_bind(record.resource.clone())
-            .push_bind(record.event_json.clone())
-            .push_bind(record.input_hash.clone())
-            .push_bind(record.output_hash.clone())
-            .push_bind(record.decision_id.clone())
-            .push_bind(record.approval_id.clone())
-            .push_bind(created_at);
-    });
-    qb.build().execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(())
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut tx = p.begin().await?;
+            let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+                "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at) "
+            );
+            qb.push_values(records, |mut b, record| {
+                let created_at = format_audit_created_at(record.created_at);
+                b.push_bind(record.id.clone())
+                    .push_bind(record.tenant_id.clone())
+                    .push_bind(record.event_type.clone())
+                    .push_bind(record.agent_id.clone())
+                    .push_bind(record.user_id.clone())
+                    .push_bind(record.run_id.clone())
+                    .push_bind(record.trace_id.clone())
+                    .push_bind(record.span_id.clone())
+                    .push_bind(record.skill.clone())
+                    .push_bind(record.action.clone())
+                    .push_bind(record.resource.clone())
+                    .push_bind(record.event_json.clone())
+                    .push_bind(record.input_hash.clone())
+                    .push_bind(record.output_hash.clone())
+                    .push_bind(record.decision_id.clone())
+                    .push_bind(record.approval_id.clone())
+                    .push_bind(created_at);
+            });
+            qb.build().execute(&mut *tx).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let mut tx = p.begin().await?;
+            let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+                "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at) "
+            );
+            qb.push_values(records, |mut b, record| {
+                let created_at = format_audit_created_at(record.created_at);
+                b.push_bind(record.id.clone())
+                    .push_bind(record.tenant_id.clone())
+                    .push_bind(record.event_type.clone())
+                    .push_bind(record.agent_id.clone())
+                    .push_bind(record.user_id.clone())
+                    .push_bind(record.run_id.clone())
+                    .push_bind(record.trace_id.clone())
+                    .push_bind(record.span_id.clone())
+                    .push_bind(record.skill.clone())
+                    .push_bind(record.action.clone())
+                    .push_bind(record.resource.clone())
+                    .push_bind(record.event_json.clone())
+                    .push_bind(record.input_hash.clone())
+                    .push_bind(record.output_hash.clone())
+                    .push_bind(record.decision_id.clone())
+                    .push_bind(record.approval_id.clone())
+                    .push_bind(created_at);
+            });
+            qb.build().execute(&mut *tx).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+    }
 }
 
 /// Move `audit_events` rows older than `cutoff` into `audit_events_archive`
@@ -507,43 +519,64 @@ pub async fn insert_audit_events_batch(
 /// transaction so a row is never lost or duplicated across the two tables.
 /// Returns the number of rows archived.
 pub async fn archive_audit_events_older_than(
-    pool: &SqlitePool,
+    pool: &DbPool,
     cutoff: DateTime<Utc>,
 ) -> Result<u64, sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut tx = p.begin().await?;
 
-    sqlx::query(
-        "INSERT INTO audit_events_archive
-            (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
-         SELECT id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at
-         FROM audit_events
-         WHERE created_at < ?",
-    )
-    .bind(cutoff)
-    .execute(&mut *tx)
-    .await?;
+            sqlx::query(
+                "INSERT INTO audit_events_archive
+                    (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+                 SELECT id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at
+                 FROM audit_events
+                 WHERE created_at < ?",
+            )
+            .bind(cutoff)
+            .execute(&mut *tx)
+            .await?;
 
-    let result = sqlx::query("DELETE FROM audit_events WHERE created_at < ?")
-        .bind(cutoff)
-        .execute(&mut *tx)
-        .await?;
+            let result = sqlx::query("DELETE FROM audit_events WHERE created_at < ?")
+                .bind(cutoff)
+                .execute(&mut *tx)
+                .await?;
 
-    tx.commit().await?;
-    Ok(result.rows_affected())
+            tx.commit().await?;
+            Ok(result.rows_affected())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let mut tx = p.begin().await?;
+
+            sqlx::query(
+                "INSERT INTO audit_events_archive
+                    (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at)
+                 SELECT id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at
+                 FROM audit_events
+                 WHERE created_at < $1",
+            )
+            .bind(cutoff)
+            .execute(&mut *tx)
+            .await?;
+
+            let result = sqlx::query("DELETE FROM audit_events WHERE created_at < $1")
+                .bind(cutoff)
+                .execute(&mut *tx)
+                .await?;
+
+            tx.commit().await?;
+            Ok(result.rows_affected())
+        }
+    }
 }
 
 pub async fn get_audit_events_by_run(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     run_id: &str,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AuditEventRecord>(
-        "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC, rowid ASC",
-    )
-    .bind(tenant_id)
-    .bind(run_id)
-    .fetch_all(pool)
-    .await
+    crate::fetch_all_as!(AuditEventRecord, pool, "SELECT * FROM audit_events WHERE tenant_id = ? AND run_id = ? ORDER BY created_at ASC, rowid ASC", tenant_id, run_id)
 }
 
 /// List audit events for a tenant, optionally filtered by `decision_id`
@@ -551,18 +584,11 @@ pub async fn get_audit_events_by_run(
 /// specific authorization decision. Always tenant-scoped; the optional
 /// filter uses the `(? IS NULL OR col = ?)` static-SQL pattern (CWE-89 safe).
 pub async fn get_all_audit_events(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_id: Option<&str>,
 ) -> Result<Vec<AuditEventRecord>, sqlx::Error> {
-    sqlx::query_as::<_, AuditEventRecord>(
-        "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 100",
-    )
-    .bind(tenant_id)
-    .bind(decision_id)
-    .bind(decision_id)
-    .fetch_all(pool)
-    .await
+    crate::fetch_all_as!(AuditEventRecord, pool, "SELECT * FROM audit_events WHERE tenant_id = ? AND (? IS NULL OR decision_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 100", tenant_id, decision_id, decision_id)
 }
 
 /// #1142: this endpoint never exposed `limit`/`offset` — it has always
@@ -578,14 +604,13 @@ const AUDIT_EVENTS_PAGE_LIMIT: i64 = 100;
 /// already-sanitized FTS5 MATCH expression contract, scoped here to
 /// `source_table = 'audit_events'`.
 pub async fn get_all_audit_events_cursor(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     decision_id: Option<&str>,
     cursor: Option<i64>,
     q: Option<&str>,
 ) -> Result<(Vec<AuditEventRecord>, Option<i64>), sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT *, rowid FROM audit_events
+    let query = "SELECT *, rowid FROM audit_events
          WHERE tenant_id = ?
            AND (? IS NULL OR decision_id = ?)
            AND (? IS NULL OR rowid < ?)
@@ -594,54 +619,75 @@ pub async fn get_all_audit_events_cursor(
                  WHERE searchable_text MATCH ? AND source_table = 'audit_events' AND tenant_id = ?
                ))
          ORDER BY rowid DESC
-         LIMIT ?",
-    )
-    .bind(tenant_id)
-    .bind(decision_id)
-    .bind(decision_id)
-    .bind(cursor)
-    .bind(cursor)
-    .bind(q)
-    .bind(q)
-    .bind(tenant_id)
-    .bind(AUDIT_EVENTS_PAGE_LIMIT + 1)
-    .fetch_all(pool)
-    .await?;
-    super::paginate_rows(rows, AUDIT_EVENTS_PAGE_LIMIT)
+         LIMIT ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(decision_id)
+                .bind(decision_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(q)
+                .bind(q)
+                .bind(tenant_id)
+                .bind(AUDIT_EVENTS_PAGE_LIMIT + 1)
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, AUDIT_EVENTS_PAGE_LIMIT)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(decision_id)
+                .bind(decision_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(q)
+                .bind(q)
+                .bind(tenant_id)
+                .bind(AUDIT_EVENTS_PAGE_LIMIT + 1)
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, AUDIT_EVENTS_PAGE_LIMIT)
+        }
+    }
 }
 
 /// Calculate the number of decisions recorded for an agent in the last 24 hours.
 pub async fn get_decision_count_24h_for_agent(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
     agent_id: &str,
 ) -> Result<i64, sqlx::Error> {
-    let row: (i64,) = sqlx::query_as(
+    let row: (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*) FROM decisions \
          WHERE tenant_id = ? AND agent_id = ? \
            AND created_at >= datetime('now', '-24 hours')",
-    )
-    .bind(tenant_id)
-    .bind(agent_id)
-    .fetch_one(pool)
-    .await?;
+        tenant_id,
+        agent_id
+    )?;
     Ok(row.0)
 }
 
 pub async fn count_decisions_by_outcome(
-    pool: &SqlitePool,
+    pool: &DbPool,
     tenant_id: &str,
 ) -> Result<(i64, i64, i64, i64), sqlx::Error> {
-    let row: (i64, i64, i64, i64) = sqlx::query_as(
+    let row: (i64, i64, i64, i64) = crate::fetch_one_as!(
+        _,
+        pool,
         "SELECT COUNT(*),
                 COUNT(CASE WHEN decision = 'allow' THEN 1 END),
                 COUNT(CASE WHEN decision = 'deny' THEN 1 END),
                 COUNT(CASE WHEN decision = 'require_approval' THEN 1 END)
          FROM decisions WHERE tenant_id = ?",
-    )
-    .bind(tenant_id)
-    .fetch_one(pool)
-    .await?;
+        tenant_id
+    )?;
 
     Ok(row)
 }
@@ -688,11 +734,10 @@ mod tests {
         insert_audit_event(&pool, &new_event).await.unwrap();
 
         // Backdate evt_old so it falls before the cutoff.
-        sqlx::query(
-            "UPDATE audit_events SET created_at = '2000-01-01T00:00:00Z' WHERE id = 'evt_old'",
+        crate::execute_query!(
+            pool,
+            "UPDATE audit_events SET created_at = '2000-01-01T00:00:00Z' WHERE id = 'evt_old'"
         )
-        .execute(&pool)
-        .await
         .unwrap();
 
         let cutoff = Utc::now() - chrono::Duration::days(1);
@@ -701,25 +746,28 @@ mod tests {
             .unwrap();
         assert_eq!(archived, 1);
 
-        let remaining: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = 'evt_old'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let remaining: (i64,) = crate::fetch_one_as!(
+            _,
+            pool,
+            "SELECT COUNT(*) FROM audit_events WHERE id = 'evt_old'"
+        )
+        .unwrap();
         assert_eq!(remaining.0, 0);
 
-        let archived_row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM audit_events_archive WHERE id = 'evt_old'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let archived_row: (i64,) = crate::fetch_one_as!(
+            _,
+            pool,
+            "SELECT COUNT(*) FROM audit_events_archive WHERE id = 'evt_old'"
+        )
+        .unwrap();
         assert_eq!(archived_row.0, 1);
 
-        let still_present: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = 'evt_new'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let still_present: (i64,) = crate::fetch_one_as!(
+            _,
+            pool,
+            "SELECT COUNT(*) FROM audit_events WHERE id = 'evt_new'"
+        )
+        .unwrap();
         assert_eq!(still_present.0, 1);
     }
 
@@ -898,12 +946,8 @@ mod tests {
         register_tenant(&pool, "tenant_a", "Tenant A", "developer")
             .await
             .unwrap();
-        sqlx::query(
-            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
-        )
-        .execute(&pool)
-        .await
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')")
         .unwrap();
 
         insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_a"))
@@ -923,10 +967,8 @@ mod tests {
             "exact-boundary page must not claim more rows exist"
         );
 
-        let oldest_rowid: i64 = sqlx::query_scalar("SELECT MIN(rowid) FROM decisions")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let oldest_rowid: i64 =
+            crate::fetch_one_scalar!(_, pool, "SELECT MIN(rowid) FROM decisions").unwrap();
         let (empty_page, empty_cursor) = list_decisions_cursor(
             &pool,
             "tenant_a",
@@ -957,12 +999,8 @@ mod tests {
         register_tenant(&pool, "tenant_b", "Tenant B", "developer")
             .await
             .unwrap();
-        sqlx::query(
-            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
-        )
-        .execute(&pool)
-        .await
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')")
         .unwrap();
 
         // `graph_perf_decision` defaults to action "merge_pull_request".
@@ -1138,12 +1176,8 @@ mod tests {
         register_tenant(&pool, "tenant_b", "Tenant B", "developer")
             .await
             .unwrap();
-        sqlx::query(
-            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
-        )
-        .execute(&pool)
-        .await
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')")
         .unwrap();
 
         insert_decision(&pool, &graph_perf_decision("dec_1", "tenant_a"))

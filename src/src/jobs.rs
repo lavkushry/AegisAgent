@@ -1,8 +1,8 @@
 //! Background jobs (#0107, #0106): periodic integrity checks and maintenance
 //! tasks that run independently of the request path.
 
+use aegis_storage::db::DbPool;
 use chrono::{Duration, Utc};
-use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -68,7 +68,7 @@ pub fn verify_chain_records(receipts: &[crate::models::ActionReceiptRecord]) -> 
 /// Walk a single tenant's receipt chain (oldest-first) and verify it via
 /// [`verify_chain_records`]. Returns `Err(reason)` describing the first break
 /// found, if any.
-pub async fn verify_tenant_receipt_chain(pool: &SqlitePool, tenant_id: &str) -> Result<(), String> {
+pub async fn verify_tenant_receipt_chain(pool: &DbPool, tenant_id: &str) -> Result<(), String> {
     let receipts = db::list_action_receipts_chain_order(pool, tenant_id)
         .await
         .map_err(|e| format!("failed to load receipt chain: {e}"))?;
@@ -79,7 +79,7 @@ pub async fn verify_tenant_receipt_chain(pool: &SqlitePool, tenant_id: &str) -> 
 /// Verify the receipt chain for every tenant. Any tenant whose chain fails
 /// integrity gets a `critical` SOC alert recorded so it surfaces on
 /// `GET /v1/alerts` / the SOC dashboard.
-pub async fn check_all_tenant_receipt_chains(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+pub async fn check_all_tenant_receipt_chains(pool: &DbPool) -> Result<(), sqlx::Error> {
     for tenant_id in db::list_all_tenant_ids(pool).await? {
         if let Err(reason) = verify_tenant_receipt_chain(pool, &tenant_id).await {
             warn!(
@@ -110,7 +110,7 @@ pub async fn check_all_tenant_receipt_chains(pool: &SqlitePool) -> Result<(), sq
 /// instances sharing one DB don't redundantly (and concurrently) sweep the
 /// same rows.
 pub async fn run_receipt_chain_integrity_job(
-    pool: SqlitePool,
+    pool: DbPool,
     interval_secs: u64,
     is_leader: Arc<AtomicBool>,
 ) {
@@ -132,7 +132,7 @@ pub async fn run_receipt_chain_integrity_job(
 /// `audit_events_archive` (#0106). Intended to be `tokio::spawn`ed once at
 /// startup. `is_leader` gates the work — see `run_receipt_chain_integrity_job`.
 pub async fn run_audit_event_archival_job(
-    pool: SqlitePool,
+    pool: DbPool,
     interval_secs: u64,
     retention_days: i64,
     is_leader: Arc<AtomicBool>,
@@ -158,7 +158,7 @@ pub async fn run_audit_event_archival_job(
 /// older than `retention_days` (#0105). Intended to be `tokio::spawn`ed once
 /// at startup. `is_leader` gates the work — see `run_receipt_chain_integrity_job`.
 pub async fn run_approval_cleanup_job(
-    pool: SqlitePool,
+    pool: DbPool,
     interval_secs: u64,
     retention_days: i64,
     is_leader: Arc<AtomicBool>,
@@ -189,7 +189,7 @@ pub const DEFAULT_VACUUM_INTERVAL_SECS: u64 = 86400;
 /// `run_receipt_chain_integrity_job` — since a full-file `VACUUM` running
 /// concurrently from multiple instances sharing one DB would be wasteful and
 /// lock-contentious.
-pub async fn run_vacuum_job(pool: SqlitePool, interval_secs: u64, is_leader: Arc<AtomicBool>) {
+pub async fn run_vacuum_job(pool: DbPool, interval_secs: u64, is_leader: Arc<AtomicBool>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     loop {
         interval.tick().await;
@@ -213,7 +213,7 @@ pub const DEFAULT_HEARTBEAT_FLUSH_INTERVAL_SECS: u64 = 30;
 /// its own function (rather than inlined in the loop below) so graceful
 /// shutdown can call it once more after the periodic loop stops, ensuring no
 /// buffered heartbeat is silently dropped on shutdown.
-pub async fn flush_heartbeats(pool: &SqlitePool, debouncer: &crate::routes::HeartbeatDebouncer) {
+pub async fn flush_heartbeats(pool: &DbPool, debouncer: &crate::routes::HeartbeatDebouncer) {
     let pending = debouncer.drain();
     for (tenant_id, agent_id) in pending {
         if let Err(e) = db::touch_agent_last_seen(pool, &tenant_id, &agent_id).await {
@@ -235,7 +235,7 @@ pub async fn flush_heartbeats(pool: &SqlitePool, debouncer: &crate::routes::Hear
 /// one DB must flush its own buffered touches, or that instance's agents'
 /// `last_seen_at` would never advance at all.
 pub async fn run_heartbeat_flush_job(
-    pool: SqlitePool,
+    pool: DbPool,
     debouncer: Arc<crate::routes::HeartbeatDebouncer>,
     interval_secs: u64,
 ) {
@@ -264,7 +264,7 @@ pub async fn run_heartbeat_flush_job(
 /// successful dispatch, so a failed POST retries the exact same window next
 /// tick instead of silently dropping events.
 pub async fn run_splunk_export_job(
-    pool: SqlitePool,
+    pool: DbPool,
     config: crate::splunk_export::SplunkHecConfig,
     is_leader: Arc<AtomicBool>,
 ) {
@@ -411,7 +411,7 @@ const POOL_BUSY_WARN_THRESHOLD: f64 = 0.8;
 /// same acquire-latency signal under current load without instrumenting
 /// every one of the codebase's call sites individually.
 pub async fn sample_pool_health(
-    pool: &SqlitePool,
+    pool: &DbPool,
     metrics: &crate::metrics::SecurityMetrics,
 ) -> Result<(), sqlx::Error> {
     let start = std::time::Instant::now();
@@ -419,9 +419,9 @@ pub async fn sample_pool_health(
     metrics.db_pool_acquire_wait.observe(start.elapsed());
     drop(conn); // release back to the pool immediately
 
-    let max_connections = pool.options().get_max_connections();
+    let max_connections = pool.max_connections();
     if max_connections > 0 {
-        let active = pool.size().saturating_sub(pool.num_idle() as u32);
+        let active = pool.size().saturating_sub(pool.num_idle());
         let busy_ratio = f64::from(active) / f64::from(max_connections);
         if busy_ratio > POOL_BUSY_WARN_THRESHOLD {
             warn!(
@@ -438,7 +438,7 @@ pub async fn sample_pool_health(
 /// Run [`sample_pool_health`] on a fixed interval until the process exits.
 /// Intended to be `tokio::spawn`ed once at startup.
 pub async fn run_pool_health_sampler(
-    pool: SqlitePool,
+    pool: DbPool,
     interval_secs: u64,
     metrics: std::sync::Arc<crate::metrics::SecurityMetrics>,
 ) {
@@ -457,7 +457,7 @@ pub async fn run_pool_health_sampler(
 /// leader/standby *transition*, `debug!` on every unchanged tick, to avoid
 /// flooding the info log every `interval_secs`.
 pub async fn run_leader_election_loop(
-    pool: SqlitePool,
+    pool: DbPool,
     instance_id: String,
     is_leader: Arc<AtomicBool>,
     interval_secs: u64,
@@ -498,7 +498,7 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    async fn setup_pool(test_name: &str) -> SqlitePool {
+    async fn setup_pool(test_name: &str) -> DbPool {
         std::fs::create_dir_all("target").unwrap();
         let db_url = format!(
             "sqlite://target/{}_{}.db",
@@ -599,9 +599,7 @@ mod tests {
         .unwrap();
 
         // Tamper with the first receipt's stored hash directly in the DB.
-        sqlx::query("UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE tenant_id = 'tenant_jobs_bad' AND action = 'op_0'")
-            .execute(&pool)
-            .await
+        aegis_storage::execute_query!(&pool, "UPDATE action_receipts SET receipt_hash = 'sha256:tampered' WHERE tenant_id = 'tenant_jobs_bad' AND action = 'op_0'")
             .unwrap();
 
         let result = verify_tenant_receipt_chain(&pool, "tenant_jobs_bad").await;
@@ -679,26 +677,30 @@ mod tests {
         ));
 
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        let still_present: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = ?")
-                .bind(&old_event.id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let standby: Option<i64> = aegis_storage::fetch_optional_scalar!(
+            i64,
+            &pool,
+            "SELECT COUNT(*) FROM audit_events WHERE id = ?",
+            &old_event.id,
+        )
+        .unwrap();
         assert_eq!(
-            still_present.0, 1,
-            "standby instance must not archive while not leader"
+            standby.unwrap_or(0),
+            1,
+            "standby instance must not archive the old row while not leader"
         );
 
         is_leader.store(true, Ordering::Relaxed);
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-        let archived: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE id = ?")
-            .bind(&old_event.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let archived: i64 = aegis_storage::fetch_one_scalar!(
+            i64,
+            &pool,
+            "SELECT COUNT(*) FROM audit_events WHERE id = ?",
+            &old_event.id,
+        )
+        .unwrap();
         assert_eq!(
-            archived.0, 0,
+            archived, 0,
             "leader instance must archive the old row once leadership is held"
         );
 
@@ -708,7 +710,7 @@ mod tests {
     /// Inserts and then deletes `count` audit_events rows with a sizable
     /// `event_json` payload each, leaving behind free (but un-reclaimed)
     /// pages for `db::vacuum_database`/`run_vacuum_job` to measurably shrink.
-    async fn churn_audit_events(pool: &SqlitePool, tenant_id: &str, count: usize) {
+    async fn churn_audit_events(pool: &DbPool, tenant_id: &str, count: usize) {
         let padding = "x".repeat(2000);
         for _ in 0..count {
             let event = crate::models::AuditEventRecord {
@@ -732,11 +734,12 @@ mod tests {
             };
             db::insert_audit_event(pool, &event).await.unwrap();
         }
-        sqlx::query("DELETE FROM audit_events WHERE tenant_id = ?")
-            .bind(tenant_id)
-            .execute(pool)
-            .await
-            .unwrap();
+        aegis_storage::execute_query!(
+            pool,
+            "DELETE FROM audit_events WHERE tenant_id = ?",
+            tenant_id
+        )
+        .unwrap();
     }
 
     /// #0061 (TASK-0061): `db::vacuum_database` must actually reclaim free
@@ -751,17 +754,13 @@ mod tests {
 
         churn_audit_events(&pool, "tenant_vacuum", 500).await;
 
-        let (page_count_before,): (i64,) = sqlx::query_as("PRAGMA page_count")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let page_count_before: i64 =
+            aegis_storage::fetch_one_scalar!(i64, &pool, "PRAGMA page_count").unwrap();
 
         db::vacuum_database(&pool).await.unwrap();
 
-        let (page_count_after,): (i64,) = sqlx::query_as("PRAGMA page_count")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let page_count_after: i64 =
+            aegis_storage::fetch_one_scalar!(i64, &pool, "PRAGMA page_count").unwrap();
 
         assert!(
             page_count_after < page_count_before,
@@ -780,10 +779,8 @@ mod tests {
             .unwrap();
 
         churn_audit_events(&pool, "tenant_vacuum_gated", 500).await;
-        let (page_count_before,): (i64,) = sqlx::query_as("PRAGMA page_count")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let page_count_before: i64 =
+            aegis_storage::fetch_one_scalar!(i64, &pool, "PRAGMA page_count").unwrap();
 
         let is_leader = Arc::new(AtomicBool::new(false));
         let handle = tokio::spawn(run_vacuum_job(
@@ -793,10 +790,8 @@ mod tests {
         ));
 
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        let (page_count_standby,): (i64,) = sqlx::query_as("PRAGMA page_count")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let page_count_standby: i64 =
+            aegis_storage::fetch_one_scalar!(i64, &pool, "PRAGMA page_count").unwrap();
         assert_eq!(
             page_count_standby, page_count_before,
             "standby instance must not vacuum while not leader"
@@ -804,10 +799,8 @@ mod tests {
 
         is_leader.store(true, Ordering::Relaxed);
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-        let (page_count_after,): (i64,) = sqlx::query_as("PRAGMA page_count")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let page_count_after: i64 =
+            aegis_storage::fetch_one_scalar!(i64, &pool, "PRAGMA page_count").unwrap();
         assert!(
             page_count_after < page_count_before,
             "leader instance must vacuum once leadership is held ({page_count_before} -> {page_count_after})"
@@ -818,14 +811,13 @@ mod tests {
 
     // ── #1286: Splunk HEC export job ────────────────────────────────────
 
-    async fn register_decision_agent(pool: &SqlitePool, tenant_id: &str) {
-        sqlx::query(
+    async fn register_decision_agent(pool: &DbPool, tenant_id: &str) {
+        aegis_storage::execute_query!(
+            pool,
             "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
              VALUES ('agent_graph_perf', ?, 'agent_graph_perf', 'token_graph_perf', 'Graph Perf Agent', 'dev', 'low', 'active')",
+            tenant_id
         )
-        .bind(tenant_id)
-        .execute(pool)
-        .await
         .unwrap();
     }
 
@@ -1029,12 +1021,11 @@ mod tests {
         db::register_tenant(&pool, "tenant_hb", "Heartbeat Tenant", "developer")
             .await
             .unwrap();
-        sqlx::query(
+        aegis_storage::execute_query!(
+            &pool,
             "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
-             VALUES ('agent_hb', 'tenant_hb', 'agent_hb', 'token_hb', 'Heartbeat Agent', 'dev', 'low', 'active')",
+             VALUES ('agent_hb', 'tenant_hb', 'agent_hb', 'token_hb', 'Heartbeat Agent', 'dev', 'low', 'active')"
         )
-        .execute(&pool)
-        .await
         .unwrap();
 
         let debouncer = Arc::new(crate::routes::HeartbeatDebouncer::new());
@@ -1061,11 +1052,12 @@ mod tests {
             "expected the first tick to drain the buffered touch"
         );
 
-        let (last_seen_at,): (Option<String>,) =
-            sqlx::query_as("SELECT last_seen_at FROM agents WHERE id = 'agent_hb'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let last_seen_at: Option<String> = aegis_storage::fetch_one_scalar!(
+            Option<String>,
+            &pool,
+            "SELECT last_seen_at FROM agents WHERE id = 'agent_hb'"
+        )
+        .unwrap();
         assert!(last_seen_at.is_some());
 
         handle.abort();
