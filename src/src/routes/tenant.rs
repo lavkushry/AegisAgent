@@ -687,6 +687,86 @@ mod tests {
         assert!(subs2.is_empty());
     }
 
+    /// #1584: a `dead` webhook subscription (>= 10 consecutive delivery
+    /// failures, per #912's circuit breaker) can be reactivated without
+    /// deleting and recreating it — which would also rotate
+    /// `delivery_secret`, forcing the tenant to update their receiving
+    /// endpoint's HMAC verification key.
+    #[tokio::test]
+    async fn test_reactivate_webhook_subscription_route() {
+        let (state, tenant_id, _) = setup_state("webhook_subscription_reactivate").await;
+
+        let payload = CreateWebhookSubscriptionRequest {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            event_types: "alert,incident".to_string(),
+            min_severity: None,
+            format: None,
+        };
+        let response_create = create_webhook_subscription(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        let body_create = to_bytes(response_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let record: WebhookSubscriptionRecord = serde_json::from_slice(&body_create).unwrap();
+        let original_delivery_secret = record.delivery_secret.clone();
+
+        // Drive it to `dead` directly via storage (mirrors how #912's
+        // circuit breaker would, after 10 consecutive failed deliveries).
+        for _ in 0..10 {
+            state
+                .storage
+                .record_webhook_delivery_attempt(&tenant_id, &record.id, false)
+                .await
+                .unwrap();
+        }
+        let dead = state
+            .storage
+            .get_webhook_subscription(&tenant_id, &record.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(dead.delivery_status, "dead");
+        assert_eq!(dead.consecutive_failures, 10);
+
+        // Reactivate.
+        let response_reactivate = reactivate_webhook_subscription(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(record.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_reactivate.status(), StatusCode::OK);
+
+        let revived = state
+            .storage
+            .get_webhook_subscription(&tenant_id, &record.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(revived.delivery_status, "healthy");
+        assert_eq!(revived.consecutive_failures, 0);
+        // url/delivery_secret are untouched by reactivation.
+        assert_eq!(revived.url, "https://example.com/hook");
+        assert_eq!(revived.delivery_secret, original_delivery_secret);
+
+        // Reactivating a nonexistent subscription 404s.
+        let response_404 = reactivate_webhook_subscription(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("nonexistent-id".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_404.status(), StatusCode::NOT_FOUND);
+    }
+
     /// TASK-0093 (#939): CRUD lifecycle for tenant-managed API keys. The
     /// plaintext key is returned only at creation; list/revoke never expose it.
     #[tokio::test]

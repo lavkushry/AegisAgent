@@ -502,6 +502,79 @@ pub async fn delete_webhook_subscription(
     }
 }
 
+/// `POST /v1/webhook_subscriptions/:id/reactivate` (#1584): resets a `dead`
+/// subscription's `delivery_status` to `healthy` and `consecutive_failures`
+/// to `0`, leaving `url`/`delivery_secret` untouched. Before this endpoint,
+/// the only way to recover a subscription #912's circuit breaker had
+/// permanently stopped dispatching to was delete + recreate — which also
+/// rotates `delivery_secret`, forcing the tenant to update their receiving
+/// endpoint's HMAC verification key even though nothing about the URL or
+/// secret was actually the problem. A no-op (still 200) if the subscription
+/// wasn't `dead` to begin with.
+pub async fn reactivate_webhook_subscription(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let mut record = match state
+        .storage
+        .get_webhook_subscription(&tenant_id, &id)
+        .await
+    {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return StatusError::not_found("Webhook subscription not found").into_response()
+        }
+        Err(e) => {
+            error!("Failed to fetch webhook subscription: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    record.delivery_status = "healthy".to_string();
+    record.consecutive_failures = 0;
+
+    match state.storage.update_webhook_subscription(&record).await {
+        Ok(()) => {
+            let audit = AuditEventRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                event_type: "webhook_subscription_reactivated".to_string(),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                span_id: None,
+                skill: None,
+                action: Some("webhook_subscription_reactivated".to_string()),
+                resource: Some(id.clone()),
+                event_json: serde_json::to_string(&json!({ "subscription_id": id }))
+                    .unwrap_or_default(),
+                input_hash: None,
+                output_hash: None,
+                decision_id: None,
+                approval_id: None,
+                created_at: Utc::now(),
+            };
+            let _ = state.storage.insert_audit_event(&audit).await;
+            info!(subscription_id = %id, "Webhook subscription reactivated");
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": record.id,
+                    "delivery_status": record.delivery_status,
+                    "consecutive_failures": record.consecutive_failures,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to reactivate webhook subscription: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct UpsertDetectionRuleRequest {
     pub rule_key: String,
