@@ -209,6 +209,14 @@ pub async fn authorize_action(
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
 
+    // Compute or retrieve the cached action hash of the tool call
+    let action_hash = hash_tool_call_cached(
+        &state,
+        &tenant_id,
+        payload.request_id.as_deref(),
+        &payload.tool_call,
+    );
+
     // Request signing (#1403, opt-in): verify X-Aegis-Request-Signature header
     // when the agent has a signing key registered. Missing or incorrect
     // signature is a hard 401 — fail-closed so a forged body can't bypass
@@ -1048,6 +1056,7 @@ pub async fn authorize_action(
             &payload,
             decision_id,
             &decision_str,
+            &action_hash,
         )
         .await;
     }
@@ -1107,7 +1116,7 @@ pub async fn authorize_action(
     if !dry_run && decision_str == "require_approval" {
         let approval_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(state.approval_ttl_secs);
-        let original_call_hash = hash_tool_call(&payload.tool_call);
+        let original_call_hash = action_hash.clone();
 
         // #1187/TASK-0082-0083: optional approval-callback registration. The
         // plaintext secret is hashed immediately and never persisted

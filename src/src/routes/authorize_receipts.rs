@@ -49,6 +49,7 @@ pub(crate) async fn emit_action_receipt(
     payload: &AuthorizeRequest,
     decision_id: Uuid,
     decision: &str,
+    action_hash: &str,
 ) {
     // Build the head-referencing receipt inside one atomic transaction (T-D
     // hardening): the chain head is read and the new link inserted under a single
@@ -68,7 +69,7 @@ pub(crate) async fn emit_action_receipt(
         source_trust: payload.context.source_trust.clone(),
         decision: decision.to_string(),
         approver: None,
-        action_hash: Some(hash_tool_call(&payload.tool_call)),
+        action_hash: Some(action_hash.to_string()),
         prev_receipt_hash: String::new(),
         receipt_hash: String::new(),
         // Self-describing scheme tag; additive, not folded into receipt_hash.

@@ -1479,6 +1479,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(1024);
     let mcp_tool_cache = routes::McpToolCache::new(mcp_tool_cache_capacity);
 
+    // Bounded LRU cache for JCS-1 canonical hashes
+    let canonical_hash_cache_capacity: usize = std::env::var("AEGIS_CANONICAL_HASH_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024);
+    let canonical_hash_cache = routes::CanonicalHashCache::new(canonical_hash_cache_capacity);
+
     // #1513: TTL cache for per-tenant composite-risk-score weights, avoiding
     // a SQLite read on (effectively) every `/v1/authorize` call for a value
     // that only changes via the rare, operator-driven
@@ -1571,6 +1578,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         skill_cache,
         mcp_server_cache,
         mcp_tool_cache,
+        canonical_hash_cache,
         replay_nonce_cache,
         risk_weight_cache,
         heartbeat_debouncer: heartbeat_debouncer.clone(),
@@ -2229,6 +2237,7 @@ mod tests {
             skill_cache: routes::SkillActionCache::new(1024),
             mcp_server_cache: routes::McpServerCache::new(1024),
             mcp_tool_cache: routes::McpToolCache::new(1024),
+            canonical_hash_cache: routes::CanonicalHashCache::new(1024),
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
@@ -2524,6 +2533,7 @@ mod tests {
             skill_cache: routes::SkillActionCache::new(1024),
             mcp_server_cache: routes::McpServerCache::new(1024),
             mcp_tool_cache: routes::McpToolCache::new(1024),
+            canonical_hash_cache: routes::CanonicalHashCache::new(1024),
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
@@ -2860,6 +2870,7 @@ mod tests {
             skill_cache: routes::SkillActionCache::new(1024),
             mcp_server_cache: routes::McpServerCache::new(1024),
             mcp_tool_cache: routes::McpToolCache::new(1024),
+            canonical_hash_cache: routes::CanonicalHashCache::new(1024),
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
