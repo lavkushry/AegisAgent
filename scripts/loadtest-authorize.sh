@@ -66,8 +66,8 @@ trap cleanup EXIT
 if [[ "${SKIP_GATEWAY_START:-0}" != "1" ]]; then
   # Build a release binary for accurate perf numbers
   echo "==> Building release gateway..."
-  cargo build --release --manifest-path "$REPO_ROOT/gateway/Cargo.toml" 2>&1 | tail -3
-  GATEWAY_BIN="${GATEWAY_BIN:-$REPO_ROOT/gateway/target/release/gateway}"
+  cargo build --release --manifest-path "$REPO_ROOT/src/Cargo.toml" 2>&1 | tail -3
+  GATEWAY_BIN="${GATEWAY_BIN:-$REPO_ROOT/target/release/gateway}"
 
   DB_PATH="$RESULTS_DIR/bench.db"
   CEDAR_PATH="$REPO_ROOT/policies.cedar"
