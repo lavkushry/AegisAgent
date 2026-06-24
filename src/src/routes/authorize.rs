@@ -6178,11 +6178,8 @@ mod tests {
             // This test targets `/v1/authorize` write concurrency, not the SOC
             // Response Engine — a tight burst of identical decisions from one
             // agent can otherwise match the correlator's "runaway" pattern and
-            // auto-freeze the agent mid-test (`auto_respond_enabled` defaults
-            // to true at the schema level; see #1572 for that default's own
-            // inconsistency with `soc_autonomy_level`'s documented "L1 skips
-            // auto-respond" default). Explicitly opt out here so this test
-            // exercises only the decision-write path it's named for.
+            // auto-freeze the agent mid-test. We explicitly disable auto-response
+            // here so this test exercises only the decision-write path it's named for.
             db::set_tenant_auto_respond(state.storage.get_pool(), &tenant_id, false)
                 .await
                 .unwrap();

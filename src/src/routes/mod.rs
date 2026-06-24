@@ -1819,7 +1819,7 @@ pub(crate) mod test_helpers {
                 id: id.to_string(),
                 name: name.to_string(),
                 plan: plan.to_string(),
-                auto_respond_enabled: true,
+                auto_respond_enabled: false,
                 auto_rotate_token_on_leak_enabled: true,
                 created_at: chrono::Utc::now(),
             })

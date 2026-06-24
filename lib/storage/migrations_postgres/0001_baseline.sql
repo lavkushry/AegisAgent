@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     name TEXT NOT NULL,
     plan TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    auto_respond_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    auto_respond_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     soc_autonomy_level TEXT,
     auto_rotate_token_on_leak_enabled BOOLEAN NOT NULL DEFAULT TRUE
 );

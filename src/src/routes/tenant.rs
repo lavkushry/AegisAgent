@@ -482,7 +482,7 @@ pub async fn create_tenant(
         name: payload.name.clone(),
         plan: payload.plan.clone(),
         created_at: Utc::now(),
-        auto_respond_enabled: true,
+        auto_respond_enabled: false,
         auto_rotate_token_on_leak_enabled: true,
     };
     match state.storage.insert_tenant(&record).await {
