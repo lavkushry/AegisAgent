@@ -46,6 +46,15 @@ pub async fn list_webhook_subscriptions(
 /// `event_kind` (`"*"` or an exact comma-separated membership match). Severity
 /// is checked separately in application code (`webhook_export::passes_severity_filter`)
 /// since SQLite has no clean way to rank a string enum in SQL.
+///
+/// #912: excludes `status != 'active'` (soft-deleted/disabled) and
+/// `delivery_status = 'dead'` (>= 10 consecutive delivery failures, recorded
+/// by `record_webhook_delivery_result`) subscriptions — this is the circuit
+/// breaker for webhook export: a persistently-unreachable tenant-configured
+/// URL stops being retried (3 attempts with exponential backoff, every
+/// matching SOC event, forever) once it's been marked dead, mirroring the
+/// `delivery_status != 'dead'` filter [`get_active_webhook_subscriptions`]
+/// already applied — that function just had no caller on this dispatch path.
 pub async fn list_matching_webhook_subscriptions(
     pool: &DbPool,
     tenant_id: &str,
@@ -56,6 +65,8 @@ pub async fn list_matching_webhook_subscriptions(
         pool,
         "SELECT * FROM webhook_subscriptions
          WHERE tenant_id = ?
+           AND status = 'active'
+           AND delivery_status != 'dead'
            AND (event_types = '*' OR ',' || event_types || ',' LIKE '%,' || ? || ',%')",
         tenant_id,
         event_kind
@@ -171,4 +182,91 @@ pub async fn update_webhook_subscription(
         &record.id
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn setup(test_name: &str) -> (DbPool, WebhookSubscriptionRecord) {
+        let pool = crate::db::test_utils::setup_pool(test_name).await;
+        let tenant_id = format!("tenant_{test_name}");
+        crate::db::register_tenant(&pool, &tenant_id, "Webhook Test Tenant", "developer")
+            .await
+            .unwrap();
+        let record = insert_webhook_subscription(
+            &pool,
+            &tenant_id,
+            "http://127.0.0.1:1/unreachable",
+            None,
+            "deny,require_approval",
+            "whsec_test",
+            "info",
+            "json",
+        )
+        .await
+        .unwrap();
+        (pool, record)
+    }
+
+    /// #912: a `dead` subscription (>= 10 consecutive delivery failures)
+    /// must not be returned by the dispatch path's lookup query — this is
+    /// the circuit breaker for webhook export.
+    #[tokio::test]
+    async fn list_matching_webhook_subscriptions_excludes_dead_subscription() {
+        let (pool, mut record) = setup("webhooks_dead_excluded").await;
+        record.delivery_status = "dead".to_string();
+        update_webhook_subscription(&pool, &record).await.unwrap();
+
+        let matches =
+            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+                .await
+                .unwrap();
+        assert!(matches.is_empty());
+    }
+
+    /// #912: an explicitly-deactivated subscription (`status != 'active'`)
+    /// must also be excluded — same dispatch-path query, same fix.
+    #[tokio::test]
+    async fn list_matching_webhook_subscriptions_excludes_inactive_subscription() {
+        let (pool, mut record) = setup("webhooks_inactive_excluded").await;
+        record.status = "inactive".to_string();
+        update_webhook_subscription(&pool, &record).await.unwrap();
+
+        let matches =
+            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+                .await
+                .unwrap();
+        assert!(matches.is_empty());
+    }
+
+    /// #912 regression guard: a `healthy` (default) subscription is still
+    /// returned — the new filter must not exclude the common case.
+    #[tokio::test]
+    async fn list_matching_webhook_subscriptions_includes_healthy_subscription() {
+        let (pool, record) = setup("webhooks_healthy_included").await;
+
+        let matches =
+            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+                .await
+                .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, record.id);
+    }
+
+    /// #912: a `degraded` (1-9 consecutive failures, not yet `dead`)
+    /// subscription is still retried — only `dead` stops dispatch.
+    #[tokio::test]
+    async fn list_matching_webhook_subscriptions_includes_degraded_subscription() {
+        let (pool, mut record) = setup("webhooks_degraded_included").await;
+        record.delivery_status = "degraded".to_string();
+        record.consecutive_failures = 5;
+        update_webhook_subscription(&pool, &record).await.unwrap();
+
+        let matches =
+            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+                .await
+                .unwrap();
+        assert_eq!(matches.len(), 1);
+    }
 }
