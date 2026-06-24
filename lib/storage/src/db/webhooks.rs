@@ -218,10 +218,9 @@ mod tests {
         record.delivery_status = "dead".to_string();
         update_webhook_subscription(&pool, &record).await.unwrap();
 
-        let matches =
-            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
-                .await
-                .unwrap();
+        let matches = list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+            .await
+            .unwrap();
         assert!(matches.is_empty());
     }
 
@@ -233,10 +232,9 @@ mod tests {
         record.status = "inactive".to_string();
         update_webhook_subscription(&pool, &record).await.unwrap();
 
-        let matches =
-            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
-                .await
-                .unwrap();
+        let matches = list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+            .await
+            .unwrap();
         assert!(matches.is_empty());
     }
 
@@ -246,10 +244,9 @@ mod tests {
     async fn list_matching_webhook_subscriptions_includes_healthy_subscription() {
         let (pool, record) = setup("webhooks_healthy_included").await;
 
-        let matches =
-            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
-                .await
-                .unwrap();
+        let matches = list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+            .await
+            .unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].id, record.id);
     }
@@ -263,10 +260,9 @@ mod tests {
         record.consecutive_failures = 5;
         update_webhook_subscription(&pool, &record).await.unwrap();
 
-        let matches =
-            list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
-                .await
-                .unwrap();
+        let matches = list_matching_webhook_subscriptions(&pool, &record.tenant_id, "deny")
+            .await
+            .unwrap();
         assert_eq!(matches.len(), 1);
     }
 }
