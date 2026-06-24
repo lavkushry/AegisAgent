@@ -60,6 +60,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
+ "serde_yml",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

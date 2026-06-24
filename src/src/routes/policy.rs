@@ -704,6 +704,25 @@ pub async fn upload_policy_bundle(
     (StatusCode::OK, Json(results)).into_response()
 }
 
+pub async fn compile_policy(
+    State(_state): State<Arc<AppState>>,
+    TenantId(_tenant_id): TenantId,
+    body: String,
+) -> impl IntoResponse {
+    match aegis_policy::compiler::compile_yaml_to_cedar(&body) {
+        Ok(cedar) => (StatusCode::OK, Json(json!({ "cedar": cedar }))).into_response(),
+        Err(e) => StatusError::bad_request(e).into_response(),
+    }
+}
+
+pub async fn list_policy_templates(
+    State(_state): State<Arc<AppState>>,
+    TenantId(_tenant_id): TenantId,
+) -> impl IntoResponse {
+    let templates = aegis_policy::compiler::get_templates();
+    (StatusCode::OK, Json(templates)).into_response()
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct CreateApiKeyRequest {
     pub name: String,
@@ -730,6 +749,57 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::mpsc;
     use uuid::Uuid;
+    #[tokio::test]
+    async fn test_compile_and_templates_routes() {
+        let (state, tenant_id, _) = setup_state("compile_templates").await;
+
+        // 1. Get templates
+        let response = list_policy_templates(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let templates: Vec<aegis_policy::compiler::PolicyTemplate> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(templates.len(), 10);
+        assert_eq!(templates[0].key, "production-baseline");
+
+        // 2. Compile valid YAML policy
+        let yaml_policy = r#"kind: AgentGuardPolicy
+metadata:
+  name: test-policy
+spec:
+  unknownMcpTools: deny
+  productionMutations: require_approval
+"#;
+        let response_compile = compile_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            yaml_policy.to_string(),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_compile.status(), StatusCode::OK);
+        let compile_body = to_bytes(response_compile.into_body(), usize::MAX).await.unwrap();
+        let compile_json: Value = serde_json::from_slice(&compile_body).unwrap();
+        let cedar = compile_json["cedar"].as_str().unwrap();
+        assert!(cedar.contains("context.is_mcp_tool_known == false"));
+
+        // 3. Compile invalid YAML policy
+        let invalid_yaml = r#"kind: InvalidKind
+metadata:
+  name: test-policy
+spec: {}
+"#;
+        let response_compile_invalid = compile_policy(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            invalid_yaml.to_string(),
+        )
+        .await
+        .into_response();
+        assert_eq!(response_compile_invalid.status(), StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn test_policy_crud_and_reload_route() {
         let (state, tenant_id, _) = setup_state("policy_crud_reload").await;

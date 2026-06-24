@@ -118,7 +118,7 @@ fn policy_eval_benchmark(c: &mut Criterion) {
     group.bench_function("base_policy_set_fallback", |b| {
         b.iter(|| {
             let decision = engine
-                .authorize("tenant_no_custom_policies", &request, "low")
+                .authorize("tenant_no_custom_policies", &request, "low", true, false)
                 .expect("authorize");
             criterion::black_box(decision.decision);
         });
@@ -142,7 +142,7 @@ fn policy_eval_benchmark(c: &mut Criterion) {
     group.bench_function("tenant_policy_set_cached", |b| {
         b.iter(|| {
             let decision = engine
-                .authorize(tenant_id, &request, "low")
+                .authorize(tenant_id, &request, "low", true, false)
                 .expect("authorize");
             criterion::black_box(decision.decision);
         });

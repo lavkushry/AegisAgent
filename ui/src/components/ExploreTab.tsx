@@ -1,0 +1,244 @@
+"use client";
+
+import React, { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useAppStore } from "../app/store";
+import { getDecisions, verifyReceipt } from "../app/api";
+import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, HelpCircle, Fingerprint } from "lucide-react";
+
+export default function ExploreTab() {
+  const { gatewayUrl, bearerToken } = useAppStore();
+  const apiOpts = { gatewayUrl, bearerToken };
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [verificationResult, setVerificationResult] = useState<Record<string, { ok: boolean; msg: string; loading: boolean }>>({});
+
+  // Fetch decisions based on query
+  const { data: decisions, isLoading, error } = useQuery({
+    queryKey: ["decisions", gatewayUrl, bearerToken, debouncedQuery],
+    queryFn: () => getDecisions(apiOpts, 50, debouncedQuery),
+    refetchInterval: 10000, // Poll every 10s
+  });
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setDebouncedQuery(searchQuery);
+  };
+
+  const verifyMutation = useMutation({
+    mutationFn: (receiptId: string) => verifyReceipt(apiOpts, receiptId),
+    onSuccess: (data, receiptId) => {
+      // Assuming response is like { verified: true, error: null } or similar
+      const isVerified = data.verified || (data.status === "verified") || (!data.error);
+      const message = data.error ? `Tamper detected: ${data.error}` : "Receipt cryptographic signature matches the hash chain.";
+      setVerificationResult((prev) => ({
+        ...prev,
+        [receiptId]: { ok: isVerified, msg: message, loading: false },
+      }));
+    },
+    onError: (err: any, receiptId) => {
+      setVerificationResult((prev) => ({
+        ...prev,
+        [receiptId]: { ok: false, msg: `Verification failed: ${err.message}`, loading: false },
+      }));
+    },
+  });
+
+  const triggerVerification = (receiptId: string) => {
+    setVerificationResult((prev) => ({
+      ...prev,
+      [receiptId]: { ok: false, msg: "", loading: true },
+    }));
+    verifyMutation.mutate(receiptId);
+  };
+
+  const getDecisionBadge = (decision: string) => {
+    switch (String(decision).toLowerCase()) {
+      case "allow":
+        return <span className="px-2 py-0.5 text-xs font-semibold bg-green-500/20 border border-green-500/40 text-green-400 rounded-full">Allow</span>;
+      case "deny":
+        return <span className="px-2 py-0.5 text-xs font-semibold bg-red-500/20 border border-red-500/40 text-red-400 rounded-full">Deny</span>;
+      case "require_approval":
+      case "approval":
+        return <span className="px-2 py-0.5 text-xs font-semibold bg-amber-500/20 border border-amber-500/40 text-amber-400 rounded-full">Require Approval</span>;
+      case "quarantine":
+        return <span className="px-2 py-0.5 text-xs font-semibold bg-rose-500/20 border border-rose-500/40 text-rose-400 rounded-full">Quarantine</span>;
+      case "redact":
+        return <span className="px-2 py-0.5 text-xs font-semibold bg-purple-500/20 border border-purple-500/40 text-purple-400 rounded-full">Redact</span>;
+      default:
+        return <span className="px-2 py-0.5 text-xs font-semibold bg-[#334155]/20 border border-[#334155]/40 text-[#94a3b8] rounded-full">{decision}</span>;
+    }
+  };
+
+  const getTrustBadge = (trust: string) => {
+    switch (String(trust).toLowerCase()) {
+      case "trusted_internal_signed":
+        return <span className="text-[10px] text-green-400 border border-green-500/30 bg-green-950/20 px-1.5 py-0.5 rounded">trusted_internal_signed</span>;
+      case "trusted_internal_unsigned":
+        return <span className="text-[10px] text-blue-400 border border-blue-500/30 bg-blue-950/20 px-1.5 py-0.5 rounded">trusted_internal_unsigned</span>;
+      case "semi_trusted_customer":
+        return <span className="text-[10px] text-amber-400 border border-amber-500/30 bg-amber-950/20 px-1.5 py-0.5 rounded">semi_trusted_customer</span>;
+      case "untrusted_external":
+        return <span className="text-[10px] text-red-400 border border-red-500/30 bg-red-950/20 px-1.5 py-0.5 rounded">untrusted_external</span>;
+      case "malicious_suspected":
+        return <span className="text-[10px] text-rose-500 border border-rose-500/40 bg-rose-950/20 px-1.5 py-0.5 rounded font-bold">malicious_suspected</span>;
+      default:
+        return <span className="text-[10px] text-[#94a3b8] border border-[#334155] px-1.5 py-0.5 rounded">unknown</span>;
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Query Bar */}
+      <form onSubmit={handleSearch} className="flex gap-2">
+        <div className="relative flex-1">
+          <input
+            type="text"
+            placeholder="Search decisions by Agent ID, tool name, reason, or action hash..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-[#111827] border border-[#334155] rounded-lg pl-10 pr-4 py-2 text-sm text-[#e2e8f0] focus:border-indigo-500 focus:outline-none"
+          />
+          <Search className="absolute left-3 top-2.5 text-[#64748b]" size={16} />
+        </div>
+        <button
+          type="submit"
+          className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-6 py-2 transition-colors cursor-pointer"
+        >
+          Search
+        </button>
+      </form>
+
+      {/* Decisions Results List */}
+      <div className="panel-card">
+        <h3 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider mb-4">
+          FTS5 Decision Index Explorer
+        </h3>
+
+        {isLoading ? (
+          <p className="text-sm text-[#64748b] text-center py-12">Querying decision records...</p>
+        ) : error ? (
+          <p className="text-sm text-red-400 text-center py-12">Error: {(error as any).message}</p>
+        ) : !decisions || decisions.length === 0 ? (
+          <p className="text-sm text-[#64748b] text-center py-12">No decisions matched the query.</p>
+        ) : (
+          <div className="space-y-2">
+            {decisions.map((dec: any) => {
+              const isExpanded = expandedId === dec.id;
+              const vResult = verificationResult[dec.id];
+              return (
+                <div
+                  key={dec.id}
+                  className="border border-[#1f2937] hover:border-[#334155] rounded-lg overflow-hidden bg-[#0f172a]/50"
+                >
+                  {/* Row Header */}
+                  <div
+                    onClick={() => setExpandedId(isExpanded ? null : dec.id)}
+                    className="flex flex-wrap md:flex-nowrap justify-between items-center gap-4 p-4 cursor-pointer select-none hover:bg-[#111827]/40 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      {getDecisionBadge(dec.decision)}
+                      <div className="flex flex-col">
+                        <span className="text-xs font-mono font-bold text-indigo-400">
+                          {dec.tool_call?.name || dec.tool || "generic_action"}
+                        </span>
+                        <span className="text-[10px] text-[#64748b] mt-0.5 font-mono">
+                          Agent: {dec.agent_id}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      {getTrustBadge(dec.root_trust_level || dec.source_trust)}
+                      <span className="text-xs text-[#64748b]">
+                        {new Date(dec.created_at || dec.ts).toLocaleTimeString()}
+                      </span>
+                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </div>
+                  </div>
+
+                  {/* Expanded Inspector View */}
+                  {isExpanded && (
+                    <div className="p-4 bg-[#111827]/60 border-t border-[#1f2937] space-y-4 text-xs">
+                      {/* Grid Properties */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <div>
+                            <span className="text-[#64748b] block uppercase text-[10px] tracking-wider font-semibold">Reason</span>
+                            <span className="text-[#e2e8f0] font-medium">{dec.reason || "N/A"}</span>
+                          </div>
+                          <div>
+                            <span className="text-[#64748b] block uppercase text-[10px] tracking-wider font-semibold">Matched Policies</span>
+                            <span className="text-[#e2e8f0] font-mono">{dec.matched_policies?.join(", ") || dec.matched_policy_ids?.join(", ") || "none"}</span>
+                          </div>
+                          <div>
+                            <span className="text-[#64748b] block uppercase text-[10px] tracking-wider font-semibold">Run ID</span>
+                            <span className="text-[#e2e8f0] font-mono">{dec.run_id || "N/A"}</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <div>
+                            <span className="text-[#64748b] block uppercase text-[10px] tracking-wider font-semibold">Action Hash</span>
+                            <span className="text-xs font-mono text-[#94a3b8] break-all">{dec.action_hash || "N/A"}</span>
+                          </div>
+                          <div>
+                            <span className="text-[#64748b] block uppercase text-[10px] tracking-wider font-semibold">Composite Risk Score</span>
+                            <span className="text-[#e2e8f0] font-bold text-amber-500">{dec.composite_risk_score ?? "N/A"}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Tool Parameters JSON Inspector */}
+                      {dec.tool_call?.parameters && (
+                        <div className="bg-[#0f172a] rounded-lg p-3 border border-[#334155] max-h-40 overflow-y-auto custom-scrollbar">
+                          <span className="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider block mb-2">Parameters</span>
+                          <pre className="text-[11px] font-mono text-indigo-300 whitespace-pre-wrap">
+                            {JSON.stringify(dec.tool_call.parameters, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Cryptographic Verification Action */}
+                      <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[#1f2937]">
+                        <div className="flex items-center gap-1.5">
+                          <Fingerprint size={16} className="text-[#94a3b8]" />
+                          <span className="text-[#94a3b8]">Verifiable receipt available for this transaction.</span>
+                        </div>
+                        
+                        <div className="flex items-center gap-3">
+                          {vResult && (
+                            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${vResult.loading ? "bg-amber-950/20 border-amber-500/30 text-amber-400" : vResult.ok ? "bg-green-950/20 border-green-500/30 text-green-400" : "bg-red-950/20 border-red-500/30 text-red-400"}`}>
+                              {vResult.loading ? (
+                                <Cpu size={14} className="animate-spin" />
+                              ) : vResult.ok ? (
+                                <Check size={14} />
+                              ) : (
+                                <AlertTriangle size={14} />
+                              )}
+                              <span>{vResult.loading ? "Verifying signature..." : vResult.msg}</span>
+                            </div>
+                          )}
+                          
+                          <button
+                            onClick={() => triggerVerification(dec.id)}
+                            disabled={vResult?.loading}
+                            className="bg-[#1e293b] hover:bg-[#273549] text-white border border-[#334155] px-3.5 py-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            Verify Cryptographic Receipt
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
