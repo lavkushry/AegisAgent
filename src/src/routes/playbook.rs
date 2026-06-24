@@ -72,16 +72,29 @@ pub async fn create_playbook(
     Ok((StatusCode::CREATED, Json(record)))
 }
 
+/// #1142: cursor-paginated via the standard `?limit=&offset=&cursor=`
+/// convention — see `parse_cursor`/`paginated_response` in `routes::mod`.
 pub async fn list_playbooks(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Result<impl IntoResponse, StatusError> {
-    let records = state
+    let (limit, offset) = crate::routes::parse_pagination(raw_query.as_deref());
+    let cursor = match crate::routes::parse_filter(raw_query.as_deref(), "cursor") {
+        None => None,
+        Some(raw) => Some(
+            crate::routes::decode_cursor(&raw)
+                .ok_or_else(|| StatusError::bad_request("Invalid cursor"))?,
+        ),
+    };
+
+    let (records, next_cursor) = state
         .storage
-        .list_playbooks(&tenant_id)
+        .list_playbooks_cursor(&tenant_id, limit, offset, cursor)
         .await
         .map_err(|e| StatusError::internal(e.to_string()))?;
-    Ok(Json(records))
+
+    Ok(crate::routes::paginated_response(&records, next_cursor))
 }
 
 pub async fn delete_playbook(
@@ -222,9 +235,13 @@ steps:
         assert_eq!(created["name"], "Quarantine MCP Playbook");
 
         // 2. List playbooks
-        let response_list = list_playbooks(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response_list = list_playbooks(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response_list.status(), StatusCode::OK);
         let body_list = to_bytes(response_list.into_body(), usize::MAX)
             .await
@@ -287,9 +304,13 @@ steps:
         assert_eq!(response_delete.status(), StatusCode::NO_CONTENT);
 
         // 6. List playbooks again (should be empty)
-        let response_list_empty = list_playbooks(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response_list_empty = list_playbooks(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let body_list_empty = to_bytes(response_list_empty.into_body(), usize::MAX)
             .await
             .unwrap();
