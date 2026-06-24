@@ -374,6 +374,18 @@
                   Loading analysis...
                 </div>
               </div>
+
+              <!-- Evidence Graph Visualization (#1273) -->
+              <div class="provable-timeline-card">
+                <div class="timeline-header">
+                  <h3>Evidence Graph</h3>
+                  <div class="graph-legend" id="incident-graph-legend"></div>
+                </div>
+                <div class="evidence-graph-wrap">
+                  <div class="evidence-graph-loading" id="incident-graph-loading">Loading evidence graph&hellip;</div>
+                  <div class="evidence-graph-container" id="incident-graph-container"></div>
+                </div>
+              </div>
             </div>
 
             <!-- Incident containment side-panel -->
@@ -402,6 +414,14 @@
                   <button class="btn btn-success btn-block" id="inc-close-incident-btn">Close Incident</button>
                 </div>
               </div>
+
+              <div class="incident-meta-card" id="incident-graph-node-detail" style="display:none;">
+                <h3>Node Detail</h3>
+                <div class="meta-row"><span>Type:</span><span id="incident-graph-node-type"></span></div>
+                <div class="meta-row"><span>Label:</span><span id="incident-graph-node-label"></span></div>
+                <div class="meta-row"><span>Timestamp:</span><span id="incident-graph-node-timestamp"></span></div>
+                <pre class="graph-node-metadata" id="incident-graph-node-metadata"></pre>
+              </div>
             </aside>
           </div>
         </div>
@@ -420,27 +440,74 @@
 
       <!-- 6. AGENTS FLEET VIEW -->
       <div id="view-agents" class="view-panel" style="display:none;">
-        <div class="view-header">
-          <h2>Agent Fleet Inventory</h2>
+        <!-- List View -->
+        <div id="agent-list-container">
+          <div class="view-header">
+            <h2>Agent Fleet Inventory</h2>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent ID</th>
+                  <th>Owner</th>
+                  <th>Environment</th>
+                  <th>Operational Status</th>
+                  <th>Allowed Environments</th>
+                  <th>Registered At</th>
+                  <th>Last Seen</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="agents-tbody">
+                <tr class="empty-row"><td colspan="8">Loading agents fleet...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Agent ID</th>
-                <th>Owner</th>
-                <th>Environment</th>
-                <th>Operational Status</th>
-                <th>Allowed Environments</th>
-                <th>Registered At</th>
-                <th>Last Seen</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="agents-tbody">
-              <tr class="empty-row"><td colspan="8">Loading agents fleet...</td></tr>
-            </tbody>
-          </table>
+
+        <!-- Detail View: Agent Evidence Graph (#1273) -->
+        <div id="agent-detail-container" style="display:none;">
+          <div class="detail-header">
+            <button class="btn btn-secondary btn-sm" id="back-to-agents-btn">&larr; Back to fleet</button>
+            <div class="incident-title-row">
+              <h2 id="agent-detail-id">Agent Detail</h2>
+              <span class="badge" id="agent-detail-status">active</span>
+            </div>
+          </div>
+
+          <div class="incident-detail-grid">
+            <div class="incident-main">
+              <div class="provable-timeline-card">
+                <div class="timeline-header">
+                  <h3>Evidence Graph</h3>
+                  <div class="graph-legend" id="agent-graph-legend"></div>
+                </div>
+                <div class="evidence-graph-wrap">
+                  <div class="evidence-graph-loading" id="agent-graph-loading">Loading evidence graph&hellip;</div>
+                  <div class="evidence-graph-container" id="agent-graph-container"></div>
+                </div>
+              </div>
+            </div>
+
+            <aside class="incident-sidebar">
+              <div class="incident-meta-card">
+                <h3>Agent Metadata</h3>
+                <div class="meta-row"><span>Owner Team:</span><span id="agent-detail-owner"></span></div>
+                <div class="meta-row"><span>Environment:</span><span id="agent-detail-env"></span></div>
+                <div class="meta-row"><span>Risk Tier:</span><span id="agent-detail-risk-tier"></span></div>
+                <div class="meta-row"><span>Registered At:</span><span id="agent-detail-created"></span></div>
+              </div>
+
+              <div class="incident-meta-card" id="agent-graph-node-detail" style="display:none;">
+                <h3>Node Detail</h3>
+                <div class="meta-row"><span>Type:</span><span id="agent-graph-node-type"></span></div>
+                <div class="meta-row"><span>Label:</span><span id="agent-graph-node-label"></span></div>
+                <div class="meta-row"><span>Timestamp:</span><span id="agent-graph-node-timestamp"></span></div>
+                <pre class="graph-node-metadata" id="agent-graph-node-metadata"></pre>
+              </div>
+            </aside>
+          </div>
         </div>
       </div>
 
@@ -619,6 +686,9 @@
     </main>
   </div>
 
+  <!-- Vendored vis-network (#1273): served locally, not from a CDN, so the
+       evidence graph visualization works in air-gapped deployments. -->
+  <script src="vis-network.min.js"></script>
   <!-- JS Code File -->
   <script src="app.js"></script>
 </body>

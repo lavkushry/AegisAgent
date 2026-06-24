@@ -1629,6 +1629,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/dashboard/", get(routes::serve_dashboard_index))
         .route("/dashboard/app.js", get(routes::serve_dashboard_js))
         .route("/dashboard/aegis.css", get(routes::serve_dashboard_css))
+        .route(
+            "/dashboard/vis-network.min.js",
+            get(routes::serve_dashboard_vis_network_js),
+        )
         // Health and probes (unversioned)
         .route("/health", get(health_handler))
         // Kubernetes-native probes (#1208): liveness, readiness, startup

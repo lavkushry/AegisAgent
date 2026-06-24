@@ -23,6 +23,8 @@
     riskScoreboard: [],
     selectedIncident: null,
     selectedMcpServerKey: null,
+    selectedAgent: null,
+    graphNetworks: {}, // #1273: live vis.Network instances, keyed by container id
     
     // Explore View Filters
     searchQuery: "",
@@ -108,13 +110,40 @@
     incContainUnfreezeBtn: document.getElementById("inc-contain-unfreeze-btn"),
     incContainRevokeBtn: document.getElementById("inc-contain-revoke-btn"),
     incCloseIncidentBtn: document.getElementById("inc-close-incident-btn"),
-    
+
+    // Incident Evidence Graph (#1273)
+    incidentGraphContainer: document.getElementById("incident-graph-container"),
+    incidentGraphLoading: document.getElementById("incident-graph-loading"),
+    incidentGraphLegend: document.getElementById("incident-graph-legend"),
+    incidentGraphNodeDetail: document.getElementById("incident-graph-node-detail"),
+    incidentGraphNodeType: document.getElementById("incident-graph-node-type"),
+    incidentGraphNodeLabel: document.getElementById("incident-graph-node-label"),
+    incidentGraphNodeTimestamp: document.getElementById("incident-graph-node-timestamp"),
+    incidentGraphNodeMetadata: document.getElementById("incident-graph-node-metadata"),
+
     // Approvals Queue
     approvalsViewCount: document.getElementById("approvals-view-count"),
     approvalsCardsContainer: document.getElementById("approvals-cards-container"),
-    
-    // Fleet / Agents List
+
+    // Fleet / Agents List & Detail (#1273)
+    agentListContainer: document.getElementById("agent-list-container"),
     agentsTbody: document.getElementById("agents-tbody"),
+    agentDetailContainer: document.getElementById("agent-detail-container"),
+    backToAgentsBtn: document.getElementById("back-to-agents-btn"),
+    agentDetailId: document.getElementById("agent-detail-id"),
+    agentDetailStatus: document.getElementById("agent-detail-status"),
+    agentDetailOwner: document.getElementById("agent-detail-owner"),
+    agentDetailEnv: document.getElementById("agent-detail-env"),
+    agentDetailRiskTier: document.getElementById("agent-detail-risk-tier"),
+    agentDetailCreated: document.getElementById("agent-detail-created"),
+    agentGraphContainer: document.getElementById("agent-graph-container"),
+    agentGraphLoading: document.getElementById("agent-graph-loading"),
+    agentGraphLegend: document.getElementById("agent-graph-legend"),
+    agentGraphNodeDetail: document.getElementById("agent-graph-node-detail"),
+    agentGraphNodeType: document.getElementById("agent-graph-node-type"),
+    agentGraphNodeLabel: document.getElementById("agent-graph-node-label"),
+    agentGraphNodeTimestamp: document.getElementById("agent-graph-node-timestamp"),
+    agentGraphNodeMetadata: document.getElementById("agent-graph-node-metadata"),
 
     // Agent Risk Scoreboard (#1290)
     riskScoreboardTbody: document.getElementById("risk-scoreboard-tbody"),
@@ -231,12 +260,20 @@
     if (viewName !== "incidents") {
       refs.incidentDetailContainer.style.display = "none";
       refs.incidentsListContainer.style.display = "block";
+      destroyGraphNetwork(refs.incidentGraphContainer);
     }
 
     // Proactively close MCP server detail if moving away (#1334)
     if (viewName !== "mcp") {
       refs.mcpDetailContainer.style.display = "none";
       refs.mcpListContainer.style.display = "block";
+    }
+
+    // Proactively close agent detail if moving away (#1273)
+    if (viewName !== "agents") {
+      refs.agentDetailContainer.style.display = "none";
+      refs.agentListContainer.style.display = "block";
+      destroyGraphNetwork(refs.agentGraphContainer);
     }
 
     // Load initial data for selected view
@@ -863,6 +900,18 @@
     }).catch(function(err) {
       refs.incDetailTimelineFlow.innerHTML = "<div class='empty-row'>Failed to load timeline: " + err.message + "</div>";
     });
+
+    // 4. Fetch + render the evidence graph (#1273)
+    fetchAndRenderEvidenceGraph("/v1/graph/incident/" + incidentId, {
+      container: refs.incidentGraphContainer,
+      loading: refs.incidentGraphLoading,
+      legend: refs.incidentGraphLegend,
+      nodeDetail: refs.incidentGraphNodeDetail,
+      nodeType: refs.incidentGraphNodeType,
+      nodeLabel: refs.incidentGraphNodeLabel,
+      nodeTimestamp: refs.incidentGraphNodeTimestamp,
+      nodeMetadata: refs.incidentGraphNodeMetadata
+    });
   }
 
   function renderIncidentTimeline(timeline) {
@@ -898,11 +947,159 @@
     });
   }
 
+  // ── Evidence Graph Visualization (#1273) ──
+  // Shared by the incident detail page and the agent detail page. Renders a
+  // GET /v1/graph/{incident,agent,run}/:id response (vis.js-compatible
+  // {nodes, edges} shape, see lib/api/src/graph.rs) with vis-network.
+  var GRAPH_LEGEND_ITEMS = [
+    { label: "Agent", color: "#3b82f6" },
+    { label: "Run", color: "#6366f1" },
+    { label: "Tool Call", color: "#06b6d4" },
+    { label: "Decision: Allow", color: "#22c55e" },
+    { label: "Decision: Deny", color: "#ef4444" },
+    { label: "Approval", color: "#f59e0b" },
+    { label: "Receipt", color: "#94a3b8" },
+    { label: "Incident", color: "#f43f5e" },
+    { label: "MCP Server", color: "#14b8a6" },
+    { label: "Policy", color: "#8b5cf6" }
+  ];
+
+  function colorForGraphNode(node) {
+    switch (node.group) {
+      case "agent": return "#3b82f6";
+      case "run": return "#6366f1";
+      case "tool_call": return "#06b6d4";
+      case "decision":
+        if (node.label === "allow") return "#22c55e";
+        if (node.label === "deny") return "#ef4444";
+        return "#f59e0b"; // require_approval or other
+      case "approval":
+        if (node.label === "approved") return "#22c55e";
+        if (node.label === "denied" || node.label === "rejected") return "#ef4444";
+        return "#f59e0b";
+      case "receipt": return "#94a3b8";
+      case "incident": return "#f43f5e";
+      case "mcp_server": return "#14b8a6";
+      case "policy": return "#8b5cf6";
+      default: return "#64748b";
+    }
+  }
+
+  function truncateGraphLabel(label) {
+    if (!label) return "";
+    return label.length > 28 ? label.slice(0, 25) + "..." : label;
+  }
+
+  function renderGraphLegend(legendEl) {
+    if (legendEl.childElementCount > 0) return; // static legend, render once
+    legendEl.innerHTML = GRAPH_LEGEND_ITEMS.map(function (item) {
+      return `<span class="graph-legend-item"><span class="graph-legend-dot" style="background:${item.color};"></span>${item.label}</span>`;
+    }).join("");
+  }
+
+  function showGraphNodeDetail(refsObj, node) {
+    refsObj.nodeDetail.style.display = "block";
+    refsObj.nodeType.textContent = node.group;
+    refsObj.nodeLabel.textContent = node.label;
+    refsObj.nodeTimestamp.textContent = node.timestamp ? new Date(node.timestamp).toLocaleString() : "N/A";
+    refsObj.nodeMetadata.textContent = (node.metadata !== undefined && node.metadata !== null)
+      ? JSON.stringify(node.metadata, null, 2)
+      : "No metadata.";
+  }
+
+  function renderEvidenceGraph(refsObj, graph) {
+    var containerEl = refsObj.container;
+    var containerId = containerEl.id;
+    var nodesById = {};
+    (graph.nodes || []).forEach(function (n) { nodesById[n.id] = n; });
+
+    var visNodes = (graph.nodes || []).map(function (n) {
+      return {
+        id: n.id,
+        label: truncateGraphLabel(n.label),
+        title: n.group + ": " + n.label,
+        color: { background: colorForGraphNode(n), border: "rgba(255,255,255,0.25)" },
+        font: { color: "#e5e7eb", size: 11 }
+      };
+    });
+
+    var visEdges = (graph.edges || []).map(function (e, idx) {
+      return {
+        id: idx,
+        from: e.from,
+        to: e.to,
+        label: (e.label || "").replace(/_/g, " "),
+        arrows: "to",
+        color: { color: "rgba(148,163,184,0.5)" },
+        font: { color: "#94a3b8", size: 9, strokeWidth: 0, align: "middle" }
+      };
+    });
+
+    if (state.graphNetworks[containerId]) {
+      state.graphNetworks[containerId].destroy();
+      delete state.graphNetworks[containerId];
+    }
+
+    var network = new vis.Network(containerEl, {
+      nodes: new vis.DataSet(visNodes),
+      edges: new vis.DataSet(visEdges)
+    }, {
+      physics: { stabilization: { iterations: 200 } },
+      interaction: { hover: true, zoomView: true, dragView: true, dragNodes: true },
+      layout: { improvedLayout: true },
+      edges: { smooth: { type: "continuous" } }
+    });
+
+    // Freeze physics once the layout settles so dragging stays interactive
+    // without the whole graph continuously re-simulating in the background.
+    network.once("stabilizationIterationsDone", function () {
+      network.setOptions({ physics: false });
+    });
+
+    network.on("click", function (params) {
+      if (params.nodes && params.nodes.length > 0) {
+        var node = nodesById[params.nodes[0]];
+        if (node) showGraphNodeDetail(refsObj, node);
+      } else {
+        refsObj.nodeDetail.style.display = "none";
+      }
+    });
+
+    state.graphNetworks[containerId] = network;
+    // Exposed on the container element (not globally) so E2E tests can drive
+    // real node clicks via vis-network's own canvasToDOM() coordinate
+    // mapping instead of guessing pixel positions.
+    containerEl.visNetwork = network;
+    renderGraphLegend(refsObj.legend);
+  }
+
+  function fetchAndRenderEvidenceGraph(endpoint, refsObj) {
+    refsObj.nodeDetail.style.display = "none";
+    refsObj.loading.hidden = false;
+    refsObj.loading.textContent = "Loading evidence graph…";
+    apiFetch(endpoint).then(function (graph) {
+      renderEvidenceGraph(refsObj, graph);
+      refsObj.loading.hidden = true;
+    }).catch(function (err) {
+      refsObj.loading.textContent = "Failed to load evidence graph: " + err.message;
+    });
+  }
+
+  function destroyGraphNetwork(containerEl) {
+    var containerId = containerEl.id;
+    if (state.graphNetworks[containerId]) {
+      state.graphNetworks[containerId].destroy();
+      delete state.graphNetworks[containerId];
+      delete containerEl.visNetwork;
+    }
+  }
+
   // Go back to list
   refs.backToIncidentsBtn.addEventListener("click", function() {
     refs.incidentDetailContainer.style.display = "none";
     refs.incidentsListContainer.style.display = "block";
     state.selectedIncident = null;
+    destroyGraphNetwork(refs.incidentGraphContainer);
     fetchIncidentsView();
   });
 
@@ -1189,7 +1386,8 @@
         `;
 
         var freeze = tr.querySelector(".freeze-btn");
-        if (freeze) freeze.addEventListener("click", function() {
+        if (freeze) freeze.addEventListener("click", function(e) {
+          e.stopPropagation();
           if (confirm("Freeze agent " + ag.id + "?")) {
             apiFetch("/v1/agents/" + ag.id + "/freeze", "POST").then(function() {
               fetchAgentsView();
@@ -1198,7 +1396,8 @@
         });
 
         var unfreeze = tr.querySelector(".unfreeze-btn");
-        if (unfreeze) unfreeze.addEventListener("click", function() {
+        if (unfreeze) unfreeze.addEventListener("click", function(e) {
+          e.stopPropagation();
           if (confirm("Unfreeze agent " + ag.id + "?")) {
             apiFetch("/v1/agents/" + ag.id + "/unfreeze", "POST").then(function() {
               fetchAgentsView();
@@ -1207,12 +1406,19 @@
         });
 
         var revoke = tr.querySelector(".revoke-btn");
-        if (revoke) revoke.addEventListener("click", function() {
+        if (revoke) revoke.addEventListener("click", function(e) {
+          e.stopPropagation();
           if (confirm("Revoke agent " + ag.id + "?")) {
             apiFetch("/v1/agents/" + ag.id + "/revoke", "POST").then(function() {
               fetchAgentsView();
             }).catch(console.error);
           }
+        });
+
+        // #1273: click a row to open the agent's evidence graph detail page.
+        tr.style.cursor = "pointer";
+        tr.addEventListener("click", function() {
+          openAgentDetail(ag);
         });
 
         refs.agentsTbody.appendChild(tr);
@@ -1221,6 +1427,42 @@
       showError("Failed to load agent fleet: " + err.message);
     });
   }
+
+  // ── Agent Detail: Evidence Graph (#1273) ──
+  function openAgentDetail(agent) {
+    state.selectedAgent = agent;
+    refs.agentListContainer.style.display = "none";
+    refs.agentDetailContainer.style.display = "block";
+
+    var isFrozen = agent.status === "frozen";
+    var isRevoked = agent.status === "revoked";
+    refs.agentDetailId.textContent = "Agent: " + (agent.agent_key || agent.id);
+    refs.agentDetailStatus.textContent = agent.status;
+    refs.agentDetailStatus.className = "badge " + (isFrozen ? "badge-warning" : (isRevoked ? "badge-critical" : "badge-success"));
+    refs.agentDetailOwner.textContent = agent.owner_team || "N/A";
+    refs.agentDetailEnv.textContent = agent.environment || "dev";
+    refs.agentDetailRiskTier.textContent = agent.risk_tier || "unknown";
+    refs.agentDetailCreated.textContent = new Date(agent.created_at).toLocaleString();
+
+    fetchAndRenderEvidenceGraph("/v1/graph/agent/" + agent.id, {
+      container: refs.agentGraphContainer,
+      loading: refs.agentGraphLoading,
+      legend: refs.agentGraphLegend,
+      nodeDetail: refs.agentGraphNodeDetail,
+      nodeType: refs.agentGraphNodeType,
+      nodeLabel: refs.agentGraphNodeLabel,
+      nodeTimestamp: refs.agentGraphNodeTimestamp,
+      nodeMetadata: refs.agentGraphNodeMetadata
+    });
+  }
+
+  refs.backToAgentsBtn.addEventListener("click", function() {
+    refs.agentDetailContainer.style.display = "none";
+    refs.agentListContainer.style.display = "block";
+    state.selectedAgent = null;
+    destroyGraphNetwork(refs.agentGraphContainer);
+    fetchAgentsView();
+  });
 
   // ── MCP Servers View ──
   function fetchMcpView() {

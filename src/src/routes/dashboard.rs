@@ -55,6 +55,9 @@ pub async fn csrf_validation_middleware(request: Request<Body>, next: Next) -> i
 const INDEX_HTML: &str = include_str!("../../dashboard/index.html");
 const APP_JS: &str = include_str!("../../dashboard/app.js");
 const AEGIS_CSS: &str = include_str!("../../dashboard/aegis.css");
+// #1273: vendored vis-network UMD build (MIT/Apache-2.0 dual-licensed), served
+// locally rather than from a CDN so the dashboard stays usable air-gapped.
+const VIS_NETWORK_JS: &str = include_str!("../../dashboard/vis-network.min.js");
 
 const CSP_VALUE: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; frame-ancestors 'none'";
 
@@ -109,6 +112,22 @@ pub async fn serve_dashboard_css() -> impl IntoResponse {
     (headers, AEGIS_CSS)
 }
 
+/// GET /dashboard/vis-network.min.js — serves the vendored vis-network UMD
+/// build (#1273). Vendored rather than CDN-loaded so the evidence graph
+/// visualization works in self-hosted/air-gapped deployments.
+pub async fn serve_dashboard_vis_network_js() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/javascript; charset=utf-8".parse().unwrap(),
+    );
+    headers.insert(
+        header::HeaderName::from_static("content-security-policy"),
+        CSP_VALUE.parse().unwrap(),
+    );
+    (headers, VIS_NETWORK_JS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +167,36 @@ mod tests {
             .unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
         assert!(body_str.contains("<meta name=\"csrf-token\""));
+    }
+
+    #[tokio::test]
+    async fn test_serve_dashboard_vis_network_js_returns_js_with_csp() {
+        let response = serve_dashboard_vis_network_js().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(content_type.contains("application/javascript"));
+
+        let csp = response
+            .headers()
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("default-src 'self'"));
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        // Sanity-check this is the genuine vendored library, not an empty stub.
+        assert!(body_str.contains("vis-network"));
+        assert!(body_str.contains("Network"));
     }
 
     #[tokio::test]
