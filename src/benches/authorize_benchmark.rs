@@ -230,7 +230,7 @@ fn authorize_mcp_allow_benchmark(c: &mut Criterion) {
         nonce: None,
         timestamp: None,
     };
-    
+
     rt.block_on(async {
         let state: Arc<routes::AppState> = state.clone();
         let headers = headers.clone();
@@ -258,5 +258,9 @@ fn authorize_mcp_allow_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, authorize_allow_benchmark, authorize_mcp_allow_benchmark);
+criterion_group!(
+    benches,
+    authorize_allow_benchmark,
+    authorize_mcp_allow_benchmark
+);
 criterion_main!(benches);

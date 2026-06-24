@@ -559,19 +559,19 @@ pub async fn authorize_action(
     let mcp_server_key = mcp_server_key_from_tool(&normalized_tool).map(str::to_string);
     let is_mcp_call = mcp_server_key.is_some();
 
-    let mcp_server_cache_key = mcp_server_key.as_deref().map(|server_key| {
-        McpServerCache::cache_key(&tenant_id, server_key)
-    });
-    let cached_mcp_server = mcp_server_cache_key.as_ref().and_then(|key| {
-        state.mcp_server_cache.get(key)
-    });
+    let mcp_server_cache_key = mcp_server_key
+        .as_deref()
+        .map(|server_key| McpServerCache::cache_key(&tenant_id, server_key));
+    let cached_mcp_server = mcp_server_cache_key
+        .as_ref()
+        .and_then(|key| state.mcp_server_cache.get(key));
 
-    let mcp_tool_cache_key = mcp_server_key.as_deref().map(|server_key| {
-        McpToolCache::cache_key(&tenant_id, server_key, &normalized_action)
-    });
-    let cached_mcp_tool = mcp_tool_cache_key.as_ref().and_then(|key| {
-        state.mcp_tool_cache.get(key)
-    });
+    let mcp_tool_cache_key = mcp_server_key
+        .as_deref()
+        .map(|server_key| McpToolCache::cache_key(&tenant_id, server_key, &normalized_action));
+    let cached_mcp_tool = mcp_tool_cache_key
+        .as_ref()
+        .and_then(|key| state.mcp_tool_cache.get(key));
 
     let (skill_action_result, mcp_server_result) = tokio::join!(
         async {
@@ -645,7 +645,7 @@ pub async fn authorize_action(
                     error!("Failed to look up MCP server status: {:?}", e);
                     return StatusError::internal("Database error").into_response();
                 }
-            }
+            },
         };
 
         if let Some(server) = &mcp_server {
@@ -726,7 +726,7 @@ pub async fn authorize_action(
                     error!("Failed to look up MCP tool: {:?}", e);
                     return StatusError::internal("Database error").into_response();
                 }
-            }
+            },
         };
 
         match mcp_tool {
@@ -3830,7 +3830,11 @@ mod tests {
         .await
         .unwrap();
         assert!(updated);
-        state.mcp_tool_cache.invalidate(&McpToolCache::cache_key(&tenant_id, "github-mcp", "create_issue"));
+        state.mcp_tool_cache.invalidate(&McpToolCache::cache_key(
+            &tenant_id,
+            "github-mcp",
+            "create_issue",
+        ));
 
         let approved_response = call_authorize(
             state,
