@@ -6120,6 +6120,170 @@ mod tests {
         }
     }
 
+    /// #908: 10,000 concurrent `/v1/authorize` calls through the real HTTP
+    /// handler, spread across 20 tenants (500 requests each) so every
+    /// tenant's token-bucket rate limiter (burst capacity 1000 in
+    /// `setup_state`) stays comfortably unhit — this test targets write
+    /// concurrency/correctness on the decision-insert hot path, not whether
+    /// the rate limiter trips (already covered by
+    /// `test_authorize_action_rate_limiting_and_quota`).
+    ///
+    /// In-flight concurrency is bounded by a semaphore (`MAX_IN_FLIGHT`)
+    /// rather than firing all 10,000 calls at the literal same instant.
+    /// `setup_state`'s pool defaults to `AEGIS_DB_MAX_CONNECTIONS=5` with a
+    /// 5s acquire timeout; spawning unbounded concurrency against that pool
+    /// (measured directly) queues far more than 5 connection-acquires at
+    /// once and starts timing out — a pool-capacity artifact, not a bug in
+    /// `authorize_action` itself. Bounding concurrency mirrors how any real
+    /// load-testing tool models "N concurrent requests" (a fixed number of
+    /// virtual users looping through total requests), not "every request
+    /// opens at the same nanosecond."
+    ///
+    /// Asserts: every call gets a clean `200 allow` (no spurious 429/500
+    /// under contention), every returned `decision_id` is unique (no
+    /// collision/duplicate-processing under the race), and each tenant's
+    /// `decisions` table ends up with exactly the 500 rows it sent — no
+    /// writes lost or double-counted under concurrent SQLite WAL writers.
+    ///
+    /// `#[ignore]`d by default: each call's decision flows through the full
+    /// SOC event pipeline (detector + correlator + per-event custom-rule
+    /// DB read), not just `insert_decision` — measured at ~134s for all
+    /// 10,000 in an unoptimized debug build, the same "too slow for every
+    /// `cargo test --workspace` run" situation as #909's 100k-entry chain
+    /// tests. Run on demand with:
+    /// `cargo test --workspace -- --ignored authorize_handles_10k_concurrent`
+    #[tokio::test]
+    #[ignore]
+    async fn authorize_handles_10k_concurrent_requests_across_20_tenants() {
+        const TENANTS: usize = 20;
+        const REQUESTS_PER_TENANT: usize = 500;
+        const TOTAL: usize = TENANTS * REQUESTS_PER_TENANT;
+        const MAX_IN_FLIGHT: usize = 8;
+
+        let (state, _tenant_id, _agent_token) = setup_state("authorize_10k_stress").await;
+
+        let mut tenant_ids = Vec::with_capacity(TENANTS);
+        let mut agent_tokens = Vec::with_capacity(TENANTS);
+        for i in 0..TENANTS {
+            let tenant_id = format!("tenant_10k_{i}");
+            db::register_tenant(
+                state.storage.get_pool(),
+                &tenant_id,
+                &format!("10k Stress Tenant {i}"),
+                "developer",
+            )
+            .await
+            .unwrap();
+            // This test targets `/v1/authorize` write concurrency, not the SOC
+            // Response Engine — a tight burst of identical decisions from one
+            // agent can otherwise match the correlator's "runaway" pattern and
+            // auto-freeze the agent mid-test (`auto_respond_enabled` defaults
+            // to true at the schema level; see #1572 for that default's own
+            // inconsistency with `soc_autonomy_level`'s documented "L1 skips
+            // auto-respond" default). Explicitly opt out here so this test
+            // exercises only the decision-write path it's named for.
+            db::set_tenant_auto_respond(state.storage.get_pool(), &tenant_id, false)
+                .await
+                .unwrap();
+
+            let agent_token = format!("agent_tok_10k_{i}_{}", Uuid::new_v4().simple());
+            let agent = AgentRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                agent_key: "routes-agent".to_string(),
+                agent_token: db::hash_token(&agent_token),
+                name: format!("10k Stress Agent {i}"),
+                owner_team: Some("platform".to_string()),
+                owner_email: None,
+                environment: "production".to_string(),
+                framework: None,
+                model_provider: None,
+                model_name: None,
+                purpose: None,
+                risk_tier: "high".to_string(),
+                status: "active".to_string(),
+                last_seen_at: None,
+                frozen_reason: None,
+                force_approval: false,
+                quarantined_at: None,
+                signing_key: None,
+                allowed_environments: None,
+                mtls_cn: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            state.storage.insert_agent(&agent).await.unwrap();
+
+            tenant_ids.push(tenant_id);
+            agent_tokens.push(agent_token);
+        }
+
+        let started = std::time::Instant::now();
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT));
+        let mut handles = Vec::with_capacity(TOTAL);
+        for i in 0..TOTAL {
+            let state = state.clone();
+            let tenant_id = tenant_ids[i % TENANTS].clone();
+            let agent_token = agent_tokens[i % TENANTS].clone();
+            let semaphore = semaphore.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap();
+                let request = mcp_authorize_request("filesystem", "read_file");
+                let response = authorize_action(
+                    State(state),
+                    agent_headers(&agent_token, &tenant_id),
+                    Bytes::from(serde_json::to_vec(&request).unwrap()),
+                )
+                .await
+                .into_response();
+                let status = response.status();
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let parsed: AuthorizeResponse = serde_json::from_slice(&body)
+                    .unwrap_or_else(|e| panic!("invalid response body: {e}: {body:?}"));
+                (status, parsed)
+            }));
+        }
+
+        let mut decision_ids = std::collections::HashSet::with_capacity(TOTAL);
+        for handle in handles {
+            let (status, parsed) = handle.await.unwrap();
+            assert_eq!(status, StatusCode::OK, "non-200 under concurrent load");
+            assert_eq!(
+                parsed.decision, "allow",
+                "expected allow, got {} (reason: {})",
+                parsed.decision, parsed.reason
+            );
+            assert!(
+                decision_ids.insert(parsed.decision_id),
+                "duplicate decision_id {} returned under concurrent load",
+                parsed.decision_id
+            );
+        }
+        eprintln!(
+            "authorize_handles_10k_concurrent_requests_across_20_tenants: {} requests in {:?}",
+            TOTAL,
+            started.elapsed()
+        );
+        assert_eq!(
+            decision_ids.len(),
+            TOTAL,
+            "expected {TOTAL} unique decision_ids"
+        );
+
+        for tenant_id in &tenant_ids {
+            let (total, allow, deny, require_approval) = state
+                .storage
+                .count_decisions_by_outcome(tenant_id)
+                .await
+                .unwrap();
+            assert_eq!(
+                (total, allow, deny, require_approval),
+                (REQUESTS_PER_TENANT as i64, REQUESTS_PER_TENANT as i64, 0, 0),
+                "tenant {tenant_id} decision counts wrong after concurrent load"
+            );
+        }
+    }
+
     /// #1402 — tenant isolation across `audit_events`, `soc_alerts`,
     /// `soc_incidents`, and `decisions/:id`. The 100-tenant stress above
     /// already covers `agents`/`decisions`/`approvals`/`receipts` list
