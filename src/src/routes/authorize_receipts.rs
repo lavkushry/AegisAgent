@@ -41,6 +41,14 @@ pub(crate) fn apply_receipt_signature(receipt: &mut ActionReceiptRecord) {
 /// competed for the SQLite WAL write lock with the decision write on every
 /// request. This function returns as soon as the write is scheduled, not
 /// once it lands.
+///
+/// 8 args: each is an independently-required identifier/handle (storage,
+/// tracker, tenant/agent ids, the request payload, the decision outcome, and
+/// the precomputed `action_hash` threaded in to avoid re-hashing the tool
+/// call — see the JCS-1 canonicalization cache). Single call site
+/// (`authorize.rs`'s decision path); a wrapper struct would be pure
+/// ceremony here.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_action_receipt(
     storage: &Arc<dyn aegis_storage::traits::StorageBackend>,
     deferred_write_tracker: &Arc<super::DeferredWriteTracker>,
