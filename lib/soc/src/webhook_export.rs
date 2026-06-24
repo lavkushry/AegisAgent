@@ -413,6 +413,51 @@ mod tests {
         );
     }
 
+    /// #912: a subscription already marked `dead` (the circuit breaker's
+    /// "open" state) must never be dispatched to again — no HTTP call at
+    /// all, not even a single attempt.
+    #[tokio::test]
+    async fn dispatch_skips_dead_subscription() {
+        use axum::{routing::post, Router};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let hit_count = Arc::new(Mutex::new(0u32));
+        let hit_count_clone = hit_count.clone();
+        let app = Router::new().route(
+            "/hook",
+            post(move || {
+                let hit_count_clone = hit_count_clone.clone();
+                async move {
+                    *hit_count_clone.lock().await += 1;
+                    "ok"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("http://{addr}/hook");
+        let (pool, mut subscription) = setup_pool_with_subscription(&url, "info", "json").await;
+        subscription.delivery_status = "dead".to_string();
+        aegis_storage::db::update_webhook_subscription(&pool, &subscription)
+            .await
+            .unwrap();
+
+        let client = reqwest::Client::new();
+        dispatch(&pool, &client, &make_payload("deny", "high")).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            *hit_count.lock().await,
+            0,
+            "a dead subscription must never be dispatched to"
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_records_failure_after_unreachable_endpoint() {
         // Port 0 never accepts connections once dropped; using an unbound
