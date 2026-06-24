@@ -551,6 +551,45 @@ pub fn mmap_size_bytes_from_env() -> Option<i64> {
         .filter(|&n| n >= 0)
 }
 
+/// Default `PRAGMA journal_size_limit` value (bytes) — the size the WAL file
+/// is truncated back to after a checkpoint. Matches the value this codebase
+/// has hardcoded since before #896 made it configurable.
+pub const DEFAULT_JOURNAL_SIZE_LIMIT_BYTES: i64 = 67_108_864;
+
+/// Read `AEGIS_DB_JOURNAL_SIZE_LIMIT` (#896), falling back to
+/// [`DEFAULT_JOURNAL_SIZE_LIMIT_BYTES`] when unset or unparseable. Unlike
+/// [`mmap_size_bytes_from_env`], negative values are *not* filtered out:
+/// SQLite defines `-1` as "no limit" for this specific pragma (see
+/// <https://www.sqlite.org/pragma.html#pragma_journal_size_limit>), so it is
+/// a meaningful, intentional value here, not a parse artifact.
+pub fn journal_size_limit_bytes_from_env() -> i64 {
+    std::env::var("AEGIS_DB_JOURNAL_SIZE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_JOURNAL_SIZE_LIMIT_BYTES)
+}
+
+/// Default `PRAGMA wal_autocheckpoint` value (pages) — the WAL size, in
+/// database pages, that triggers an automatic checkpoint. Matches the value
+/// this codebase has hardcoded since before #896 made it configurable.
+pub const DEFAULT_WAL_AUTOCHECKPOINT_PAGES: i64 = 1000;
+
+/// Read `AEGIS_DB_WAL_AUTOCHECKPOINT` (#896), falling back to
+/// [`DEFAULT_WAL_AUTOCHECKPOINT_PAGES`] when unset, unparseable, or negative.
+/// `0` is a valid, meaningful value: SQLite treats `wal_autocheckpoint = 0`
+/// (or negative) as "disable automatic checkpointing" — distinguished here
+/// from "disable" only in that a negative *input* falls back to the default
+/// instead, since (unlike `journal_size_limit`) SQLite assigns no special
+/// meaning to a negative value beyond "off", so there's no information lost
+/// by normalizing it to the documented default rather than passing it through.
+pub fn wal_autocheckpoint_pages_from_env() -> i64 {
+    std::env::var("AEGIS_DB_WAL_AUTOCHECKPOINT")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|&n| n >= 0)
+        .unwrap_or(DEFAULT_WAL_AUTOCHECKPOINT_PAGES)
+}
+
 pub async fn init_db(db_url: &str) -> Result<DbPool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }
@@ -682,6 +721,27 @@ async fn init_sqlite_db_with_busy_timeout(
         connection_options = connection_options.pragma("mmap_size", mmap_bytes.to_string());
     }
 
+    // #896: WAL checkpoint tuning. These three are per-connection PRAGMAs
+    // (not persisted in the database file, unlike `journal_mode=WAL`
+    // itself), so — like `mmap_size` above — they belong on
+    // `connection_options`, not in a one-off `sqlx::query(...).execute(&pool)`
+    // run once against whichever single connection serviced that query.
+    // Before #896, that one-off-query bug meant only one pooled connection
+    // (and never any connection opened later to grow the pool under load)
+    // actually ran with `synchronous=NORMAL` / the tuned checkpoint
+    // thresholds — every other connection silently kept SQLite's own
+    // compiled-in defaults.
+    connection_options = connection_options
+        .pragma(
+            "journal_size_limit",
+            journal_size_limit_bytes_from_env().to_string(),
+        )
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        .pragma(
+            "wal_autocheckpoint",
+            wal_autocheckpoint_pages_from_env().to_string(),
+        );
+
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections)
         .idle_timeout(std::time::Duration::from_secs(idle_timeout))
@@ -695,17 +755,6 @@ async fn init_sqlite_db_with_busy_timeout(
     // no-op (per SQLite's documented behavior for unknown pragmas) — the
     // operator would believe their database is encrypted when it is not.
     verify_encryption_or_fail_closed(&pool, encryption_key.is_some()).await?;
-
-    // Performance tuning PRAGMAs for SQLite WAL mode autocheckpointing
-    sqlx::query("PRAGMA journal_size_limit = 67108864;")
-        .execute(&pool)
-        .await?;
-    sqlx::query("PRAGMA synchronous = NORMAL;")
-        .execute(&pool)
-        .await?;
-    sqlx::query("PRAGMA wal_autocheckpoint = 1000;")
-        .execute(&pool)
-        .await?;
 
     // Bring any pre-existing database (created by older binaries via the
     // legacy ad-hoc bootstrap, before DB-001/#1191) up to the schema that
@@ -1896,6 +1945,182 @@ mod tests {
             .await
             .expect("a basic query should still succeed");
         assert_eq!(one, 1);
+    }
+
+    /// #896: unset env var falls back to the documented default.
+    #[tokio::test]
+    async fn journal_size_limit_bytes_from_env_defaults_when_unset() {
+        let _guard = crate::db::test_utils::JOURNAL_SIZE_LIMIT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::remove_var("AEGIS_DB_JOURNAL_SIZE_LIMIT");
+        assert_eq!(
+            journal_size_limit_bytes_from_env(),
+            DEFAULT_JOURNAL_SIZE_LIMIT_BYTES
+        );
+    }
+
+    /// #896: a configured value is read and parsed.
+    #[tokio::test]
+    async fn journal_size_limit_bytes_from_env_reads_configured_value() {
+        let _guard = crate::db::test_utils::JOURNAL_SIZE_LIMIT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_JOURNAL_SIZE_LIMIT", "33554432");
+        assert_eq!(journal_size_limit_bytes_from_env(), 33554432);
+        std::env::remove_var("AEGIS_DB_JOURNAL_SIZE_LIMIT");
+    }
+
+    /// #896: `-1` is SQLite's own documented "no limit" value for this
+    /// specific pragma — must pass through unchanged, not be filtered out
+    /// the way a negative `AEGIS_DB_MMAP_SIZE` is.
+    #[tokio::test]
+    async fn journal_size_limit_bytes_from_env_allows_negative_one_for_no_limit() {
+        let _guard = crate::db::test_utils::JOURNAL_SIZE_LIMIT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_JOURNAL_SIZE_LIMIT", "-1");
+        assert_eq!(journal_size_limit_bytes_from_env(), -1);
+        std::env::remove_var("AEGIS_DB_JOURNAL_SIZE_LIMIT");
+    }
+
+    /// #896: an unparseable value falls back to the default instead of
+    /// failing startup.
+    #[tokio::test]
+    async fn journal_size_limit_bytes_from_env_falls_back_on_garbage_value() {
+        let _guard = crate::db::test_utils::JOURNAL_SIZE_LIMIT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_JOURNAL_SIZE_LIMIT", "not-a-number");
+        assert_eq!(
+            journal_size_limit_bytes_from_env(),
+            DEFAULT_JOURNAL_SIZE_LIMIT_BYTES
+        );
+        std::env::remove_var("AEGIS_DB_JOURNAL_SIZE_LIMIT");
+    }
+
+    /// #896: unset env var falls back to the documented default.
+    #[tokio::test]
+    async fn wal_autocheckpoint_pages_from_env_defaults_when_unset() {
+        let _guard = crate::db::test_utils::WAL_AUTOCHECKPOINT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::remove_var("AEGIS_DB_WAL_AUTOCHECKPOINT");
+        assert_eq!(
+            wal_autocheckpoint_pages_from_env(),
+            DEFAULT_WAL_AUTOCHECKPOINT_PAGES
+        );
+    }
+
+    /// #896: a configured value is read and parsed.
+    #[tokio::test]
+    async fn wal_autocheckpoint_pages_from_env_reads_configured_value() {
+        let _guard = crate::db::test_utils::WAL_AUTOCHECKPOINT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_WAL_AUTOCHECKPOINT", "500");
+        assert_eq!(wal_autocheckpoint_pages_from_env(), 500);
+        std::env::remove_var("AEGIS_DB_WAL_AUTOCHECKPOINT");
+    }
+
+    /// #896: `0` is a valid, meaningful value (disables automatic
+    /// checkpointing) — not filtered out, mirroring the
+    /// statement-cache-capacity / mmap-size "0 is meaningful" precedent.
+    #[tokio::test]
+    async fn wal_autocheckpoint_pages_from_env_allows_zero() {
+        let _guard = crate::db::test_utils::WAL_AUTOCHECKPOINT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_WAL_AUTOCHECKPOINT", "0");
+        assert_eq!(wal_autocheckpoint_pages_from_env(), 0);
+        std::env::remove_var("AEGIS_DB_WAL_AUTOCHECKPOINT");
+    }
+
+    /// #896: a negative value has no documented meaning for this pragma
+    /// (unlike `journal_size_limit`'s `-1`) — falls back to the default.
+    #[tokio::test]
+    async fn wal_autocheckpoint_pages_from_env_rejects_negative_value() {
+        let _guard = crate::db::test_utils::WAL_AUTOCHECKPOINT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_WAL_AUTOCHECKPOINT", "-5");
+        assert_eq!(
+            wal_autocheckpoint_pages_from_env(),
+            DEFAULT_WAL_AUTOCHECKPOINT_PAGES
+        );
+        std::env::remove_var("AEGIS_DB_WAL_AUTOCHECKPOINT");
+    }
+
+    /// #896: an unparseable value falls back to the default instead of
+    /// failing startup.
+    #[tokio::test]
+    async fn wal_autocheckpoint_pages_from_env_falls_back_on_garbage_value() {
+        let _guard = crate::db::test_utils::WAL_AUTOCHECKPOINT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_WAL_AUTOCHECKPOINT", "not-a-number");
+        assert_eq!(
+            wal_autocheckpoint_pages_from_env(),
+            DEFAULT_WAL_AUTOCHECKPOINT_PAGES
+        );
+        std::env::remove_var("AEGIS_DB_WAL_AUTOCHECKPOINT");
+    }
+
+    /// #896: the core regression test — both checkpoint PRAGMAs, plus
+    /// `synchronous`, must be applied to *every* pooled connection, not just
+    /// whichever one happened to service a one-off setup query. Forces the
+    /// pool to open several connections concurrently and reads each PRAGMA
+    /// back from each one.
+    #[tokio::test]
+    async fn checkpoint_pragmas_apply_to_every_pooled_connection() {
+        let _journal_guard = crate::db::test_utils::JOURNAL_SIZE_LIMIT_ENV_LOCK
+            .lock()
+            .await;
+        let _wal_guard = crate::db::test_utils::WAL_AUTOCHECKPOINT_ENV_LOCK
+            .lock()
+            .await;
+        std::env::set_var("AEGIS_DB_JOURNAL_SIZE_LIMIT", "33554432");
+        std::env::set_var("AEGIS_DB_WAL_AUTOCHECKPOINT", "500");
+
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/checkpoint_pragmas_pooled_{}.db",
+            Uuid::new_v4().simple()
+        );
+        let pool = init_sqlite_db_with_busy_timeout(&db_url, std::time::Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                let (journal_size_limit,): (i64,) = sqlx::query_as("PRAGMA journal_size_limit;")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                let (wal_autocheckpoint,): (i64,) = sqlx::query_as("PRAGMA wal_autocheckpoint;")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                let (synchronous,): (i64,) = sqlx::query_as("PRAGMA synchronous;")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                (journal_size_limit, wal_autocheckpoint, synchronous)
+            }));
+        }
+
+        for handle in handles {
+            let (journal_size_limit, wal_autocheckpoint, synchronous) = handle.await.unwrap();
+            assert_eq!(journal_size_limit, 33554432);
+            assert_eq!(wal_autocheckpoint, 500);
+            // `synchronous` reads back as SQLite's integer code: 1 == NORMAL.
+            assert_eq!(synchronous, 1);
+        }
+
+        std::env::remove_var("AEGIS_DB_JOURNAL_SIZE_LIMIT");
+        std::env::remove_var("AEGIS_DB_WAL_AUTOCHECKPOINT");
     }
 
     #[tokio::test]

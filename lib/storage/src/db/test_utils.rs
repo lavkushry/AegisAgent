@@ -19,6 +19,14 @@ pub static STATEMENT_CACHE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex
 /// var (#919).
 pub static MMAP_SIZE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Serializes tests that mutate the process-wide `AEGIS_DB_JOURNAL_SIZE_LIMIT`
+/// env var (#896).
+pub static JOURNAL_SIZE_LIMIT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Serializes tests that mutate the process-wide `AEGIS_DB_WAL_AUTOCHECKPOINT`
+/// env var (#896).
+pub static WAL_AUTOCHECKPOINT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub async fn setup_pool(test_name: &str) -> DbPool {
     std::fs::create_dir_all("target").unwrap();
     let db_url = format!(
