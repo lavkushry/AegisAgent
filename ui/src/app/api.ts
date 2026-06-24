@@ -162,3 +162,35 @@ export function getDecisions(opts: FetchOptions, limit = 50, q = "") {
 export function getIncidentGraph(opts: FetchOptions, incidentId: string) {
   return fetchFromGateway<any>(opts, `/v1/graph/incident/${incidentId}`);
 }
+
+// SOC Rules & Backtesting
+export interface UpsertRulePayload {
+  rule_key: string;
+  name: string;
+  severity: string;
+  condition: string; // YAML condition string
+  summary_template: string;
+  enabled: boolean;
+}
+
+export function getSocRules(opts: FetchOptions) {
+  return fetchFromGateway<any[]>(opts, "/v1/soc/rules");
+}
+
+export function getDetectionRules(opts: FetchOptions) {
+  return fetchFromGateway<any[]>(opts, "/v1/detection_rules");
+}
+
+export function createSocRule(opts: FetchOptions, payload: UpsertRulePayload) {
+  return fetchFromGateway<any>(opts, "/v1/soc/rules", "POST", payload);
+}
+
+export function deleteDetectionRule(opts: FetchOptions, ruleId: string) {
+  return fetchFromGateway<any>(opts, `/v1/detection_rules/${ruleId}`, "DELETE");
+}
+
+export function backtestSocRule(opts: FetchOptions, ruleKey: string, from?: string, to?: string) {
+  const body = from && to ? { from, to } : {};
+  return fetchFromGateway<any>(opts, `/v1/soc/rules/${ruleKey}/backtest`, "POST", body);
+}
+

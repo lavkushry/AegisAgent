@@ -12,9 +12,10 @@ import AgentsTab from "../components/AgentsTab";
 import McpTab from "../components/McpTab";
 import ReceiptsTab from "../components/ReceiptsTab";
 import SettingsTab from "../components/SettingsTab";
-import { Shield, LayoutDashboard, Search, AlertOctagon, Clock, Users, Server, FileCheck2, Settings as SettingsIcon } from "lucide-react";
+import DetectionsTab from "../components/DetectionsTab";
+import { Shield, LayoutDashboard, Search, AlertOctagon, ShieldAlert, Clock, Users, Server, FileCheck2, Settings as SettingsIcon } from "lucide-react";
 
-type ActiveTab = "overview" | "explore" | "incidents" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
+type ActiveTab = "overview" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
@@ -43,6 +44,8 @@ export default function Home() {
         return <ExploreTab />;
       case "incidents":
         return <IncidentsTab />;
+      case "detections":
+        return <DetectionsTab />;
       case "approvals":
         return <ApprovalsTab />;
       case "agents":
@@ -62,6 +65,7 @@ export default function Home() {
     { id: "overview" as ActiveTab, label: "Overview", icon: <LayoutDashboard size={16} /> },
     { id: "explore" as ActiveTab, label: "Explore", icon: <Search size={16} /> },
     { id: "incidents" as ActiveTab, label: "Incidents", icon: <AlertOctagon size={16} /> },
+    { id: "detections" as ActiveTab, label: "Detections & Rules", icon: <ShieldAlert size={16} /> },
     { id: "approvals" as ActiveTab, label: "Approvals", icon: <Clock size={16} /> },
     { id: "agents" as ActiveTab, label: "Agents Fleet", icon: <Users size={16} /> },
     { id: "mcp" as ActiveTab, label: "MCP Servers", icon: <Server size={16} /> },
