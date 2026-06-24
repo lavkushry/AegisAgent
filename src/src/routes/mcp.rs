@@ -71,6 +71,8 @@ pub async fn register_mcp_server(
         _ => record,
     };
 
+    state.mcp_server_cache.invalidate(&McpServerCache::cache_key(&tenant_id, &payload.server_key));
+
     (
         StatusCode::CREATED,
         Json(RegisterMcpServerResponse {
@@ -298,6 +300,10 @@ pub async fn discover_mcp_tools(
         error!("Failed to record MCP discovery timestamp: {:?}", e);
     }
 
+    // Invalidate server and tool caches
+    state.mcp_server_cache.invalidate(&McpServerCache::cache_key(&tenant_id, &server_key));
+    state.mcp_tool_cache.invalidate_server(&tenant_id, &server_key);
+
     (
         StatusCode::OK,
         Json(json!({
@@ -411,7 +417,7 @@ async fn update_mcp_tool_status(
         Ok(true) => {
             let audit_record = AuditEventRecord {
                 id: Uuid::new_v4().to_string(),
-                tenant_id,
+                tenant_id: tenant_id.clone(),
                 event_type: "mcp_tool_status_changed".to_string(),
                 agent_id: None,
                 user_id: None,
@@ -434,6 +440,8 @@ async fn update_mcp_tool_status(
                 created_at: Utc::now(),
             };
             let _ = state.storage.insert_audit_event(&audit_record).await;
+
+            state.mcp_tool_cache.invalidate(&McpToolCache::cache_key(&tenant_id, &server_key, &tool_key));
 
             (
                 StatusCode::OK,
@@ -497,6 +505,10 @@ pub async fn delete_mcp_server(
                 json!({"server_key": server_key}),
             )
             .await;
+
+            state.mcp_server_cache.invalidate(&McpServerCache::cache_key(&tenant_id, &server_key));
+            state.mcp_tool_cache.invalidate_server(&tenant_id, &server_key);
+
             (
                 StatusCode::OK,
                 Json(json!({"message": "MCP server successfully deleted"})),
@@ -559,6 +571,9 @@ pub(crate) async fn update_mcp_server_quarantine(
             };
             let _ = state.storage.insert_audit_event(&audit).await;
             info!(server_key = %server_key, status = %status, "MCP server status changed");
+
+            state.mcp_server_cache.invalidate(&McpServerCache::cache_key(&tenant_id, &server_key));
+
             (
                 StatusCode::OK,
                 Json(json!({ "server_key": server_key, "status": status })),
@@ -649,7 +664,10 @@ pub async fn update_mcp_server(
         )
         .await
     {
-        Ok(Some(server)) => (StatusCode::OK, Json(server)).into_response(),
+        Ok(Some(server)) => {
+            state.mcp_server_cache.invalidate(&McpServerCache::cache_key(&tenant_id, &server_key));
+            (StatusCode::OK, Json(server)).into_response()
+        }
         Ok(None) => StatusError::not_found("MCP server not found").into_response(),
         Err(e) => {
             error!("Failed to update MCP server: {:?}", e);
@@ -1522,6 +1540,7 @@ mod tests {
         )
         .await
         .unwrap());
+        state.mcp_server_cache.invalidate(&McpServerCache::cache_key(&tenant_id, "github-mcp"));
         let denied = call_authorize(
             state,
             &tenant_id,

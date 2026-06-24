@@ -328,6 +328,168 @@ impl SkillActionCache {
     }
 }
 
+pub struct McpServerCache {
+    inner: Mutex<McpServerCacheInner>,
+    capacity: usize,
+}
+
+#[derive(Default)]
+struct McpServerCacheInner {
+    map: HashMap<String, McpServerRecord>,
+    order: VecDeque<String>,
+}
+
+impl McpServerCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(McpServerCacheInner::default()),
+            capacity,
+        }
+    }
+
+    pub fn cache_key(tenant_id: &str, server_key: &str) -> String {
+        format!("{tenant_id}\x1f{server_key}")
+    }
+
+    fn touch(order: &mut VecDeque<String>, key: &str) {
+        if let Some(pos) = order.iter().position(|k| k == key) {
+            order.remove(pos);
+        }
+        order.push_back(key.to_string());
+    }
+
+    pub fn get(&self, key: &str) -> Option<McpServerRecord> {
+        if self.capacity == 0 {
+            return None;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let val = inner.map.get(key).cloned();
+        if val.is_some() {
+            Self::touch(&mut inner.order, key);
+        }
+        val
+    }
+
+    pub fn insert(&self, key: String, value: McpServerRecord) {
+        if self.capacity == 0 {
+            return;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.insert(key.clone(), value);
+        Self::touch(&mut inner.order, &key);
+        while inner.map.len() > self.capacity {
+            if let Some(evict) = inner.order.pop_front() {
+                inner.map.remove(&evict);
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub fn invalidate(&self, key: &str) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.remove(key);
+        if let Some(pos) = inner.order.iter().position(|k| k == key) {
+            inner.order.remove(pos);
+        }
+    }
+}
+
+pub struct McpToolCache {
+    inner: Mutex<McpToolCacheInner>,
+    capacity: usize,
+}
+
+#[derive(Default)]
+struct McpToolCacheInner {
+    map: HashMap<String, McpToolRecord>,
+    order: VecDeque<String>,
+}
+
+impl McpToolCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(McpToolCacheInner::default()),
+            capacity,
+        }
+    }
+
+    pub fn cache_key(tenant_id: &str, server_key: &str, tool_key: &str) -> String {
+        format!("{tenant_id}\x1f{server_key}\x1f{tool_key}")
+    }
+
+    fn touch(order: &mut VecDeque<String>, key: &str) {
+        if let Some(pos) = order.iter().position(|k| k == key) {
+            order.remove(pos);
+        }
+        order.push_back(key.to_string());
+    }
+
+    pub fn get(&self, key: &str) -> Option<McpToolRecord> {
+        if self.capacity == 0 {
+            return None;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let val = inner.map.get(key).cloned();
+        if val.is_some() {
+            Self::touch(&mut inner.order, key);
+        }
+        val
+    }
+
+    pub fn insert(&self, key: String, value: McpToolRecord) {
+        if self.capacity == 0 {
+            return;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.insert(key.clone(), value);
+        Self::touch(&mut inner.order, &key);
+        while inner.map.len() > self.capacity {
+            if let Some(evict) = inner.order.pop_front() {
+                inner.map.remove(&evict);
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub fn invalidate(&self, key: &str) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        inner.map.remove(key);
+        if let Some(pos) = inner.order.iter().position(|k| k == key) {
+            inner.order.remove(pos);
+        }
+    }
+
+    pub fn invalidate_server(&self, tenant_id: &str, server_key: &str) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let prefix = format!("{tenant_id}\x1f{server_key}\x1f");
+        inner.map.retain(|k, _| !k.starts_with(&prefix));
+        inner.order.retain(|k| !k.starts_with(&prefix));
+    }
+}
+
 /// In-memory, bounded LRU dedup cache for `/v1/authorize` replay-protection
 /// nonces (#1306, opt-in). Keyed on `(tenant_id, agent_id, nonce)` so two
 /// different agents (or tenants) can independently use the same nonce
@@ -736,6 +898,10 @@ pub struct AppState {
     pub approval_attempt_tracker: ApprovalAttemptTracker,
     /// Read-through cache for registered-action metadata (#899).
     pub skill_cache: SkillActionCache,
+    /// Bounded LRU cache for MCP server records (#1337).
+    pub mcp_server_cache: McpServerCache,
+    /// Bounded LRU cache for MCP tool records (#1337).
+    pub mcp_tool_cache: McpToolCache,
     /// Opt-in replay-protection nonce dedup cache (#1306). See
     /// [`ReplayNonceCache`] for the LRU + timestamp-window approximation.
     pub replay_nonce_cache: ReplayNonceCache,
@@ -1416,6 +1582,8 @@ pub mod benchutil {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -1713,6 +1881,8 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -1761,6 +1931,8 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -1811,6 +1983,8 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -1863,6 +2037,8 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -1965,6 +2141,8 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -2025,6 +2203,8 @@ pub(crate) mod test_helpers {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),

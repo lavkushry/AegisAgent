@@ -559,6 +559,20 @@ pub async fn authorize_action(
     let mcp_server_key = mcp_server_key_from_tool(&normalized_tool).map(str::to_string);
     let is_mcp_call = mcp_server_key.is_some();
 
+    let mcp_server_cache_key = mcp_server_key.as_deref().map(|server_key| {
+        McpServerCache::cache_key(&tenant_id, server_key)
+    });
+    let cached_mcp_server = mcp_server_cache_key.as_ref().and_then(|key| {
+        state.mcp_server_cache.get(key)
+    });
+
+    let mcp_tool_cache_key = mcp_server_key.as_deref().map(|server_key| {
+        McpToolCache::cache_key(&tenant_id, server_key, &normalized_action)
+    });
+    let cached_mcp_tool = mcp_tool_cache_key.as_ref().and_then(|key| {
+        state.mcp_tool_cache.get(key)
+    });
+
     let (skill_action_result, mcp_server_result) = tokio::join!(
         async {
             if cached_action_meta.is_some() {
@@ -572,6 +586,9 @@ pub async fn authorize_action(
         async {
             match mcp_server_key.as_deref() {
                 Some(server_key) => {
+                    if cached_mcp_server.is_some() {
+                        return Ok(None);
+                    }
                     state
                         .storage
                         .get_mcp_server_by_key(&tenant_id, server_key)
@@ -614,13 +631,25 @@ pub async fn authorize_action(
     }
 
     if let Some(server_key) = mcp_server_key.as_deref() {
-        // Fail-closed server-level gate (Phase 4 response enforcement). A
-        // quarantined MCP server — whether quarantined by an operator or
-        // auto-quarantined on tool-manifest drift — denies ALL of its tool calls
-        // inline, regardless of any tool's prior approved status. Without this,
-        // quarantine was recorded but never enforced on the authorize hot path.
-        match mcp_server_result {
-            Ok(Some(server)) if server.status == "quarantined" => {
+        let mcp_server = match cached_mcp_server {
+            Some(s) => Some(s),
+            None => match mcp_server_result {
+                Ok(Some(s)) => {
+                    if let Some(ref key) = mcp_server_cache_key {
+                        state.mcp_server_cache.insert(key.clone(), s.clone());
+                    }
+                    Some(s)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    error!("Failed to look up MCP server status: {:?}", e);
+                    return StatusError::internal("Database error").into_response();
+                }
+            }
+        };
+
+        if let Some(server) = &mcp_server {
+            if server.status == "quarantined" {
                 let decision_id = Uuid::new_v4();
                 let reason = format!(
                     "MCP server '{}' is quarantined; all tool calls are denied (fail-closed).",
@@ -676,19 +705,32 @@ pub async fn authorize_action(
                 )
                     .into_response();
             }
-            Ok(_) => {}
-            Err(e) => {
-                error!("Failed to look up MCP server status: {:?}", e);
-                return StatusError::internal("Database error").into_response();
-            }
         }
 
-        match state
-            .storage
-            .get_mcp_tool_by_key(&tenant_id, server_key, &normalized_action)
-            .await
-        {
-            Ok(Some(tool)) => {
+        // Get the tool record, checking the cache first
+        let mcp_tool = match cached_mcp_tool {
+            Some(t) => Some(t),
+            None => match state
+                .storage
+                .get_mcp_tool_by_key(&tenant_id, server_key, &normalized_action)
+                .await
+            {
+                Ok(Some(tool)) => {
+                    if let Some(ref key) = mcp_tool_cache_key {
+                        state.mcp_tool_cache.insert(key.clone(), tool.clone());
+                    }
+                    Some(tool)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    error!("Failed to look up MCP tool: {:?}", e);
+                    return StatusError::internal("Database error").into_response();
+                }
+            }
+        };
+
+        match mcp_tool {
+            Some(tool) => {
                 risk_level = tool.risk.clone();
                 risk_score = risk_score_for_level(&risk_level);
                 action_approval_required = action_approval_required || tool.approval_required;
@@ -748,7 +790,7 @@ pub async fn authorize_action(
                         .into_response();
                 }
             }
-            Ok(None) => {
+            None => {
                 let decision_id = Uuid::new_v4();
                 let reason = format!(
                     "Unknown MCP tool '{}' for server '{}' is denied by default.",
@@ -803,10 +845,6 @@ pub async fn authorize_action(
                     }),
                 )
                     .into_response();
-            }
-            Err(e) => {
-                error!("Failed to look up MCP tool: {:?}", e);
-                return StatusError::internal("Database error").into_response();
             }
         }
     }
@@ -1792,6 +1830,8 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -1848,6 +1888,8 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -3788,6 +3830,7 @@ mod tests {
         .await
         .unwrap();
         assert!(updated);
+        state.mcp_tool_cache.invalidate(&McpToolCache::cache_key(&tenant_id, "github-mcp", "create_issue"));
 
         let approved_response = call_authorize(
             state,
@@ -6497,6 +6540,8 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
@@ -6702,6 +6747,8 @@ mod tests {
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
             risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),

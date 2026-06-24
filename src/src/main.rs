@@ -1465,6 +1465,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(10_000);
     let replay_nonce_cache = routes::ReplayNonceCache::new(replay_nonce_cache_capacity);
 
+    // Bounded LRU cache for MCP server records (#1337)
+    let mcp_server_cache_capacity: usize = std::env::var("AEGIS_MCP_SERVER_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024);
+    let mcp_server_cache = routes::McpServerCache::new(mcp_server_cache_capacity);
+
+    // Bounded LRU cache for MCP tool records (#1337)
+    let mcp_tool_cache_capacity: usize = std::env::var("AEGIS_MCP_TOOL_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024);
+    let mcp_tool_cache = routes::McpToolCache::new(mcp_tool_cache_capacity);
+
     // #1513: TTL cache for per-tenant composite-risk-score weights, avoiding
     // a SQLite read on (effectively) every `/v1/authorize` call for a value
     // that only changes via the rare, operator-driven
@@ -1555,6 +1569,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         approval_callback_ip_limiter,
         approval_attempt_tracker,
         skill_cache,
+        mcp_server_cache,
+        mcp_tool_cache,
         replay_nonce_cache,
         risk_weight_cache,
         heartbeat_debouncer: heartbeat_debouncer.clone(),
@@ -2207,6 +2223,8 @@ mod tests {
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
+            mcp_server_cache: routes::McpServerCache::new(1024),
+            mcp_tool_cache: routes::McpToolCache::new(1024),
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
@@ -2500,6 +2518,8 @@ mod tests {
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
+            mcp_server_cache: routes::McpServerCache::new(1024),
+            mcp_tool_cache: routes::McpToolCache::new(1024),
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
@@ -2834,6 +2854,8 @@ mod tests {
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
+            mcp_server_cache: routes::McpServerCache::new(1024),
+            mcp_tool_cache: routes::McpToolCache::new(1024),
             risk_weight_cache: routes::RiskWeightsCache::new(std::time::Duration::from_secs(
                 routes::DEFAULT_RISK_WEIGHTS_CACHE_TTL_SECS,
             )),
