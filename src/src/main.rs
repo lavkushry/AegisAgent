@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
@@ -1569,9 +1569,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("AEGIS_ADMISSION_WEBHOOK_URL set: admission webhooks are enabled.");
     }
 
+    // #917: warm the in-memory tenant-existence bloom filter before serving
+    // traffic, so the fast "definitely absent" pre-check in
+    // `get_tenant_by_id` is active from the first request. Best-effort: a
+    // failure here just leaves the filter inert (every lookup falls
+    // through to the real query, identical to pre-#917 behavior).
+    let sql_storage = aegis_storage::sqlite::SqlDbStorage::new(pool);
+    if let Err(e) = sql_storage.warm_tenant_bloom_filter().await {
+        warn!("Failed to warm tenant bloom filter: {:?}", e);
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
-        storage: Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool)),
+        storage: Arc::new(sql_storage),
         policy_engine,
         events,
         metrics,

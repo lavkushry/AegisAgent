@@ -1,18 +1,39 @@
 use crate::db;
 use crate::db::DbPool;
+use crate::tenant_bloom::TenantBloomFilter;
 use crate::traits::StorageBackend;
 use aegis_api::models::*;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct SqlDbStorage {
     pub pool: DbPool,
+    tenant_bloom: Arc<TenantBloomFilter>,
 }
 
 impl SqlDbStorage {
     pub fn new(pool: DbPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            tenant_bloom: Arc::new(TenantBloomFilter::new()),
+        }
+    }
+
+    /// #917: populate the in-memory tenant-existence bloom filter from the
+    /// current `tenants` table. Call once at startup, before serving
+    /// traffic. Until called (or until the first `insert_tenant`), the
+    /// bloom pre-check in `get_tenant_by_id` stays inert — every lookup
+    /// falls through to the real query, identical to pre-#917 behavior.
+    pub async fn warm_tenant_bloom_filter(&self) -> Result<(), AegisError> {
+        let tenants = db::list_tenants(&self.pool)
+            .await
+            .map_err(AegisError::Database)?;
+        for tenant in tenants {
+            self.tenant_bloom.insert(&tenant.id);
+        }
+        Ok(())
     }
 }
 
@@ -997,6 +1018,12 @@ impl StorageBackend for SqlDbStorage {
 
     // Tenants
     async fn get_tenant_by_id(&self, tenant_id: &str) -> Result<Option<TenantRecord>, AegisError> {
+        // #917: a populated filter reporting "definitely absent" lets us
+        // skip the DB round trip entirely; a positive (real or false) falls
+        // through to the authoritative query unchanged.
+        if self.tenant_bloom.is_populated() && !self.tenant_bloom.might_contain(tenant_id) {
+            return Ok(None);
+        }
         db::get_tenant_by_id(&self.pool, tenant_id)
             .await
             .map_err(AegisError::Database)
@@ -1005,7 +1032,9 @@ impl StorageBackend for SqlDbStorage {
     async fn insert_tenant(&self, record: &TenantRecord) -> Result<(), AegisError> {
         db::insert_tenant(&self.pool, record)
             .await
-            .map_err(AegisError::Database)
+            .map_err(AegisError::Database)?;
+        self.tenant_bloom.insert(&record.id);
+        Ok(())
     }
 
     async fn list_tenants(&self) -> Result<Vec<TenantRecord>, AegisError> {
@@ -1555,5 +1584,87 @@ impl StorageBackend for SqlDbStorage {
 
     async fn close(&self) {
         self.pool.close().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_utils::setup_pool;
+
+    /// #917: before `warm_tenant_bloom_filter` (or any `insert_tenant`)
+    /// runs, the filter is inert — `get_tenant_by_id` must behave exactly
+    /// as it did before this change, for both a real and a nonexistent
+    /// tenant.
+    #[tokio::test]
+    async fn get_tenant_by_id_unaffected_before_filter_is_warmed() {
+        let pool = setup_pool("bloom_unwarmed").await;
+        let storage = SqlDbStorage::new(pool);
+        let record = TenantRecord {
+            id: "tenant_unwarmed".to_string(),
+            name: "Unwarmed Tenant".to_string(),
+            plan: "developer".to_string(),
+            created_at: Utc::now(),
+            auto_respond_enabled: false,
+            auto_rotate_token_on_leak_enabled: true,
+        };
+        db::insert_tenant(&storage.pool, &record).await.unwrap();
+
+        // insert_tenant (the free fn, bypassing the trait) doesn't touch
+        // the filter, so it's still unpopulated here.
+        assert!(!storage.tenant_bloom.is_populated());
+        assert_eq!(
+            storage
+                .get_tenant_by_id("tenant_unwarmed")
+                .await
+                .unwrap()
+                .map(|t| t.id),
+            Some("tenant_unwarmed".to_string())
+        );
+        assert!(storage
+            .get_tenant_by_id("nonexistent_tenant")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// #917 core regression guard: after warming, a tenant created via the
+    /// trait's `insert_tenant` is still found by `get_tenant_by_id` (proves
+    /// the bloom-positive path correctly falls through to the real query),
+    /// and a tenant ID that was never created is rejected via the bloom
+    /// pre-check's fast path, with the same `None` result as before.
+    #[tokio::test]
+    async fn get_tenant_by_id_correct_after_warming_and_insert() {
+        let pool = setup_pool("bloom_warmed").await;
+        let storage = SqlDbStorage::new(pool);
+        storage.warm_tenant_bloom_filter().await.unwrap();
+
+        let record = TenantRecord {
+            id: "tenant_warmed".to_string(),
+            name: "Warmed Tenant".to_string(),
+            plan: "developer".to_string(),
+            created_at: Utc::now(),
+            auto_respond_enabled: false,
+            auto_rotate_token_on_leak_enabled: true,
+        };
+        storage.insert_tenant(&record).await.unwrap();
+
+        assert!(storage.tenant_bloom.is_populated());
+        assert!(storage.tenant_bloom.might_contain("tenant_warmed"));
+        assert!(!storage.tenant_bloom.might_contain("nonexistent_tenant"));
+
+        assert_eq!(
+            storage
+                .get_tenant_by_id("tenant_warmed")
+                .await
+                .unwrap()
+                .map(|t| t.id),
+            Some("tenant_warmed".to_string())
+        );
+        assert!(storage
+            .get_tenant_by_id("nonexistent_tenant")
+            .await
+            .unwrap()
+            .is_none());
     }
 }
