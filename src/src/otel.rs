@@ -103,7 +103,23 @@ pub fn shutdown_tracer_provider(provider: &SdkTracerProvider) {
 /// site in `routes::authorize_decision::write_decision_and_audit` — an
 /// observable instrument can't backfill individual sample latencies, only a
 /// synchronous one can.
-pub fn init_meter_provider(metrics: Arc<SecurityMetrics>) -> Option<SdkMeterProvider> {
+///
+/// Also registers three tokio runtime gauges (#920), mirroring the
+/// introspection already exposed ad-hoc on `GET /debug/runtime` (#1160) —
+/// `tokio_workers_count`, `tokio_worker_poll_count_total`, and
+/// `tokio_scheduler_utilization_ratio` — so the same numbers are available
+/// in a real time-series backend via OTLP, not just on manual request.
+/// `runtime_handle` is a parameter rather than `tokio::runtime::Handle::current()`
+/// called internally, because the OTel SDK's periodic exporter invokes
+/// observable-instrument callbacks from its own background thread, not
+/// necessarily one inside this process's tokio runtime — capturing the
+/// handle once, at a call site known to be inside the runtime (`main.rs`),
+/// and cloning it into the callback closures avoids relying on ambient
+/// thread-local runtime context inside those callbacks.
+pub fn init_meter_provider(
+    metrics: Arc<SecurityMetrics>,
+    runtime_handle: tokio::runtime::Handle,
+) -> Option<SdkMeterProvider> {
     let endpoint = std::env::var("AEGIS_OTLP_ENDPOINT").ok()?;
 
     let exporter = match opentelemetry_otlp::MetricExporter::builder()
@@ -157,6 +173,54 @@ pub fn init_meter_provider(metrics: Arc<SecurityMetrics>) -> Option<SdkMeterProv
                     .load(Ordering::Relaxed),
                 &[],
             );
+        })
+        .build();
+
+    // #920: tokio runtime metrics, derived the same way as `GET
+    // /debug/runtime`'s `debug_runtime_handler` (#1160) — its own
+    // `start` instant, not shared with that handler's, since the two are
+    // independent consumers of the same underlying `RuntimeMetrics` API.
+    let start = std::time::Instant::now();
+
+    let workers_handle = runtime_handle.clone();
+    let _ = meter
+        .u64_observable_gauge("tokio_workers_count")
+        .with_description("Number of worker threads in the tokio runtime")
+        .with_callback(move |observer| {
+            observer.observe(workers_handle.metrics().num_workers() as u64, &[]);
+        })
+        .build();
+
+    let poll_count_handle = runtime_handle.clone();
+    let _ = meter
+        .u64_observable_counter("tokio_worker_poll_count_total")
+        .with_description("Cumulative count of task polls across all tokio worker threads")
+        .with_callback(move |observer| {
+            let m = poll_count_handle.metrics();
+            let total: u64 = (0..m.num_workers()).map(|i| m.worker_poll_count(i)).sum();
+            observer.observe(total, &[]);
+        })
+        .build();
+
+    let utilization_handle = runtime_handle;
+    let _ = meter
+        .f64_observable_gauge("tokio_scheduler_utilization_ratio")
+        .with_description(
+            "Fraction of total worker-thread time spent busy since this gauge was registered, in [0, 1]",
+        )
+        .with_callback(move |observer| {
+            let m = utilization_handle.metrics();
+            let workers_count = m.num_workers();
+            let elapsed = start.elapsed();
+            let utilization = if elapsed.is_zero() || workers_count == 0 {
+                0.0
+            } else {
+                let total_busy: std::time::Duration =
+                    (0..workers_count).map(|i| m.worker_total_busy_duration(i)).sum();
+                (total_busy.as_secs_f64() / (elapsed.as_secs_f64() * workers_count as f64))
+                    .clamp(0.0, 1.0)
+            };
+            observer.observe(utilization, &[]);
         })
         .build();
 
@@ -227,18 +291,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn init_meter_provider_is_noop_when_endpoint_unset() {
+    #[tokio::test]
+    async fn init_meter_provider_is_noop_when_endpoint_unset() {
         // #1287: same ambient-env-aware assertion as
         // `init_tracer_provider_is_noop_when_endpoint_unset` above, and for
         // the same reason — no test mutates AEGIS_OTLP_ENDPOINT globally.
+        // #920: now `#[tokio::test]` (was `#[test]`) because `init_meter_provider`
+        // takes a live `tokio::runtime::Handle` — constructing that argument
+        // via `Handle::current()` requires an active runtime, even though
+        // this early-return "unset" path never touches it.
         let metrics = Arc::new(SecurityMetrics::new());
-        let result = init_meter_provider(metrics);
+        let result = init_meter_provider(metrics, tokio::runtime::Handle::current());
         let endpoint_was_set = std::env::var("AEGIS_OTLP_ENDPOINT").is_ok();
         assert_eq!(result.is_some(), endpoint_was_set);
         if let Some(provider) = result {
             shutdown_meter_provider(&provider);
         }
+    }
+
+    /// Serializes the one test below that mutates the process-wide
+    /// `AEGIS_OTLP_ENDPOINT` env var (#920) — mirrors the
+    /// `STATEMENT_CACHE_ENV_LOCK`/`MMAP_SIZE_ENV_LOCK` precedent in
+    /// `aegis-storage` (#906, #919) for exactly this hazard.
+    static OTLP_ENDPOINT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// #920: registering the tokio runtime metrics gauges (workers count,
+    /// total poll count, scheduler utilization) must not panic — in
+    /// particular, capturing a `tokio::runtime::Handle` and querying
+    /// `.metrics()` from inside an OTel observable-instrument callback (which
+    /// may run on a thread the SDK manages itself, not this test's runtime)
+    /// must work. The endpoint doesn't need to be reachable —
+    /// `MetricExporter::builder().build()` only validates the URL, it
+    /// doesn't connect synchronously.
+    #[tokio::test]
+    async fn init_meter_provider_registers_runtime_gauges_without_panicking() {
+        let _guard = OTLP_ENDPOINT_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_OTLP_ENDPOINT", "http://127.0.0.1:1");
+
+        let metrics = Arc::new(SecurityMetrics::new());
+        let result = init_meter_provider(metrics, tokio::runtime::Handle::current());
+        assert!(result.is_some());
+
+        if let Some(provider) = result {
+            shutdown_meter_provider(&provider);
+        }
+        std::env::remove_var("AEGIS_OTLP_ENDPOINT");
     }
 
     #[test]
