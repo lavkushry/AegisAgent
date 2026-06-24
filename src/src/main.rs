@@ -1181,8 +1181,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // #1287: OTLP metrics export, gated on the same AEGIS_OTLP_ENDPOINT as
     // tracing above. `None` when unset — entirely inert, see
-    // `otel::init_meter_provider`'s doc comment.
-    let otel_meter_provider = otel::init_meter_provider(metrics.clone());
+    // `otel::init_meter_provider`'s doc comment. `Handle::current()` is
+    // valid here (#920) since `main` itself runs inside the tokio runtime.
+    let otel_meter_provider =
+        otel::init_meter_provider(metrics.clone(), tokio::runtime::Handle::current());
 
     let (events, events_rx) = events::EventSink::channel(events::DEFAULT_CAPACITY, metrics.clone());
     let drain_handle = tokio::spawn(events::drain(
