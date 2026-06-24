@@ -856,6 +856,10 @@ fn api_routes() -> Router<Arc<AppState>> {
             delete(routes::delete_webhook_subscription),
         )
         .route(
+            "/webhook_subscriptions/:id/reactivate",
+            post(routes::reactivate_webhook_subscription),
+        )
+        .route(
             "/detection_rules",
             get(routes::list_detection_rules).post(routes::upsert_detection_rule),
         )

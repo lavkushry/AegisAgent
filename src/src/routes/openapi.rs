@@ -54,6 +54,7 @@ use utoipa::OpenApi;
         list_webhook_subscriptions_api,
         create_webhook_subscription_api,
         delete_webhook_subscription_api,
+        reactivate_webhook_subscription_api,
         list_detection_rules_api,
         upsert_detection_rule_api,
         delete_detection_rule_api,
@@ -749,6 +750,20 @@ fn create_webhook_subscription_api() {}
     )
 )]
 fn delete_webhook_subscription_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/webhook_subscriptions/{id}/reactivate",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Webhook subscription ID")
+    ),
+    responses(
+        (status = 200, description = "Webhook subscription reactivated successfully"),
+        (status = 404, description = "Subscription not found", body = StatusError)
+    )
+)]
+fn reactivate_webhook_subscription_api() {}
 
 #[utoipa::path(
     get,
