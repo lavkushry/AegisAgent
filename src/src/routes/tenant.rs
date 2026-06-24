@@ -154,12 +154,25 @@ pub async fn create_api_key(
 
 /// GET /v1/api_keys — list the authenticated tenant's API keys.
 /// `key_hash` is included (it is not a secret), the plaintext key never is.
+/// #1142: cursor-paginated via the standard `?limit=&offset=&cursor=`
+/// convention — see `parse_cursor`/`paginated_response`.
 pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    match state.storage.list_api_keys(&tenant_id).await {
-        Ok(keys) => (StatusCode::OK, Json(keys)).into_response(),
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
+
+    match state
+        .storage
+        .list_api_keys_cursor(&tenant_id, limit, offset, cursor)
+        .await
+    {
+        Ok((keys, next_cursor)) => paginated_response(&keys, next_cursor),
         Err(e) => {
             error!("Failed to list API keys: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -605,10 +618,13 @@ mod tests {
         let (state, tenant_id, _) = setup_state("webhook_subscription_crud").await;
 
         // 1. List (initially empty)
-        let response =
-            list_webhook_subscriptions(State(state.clone()), TenantId(tenant_id.clone()))
-                .await
-                .into_response();
+        let response = list_webhook_subscriptions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
@@ -644,10 +660,13 @@ mod tests {
         );
 
         // 3. List (should contain 1 subscription)
-        let response_list =
-            list_webhook_subscriptions(State(state.clone()), TenantId(tenant_id.clone()))
-                .await
-                .into_response();
+        let response_list = list_webhook_subscriptions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response_list.status(), StatusCode::OK);
         let body_list = to_bytes(response_list.into_body(), usize::MAX)
             .await
@@ -677,14 +696,75 @@ mod tests {
         assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
 
         // 6. List (empty again)
-        let response_list2 = list_webhook_subscriptions(State(state), TenantId(tenant_id))
-            .await
-            .into_response();
+        let response_list2 = list_webhook_subscriptions(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let body_list2 = to_bytes(response_list2.into_body(), usize::MAX)
             .await
             .unwrap();
         let subs2: Vec<WebhookSubscriptionRecord> = serde_json::from_slice(&body_list2).unwrap();
         assert!(subs2.is_empty());
+    }
+
+    /// #1142: `GET /v1/webhook_subscriptions?limit=1` sets the
+    /// `x-next-cursor` response header end-to-end through the full route
+    /// handler when more rows exist than the requested page size, and a
+    /// follow-up request with `?cursor=<that value>` returns the remaining
+    /// row with no further `x-next-cursor`.
+    #[tokio::test]
+    async fn list_webhook_subscriptions_route_sets_next_cursor_header() {
+        let (state, tenant_id, _) = setup_state("webhook_subscriptions_cursor_header").await;
+        for i in 0..2 {
+            let _ = create_webhook_subscription(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Json(CreateWebhookSubscriptionRequest {
+                    url: format!("https://example.com/hook{i}"),
+                    secret: None,
+                    event_types: "alert,incident".to_string(),
+                    min_severity: None,
+                    format: None,
+                }),
+            )
+            .await
+            .into_response();
+        }
+
+        let response = list_webhook_subscriptions(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let next_cursor = response
+            .headers()
+            .get("x-next-cursor")
+            .expect("a second row exists beyond the page")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: Vec<WebhookSubscriptionRecord> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.len(), 1);
+
+        let response2 = list_webhook_subscriptions(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(Some(format!("limit=1&cursor={next_cursor}"))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response2.status(), StatusCode::OK);
+        assert!(response2.headers().get("x-next-cursor").is_none());
+        let body2 = to_bytes(response2.into_body(), usize::MAX).await.unwrap();
+        let page2: Vec<WebhookSubscriptionRecord> = serde_json::from_slice(&body2).unwrap();
+        assert_eq!(page2.len(), 1);
     }
 
     /// #1584: a `dead` webhook subscription (>= 10 consecutive delivery
@@ -774,9 +854,13 @@ mod tests {
         let (state, tenant_id, _) = setup_state("api_key_crud").await;
 
         // 1. List (initially empty)
-        let response = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response = list_api_keys(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let keys: Vec<ApiKeyRecord> = serde_json::from_slice(&body).unwrap();
@@ -803,9 +887,13 @@ mod tests {
         assert!(!plaintext_key.is_empty());
 
         // 3. List (should contain 1 key, hashed, status active, no plaintext)
-        let response_list = list_api_keys(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response_list = list_api_keys(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let body_list = to_bytes(response_list.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -837,9 +925,13 @@ mod tests {
         assert_eq!(response_revoke_404.status(), StatusCode::NOT_FOUND);
 
         // 6. List shows status revoked
-        let response_list2 = list_api_keys(State(state), TenantId(tenant_id))
-            .await
-            .into_response();
+        let response_list2 = list_api_keys(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let body_list2 = to_bytes(response_list2.into_body(), usize::MAX)
             .await
             .unwrap();

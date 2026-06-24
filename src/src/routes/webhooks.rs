@@ -465,12 +465,25 @@ pub async fn create_webhook_subscription(
 }
 
 /// TASK-0092 (#938): list this tenant's webhook subscriptions.
+/// #1142: cursor-paginated via the standard `?limit=&offset=&cursor=`
+/// convention — see `parse_cursor`/`paginated_response`.
 pub async fn list_webhook_subscriptions(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    match state.storage.list_webhook_subscriptions(&tenant_id).await {
-        Ok(subs) => (StatusCode::OK, Json(subs)).into_response(),
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
+
+    match state
+        .storage
+        .list_webhook_subscriptions_cursor(&tenant_id, limit, offset, cursor)
+        .await
+    {
+        Ok((subs, next_cursor)) => paginated_response(&subs, next_cursor),
         Err(e) => {
             error!("Failed to list webhook subscriptions: {:?}", e);
             StatusError::internal("Database error").into_response()
