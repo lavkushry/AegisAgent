@@ -306,27 +306,27 @@ export default function DetectionsTab() {
       case "high":
         return {
           badge: "bg-red-500/20 border border-red-500/40 text-red-400",
-          card: "border-l-4 border-l-red-500 bg-[#1e1b1b]/40 hover:bg-[#251e1e]/50 border-r border-y border-[#334155]"
+          card: "border-l-4 border-l-red-500 bg-[var(--surface-panel)] hover:bg-[var(--surface-elevated)] border-r border-y border-[var(--border-default)]"
         };
       case "medium":
         return {
           badge: "bg-amber-500/20 border border-amber-500/40 text-amber-400",
-          card: "border-l-4 border-l-amber-500 bg-[#1f1e1a]/40 hover:bg-[#27241e]/50 border-r border-y border-[#334155]"
+          card: "border-l-4 border-l-amber-500 bg-[var(--surface-panel)] hover:bg-[var(--surface-elevated)] border-r border-y border-[var(--border-default)]"
         };
       case "low":
         return {
           badge: "bg-yellow-500/20 border border-yellow-500/40 text-yellow-400",
-          card: "border-l-4 border-l-yellow-500 bg-[#1f1f1a]/40 hover:bg-[#27271e]/50 border-r border-y border-[#334155]"
+          card: "border-l-4 border-l-yellow-500 bg-[var(--surface-panel)] hover:bg-[var(--surface-elevated)] border-r border-y border-[var(--border-default)]"
         };
       case "info":
         return {
           badge: "bg-blue-500/20 border border-blue-500/40 text-blue-400",
-          card: "border-l-4 border-l-blue-500 bg-[#161c2a]/40 hover:bg-[#1a2336]/50 border-r border-y border-[#334155]"
+          card: "border-l-4 border-l-blue-500 bg-[var(--surface-panel)] hover:bg-[var(--surface-elevated)] border-r border-y border-[var(--border-default)]"
         };
       default:
         return {
           badge: "bg-slate-500/20 border border-slate-500/40 text-slate-400",
-          card: "border-l-4 border-l-slate-500 bg-[#111827]/40 hover:bg-[#1f2937]/50 border-r border-y border-[#334155]"
+          card: "border-l-4 border-l-slate-500 bg-[var(--surface-panel)]/40 hover:bg-[var(--border-default)]/50 border-r border-y border-[var(--border-default)]"
         };
     }
   };
@@ -334,13 +334,13 @@ export default function DetectionsTab() {
   return (
     <div className="space-y-6">
       {/* Sub-tab Pill navigation */}
-      <div className="flex gap-2 bg-[#0b0f19] p-1 rounded-lg w-fit border border-[#1f2937]">
+      <div className="flex gap-2 bg-[var(--surface-app)] p-1 rounded-lg w-fit border border-[var(--border-default)]">
         <button
           onClick={() => { setSubTab("alerts"); setFormError(null); setFormSuccess(null); }}
           className={`px-4 py-1.5 rounded-md text-xs font-semibold tracking-wide transition-all cursor-pointer flex items-center gap-2 ${
             subTab === "alerts"
-              ? "bg-indigo-600 text-white font-bold"
-              : "text-[#94a3b8] hover:text-[#e2e8f0]"
+              ? "bg-[var(--brand)] text-white font-bold"
+              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
           }`}
         >
           <ShieldAlert size={14} />
@@ -355,8 +355,8 @@ export default function DetectionsTab() {
           onClick={() => { setSubTab("rules"); setFormError(null); setFormSuccess(null); }}
           className={`px-4 py-1.5 rounded-md text-xs font-semibold tracking-wide transition-all cursor-pointer flex items-center gap-2 ${
             subTab === "rules"
-              ? "bg-indigo-600 text-white font-bold"
-              : "text-[#94a3b8] hover:text-[#e2e8f0]"
+              ? "bg-[var(--brand)] text-white font-bold"
+              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
           }`}
         >
           <Terminal size={14} />
@@ -368,23 +368,23 @@ export default function DetectionsTab() {
       {subTab === "alerts" && (
         <div className="space-y-4 animate-fadeIn">
           {/* Filters Bar */}
-          <div className="flex flex-col md:flex-row gap-3 items-center bg-[#111827] p-3 rounded-lg border border-[#334155]">
+          <div className="flex flex-col md:flex-row gap-3 items-center bg-[var(--surface-panel)] p-3 rounded-lg border border-[var(--border-default)]">
             <div className="relative flex-1 w-full">
-              <Search className="absolute left-3 top-2.5 text-[#64748b]" size={16} />
+              <Search className="absolute left-3 top-2.5 text-[var(--text-muted)]" size={16} />
               <input
                 type="text"
                 value={alertSearch}
                 onChange={(e) => setAlertSearch(e.target.value)}
                 placeholder="Search alerts by rule, agent ID, summary..."
-                className="w-full bg-[#0f172a] border border-[#334155] rounded-md pl-10 pr-4 py-2 text-xs text-[#e2e8f0] focus:border-indigo-500 focus:outline-none"
+                className="w-full bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md pl-10 pr-4 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none"
               />
             </div>
             <div className="flex items-center gap-2 w-full md:w-auto">
-              <Filter className="text-[#64748b] shrink-0" size={14} />
+              <Filter className="text-[var(--text-muted)] shrink-0" size={14} />
               <select
                 value={alertSeverityFilter}
                 onChange={(e) => setAlertSeverityFilter(e.target.value)}
-                className="bg-[#0f172a] border border-[#334155] rounded-md px-3 py-2 text-xs text-[#e2e8f0] focus:border-indigo-500 focus:outline-none w-full md:w-40"
+                className="bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md px-3 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none w-full md:w-40"
               >
                 <option value="all">All Severities</option>
                 <option value="high">High</option>
@@ -397,19 +397,19 @@ export default function DetectionsTab() {
 
           {/* Alerts List */}
           <div className="panel-card space-y-3">
-            <h3 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider mb-2">
+            <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">
               Triggered Detections Log
             </h3>
 
             {loadingAlerts ? (
-              <p className="text-xs text-[#64748b] text-center py-10">Fetching active alerts...</p>
+              <p className="text-xs text-[var(--text-muted)] text-center py-10">Fetching active alerts...</p>
             ) : alertsError ? (
               <div className="flex items-center gap-2 text-red-400 bg-red-950/20 border border-red-500/20 p-4 rounded-lg text-xs">
                 <AlertCircle size={16} />
                 <span>Error fetching alerts: {(alertsError as any).message}</span>
               </div>
             ) : filteredAlerts.length === 0 ? (
-              <p className="text-xs text-[#64748b] text-center py-12">No active alerts matched the filter conditions.</p>
+              <p className="text-xs text-[var(--text-muted)] text-center py-12">No active alerts matched the filter conditions.</p>
             ) : (
               <div className="space-y-2">
                 {filteredAlerts.map((alert: any) => {
@@ -419,7 +419,7 @@ export default function DetectionsTab() {
                   return (
                     <div
                       key={alert.alert_id}
-                      className={`rounded-lg overflow-hidden border border-[#334155] transition-all ${severityStyle.card}`}
+                      className={`rounded-lg overflow-hidden border border-[var(--border-default)] transition-all ${severityStyle.card}`}
                     >
                       <div
                         onClick={() => setExpandedAlertId(isExpanded ? null : alert.alert_id)}
@@ -430,44 +430,44 @@ export default function DetectionsTab() {
                             {alert.severity.toUpperCase()}
                           </span>
                           <div className="flex flex-col">
-                            <span className="text-xs font-mono font-bold text-indigo-400">
+                            <span className="text-xs font-mono font-bold text-[var(--brand)]">
                               {alert.rule}
                             </span>
-                            <span className="text-[10px] text-[#64748b] mt-0.5 font-mono">
+                            <span className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">
                               Agent: {alert.agent_id} &middot; Occurred: {new Date(alert.occurred_at).toLocaleString()}
                             </span>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 text-xs font-medium text-[#e2e8f0]">
-                          <span className="truncate max-w-[280px] md:max-w-md text-[#94a3b8] italic">
+                        <div className="flex items-center gap-2 text-xs font-medium text-[var(--text-primary)]">
+                          <span className="truncate max-w-[280px] md:max-w-md text-[var(--text-secondary)] italic">
                             {alert.summary}
                           </span>
-                          {isExpanded ? <ChevronUp size={16} className="text-[#64748b]" /> : <ChevronDown size={16} className="text-[#64748b]" />}
+                          {isExpanded ? <ChevronUp size={16} className="text-[var(--text-muted)]" /> : <ChevronDown size={16} className="text-[var(--text-muted)]" />}
                         </div>
                       </div>
 
                       {/* Expanded alert details */}
                       {isExpanded && (
-                        <div className="border-t border-[#1f2937] bg-[#0b0f19] p-4 text-xs font-mono space-y-3">
+                        <div className="border-t border-[var(--border-default)] bg-[var(--surface-app)] p-4 text-xs font-mono space-y-3">
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                              <span className="text-[#64748b] block text-[10px] uppercase font-sans font-bold">Alert ID</span>
-                              <span className="text-[#e2e8f0] select-all">{alert.alert_id}</span>
+                              <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans font-bold">Alert ID</span>
+                              <span className="text-[var(--text-primary)] select-all">{alert.alert_id}</span>
                             </div>
                             <div>
-                              <span className="text-[#64748b] block text-[10px] uppercase font-sans font-bold">Source Event ID</span>
-                              <span className="text-[#e2e8f0] select-all">{alert.source_event_id}</span>
+                              <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans font-bold">Source Event ID</span>
+                              <span className="text-[var(--text-primary)] select-all">{alert.source_event_id}</span>
                             </div>
                           </div>
                           <div>
-                            <span className="text-[#64748b] block text-[10px] uppercase font-sans font-bold mb-1">Full Summary</span>
-                            <p className="text-[#e2e8f0] font-sans leading-relaxed bg-[#0f172a] p-2.5 rounded border border-[#1f2937]">
+                            <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans font-bold mb-1">Full Summary</span>
+                            <p className="text-[var(--text-primary)] font-sans leading-relaxed bg-[var(--surface-app)] p-2.5 rounded border border-[var(--border-default)]">
                               {alert.summary}
                             </p>
                           </div>
                           <div>
-                            <span className="text-[#64748b] block text-[10px] uppercase font-sans font-bold mb-1">Raw Alert Record</span>
-                            <pre className="bg-[#0f172a] text-[#818cf8] p-3 rounded overflow-x-auto text-[11px] border border-[#1f2937] max-h-60 custom-scrollbar">
+                            <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans font-bold mb-1">Raw Alert Record</span>
+                            <pre className="bg-[var(--surface-app)] text-[var(--brand)] p-3 rounded overflow-x-auto text-[11px] border border-[var(--border-default)] max-h-60 custom-scrollbar">
                               {JSON.stringify(alert, null, 2)}
                             </pre>
                           </div>
@@ -487,22 +487,22 @@ export default function DetectionsTab() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fadeIn">
           {/* Left Column: Catalogue */}
           <div className="lg:col-span-4 panel-card flex flex-col space-y-4">
-            <div className="flex justify-between items-center border-b border-[#1f2937] pb-3">
-              <h3 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider flex items-center gap-1.5">
-                <Terminal size={14} className="text-indigo-400" /> Rules Catalogue
+            <div className="flex justify-between items-center border-b border-[var(--border-default)] pb-3">
+              <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1.5">
+                <Terminal size={14} className="text-[var(--brand)]" /> Rules Catalogue
               </h3>
               <button
                 onClick={handleCreateNew}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] px-2.5 py-1 rounded transition-colors flex items-center gap-1 cursor-pointer"
+                className="bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-white font-bold text-[10px] px-2.5 py-1 rounded transition-colors flex items-center gap-1 cursor-pointer"
               >
                 <Plus size={12} /> Add Rule
               </button>
             </div>
 
             {loadingEffective || loadingCustom ? (
-              <p className="text-xs text-[#64748b] text-center py-10">Loading catalog...</p>
+              <p className="text-xs text-[var(--text-muted)] text-center py-10">Loading catalog...</p>
             ) : catalog.length === 0 ? (
-              <p className="text-xs text-[#64748b] text-center py-10">No rules registered.</p>
+              <p className="text-xs text-[var(--text-muted)] text-center py-10">No rules registered.</p>
             ) : (
               <div className="space-y-2 overflow-y-auto max-h-[600px] pr-1 custom-scrollbar">
                 {catalog.map((rule) => {
@@ -518,12 +518,12 @@ export default function DetectionsTab() {
                       }}
                       className={`p-3 rounded-lg border cursor-pointer select-none transition-all flex flex-col gap-1.5 ${
                         isSelected
-                          ? "bg-[#1f2937]/80 border-indigo-500 ring-1 ring-indigo-500"
-                          : "bg-[#0b0f19]/40 border-[#1f2937] hover:border-[#334155]"
+                          ? "bg-[var(--border-default)]/80 border-[var(--border-active)] ring-1 ring-[var(--border-focus)]"
+                          : "bg-[var(--surface-app)]/40 border-[var(--border-default)] hover:border-[var(--border-default)]"
                       }`}
                     >
                       <div className="flex justify-between items-center">
-                        <span className="text-xs font-mono font-bold text-indigo-400 truncate max-w-[170px]">
+                        <span className="text-xs font-mono font-bold text-[var(--brand)] truncate max-w-[170px]">
                           {rule.rule_key}
                         </span>
                         <div className="flex items-center gap-1.5">
@@ -533,13 +533,13 @@ export default function DetectionsTab() {
                         </div>
                       </div>
 
-                      <span className="text-[11px] text-[#94a3b8] line-clamp-1 italic">
+                      <span className="text-[11px] text-[var(--text-secondary)] line-clamp-1 italic">
                         {rule.name}
                       </span>
 
-                      <div className="flex justify-between items-center text-[10px] text-[#64748b] font-mono mt-1 border-t border-[#1f2937]/50 pt-1.5">
+                      <div className="flex justify-between items-center text-[10px] text-[var(--text-muted)] font-mono mt-1 border-t border-[var(--border-default)]/50 pt-1.5">
                         <span className={`uppercase font-sans font-bold ${
-                          rule.source === "default" ? "text-indigo-400" : "text-amber-500"
+                          rule.source === "default" ? "text-[var(--brand)]" : "text-amber-500"
                         }`}>
                           {rule.source}
                         </span>
@@ -581,15 +581,15 @@ export default function DetectionsTab() {
             {/* Selected Rule Panel */}
             {selectedRule || isCreatingNew ? (
               <div className="panel-card space-y-6">
-                <div className="flex justify-between items-center border-b border-[#1f2937] pb-3 flex-wrap gap-2">
+                <div className="flex justify-between items-center border-b border-[var(--border-default)] pb-3 flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-[#e2e8f0] font-mono">
+                    <h3 className="text-sm font-bold text-[var(--text-primary)] font-mono">
                       {isCreatingNew ? "New Custom Detection Rule" : selectedRule?.rule_key}
                     </h3>
                     {!isCreatingNew && (
                       <span className={`px-2 py-0.5 text-[10px] rounded uppercase font-bold ${
                         selectedRule?.source === "default"
-                          ? "bg-indigo-500/10 border border-indigo-500/20 text-indigo-400"
+                          ? "bg-[var(--brand)]/10 border border-[var(--border-active)]/20 text-[var(--brand)]"
                           : "bg-amber-500/10 border border-amber-500/20 text-amber-400"
                       }`}>
                         {selectedRule?.source}
@@ -600,7 +600,7 @@ export default function DetectionsTab() {
                     {!isEditing && selectedRule?.source === "custom" && (
                       <button
                         onClick={() => setIsEditing(true)}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-1.5 rounded transition-colors cursor-pointer"
+                        className="bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-white font-bold text-xs px-4 py-1.5 rounded transition-colors cursor-pointer"
                       >
                         Edit Rule
                       </button>
@@ -614,7 +614,7 @@ export default function DetectionsTab() {
                             setIsCreatingNew(false);
                             setFormError(null);
                           }}
-                          className="bg-[#1f2937] hover:bg-[#334155] text-[#e2e8f0] font-bold text-xs px-4 py-1.5 rounded transition-colors cursor-pointer"
+                          className="bg-[var(--border-default)] hover:bg-[var(--border-default)] text-[var(--text-primary)] font-bold text-xs px-4 py-1.5 rounded transition-colors cursor-pointer"
                         >
                           Cancel
                         </button>
@@ -643,38 +643,38 @@ export default function DetectionsTab() {
                 <form onSubmit={handleSave} className="space-y-4 text-xs">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="text-[#64748b] font-bold block mb-1">Rule Key</label>
+                      <label className="text-[var(--text-muted)] font-bold block mb-1">Rule Key</label>
                       <input
                         type="text"
                         value={formRuleKey}
                         onChange={(e) => setFormRuleKey(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))}
                         disabled={!isCreatingNew}
                         placeholder="e.g. mutating_critical_action"
-                        className="w-full bg-[#0f172a] border border-[#334155] rounded-md px-3 py-2 text-xs text-[#e2e8f0] focus:border-indigo-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed font-mono"
+                        className="w-full bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md px-3 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed font-mono"
                       />
-                      <span className="text-[10px] text-[#64748b] mt-0.5 block">Unique identifier. Lowercase, numbers, underscores only.</span>
+                      <span className="text-[10px] text-[var(--text-muted)] mt-0.5 block">Unique identifier. Lowercase, numbers, underscores only.</span>
                     </div>
                     <div>
-                      <label className="text-[#64748b] font-bold block mb-1">Rule Name (Fired Alert Rule Value)</label>
+                      <label className="text-[var(--text-muted)] font-bold block mb-1">Rule Name (Fired Alert Rule Value)</label>
                       <input
                         type="text"
                         value={formName}
                         onChange={(e) => setFormName(e.target.value)}
                         disabled={!isEditing}
                         placeholder="e.g. confused_deputy_block"
-                        className="w-full bg-[#0f172a] border border-[#334155] rounded-md px-3 py-2 text-xs text-[#e2e8f0] focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+                        className="w-full bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md px-3 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none disabled:opacity-50"
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="text-[#64748b] font-bold block mb-1">Severity</label>
+                      <label className="text-[var(--text-muted)] font-bold block mb-1">Severity</label>
                       <select
                         value={formSeverity}
                         onChange={(e) => setFormSeverity(e.target.value)}
                         disabled={!isEditing}
-                        className="w-full bg-[#0f172a] border border-[#334155] rounded-md px-3 py-2 text-xs text-[#e2e8f0] focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+                        className="w-full bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md px-3 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none disabled:opacity-50"
                       >
                         <option value="high">High</option>
                         <option value="medium">Medium</option>
@@ -683,13 +683,13 @@ export default function DetectionsTab() {
                       </select>
                     </div>
                     <div className="flex items-center pt-5">
-                      <label className="flex items-center gap-2 font-bold text-[#e2e8f0] cursor-pointer select-none">
+                      <label className="flex items-center gap-2 font-bold text-[var(--text-primary)] cursor-pointer select-none">
                         <input
                           type="checkbox"
                           checked={formEnabled}
                           onChange={(e) => setFormEnabled(e.target.checked)}
                           disabled={!isEditing}
-                          className="h-4 w-4 rounded border-[#334155] bg-[#0f172a] text-indigo-600 focus:ring-indigo-500 disabled:opacity-50"
+                          className="h-4 w-4 rounded border-[var(--border-default)] bg-[var(--surface-app)] text-[var(--brand)] focus:ring-[var(--border-focus)] disabled:opacity-50"
                         />
                         <span>Enabled / Evaluate Rule Live</span>
                       </label>
@@ -697,22 +697,22 @@ export default function DetectionsTab() {
                   </div>
 
                   <div>
-                    <label className="text-[#64748b] font-bold block mb-1">Summary Template</label>
+                    <label className="text-[var(--text-muted)] font-bold block mb-1">Summary Template</label>
                     <input
                       type="text"
                       value={formSummaryTemplate}
                       onChange={(e) => setFormSummaryTemplate(e.target.value)}
                       disabled={!isEditing}
                       placeholder="Action {tool}.{action} denied: triggered by untrusted provenance"
-                      className="w-full bg-[#0f172a] border border-[#334155] rounded-md px-3 py-2 text-xs text-[#e2e8f0] focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+                      className="w-full bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md px-3 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none disabled:opacity-50"
                     />
-                    <span className="text-[10px] text-[#64748b] mt-0.5 block">Supported placeholders: {"{tool}"}, {"{action}"}, {"{decision}"}, {"{reason}"}, {"{agent_id}"}, {"{tenant_id}"}.</span>
+                    <span className="text-[10px] text-[var(--text-muted)] mt-0.5 block">Supported placeholders: {"{tool}"}, {"{action}"}, {"{decision}"}, {"{reason}"}, {"{agent_id}"}, {"{tenant_id}"}.</span>
                   </div>
 
                   <div>
-                    <label className="text-[#64748b] font-bold block mb-1">Rule Condition (YAML Specification)</label>
+                    <label className="text-[var(--text-muted)] font-bold block mb-1">Rule Condition (YAML Specification)</label>
                     {selectedRule?.source === "default" ? (
-                      <pre className="bg-[#0f172a] text-[#94a3b8] p-3 rounded border border-[#1f2937] font-mono text-[11px] overflow-x-auto">
+                      <pre className="bg-[var(--surface-app)] text-[var(--text-secondary)] p-3 rounded border border-[var(--border-default)] font-mono text-[11px] overflow-x-auto">
                         {formCondition}
                       </pre>
                     ) : (
@@ -723,12 +723,12 @@ export default function DetectionsTab() {
                           onChange={(e) => setFormCondition(e.target.value)}
                           disabled={!isEditing}
                           placeholder="event_type: authorize_decision&#10;decision: deny&#10;mutating: true&#10;context_trust: [untrusted_external, malicious_suspected]"
-                          className="w-full bg-[#0f172a] border border-[#334155] rounded-md p-3 font-mono text-[11px] text-[#e2e8f0] focus:border-indigo-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed leading-relaxed custom-scrollbar"
+                          className="w-full bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md p-3 font-mono text-[11px] text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed leading-relaxed custom-scrollbar"
                         />
                       </div>
                     )}
                     {isEditing && (
-                      <span className="text-[10px] text-[#64748b] mt-0.5 block">
+                      <span className="text-[10px] text-[var(--text-muted)] mt-0.5 block">
                         Specify filters (event_type, decision, tool, action, context_trust: [...], mutating: true/false, min_risk_score, max_risk_score, matched_policy_contains: [...]) using standard YAML block format.
                       </span>
                     )}
@@ -737,38 +737,38 @@ export default function DetectionsTab() {
 
                 {/* Backtesting Sub-panel */}
                 {!isCreatingNew && (
-                  <div className="border-t border-[#1f2937] pt-5 space-y-4">
+                  <div className="border-t border-[var(--border-default)] pt-5 space-y-4">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                       <div>
-                        <h4 className="text-xs font-bold text-[#e2e8f0] flex items-center gap-1.5">
-                          <Activity size={14} className="text-indigo-400" /> Historical Decision Backtesting
+                        <h4 className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+                          <Activity size={14} className="text-[var(--brand)]" /> Historical Decision Backtesting
                         </h4>
-                        <p className="text-[11px] text-[#64748b] mt-0.5">Evaluate rule matches over historical decisions in memory without affecting live pipelines.</p>
+                        <p className="text-[11px] text-[var(--text-muted)] mt-0.5">Evaluate rule matches over historical decisions in memory without affecting live pipelines.</p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-1">
-                          <span className="text-[10px] text-[#64748b] font-mono">From:</span>
+                          <span className="text-[10px] text-[var(--text-muted)] font-mono">From:</span>
                           <input
                             type="datetime-local"
                             value={backtestFrom}
                             onChange={(e) => setBacktestFrom(e.target.value)}
-                            className="bg-[#0f172a] border border-[#334155] rounded px-2 py-1 text-[10px] text-[#e2e8f0] focus:outline-none"
+                            className="bg-[var(--surface-app)] border border-[var(--border-default)] rounded px-2 py-1 text-[10px] text-[var(--text-primary)] focus:outline-none"
                           />
                         </div>
                         <div className="flex items-center gap-1">
-                          <span className="text-[10px] text-[#64748b] font-mono">To:</span>
+                          <span className="text-[10px] text-[var(--text-muted)] font-mono">To:</span>
                           <input
                             type="datetime-local"
                             value={backtestTo}
                             onChange={(e) => setBacktestTo(e.target.value)}
-                            className="bg-[#0f172a] border border-[#334155] rounded px-2 py-1 text-[10px] text-[#e2e8f0] focus:outline-none"
+                            className="bg-[var(--surface-app)] border border-[var(--border-default)] rounded px-2 py-1 text-[10px] text-[var(--text-primary)] focus:outline-none"
                           />
                         </div>
                         <button
                           type="button"
                           onClick={handleRunBacktest}
                           disabled={isBacktesting}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] px-3.5 py-1.5 rounded transition-colors flex items-center gap-1 font-bold disabled:opacity-50 cursor-pointer"
+                          className="bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-white text-[10px] px-3.5 py-1.5 rounded transition-colors flex items-center gap-1 font-bold disabled:opacity-50 cursor-pointer"
                         >
                           <Play size={10} /> {isBacktesting ? "Simulating..." : "Run Simulator"}
                         </button>
@@ -784,21 +784,21 @@ export default function DetectionsTab() {
 
                     {/* Backtest Result Output */}
                     {backtestResult && (
-                      <div className="bg-[#0f172a]/70 rounded-lg p-4 border border-[#1f2937] space-y-4 animate-fadeIn">
+                      <div className="bg-[var(--surface-app)]/70 rounded-lg p-4 border border-[var(--border-default)] space-y-4 animate-fadeIn">
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
-                          <div className="bg-[#111827]/80 rounded p-3 border border-[#1f2937]/75">
-                            <span className="text-[9px] uppercase font-bold text-[#64748b] tracking-wider block">Decisions Scanned</span>
-                            <span className="text-lg font-extrabold text-[#e2e8f0]">{backtestResult.decisions_scanned}</span>
+                          <div className="bg-[var(--surface-panel)]/80 rounded p-3 border border-[var(--border-default)]/75">
+                            <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">Decisions Scanned</span>
+                            <span className="text-lg font-extrabold text-[var(--text-primary)]">{backtestResult.decisions_scanned}</span>
                           </div>
-                          <div className="bg-[#111827]/80 rounded p-3 border border-[#1f2937]/75">
-                            <span className="text-[9px] uppercase font-bold text-[#64748b] tracking-wider block">Match Count</span>
+                          <div className="bg-[var(--surface-panel)]/80 rounded p-3 border border-[var(--border-default)]/75">
+                            <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">Match Count</span>
                             <span className={`text-lg font-extrabold ${
                               backtestResult.match_count > 0 ? "text-amber-400" : "text-green-400"
                             }`}>{backtestResult.match_count}</span>
                           </div>
-                          <div className="bg-[#111827]/80 rounded p-3 border border-[#1f2937]/75">
-                            <span className="text-[9px] uppercase font-bold text-[#64748b] tracking-wider block">Est. Daily Volume</span>
-                            <span className="text-lg font-extrabold text-indigo-400">
+                          <div className="bg-[var(--surface-panel)]/80 rounded p-3 border border-[var(--border-default)]/75">
+                            <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">Est. Daily Volume</span>
+                            <span className="text-lg font-extrabold text-[var(--brand)]">
                               {Number(backtestResult.estimated_daily_alert_volume).toFixed(3)} / day
                             </span>
                           </div>
@@ -806,12 +806,12 @@ export default function DetectionsTab() {
 
                         {backtestResult.matched_decision_ids && backtestResult.matched_decision_ids.length > 0 ? (
                           <div className="space-y-1.5">
-                            <span className="text-[10px] uppercase font-bold text-[#64748b] tracking-wider block">Matched Decision IDs</span>
-                            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto custom-scrollbar bg-[#111827]/50 p-2.5 rounded border border-[#1f2937]">
+                            <span className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">Matched Decision IDs</span>
+                            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto custom-scrollbar bg-[var(--surface-panel)]/50 p-2.5 rounded border border-[var(--border-default)]">
                               {backtestResult.matched_decision_ids.map((id: string) => (
                                 <span
                                   key={id}
-                                  className="px-2 py-0.5 bg-[#0f172a] text-indigo-300 rounded font-mono text-[10px] border border-[#1f2937] hover:border-indigo-500 cursor-default select-all"
+                                  className="px-2 py-0.5 bg-[var(--surface-app)] text-[var(--brand)] rounded font-mono text-[10px] border border-[var(--border-default)] hover:border-[var(--border-active)] cursor-default select-all"
                                 >
                                   {id}
                                 </span>
@@ -819,7 +819,7 @@ export default function DetectionsTab() {
                             </div>
                           </div>
                         ) : (
-                          <p className="text-[11px] text-[#64748b] italic text-center py-2">
+                          <p className="text-[11px] text-[var(--text-muted)] italic text-center py-2">
                             Simulator scanned decisions cleanly. No matches detected.
                           </p>
                         )}
@@ -829,9 +829,9 @@ export default function DetectionsTab() {
                 )}
               </div>
             ) : (
-              <div className="panel-card flex flex-col items-center justify-center text-center py-20 text-[#64748b]">
-                <ShieldAlert size={36} className="text-[#334155] mb-2" />
-                <h4 className="text-xs font-bold uppercase tracking-wider text-[#94a3b8]">Select a Rule</h4>
+              <div className="panel-card flex flex-col items-center justify-center text-center py-20 text-[var(--text-muted)]">
+                <ShieldAlert size={36} className="text-[var(--border-default)] mb-2" />
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)]">Select a Rule</h4>
                 <p className="text-[11px] max-w-sm mt-1">Select a default built-in or tenant custom rule from the catalog to view conditions, modify parameters, or run a historical backtest simulation.</p>
               </div>
             )}

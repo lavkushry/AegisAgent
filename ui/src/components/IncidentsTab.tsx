@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { getIncidents, getIncidentDetail, fetchFromGateway, getIncidentGraph, verifyReceipt } from "../app/api";
 import { AlertOctagon, CheckSquare, FileText, Download, ShieldCheck, HelpCircle, Activity, User, ShieldAlert, AlertTriangle } from "lucide-react";
+import SeverityTag from "./security/SeverityTag";
 
 export default function IncidentsTab() {
   const { gatewayUrl, bearerToken } = useAppStore();
@@ -109,31 +110,18 @@ export default function IncidentsTab() {
     }
   };
 
-  const getSeverityColor = (sev: string) => {
-    switch (String(sev).toLowerCase()) {
-      case "critical":
-        return "text-red-500 bg-red-950/20 border-red-500/30";
-      case "high":
-        return "text-orange-500 bg-orange-950/20 border-orange-500/30";
-      case "medium":
-        return "text-amber-500 bg-amber-950/20 border-amber-500/30";
-      default:
-        return "text-indigo-400 bg-indigo-950/20 border-indigo-500/30";
-    }
-  };
-
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Incidents List (Left Side) */}
       <div className="panel-card lg:col-span-1 space-y-4">
-        <h3 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider">
+        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">
           Security Incidents Case List
         </h3>
         
         {isIncidentsLoading ? (
-          <p className="text-xs text-[#64748b] text-center py-8">Loading incidents list...</p>
+          <p className="text-xs text-[var(--text-muted)] text-center py-8">Loading incidents list...</p>
         ) : !incidents || incidents.length === 0 ? (
-          <p className="text-xs text-[#64748b] text-center py-8">No incidents recorded.</p>
+          <p className="text-xs text-[var(--text-muted)] text-center py-8">No incidents recorded.</p>
         ) : (
           <div className="space-y-2 overflow-y-auto max-h-[500px] custom-scrollbar">
             {incidents.map((inc: any) => (
@@ -145,21 +133,19 @@ export default function IncidentsTab() {
                 }}
                 className={`p-3 border rounded-lg cursor-pointer transition-colors text-xs ${
                   selectedIncidentId === inc.id
-                    ? "bg-indigo-600/10 border-indigo-500"
-                    : "bg-[#0f172a]/40 border-[#1f2937] hover:border-[#334155]"
+                    ? "bg-[var(--brand)]/10 border-[var(--border-active)]"
+                    : "bg-[var(--surface-app)]/40 border-[var(--border-default)] hover:border-[var(--border-default)]"
                 }`}
               >
                 <div className="flex justify-between items-start gap-2">
-                  <span className={`px-2 py-0.5 rounded border text-[10px] font-bold ${getSeverityColor(inc.severity)}`}>
-                    {inc.severity.toUpperCase()}
-                  </span>
+                  <SeverityTag severity={inc.severity} />
                   <span className={`text-[10px] font-semibold ${inc.status === "open" ? "text-red-400" : "text-green-400"}`}>
                     {inc.status.toUpperCase()}
                   </span>
                 </div>
-                <h4 className="font-semibold mt-2 text-[#e2e8f0] truncate">{inc.kind}</h4>
-                <p className="text-[#94a3b8] text-[11px] mt-1 line-clamp-2">{inc.summary}</p>
-                <div className="flex justify-between items-center text-[10px] text-[#64748b] mt-3">
+                <h4 className="font-semibold mt-2 text-[var(--text-primary)] truncate">{inc.kind}</h4>
+                <p className="text-[var(--text-secondary)] text-[11px] mt-1 line-clamp-2">{inc.summary}</p>
+                <div className="flex justify-between items-center text-[10px] text-[var(--text-muted)] mt-3">
                   <span>Agent: {inc.agent_id}</span>
                   <span>{new Date(inc.opened_at).toLocaleDateString()}</span>
                 </div>
@@ -172,34 +158,34 @@ export default function IncidentsTab() {
       {/* Incident Detail Pane (Right Side) */}
       <div className="panel-card lg:col-span-2 space-y-6">
         {!selectedIncidentId ? (
-          <div className="flex flex-col items-center justify-center py-32 text-center text-[#64748b]">
+          <div className="flex flex-col items-center justify-center py-32 text-center text-[var(--text-muted)]">
             <AlertOctagon size={48} className="mb-4" />
             <h4 className="text-sm font-semibold">No Incident Selected</h4>
             <p className="text-xs max-w-xs mt-1">Select an incident from the list to view the correlated provable evidence timeline.</p>
           </div>
         ) : isDetailLoading ? (
-          <p className="text-sm text-[#64748b] text-center py-32">Loading incident details...</p>
+          <p className="text-sm text-[var(--text-muted)] text-center py-32">Loading incident details...</p>
         ) : !incidentDetail ? (
           <p className="text-sm text-red-400 text-center py-32">Incident details not found.</p>
         ) : (
           <div className="space-y-6">
             {/* Header Block */}
-            <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[#1f2937]">
+            <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--border-default)]">
               <div>
                 <h2 className="text-base font-bold text-rose-500 flex items-center gap-1.5">
                   <ShieldAlert size={18} /> {incidentDetail.kind}
                 </h2>
-                <div className="flex items-center gap-2 mt-1.5 text-xs text-[#94a3b8]">
-                  <span>Incident ID: <code className="text-[#e2e8f0]">{incidentDetail.id.slice(-12)}</code></span>
+                <div className="flex items-center gap-2 mt-1.5 text-xs text-[var(--text-secondary)]">
+                  <span>Incident ID: <code className="text-[var(--text-primary)]">{incidentDetail.id.slice(-12)}</code></span>
                   <span>&middot;</span>
-                  <span>Agent: <code className="text-indigo-400">{incidentDetail.agent_id}</code></span>
+                  <span>Agent: <code className="text-[var(--brand)]">{incidentDetail.agent_id}</code></span>
                 </div>
               </div>
 
               <div className="flex gap-2">
                 <button
                   onClick={() => handleDownloadEvidencePack(incidentDetail.id)}
-                  className="flex items-center gap-1.5 bg-[#1e293b] hover:bg-[#273549] text-[#e2e8f0] border border-[#334155] px-3.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-[var(--text-primary)] border border-[var(--border-default)] px-3.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
                 >
                   <Download size={14} /> Download Evidence Pack
                 </button>
@@ -221,14 +207,14 @@ export default function IncidentsTab() {
             </div>
 
             {/* RCA Narrative (AI generated, sandboxed LLM) */}
-            <div className="p-4 bg-[#0f172a] border border-[#1f2937] rounded-lg">
-              <h4 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <FileText size={14} className="text-indigo-400" /> Root Cause Analysis (RCA) Narration
+            <div className="p-4 bg-[var(--surface-app)] border border-[var(--border-default)] rounded-lg">
+              <h4 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <FileText size={14} className="text-[var(--brand)]" /> Root Cause Analysis (RCA) Narration
               </h4>
               {isNarrationLoading ? (
-                <p className="text-xs text-[#64748b] py-2">Narrating incident timeline...</p>
+                <p className="text-xs text-[var(--text-muted)] py-2">Narrating incident timeline...</p>
               ) : (
-                <div className="text-xs text-[#e2e8f0] leading-relaxed whitespace-pre-wrap font-sans prose prose-invert max-w-none">
+                <div className="text-xs text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap font-sans prose prose-invert max-w-none">
                   {narration?.narrative || narration?.summary || "RCA narrative is being prepared for this incident."}
                 </div>
               )}
@@ -237,14 +223,14 @@ export default function IncidentsTab() {
             {/* Provable Cryptographic Timeline */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider flex items-center gap-1.5">
-                  <Activity size={14} className="text-indigo-400" /> Provable Incident Timeline
+                <h4 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1.5">
+                  <Activity size={14} className="text-[var(--brand)]" /> Provable Incident Timeline
                 </h4>
                 
                 <button
                   onClick={handleVerifyTimeline}
                   disabled={isGraphLoading || verifyingTimeline}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 font-medium underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  className="text-xs text-[var(--brand)] hover:text-[var(--brand)] font-medium underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
                 >
                   <ShieldCheck size={14} /> {verifyingTimeline ? "Verifying..." : "Verify Cryptographic Timeline"}
                 </button>
@@ -265,9 +251,9 @@ export default function IncidentsTab() {
               {/* Timeline Nodes */}
               <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
                 {isGraphLoading ? (
-                  <p className="text-xs text-[#64748b] text-center py-6">Reconstructing timeline graph...</p>
+                  <p className="text-xs text-[var(--text-muted)] text-center py-6">Reconstructing timeline graph...</p>
                 ) : !graph || !graph.nodes || graph.nodes.length === 0 ? (
-                  <p className="text-xs text-[#64748b] text-center py-6 font-mono">No actions bound to this incident case.</p>
+                  <p className="text-xs text-[var(--text-muted)] text-center py-6 font-mono">No actions bound to this incident case.</p>
                 ) : (
                   graph.nodes
                     .filter((node: any) => node.group === "decision" || node.group === "receipt" || node.group === "approval")
@@ -275,23 +261,23 @@ export default function IncidentsTab() {
                     .map((node: any, idx: number) => (
                       <div
                         key={idx}
-                        className="flex justify-between items-center gap-4 p-3 bg-[#0f172a]/30 border border-[#1f2937] rounded-lg text-xs"
+                        className="flex justify-between items-center gap-4 p-3 bg-[var(--surface-app)]/30 border border-[var(--border-default)] rounded-lg text-xs"
                       >
                         <div className="flex items-center gap-2">
                           <span className={`w-2.5 h-2.5 rounded-full ${
-                            node.group === "receipt" ? "bg-green-500" : node.group === "approval" ? "bg-amber-500" : "bg-indigo-500"
+                            node.group === "receipt" ? "bg-green-500" : node.group === "approval" ? "bg-amber-500" : "bg-[var(--brand)]"
                           }`} />
                           <div className="flex flex-col">
-                            <span className="font-semibold text-[#e2e8f0]">{node.label}</span>
+                            <span className="font-semibold text-[var(--text-primary)]">{node.label}</span>
                             {node.metadata && (
-                              <span className="text-[10px] text-[#64748b] font-mono mt-0.5 truncate max-w-[300px]">
+                              <span className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5 truncate max-w-[300px]">
                                 {typeof node.metadata === "string" ? node.metadata : JSON.stringify(node.metadata)}
                               </span>
                             )}
                           </div>
                         </div>
 
-                        <span className="text-[10px] text-[#64748b] font-mono whitespace-nowrap">
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap">
                           {node.timestamp ? new Date(node.timestamp).toLocaleTimeString() : ""}
                         </span>
                       </div>

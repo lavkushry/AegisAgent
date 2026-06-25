@@ -57,18 +57,18 @@ export default function AgentsTab() {
 
   return (
     <div className="panel-card space-y-4">
-      <div className="border-b border-[#1f2937] pb-3">
-        <h3 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider flex items-center gap-1.5">
-          <Zap size={14} className="text-indigo-400" /> Agents Fleet Inventory
+      <div className="border-b border-[var(--border-default)] pb-3">
+        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1.5">
+          <Zap size={14} className="text-[var(--brand)]" /> Agents Fleet Inventory
         </h3>
       </div>
 
       {isLoading ? (
-        <p className="text-sm text-[#64748b] text-center py-16">Loading fleet info...</p>
+        <p className="text-sm text-[var(--text-muted)] text-center py-16">Loading fleet info...</p>
       ) : error ? (
         <p className="text-sm text-red-400 text-center py-16">Error: {(error as any).message}</p>
       ) : !agents || agents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center text-[#64748b]">
+        <div className="flex flex-col items-center justify-center py-20 text-center text-[var(--text-muted)]">
           <ShieldAlert size={48} className="mb-4" />
           <h4 className="text-sm font-semibold">No Registered Agents</h4>
           <p className="text-xs max-w-xs mt-1">Register agents using the gateway API or SDK to monitor them here.</p>
@@ -77,7 +77,7 @@ export default function AgentsTab() {
         <div className="overflow-x-auto custom-scrollbar">
           <table className="w-full text-left text-xs min-w-[700px]">
             <thead>
-              <tr className="border-b border-[#334155] text-[#64748b] uppercase text-[10px] tracking-wider font-semibold">
+              <tr className="border-b border-[var(--border-default)] text-[var(--text-muted)] uppercase text-[10px] tracking-wider font-semibold">
                 <th className="py-2.5">Agent Key</th>
                 <th className="py-2.5">Status</th>
                 <th className="py-2.5">Risk Tier</th>
@@ -90,12 +90,12 @@ export default function AgentsTab() {
               {agents.map((agent: any) => {
                 const isFrozen = agent.status === "frozen" || agent.status === "quarantined";
                 return (
-                  <tr key={agent.id} className="border-b border-[#1f2937] hover:bg-[#1f2937]/20 transition-colors">
-                    <td className="py-3.5 font-mono text-indigo-400 font-bold">{agent.id}</td>
+                  <tr key={agent.id} className="border-b border-[var(--border-default)] hover:bg-[var(--border-default)]/20 transition-colors">
+                    <td className="py-3.5 font-mono text-[var(--brand)] font-bold">{agent.id}</td>
                     <td className="py-3.5">{getStatusBadge(agent.status)}</td>
                     <td className="py-3.5 font-semibold text-rose-400">{agent.risk_tier || "low"}</td>
-                    <td className="py-3.5 font-mono text-[#94a3b8]">{agent.environment || "production"}</td>
-                    <td className="py-3.5 text-[#e2e8f0]">{agent.model || "N/A"}</td>
+                    <td className="py-3.5 font-mono text-[var(--text-secondary)]">{agent.environment || "production"}</td>
+                    <td className="py-3.5 text-[var(--text-primary)]">{agent.model || "N/A"}</td>
                     <td className="py-3.5 text-right">
                       {agent.status !== "revoked" ? (
                         <button
@@ -118,7 +118,7 @@ export default function AgentsTab() {
                           )}
                         </button>
                       ) : (
-                        <span className="text-[#64748b] italic">Revoked</span>
+                        <span className="text-[var(--text-muted)] italic">Revoked</span>
                       )}
                     </td>
                   </tr>

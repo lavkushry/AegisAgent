@@ -48,9 +48,9 @@ export default function ReceiptsTab() {
 
   return (
     <div className="panel-card space-y-4">
-      <div className="border-b border-[#1f2937] pb-3 flex justify-between items-center">
-        <h3 className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider flex items-center gap-1.5">
-          <Fingerprint size={14} className="text-indigo-400" /> Cryptographic Receipts Integrity Log
+      <div className="border-b border-[var(--border-default)] pb-3 flex justify-between items-center">
+        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1.5">
+          <Fingerprint size={14} className="text-[var(--brand)]" /> Cryptographic Receipts Integrity Log
         </h3>
         <span className="text-[10px] text-green-400 bg-green-950/20 border border-green-500/30 px-2 py-0.5 rounded flex items-center gap-1 font-bold">
           <ShieldCheck size={12} /> Chain Verified
@@ -58,11 +58,11 @@ export default function ReceiptsTab() {
       </div>
 
       {isLoading ? (
-        <p className="text-xs text-[#64748b] text-center py-16">Loading receipt chain...</p>
+        <p className="text-xs text-[var(--text-muted)] text-center py-16">Loading receipt chain...</p>
       ) : error ? (
         <p className="text-xs text-red-400 text-center py-16">Error: {(error as any).message}</p>
       ) : !receipts || receipts.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center text-[#64748b]">
+        <div className="flex flex-col items-center justify-center py-20 text-center text-[var(--text-muted)]">
           <Fingerprint size={48} className="mb-4" />
           <h4 className="text-sm font-semibold">No Receipts Emitted</h4>
           <p className="text-xs max-w-xs mt-1">Receipts are emitted automatically upon every /v1/authorize decision.</p>
@@ -75,20 +75,20 @@ export default function ReceiptsTab() {
             return (
               <div
                 key={rec.id}
-                className="border border-[#1f2937] hover:border-[#334155] rounded-lg overflow-hidden bg-[#0f172a]/50"
+                className="border border-[var(--border-default)] hover:border-[var(--border-default)] rounded-lg overflow-hidden bg-[var(--surface-app)]/50"
               >
                 {/* Row Header */}
                 <div
                   onClick={() => setExpandedId(isExpanded ? null : rec.id)}
-                  className="flex flex-wrap md:flex-nowrap justify-between items-center gap-4 p-4 cursor-pointer select-none hover:bg-[#111827]/40 transition-colors"
+                  className="flex flex-wrap md:flex-nowrap justify-between items-center gap-4 p-4 cursor-pointer select-none hover:bg-[var(--surface-panel)]/40 transition-colors"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-[10px] text-[#64748b] font-mono">#{receipts.length - idx}</span>
+                    <span className="text-[10px] text-[var(--text-muted)] font-mono">#{receipts.length - idx}</span>
                     <div className="flex flex-col">
-                      <span className="text-xs font-mono font-bold text-indigo-400">
+                      <span className="text-xs font-mono font-bold text-[var(--brand)]">
                         {rec.tool || "generic_action"}
                       </span>
-                      <span className="text-[10px] text-[#64748b] mt-0.5 font-mono">
+                      <span className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">
                         ID: {rec.id}
                       </span>
                     </div>
@@ -98,7 +98,7 @@ export default function ReceiptsTab() {
                     <code className="text-[10px] text-green-400 bg-green-950/20 px-1.5 py-0.5 rounded border border-green-500/20">
                       link: {rec.receipt_hash ? rec.receipt_hash.slice(0, 12) : "N/A"}
                     </code>
-                    <span className="text-xs text-[#64748b]">
+                    <span className="text-xs text-[var(--text-muted)]">
                       {new Date(rec.ts || rec.created_at).toLocaleTimeString()}
                     </span>
                   </div>
@@ -106,40 +106,40 @@ export default function ReceiptsTab() {
 
                 {/* Expanded Details */}
                 {isExpanded && (
-                  <div className="p-4 bg-[#111827]/60 border-t border-[#1f2937] space-y-4 text-xs font-mono">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[#94a3b8]">
+                  <div className="p-4 bg-[var(--surface-panel)]/60 border-t border-[var(--border-default)] space-y-4 text-xs font-mono">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[var(--text-secondary)]">
                       <div className="space-y-1">
-                        <span className="block text-[9px] uppercase tracking-wider text-[#64748b] font-sans font-bold">Previous Link Hash</span>
-                        <code className="block bg-[#0f172a] p-1.5 rounded border border-[#1f2937] break-all">
+                        <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)] font-sans font-bold">Previous Link Hash</span>
+                        <code className="block bg-[var(--surface-app)] p-1.5 rounded border border-[var(--border-default)] break-all">
                           {rec.prev_receipt_hash || "null (Genesis Block)"}
                         </code>
                       </div>
                       <div className="space-y-1">
-                        <span className="block text-[9px] uppercase tracking-wider text-[#64748b] font-sans font-bold">Receipt Hash</span>
-                        <code className="block bg-[#0f172a] p-1.5 rounded border border-[#1f2937] break-all">
+                        <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)] font-sans font-bold">Receipt Hash</span>
+                        <code className="block bg-[var(--surface-app)] p-1.5 rounded border border-[var(--border-default)] break-all">
                           {rec.receipt_hash || "null"}
                         </code>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 text-[#94a3b8]">
+                    <div className="grid grid-cols-3 gap-2 text-[var(--text-secondary)]">
                       <div>
-                        <span className="block text-[9px] uppercase tracking-wider text-[#64748b] font-sans font-bold">Agent ID</span>
-                        <span className="text-[#e2e8f0]">{rec.agent_id || "N/A"}</span>
+                        <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)] font-sans font-bold">Agent ID</span>
+                        <span className="text-[var(--text-primary)]">{rec.agent_id || "N/A"}</span>
                       </div>
                       <div>
-                        <span className="block text-[9px] uppercase tracking-wider text-[#64748b] font-sans font-bold">Run ID</span>
-                        <span className="text-[#e2e8f0]">{rec.run_id || "N/A"}</span>
+                        <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)] font-sans font-bold">Run ID</span>
+                        <span className="text-[var(--text-primary)]">{rec.run_id || "N/A"}</span>
                       </div>
                       <div>
-                        <span className="block text-[9px] uppercase tracking-wider text-[#64748b] font-sans font-bold">Trace ID</span>
-                        <span className="text-[#e2e8f0]">{rec.trace_id || "N/A"}</span>
+                        <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)] font-sans font-bold">Trace ID</span>
+                        <span className="text-[var(--text-primary)]">{rec.trace_id || "N/A"}</span>
                       </div>
                     </div>
 
                     {/* Action Block details */}
-                    <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[#1f2937]">
-                      <div className="flex items-center gap-1.5 text-xs text-[#94a3b8] font-sans">
+                    <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[var(--border-default)]">
+                      <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] font-sans">
                         <Activity size={14} /> Link verified in active ledger database.
                       </div>
 
@@ -160,7 +160,7 @@ export default function ReceiptsTab() {
                         <button
                           onClick={() => triggerVerification(rec.id)}
                           disabled={vResult?.loading}
-                          className="bg-[#1e293b] hover:bg-[#273549] text-white text-[11px] border border-[#334155] px-3 py-1 rounded cursor-pointer transition-colors font-sans"
+                          className="bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-white text-[11px] border border-[var(--border-default)] px-3 py-1 rounded cursor-pointer transition-colors font-sans"
                         >
                           Verify Signature Link
                         </button>
