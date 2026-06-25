@@ -13,9 +13,11 @@ import McpTab from "../components/McpTab";
 import ReceiptsTab from "../components/ReceiptsTab";
 import SettingsTab from "../components/SettingsTab";
 import DetectionsTab from "../components/DetectionsTab";
-import { Shield, LayoutDashboard, Search, AlertOctagon, ShieldAlert, Clock, Users, Server, FileCheck2, Settings as SettingsIcon } from "lucide-react";
+import DashboardLoader from "../dashboards/DashboardLoader";
+import { overviewDashboard } from "../dashboards/system/overview";
+import { Shield, LayoutDashboard, LayoutGrid, Search, AlertOctagon, ShieldAlert, Clock, Users, Server, FileCheck2, Settings as SettingsIcon } from "lucide-react";
 
-type ActiveTab = "overview" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
+type ActiveTab = "overview" | "dashboards" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
@@ -40,6 +42,8 @@ export default function Home() {
     switch (activeTab) {
       case "overview":
         return <OverviewTab />;
+      case "dashboards":
+        return <DashboardLoader schema={overviewDashboard} />;
       case "explore":
         return <ExploreTab />;
       case "incidents":
@@ -63,6 +67,7 @@ export default function Home() {
 
   const navItems = [
     { id: "overview" as ActiveTab, label: "Overview", icon: <LayoutDashboard size={16} /> },
+    { id: "dashboards" as ActiveTab, label: "Dashboards", icon: <LayoutGrid size={16} /> },
     { id: "explore" as ActiveTab, label: "Explore", icon: <Search size={16} /> },
     { id: "incidents" as ActiveTab, label: "Incidents", icon: <AlertOctagon size={16} /> },
     { id: "detections" as ActiveTab, label: "Detections & Rules", icon: <ShieldAlert size={16} /> },
