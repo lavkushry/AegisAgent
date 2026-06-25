@@ -551,6 +551,12 @@ pub async fn authorize_action(
     let mut risk_level = "low".to_string();
     let mut action_approval_required = false;
     let mut action_default_decision = "policy".to_string();
+    let mut is_tool_known = true;
+    let is_mtls = headers
+        .get(crate::mtls::MTLS_CN_HEADER)
+        .and_then(|h| h.to_str().ok())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
 
     // Read-through cache (#899): registered-action metadata is static between
     // registrations, so serve it from the LRU and fall back to the DB on a miss.
@@ -636,6 +642,8 @@ pub async fn authorize_action(
         risk_score = risk_score_for_level(&risk_level);
         action_approval_required = approval_required;
         action_default_decision = default_decision;
+    } else if !is_mcp_call {
+        is_tool_known = false;
     }
 
     if let Some(server_key) = mcp_server_key.as_deref() {
@@ -799,60 +807,9 @@ pub async fn authorize_action(
                 }
             }
             None => {
-                let decision_id = Uuid::new_v4();
-                let reason = format!(
-                    "Unknown MCP tool '{}' for server '{}' is denied by default.",
-                    payload.tool_call.action, server_key
-                );
-                let matched_policies = vec!["mcp_unknown_tool".to_string()];
+                is_tool_known = false;
                 risk_level = "critical".to_string();
                 risk_score = 100;
-
-                let composite_risk_score = match write_decision_and_audit(
-                    &state.storage,
-                    &state.deferred_write_tracker,
-                    &state.events,
-                    &state.metrics,
-                    &state.audit_batch,
-                    &state.risk_weight_cache,
-                    &tenant_id,
-                    &agent_id,
-                    &payload,
-                    decision_id,
-                    "deny",
-                    risk_score,
-                    &reason,
-                    &matched_policies,
-                    "mcp_tool_called",
-                    started_at,
-                    dry_run,
-                )
-                .await
-                {
-                    Ok(score) => score,
-                    Err(e) => {
-                        error!("Failed to write unknown MCP denial decision: {:?}", e);
-                        return StatusError::from(e).into_response();
-                    }
-                };
-
-                return (
-                    StatusCode::OK,
-                    Json(AuthorizeResponse {
-                        decision_id,
-                        decision: "deny".to_string(),
-                        risk_score,
-                        risk_level,
-                        composite_risk_score,
-                        reason,
-                        matched_policies,
-                        approval: None,
-                        redacted_fields: vec![],
-                        root_trust_level: root_trust_level.clone(),
-                        dry_run,
-                    }),
-                )
-                    .into_response();
             }
         }
     }
@@ -886,7 +843,7 @@ pub async fn authorize_action(
     let policy_decision =
         match state
             .policy_engine
-            .authorize(&tenant_id, &payload, &agent.risk_tier)
+            .authorize(&tenant_id, &payload, &agent.risk_tier, is_tool_known, is_mtls)
         {
             Ok(d) => d,
             Err(e) => {

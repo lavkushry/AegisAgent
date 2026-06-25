@@ -203,7 +203,7 @@ mod tests {
 
         // Empty policy set: Cedar's default is deny.
         let before = engine
-            .authorize("hot_reload_test_tenant", &request, "low")
+            .authorize("hot_reload_test_tenant", &request, "low", true, false)
             .unwrap();
         assert_eq!(before.decision, "deny");
 
@@ -211,7 +211,7 @@ mod tests {
         reload_now(&engine, &path).await;
 
         let after = engine
-            .authorize("hot_reload_test_tenant", &request, "low")
+            .authorize("hot_reload_test_tenant", &request, "low", true, false)
             .unwrap();
         assert_eq!(after.decision, "allow");
     }
@@ -226,7 +226,7 @@ mod tests {
         let request = permissive_request();
 
         let before = engine
-            .authorize("hot_reload_test_tenant", &request, "low")
+            .authorize("hot_reload_test_tenant", &request, "low", true, false)
             .unwrap();
         assert_eq!(before.decision, "allow");
 
@@ -237,7 +237,7 @@ mod tests {
         reload_now(&engine, &path).await;
 
         let after = engine
-            .authorize("hot_reload_test_tenant", &request, "low")
+            .authorize("hot_reload_test_tenant", &request, "low", true, false)
             .unwrap();
         assert_eq!(after.decision, "allow");
     }

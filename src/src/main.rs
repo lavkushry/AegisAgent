@@ -831,6 +831,14 @@ fn api_routes() -> Router<Arc<AppState>> {
             get(routes::list_policies).post(routes::create_policy),
         )
         .route(
+            "/policies/compile",
+            post(routes::compile_policy),
+        )
+        .route(
+            "/policies/templates",
+            get(routes::list_policy_templates),
+        )
+        .route(
             "/policies/:id",
             put(routes::update_policy).delete(routes::delete_policy),
         )
@@ -1666,12 +1674,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(|| async { axum::response::Redirect::permanent("/dashboard/") }),
         )
         .route("/dashboard/", get(routes::serve_dashboard_index))
-        .route("/dashboard/app.js", get(routes::serve_dashboard_js))
-        .route("/dashboard/aegis.css", get(routes::serve_dashboard_css))
-        .route(
-            "/dashboard/vis-network.min.js",
-            get(routes::serve_dashboard_vis_network_js),
-        )
+        .route("/dashboard/*path", get(routes::serve_dashboard_static))
         // Health and probes (unversioned)
         .route("/health", get(health_handler))
         // Kubernetes-native probes (#1208): liveness, readiness, startup

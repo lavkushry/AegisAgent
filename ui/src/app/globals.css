@@ -1,0 +1,66 @@
+@import "tailwindcss";
+@import "../design-system/tokens.css";
+
+/*
+ * Legacy aliases — existing components reference these names. They now
+ * resolve to design tokens so the whole app follows the active theme.
+ * New code should use the --surface-* / --text-* / --border-* tokens.
+ */
+:root {
+  --background: var(--surface-app);
+  --foreground: var(--text-primary);
+  --card-bg: var(--surface-panel);
+  --card-border: var(--border-default);
+  --sidebar-bg: var(--surface-app);
+}
+
+body {
+  background-color: var(--surface-app);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* Custom styling for cards and layouts */
+.dashboard-grid {
+  display: grid;
+  gap: var(--space-grid-gap, 1.5rem);
+}
+
+.panel-card {
+  background-color: var(--surface-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-panel);
+  padding: var(--space-panel-pad, 1.25rem);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: var(--surface-app);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
+
+/* Honor reduced-motion globally: console motion is functional, not
+ * decorative, so collapsing it to instant is always safe. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
