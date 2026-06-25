@@ -461,6 +461,7 @@ pub async fn get_graph_for_agent(
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap_or_default()

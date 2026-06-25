@@ -163,6 +163,7 @@ export interface DecisionFilters {
   agentId?: string;
   decision?: string;
   sourceTrust?: string;
+  skill?: string;
   q?: string;
 }
 
@@ -173,6 +174,7 @@ export function searchDecisions(opts: FetchOptions, filters: DecisionFilters) {
   if (filters.agentId) params.set("agent_id", filters.agentId);
   if (filters.decision) params.set("decision", filters.decision);
   if (filters.sourceTrust) params.set("source_trust", filters.sourceTrust);
+  if (filters.skill) params.set("skill", filters.skill);
   if (filters.q) params.set("q", filters.q);
   return fetchFromGateway<any[]>(opts, `/v1/decisions?${params.toString()}`);
 }

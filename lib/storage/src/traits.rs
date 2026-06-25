@@ -207,6 +207,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         cursor: Option<i64>,
         q: Option<&str>,
         source_trust: Option<&str>,
+        skill: Option<&str>,
     ) -> Result<(Vec<DecisionRecord>, Option<i64>), AegisError>;
     async fn get_decision_count_24h_for_agent(
         &self,

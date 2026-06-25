@@ -132,6 +132,7 @@ pub async fn list_decisions(
     let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
     let decision = parse_filter(raw_query.as_deref(), "decision");
     let source_trust = parse_filter(raw_query.as_deref(), "source_trust");
+    let skill = parse_filter(raw_query.as_deref(), "skill");
     let q = parse_filter(raw_query.as_deref(), "q").and_then(|raw| sanitize_fts5_query(&raw));
 
     match state
@@ -144,6 +145,7 @@ pub async fn list_decisions(
             cursor,
             q.as_deref(),
             source_trust.as_deref(),
+            skill.as_deref(),
         )
         .await
     {

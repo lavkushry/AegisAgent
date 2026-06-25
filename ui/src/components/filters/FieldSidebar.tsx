@@ -18,7 +18,7 @@ interface FacetField {
 const FACETS: FacetField[] = [
   { key: "decision", label: "decision", type: "decision" },
   { key: "source_trust", label: "source_trust", type: "trust", altKeys: ["root_trust_level"] },
-  { key: "tool", label: "tool", type: "string", altKeys: ["tool_name"] },
+  { key: "tool", label: "tool", type: "string", altKeys: ["skill", "tool_name"] },
   { key: "agent_id", label: "agent_id", type: "string" },
   { key: "event_type", label: "event_type", type: "string" },
 ];

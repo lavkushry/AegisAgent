@@ -18,6 +18,7 @@ interface DecisionRecord {
   id: string;
   decision?: string;
   tool?: string;
+  skill?: string;
   tool_call?: { name?: string; parameters?: Record<string, unknown> };
   agent_id?: string;
   root_trust_level?: string;
@@ -154,7 +155,7 @@ export default function ExploreTab() {
                       <DecisionBadge decision={dec.decision} />
                       <div className="flex flex-col">
                         <span className="text-xs font-mono font-bold text-[var(--brand)]">
-                          {dec.tool_call?.name || dec.tool || "generic_action"}
+                          {dec.tool_call?.name || dec.skill || dec.tool || "generic_action"}
                         </span>
                         <span className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">
                           Agent: {dec.agent_id}
