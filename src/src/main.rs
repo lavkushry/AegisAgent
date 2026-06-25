@@ -830,14 +830,8 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/policies",
             get(routes::list_policies).post(routes::create_policy),
         )
-        .route(
-            "/policies/compile",
-            post(routes::compile_policy),
-        )
-        .route(
-            "/policies/templates",
-            get(routes::list_policy_templates),
-        )
+        .route("/policies/compile", post(routes::compile_policy))
+        .route("/policies/templates", get(routes::list_policy_templates))
         .route(
             "/policies/:id",
             put(routes::update_policy).delete(routes::delete_policy),
