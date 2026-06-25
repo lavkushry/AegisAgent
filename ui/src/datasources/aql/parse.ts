@@ -15,6 +15,7 @@
 export interface ParsedQuery {
   agentId?: string;
   decision?: string;
+  sourceTrust?: string;
   q?: string;
 }
 
@@ -29,6 +30,7 @@ export function parseAql(input: string): ParsedQuery {
 
   let agentId: string | undefined;
   let decision: string | undefined;
+  let sourceTrust: string | undefined;
   const qTerms: string[] = [];
 
   for (const token of tokens) {
@@ -40,6 +42,8 @@ export function parseAql(input: string): ParsedQuery {
         agentId = value;
       } else if (field === "decision" && !decision) {
         decision = value;
+      } else if ((field === "source_trust" || field === "root_trust_level") && !sourceTrust) {
+        sourceTrust = value;
       } else {
         // Unknown/unsupported field filter — search its value as a keyword.
         qTerms.push(value);
@@ -52,6 +56,7 @@ export function parseAql(input: string): ParsedQuery {
   return {
     agentId,
     decision,
+    sourceTrust,
     q: qTerms.length > 0 ? qTerms.join(" ") : undefined,
   };
 }

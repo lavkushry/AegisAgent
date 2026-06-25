@@ -840,18 +840,19 @@ pub async fn authorize_action(
     // trusted server-side value (#1296) — never the client-supplied request
     // body — so a self-reported tier can't dodge the stricter policies an
     // auto-escalated agent should be subject to.
-    let policy_decision =
-        match state
-            .policy_engine
-            .authorize(&tenant_id, &payload, &agent.risk_tier, is_tool_known, is_mtls)
-        {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Policy engine error: {:?}", e);
-                return StatusError::internal(format!("Policy engine failure: {}", e))
-                    .into_response();
-            }
-        };
+    let policy_decision = match state.policy_engine.authorize(
+        &tenant_id,
+        &payload,
+        &agent.risk_tier,
+        is_tool_known,
+        is_mtls,
+    ) {
+        Ok(d) => d,
+        Err(e) => {
+            error!("Policy engine error: {:?}", e);
+            return StatusError::internal(format!("Policy engine failure: {}", e)).into_response();
+        }
+    };
 
     let decision_id = Uuid::new_v4();
 
@@ -2661,7 +2662,7 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 10, None, None)
+            .list_decisions(&tenant_id, None, None, 10, None, None, None)
             .await
             .unwrap()
             .0;
@@ -2698,7 +2699,7 @@ mod tests {
         // drain.
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 10, None, None)
+            .list_decisions(&tenant_id, None, None, 10, None, None, None)
             .await
             .unwrap()
             .0;
@@ -7145,7 +7146,7 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 100, None, None)
+            .list_decisions(&tenant_id, None, None, 100, None, None, None)
             .await
             .unwrap()
             .0;
@@ -7247,7 +7248,7 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 100, None, None)
+            .list_decisions(&tenant_id, None, None, 100, None, None, None)
             .await
             .unwrap()
             .0;

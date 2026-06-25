@@ -134,6 +134,7 @@ pub async fn list_decisions_cursor(
     agent_id: Option<&str>,
     decision: Option<&str>,
     q: Option<&str>,
+    source_trust: Option<&str>,
 ) -> Result<(Vec<DecisionRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let query = "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
@@ -141,6 +142,7 @@ pub async fn list_decisions_cursor(
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
            AND (? IS NULL OR decision = ?)
+           AND (? IS NULL OR root_trust_level = ?)
            AND (? IS NULL OR rowid < ?)
            AND (? IS NULL OR id IN (
                  SELECT source_id FROM audit_search_index
@@ -156,6 +158,8 @@ pub async fn list_decisions_cursor(
                 .bind(agent_id)
                 .bind(decision)
                 .bind(decision)
+                .bind(source_trust)
+                .bind(source_trust)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(q)
@@ -176,6 +180,8 @@ pub async fn list_decisions_cursor(
                 .bind(agent_id)
                 .bind(decision)
                 .bind(decision)
+                .bind(source_trust)
+                .bind(source_trust)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(q)
@@ -958,7 +964,7 @@ mod tests {
             .unwrap();
 
         let (page, next_cursor) =
-            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, None, None, None)
+            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, None, None, None, None)
                 .await
                 .unwrap();
         assert_eq!(page.len(), 2);
@@ -975,6 +981,7 @@ mod tests {
             2,
             0,
             Some(oldest_rowid),
+            None,
             None,
             None,
             None,
@@ -1028,6 +1035,7 @@ mod tests {
             None,
             None,
             Some("merge_pull_request*"),
+            None,
         )
         .await
         .unwrap();
@@ -1037,7 +1045,7 @@ mod tests {
         // Prefix match — exactly what `sanitize_fts5_query` produces for a
         // partial term like `?q=mer`.
         let (prefix_page, _) =
-            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, None, None, Some("mer*"))
+            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, None, None, Some("mer*"), None)
                 .await
                 .unwrap();
         assert_eq!(prefix_page.len(), 1);
@@ -1054,6 +1062,7 @@ mod tests {
             None,
             None,
             Some("merge_pull_request*"),
+            None,
         )
         .await
         .unwrap();
@@ -1070,10 +1079,63 @@ mod tests {
             None,
             None,
             Some("zzzznomatch*"),
+            None,
         )
         .await
         .unwrap();
         assert!(no_match.is_empty());
+    }
+
+    /// #SOC-query: `source_trust` is an exact, parameterized filter on
+    /// `root_trust_level` (the provenance differentiator) and is tenant-scoped.
+    #[tokio::test]
+    async fn list_decisions_cursor_filters_by_source_trust_and_is_tenant_scoped() {
+        let pool = setup_pool("decisions_source_trust").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_st', 'ST Agent', 'dev', 'low', 'active')")
+        .unwrap();
+
+        let mut untrusted = graph_perf_decision("dec_untrusted", "tenant_a");
+        untrusted.root_trust_level = Some("untrusted_external".to_string());
+        insert_decision(&pool, &untrusted).await.unwrap();
+
+        let mut trusted = graph_perf_decision("dec_trusted", "tenant_a");
+        trusted.root_trust_level = Some("trusted_internal_signed".to_string());
+        insert_decision(&pool, &trusted).await.unwrap();
+
+        // Same trust level under a different tenant must never leak.
+        let mut cross = graph_perf_decision("dec_cross", "tenant_b");
+        cross.root_trust_level = Some("untrusted_external".to_string());
+        insert_decision(&pool, &cross).await.unwrap();
+
+        let (page, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            None,
+            None,
+            None,
+            Some("untrusted_external"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "dec_untrusted");
+
+        // No source_trust filter returns both tenant_a rows.
+        let (all, _) =
+            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, None, None, None, None)
+                .await
+                .unwrap();
+        assert_eq!(all.len(), 2);
     }
 
     /// Same off-by-one regression as the decisions test above, for

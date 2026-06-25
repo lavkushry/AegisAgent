@@ -460,6 +460,7 @@ pub async fn get_graph_for_agent(
             GRAPH_AGENT_DECISION_LIMIT,
             None,
             None,
+            None,
         )
         .await
         .unwrap_or_default()

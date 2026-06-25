@@ -162,6 +162,7 @@ export interface DecisionFilters {
   limit?: number;
   agentId?: string;
   decision?: string;
+  sourceTrust?: string;
   q?: string;
 }
 
@@ -171,6 +172,7 @@ export function searchDecisions(opts: FetchOptions, filters: DecisionFilters) {
   params.set("limit", String(filters.limit ?? 50));
   if (filters.agentId) params.set("agent_id", filters.agentId);
   if (filters.decision) params.set("decision", filters.decision);
+  if (filters.sourceTrust) params.set("source_trust", filters.sourceTrust);
   if (filters.q) params.set("q", filters.q);
   return fetchFromGateway<any[]>(opts, `/v1/decisions?${params.toString()}`);
 }
