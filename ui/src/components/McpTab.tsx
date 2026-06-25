@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { getMcpServers, quarantineMcpServer, restoreMcpServer, getMcpManifestHistory } from "../app/api";
 import { Server, ShieldAlert, ShieldCheck, Lock, Unlock, HelpCircle, History, Clock } from "lucide-react";
+import StatusBadge from "./security/StatusBadge";
 
 export default function McpTab() {
   const { gatewayUrl, bearerToken } = useAppStore();
@@ -49,19 +50,6 @@ export default function McpTab() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (String(status).toLowerCase()) {
-      case "healthy":
-        return <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 border border-green-500/30">Healthy</span>;
-      case "quarantined":
-        return <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Quarantined</span>;
-      case "drifted":
-        return <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Drifted</span>;
-      default:
-        return <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-500/20 text-slate-400 border border-slate-500/30">{status}</span>;
-    }
-  };
-
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* MCP Servers List */}
@@ -94,7 +82,7 @@ export default function McpTab() {
               >
                 <div className="flex justify-between items-start">
                   <span className="font-bold text-[var(--brand)] font-mono truncate max-w-[120px]">{srv.server_key}</span>
-                  {getStatusBadge(srv.status || "healthy")}
+                  <StatusBadge status={srv.status || "healthy"} size="sm" />
                 </div>
                 <div className="flex flex-col gap-1 mt-2 text-[10px] text-[var(--text-secondary)] font-mono">
                   <span className="truncate">Manifest Hash: {srv.manifest_hash ? srv.manifest_hash.slice(0, 16) : "N/A"}</span>

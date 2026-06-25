@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { getAgents, freezeAgent, unfreezeAgent } from "../app/api";
 import { ShieldCheck, ShieldAlert, Zap, Lock, Unlock, AlertTriangle } from "lucide-react";
+import StatusBadge from "./security/StatusBadge";
 
 export default function AgentsTab() {
   const { gatewayUrl, bearerToken } = useAppStore();
@@ -37,21 +38,6 @@ export default function AgentsTab() {
       unfreezeMutation.mutate(id);
     } else {
       freezeMutation.mutate(id);
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (String(status).toLowerCase()) {
-      case "active":
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-500/20 text-green-400 border border-green-500/30">Active</span>;
-      case "frozen":
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Frozen</span>;
-      case "quarantined":
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Quarantined</span>;
-      case "revoked":
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30">Revoked</span>;
-      default:
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-500/20 text-slate-400 border border-slate-500/30">{status}</span>;
     }
   };
 
@@ -92,7 +78,7 @@ export default function AgentsTab() {
                 return (
                   <tr key={agent.id} className="border-b border-[var(--border-default)] hover:bg-[var(--border-default)]/20 transition-colors">
                     <td className="py-3.5 font-mono text-[var(--brand)] font-bold">{agent.id}</td>
-                    <td className="py-3.5">{getStatusBadge(agent.status)}</td>
+                    <td className="py-3.5"><StatusBadge status={agent.status} /></td>
                     <td className="py-3.5 font-semibold text-rose-400">{agent.risk_tier || "low"}</td>
                     <td className="py-3.5 font-mono text-[var(--text-secondary)]">{agent.environment || "production"}</td>
                     <td className="py-3.5 text-[var(--text-primary)]">{agent.model || "N/A"}</td>

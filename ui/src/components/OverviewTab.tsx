@@ -6,10 +6,12 @@ import { useAppStore } from "../app/store";
 import { getSocSummary, getStats, getAlerts, getIncidents, getAgentScoreboard } from "../app/api";
 import { Shield, ShieldAlert, CheckCircle, Clock, AlertTriangle, UserCheck, Flame } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useChartColors } from "@/hooks/useChartColors";
 
 export default function OverviewTab() {
   const { gatewayUrl, bearerToken } = useAppStore();
   const apiOpts = { gatewayUrl, bearerToken };
+  const chart = useChartColors();
 
   // Fetch summary counters
   const { data: summary, isLoading: isSummaryLoading, error: summaryError } = useQuery({
@@ -148,17 +150,17 @@ export default function OverviewTab() {
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                <XAxis dataKey="hour" stroke="#64748b" fontSize={10} />
-                <YAxis stroke="#64748b" fontSize={10} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chart.border} />
+                <XAxis dataKey="hour" stroke={chart.textMuted} fontSize={10} />
+                <YAxis stroke={chart.textMuted} fontSize={10} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "#111827", borderColor: "#334155" }}
-                  labelStyle={{ color: "#94a3b8" }}
+                  contentStyle={{ backgroundColor: chart.surfacePanel, borderColor: chart.border }}
+                  labelStyle={{ color: chart.textMuted }}
                 />
                 <Line
                   type="monotone"
                   dataKey="decisions"
-                  stroke="#6366f1"
+                  stroke={chart.brand}
                   strokeWidth={2}
                   activeDot={{ r: 6 }}
                 />
