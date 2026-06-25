@@ -3,6 +3,7 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDatasources } from "@/datasources/registry";
+import { useDrilldownRouter } from "@/hooks/useDrilldownRouter";
 import { errorMessage } from "@/lib/format";
 import type { TimeRange, VariableValues, DataFrame } from "@/datasources/types";
 import { getPanelEntry } from "./registry";
@@ -35,6 +36,7 @@ export default function PanelRuntime({
   const datasources = useDatasources();
   const datasource = datasources.get(definition.datasourceId);
   const entry = getPanelEntry(definition.type);
+  const router = useDrilldownRouter();
 
   const { data, isLoading, error } = useQuery({
     queryKey: [
@@ -72,7 +74,7 @@ export default function PanelRuntime({
 
   const frame = data ?? EMPTY_FRAME;
   const Component = entry.Component;
-  const handleDrilldown = onDrilldown ?? (() => {});
+  const handleDrilldown = onDrilldown ?? router;
 
   return (
     <PanelContainer

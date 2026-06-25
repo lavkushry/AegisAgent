@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAppStore } from "./store";
 import { errorMessage } from "@/lib/format";
 import ConfigBar from "../components/ConfigBar";
 import OverviewTab from "../components/OverviewTab";
@@ -21,7 +22,8 @@ import { Shield, LayoutDashboard, LayoutGrid, Fingerprint, Search, AlertOctagon,
 type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const activeTab = useAppStore((s) => s.activeView) as ActiveTab;
+  const setActiveTab = useAppStore((s) => s.setActiveView);
   const [isFetching, setIsFetching] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
   const queryClient = useQueryClient();

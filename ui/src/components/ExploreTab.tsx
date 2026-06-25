@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { getDecisions, verifyReceipt } from "../app/api";
@@ -32,12 +32,22 @@ interface DecisionRecord {
 
 export default function ExploreTab() {
   const { gatewayUrl, bearerToken } = useAppStore();
+  const exploreSeed = useAppStore((s) => s.exploreSeed);
+  const consumeExploreSeed = useAppStore((s) => s.consumeExploreSeed);
   const apiOpts = { gatewayUrl, bearerToken };
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // Seed the query from a drilldown at mount (this tab remounts on switch).
+  const [searchQuery, setSearchQuery] = useState(() => exploreSeed ?? "");
+  const [debouncedQuery, setDebouncedQuery] = useState(() => exploreSeed ?? "");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [verificationResult, setVerificationResult] = useState<Record<string, { ok: boolean; msg: string; loading: boolean }>>({});
+
+  // Clear the one-time seed after the initializers above have consumed it.
+  useEffect(() => {
+    if (exploreSeed) consumeExploreSeed();
+    // Mount-only: the seed is read once via the useState initializers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch decisions based on query
   const { data: decisions, isLoading, error } = useQuery({

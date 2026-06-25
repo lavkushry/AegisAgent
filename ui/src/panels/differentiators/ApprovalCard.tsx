@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, Edit3, Save, ArrowUpRight } from "lucide-react";
-import { useAppStore } from "@/app/store";
+import { useAppStore, canApprove } from "@/app/store";
 import { approveApproval, rejectApproval } from "@/app/api";
 import { frameRows } from "@/datasources/frame";
 import { errorMessage } from "@/lib/format";
@@ -36,6 +36,9 @@ function approvalId(a: ApprovalRow): string {
  */
 export default function ApprovalCard({ data }: PanelProps) {
   const { gatewayUrl, bearerToken } = useAppStore();
+  const role = useAppStore((s) => s.role);
+  const canAct = canApprove(role);
+  const denyReason = canAct ? undefined : "Requires the approver or admin role (separation of duties)";
   const apiOpts = { gatewayUrl, bearerToken };
   const queryClient = useQueryClient();
 
@@ -92,8 +95,21 @@ export default function ApprovalCard({ data }: PanelProps) {
   const approvals = frameRows(data) as ApprovalRow[];
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 overflow-auto custom-scrollbar h-full pr-1">
-      {approvals.map((a) => {
+    <div className="flex flex-col h-full">
+      {!canAct ? (
+        <p
+          className="text-[11px] mb-2 px-2 py-1 rounded border"
+          style={{
+            color: "var(--text-secondary)",
+            borderColor: "var(--border-default)",
+            backgroundColor: "var(--surface-app)",
+          }}
+        >
+          Read-only as <strong>{role}</strong>: {denyReason}. The gateway also enforces this server-side.
+        </p>
+      ) : null}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 overflow-auto custom-scrollbar flex-1 pr-1">
+        {approvals.map((a) => {
         const id = approvalId(a);
         const isEditing = editingId === id;
         const busy = approveMutation.isPending || rejectMutation.isPending;
@@ -165,7 +181,9 @@ export default function ApprovalCard({ data }: PanelProps) {
                 <>
                   <button
                     onClick={() => saveEdit(a)}
-                    className="flex-1 flex items-center justify-center gap-1.5 bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-[var(--text-on-brand)] font-medium text-xs rounded-lg py-1.5 cursor-pointer"
+                    disabled={!canAct}
+                    title={denyReason}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-[var(--text-on-brand)] font-medium text-xs rounded-lg py-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Save size={13} /> Save &amp; re-evaluate
                   </button>
@@ -180,16 +198,18 @@ export default function ApprovalCard({ data }: PanelProps) {
                 <>
                   <button
                     onClick={() => approveMutation.mutate(id)}
-                    disabled={busy}
-                    className="flex-1 flex items-center justify-center gap-1 text-[var(--text-on-brand)] font-medium text-xs rounded-lg py-1.5 cursor-pointer disabled:opacity-50"
+                    disabled={busy || !canAct}
+                    title={denyReason}
+                    className="flex-1 flex items-center justify-center gap-1 text-[var(--text-on-brand)] font-medium text-xs rounded-lg py-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ backgroundColor: "var(--decision-allow)" }}
                   >
                     <Check size={13} /> Approve
                   </button>
                   <button
                     onClick={() => startEditing(a)}
-                    title="Edit parameters (re-hash + re-evaluate)"
-                    className="bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-[var(--text-primary)] border border-[var(--border-default)] text-xs rounded-lg px-2.5 py-1.5 cursor-pointer"
+                    disabled={!canAct}
+                    title={denyReason ?? "Edit parameters (re-hash + re-evaluate)"}
+                    className="bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-[var(--text-primary)] border border-[var(--border-default)] text-xs rounded-lg px-2.5 py-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Edit3 size={13} />
                   </button>
@@ -202,8 +222,9 @@ export default function ApprovalCard({ data }: PanelProps) {
                   </button>
                   <button
                     onClick={() => rejectMutation.mutate(id)}
-                    disabled={busy}
-                    className="flex-1 flex items-center justify-center gap-1 text-[var(--text-on-brand)] font-medium text-xs rounded-lg py-1.5 cursor-pointer disabled:opacity-50"
+                    disabled={busy || !canAct}
+                    title={denyReason}
+                    className="flex-1 flex items-center justify-center gap-1 text-[var(--text-on-brand)] font-medium text-xs rounded-lg py-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ backgroundColor: "var(--decision-deny)" }}
                   >
                     <X size={13} /> Reject
@@ -213,7 +234,8 @@ export default function ApprovalCard({ data }: PanelProps) {
             </div>
           </div>
         );
-      })}
+        })}
+      </div>
     </div>
   );
 }

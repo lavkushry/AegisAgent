@@ -80,6 +80,9 @@ export const overviewDashboard: DashboardSchema = {
               columns: ["decision", "tool", "agent_id", "source_trust", "action_hash", "created_at"],
               maxRows: 10,
             },
+            drilldowns: [
+              { label: "Explore agent", target: { kind: "explore", aqlTemplate: "${agent_id}" } },
+            ],
           },
           w: 12,
           h: 4,

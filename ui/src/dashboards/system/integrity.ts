@@ -42,6 +42,9 @@ export const integrityDashboard: DashboardSchema = {
             datasourceId: DEFAULT_DATASOURCE_ID,
             entity: "decision",
             options: { labelField: "tool", receiptHashField: "action_hash" },
+            drilldowns: [
+              { label: "Explore agent", target: { kind: "explore", aqlTemplate: "${agent_id}" } },
+            ],
           },
           w: 12,
           h: 4,
