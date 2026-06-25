@@ -1,6 +1,7 @@
 import type { PanelProps, PanelRegistryEntry, PanelType } from "./types";
 import StatPanel from "./standard/StatPanel";
 import TablePanel from "./standard/TablePanel";
+import AgentTablePanel from "./standard/AgentTablePanel";
 import ApprovalCard from "./differentiators/ApprovalCard";
 import ProvableTimeline from "./differentiators/ProvableTimeline";
 import ReceiptIntegrity from "./differentiators/ReceiptIntegrity";
@@ -20,6 +21,12 @@ const entries: PanelRegistryEntry[] = [
   {
     type: "table",
     Component: TablePanel as PanelRegistryEntry["Component"],
+    defaultOptions: {},
+    chartLib: "none",
+  },
+  {
+    type: "agent-table",
+    Component: AgentTablePanel as PanelRegistryEntry["Component"],
     defaultOptions: {},
     chartLib: "none",
   },

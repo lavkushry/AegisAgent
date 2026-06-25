@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, Edit3, Save, ArrowUpRight } from "lucide-react";
 import { useAppStore, canApprove } from "@/app/store";
+import { useEffectiveRole } from "@/hooks/useSessionRole";
 import { approveApproval, rejectApproval } from "@/app/api";
 import { frameRows } from "@/datasources/frame";
 import { errorMessage } from "@/lib/format";
@@ -36,7 +37,7 @@ function approvalId(a: ApprovalRow): string {
  */
 export default function ApprovalCard({ data }: PanelProps) {
   const { gatewayUrl, bearerToken } = useAppStore();
-  const role = useAppStore((s) => s.role);
+  const { role } = useEffectiveRole();
   const canAct = canApprove(role);
   const denyReason = canAct ? undefined : "Requires the approver or admin role (separation of duties)";
   const apiOpts = { gatewayUrl, bearerToken };

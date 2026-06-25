@@ -18,6 +18,7 @@ export type PanelType =
   | "stat"
   | "timeseries"
   | "table"
+  | "agent-table"
   | "heatmap"
   | "status"
   | "feed"

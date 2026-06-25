@@ -9,7 +9,6 @@ import OverviewTab from "../components/OverviewTab";
 import ExploreTab from "../components/ExploreTab";
 import IncidentsTab from "../components/IncidentsTab";
 import ApprovalsTab from "../components/ApprovalsTab";
-import AgentsTab from "../components/AgentsTab";
 import McpTab from "../components/McpTab";
 import ReceiptsTab from "../components/ReceiptsTab";
 import SettingsTab from "../components/SettingsTab";
@@ -17,6 +16,7 @@ import DetectionsTab from "../components/DetectionsTab";
 import DashboardLoader from "../dashboards/DashboardLoader";
 import { overviewDashboard } from "../dashboards/system/overview";
 import { integrityDashboard } from "../dashboards/system/integrity";
+import { fleetDashboard } from "../dashboards/system/fleet";
 import { Shield, LayoutDashboard, LayoutGrid, Fingerprint, Search, AlertOctagon, ShieldAlert, Clock, Users, Server, FileCheck2, Settings as SettingsIcon } from "lucide-react";
 
 type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
@@ -58,7 +58,7 @@ export default function Home() {
       case "approvals":
         return <ApprovalsTab />;
       case "agents":
-        return <AgentsTab />;
+        return <DashboardLoader schema={fleetDashboard} />;
       case "mcp":
         return <McpTab />;
       case "receipts":
