@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAppStore } from "./store";
+import { errorMessage } from "@/lib/format";
 import ConfigBar from "../components/ConfigBar";
 import OverviewTab from "../components/OverviewTab";
 import ExploreTab from "../components/ExploreTab";
@@ -29,8 +29,8 @@ export default function Home() {
     try {
       await queryClient.refetchQueries();
       setStatusMsg("Console data updated successfully.");
-    } catch (err: any) {
-      setStatusMsg(`Refresh failed: ${err.message}`);
+    } catch (err: unknown) {
+      setStatusMsg(`Refresh failed: ${errorMessage(err)}`);
     } finally {
       setIsFetching(false);
     }
@@ -74,15 +74,15 @@ export default function Home() {
   ];
 
   return (
-    <div className="flex flex-col md:flex-row min-h-screen bg-[#0f172a] text-[#e2e8f0]">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--surface-app)] text-[var(--text-primary)]">
       {/* Sidebar navigation */}
-      <aside className="w-full md:w-64 bg-[#0b0f19] border-r border-[#1f2937] flex flex-col p-5 shrink-0">
+      <aside className="w-full md:w-64 bg-[var(--surface-app)] border-r border-[var(--border-default)] flex flex-col p-5 shrink-0">
         {/* Title / Logo */}
         <div className="flex items-center gap-2 mb-8 px-2">
-          <Shield className="text-indigo-500" size={24} />
+          <Shield className="text-[var(--brand)]" size={24} />
           <div className="flex flex-col">
             <h1 className="font-extrabold text-sm tracking-wider uppercase">AegisAgent</h1>
-            <span className="text-[10px] text-[#64748b] tracking-wider font-semibold font-mono">SOC CONSOLE</span>
+            <span className="text-[10px] text-[var(--text-muted)] tracking-wider font-semibold font-mono">SOC CONSOLE</span>
           </div>
         </div>
 
@@ -97,8 +97,8 @@ export default function Home() {
               }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold tracking-wide transition-colors cursor-pointer ${
                 activeTab === item.id
-                  ? "bg-indigo-600 text-white font-bold"
-                  : "text-[#94a3b8] hover:bg-[#111827] hover:text-[#e2e8f0]"
+                  ? "bg-[var(--brand)] text-[var(--text-on-brand)] font-bold"
+                  : "text-[var(--text-secondary)] hover:bg-[var(--surface-panel)] hover:text-[var(--text-primary)]"
               }`}
             >
               {item.icon}
@@ -108,7 +108,7 @@ export default function Home() {
         </nav>
 
         {/* Footer */}
-        <div className="pt-6 border-t border-[#1f2937] text-[10px] text-[#64748b] font-mono px-2 mt-auto">
+        <div className="pt-6 border-t border-[var(--border-default)] text-[10px] text-[var(--text-muted)] font-mono px-2 mt-auto">
           <span>v1.2.0-beta &middot; 2026</span>
         </div>
       </aside>

@@ -1,0 +1,200 @@
+/*
+ * AegisAgent SOC Console — design tokens.
+ * See docs/AegisAgent_SOC_Console_Design_System.md (section 3).
+ *
+ * One token contract, three themes. Default (:root) is Dark SOC and its
+ * values match the existing console palette exactly, so adopting tokens
+ * causes zero visual regression. [data-theme="light"] and
+ * [data-theme="oled"] override values only.
+ *
+ * Severity / trust / decision are RESERVED palettes — never use them for
+ * chrome. That is what makes a red row mean something.
+ */
+
+:root,
+:root[data-theme="dark-soc"] {
+  /* Brand — the one saturated accent */
+  --brand: #6366f1; /* indigo-500 */
+  --brand-emphasis: #4f46e5; /* indigo-600 */
+  --brand-subtle: rgba(99, 102, 241, 0.16);
+  --text-on-brand: #ffffff;
+
+  /* Interactive */
+  --interactive-bg: #1e293b;
+  --interactive-bg-hover: #273549;
+  --focus-ring: #6366f1;
+
+  /* Surface elevation (depth via surface, not shadow) */
+  --surface-app: #0f172a;
+  --surface-panel: #111827;
+  --surface-elevated: #1e293b;
+  --surface-modal: #1e293b;
+  --surface-overlay: rgba(2, 6, 23, 0.72);
+
+  /* Text */
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Borders (hairline; recede) */
+  --border-default: #334155;
+  --border-hover: #475569;
+  --border-active: #6366f1;
+  --border-focus: #6366f1;
+
+  /* SOC severity ramp (meaning, never decoration) */
+  --sev-critical: #f43f5e; /* rose */
+  --sev-high: #ef4444; /* red */
+  --sev-medium: #f59e0b; /* amber */
+  --sev-low: #38bdf8; /* sky */
+  --sev-info: #94a3b8; /* slate */
+
+  /* Decision ramp */
+  --decision-allow: #22c55e; /* green */
+  --decision-deny: #ef4444; /* red */
+  --decision-approval: #f59e0b; /* amber */
+  --decision-quarantine: #f43f5e; /* rose */
+  --decision-redact: #a855f7; /* purple */
+
+  /* State */
+  --state-verified: #10b981; /* emerald */
+  --state-failed: #f43f5e; /* rose */
+  --state-pending: #f59e0b; /* amber */
+
+  /* Trust-provenance ramp (the 6 levels, ordered) */
+  --trust-internal-signed: #10b981; /* emerald */
+  --trust-internal-unsigned: #38bdf8; /* sky */
+  --trust-customer: #f59e0b; /* amber */
+  --trust-external: #ef4444; /* red */
+  --trust-malicious: #f43f5e; /* rose, bold */
+  --trust-unknown: #94a3b8; /* slate */
+
+  /* Radii & elevation */
+  --radius-chip: 9999px;
+  --radius-control: 0.5rem;
+  --radius-panel: 0.875rem;
+  --shadow-elevated: 0 8px 24px rgba(2, 6, 23, 0.4);
+
+  /* Motion (functional only) */
+  --duration-fast: 120ms;
+  --duration-normal: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Light theme — daytime / print / evidence-export readability (WCAG AA). */
+:root[data-theme="light"] {
+  --brand: #4f46e5;
+  --brand-emphasis: #4338ca;
+  --brand-subtle: rgba(79, 70, 229, 0.12);
+  --text-on-brand: #ffffff;
+
+  --interactive-bg: #f1f5f9;
+  --interactive-bg-hover: #e2e8f0;
+  --focus-ring: #4f46e5;
+
+  --surface-app: #f8fafc;
+  --surface-panel: #ffffff;
+  --surface-elevated: #f1f5f9;
+  --surface-modal: #ffffff;
+  --surface-overlay: rgba(15, 23, 42, 0.4);
+
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  --border-default: #e2e8f0;
+  --border-hover: #cbd5e1;
+  --border-active: #4f46e5;
+  --border-focus: #4f46e5;
+
+  --sev-critical: #e11d48;
+  --sev-high: #dc2626;
+  --sev-medium: #d97706;
+  --sev-low: #0284c7;
+  --sev-info: #475569;
+
+  --decision-allow: #16a34a;
+  --decision-deny: #dc2626;
+  --decision-approval: #d97706;
+  --decision-quarantine: #e11d48;
+  --decision-redact: #9333ea;
+
+  --state-verified: #059669;
+  --state-failed: #e11d48;
+  --state-pending: #d97706;
+
+  --trust-internal-signed: #059669;
+  --trust-internal-unsigned: #0284c7;
+  --trust-customer: #d97706;
+  --trust-external: #dc2626;
+  --trust-malicious: #e11d48;
+  --trust-unknown: #475569;
+
+  --shadow-elevated: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+/* OLED theme — true black for 24/7 wall displays; panels float on black. */
+:root[data-theme="oled"] {
+  --brand: #818cf8;
+  --brand-emphasis: #6366f1;
+  --brand-subtle: rgba(129, 140, 248, 0.18);
+
+  --interactive-bg: #161616;
+  --interactive-bg-hover: #222222;
+  --focus-ring: #818cf8;
+
+  --surface-app: #000000;
+  --surface-panel: #0b0b0f;
+  --surface-elevated: #16161c;
+  --surface-modal: #16161c;
+  --surface-overlay: rgba(0, 0, 0, 0.82);
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+
+  --border-default: #27272a;
+  --border-hover: #3f3f46;
+  --border-active: #818cf8;
+  --border-focus: #818cf8;
+
+  /* Slightly boosted chroma to survive higher contrast on true black. */
+  --sev-critical: #fb7185;
+  --sev-high: #f87171;
+  --sev-medium: #fbbf24;
+  --sev-low: #56ccf2;
+  --sev-info: #a1a1aa;
+
+  --decision-allow: #4ade80;
+  --decision-deny: #f87171;
+  --decision-approval: #fbbf24;
+  --decision-quarantine: #fb7185;
+  --decision-redact: #c084fc;
+
+  --state-verified: #34d399;
+  --state-failed: #fb7185;
+  --state-pending: #fbbf24;
+
+  --trust-internal-signed: #34d399;
+  --trust-internal-unsigned: #56ccf2;
+  --trust-customer: #fbbf24;
+  --trust-external: #f87171;
+  --trust-malicious: #fb7185;
+  --trust-unknown: #a1a1aa;
+
+  --shadow-elevated: 0 8px 28px rgba(0, 0, 0, 0.8);
+}
+
+/* Density — Compact (default) vs Cozy. Pure CSS-variable swap, no remount. */
+:root,
+:root[data-density="compact"] {
+  --row-height: 28px;
+  --space-panel-pad: 12px;
+  --space-grid-gap: 12px;
+}
+
+:root[data-density="cozy"] {
+  --row-height: 36px;
+  --space-panel-pad: 16px;
+  --space-grid-gap: 16px;
+}
