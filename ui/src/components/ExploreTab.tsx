@@ -8,6 +8,7 @@ import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint 
 import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
 import HashChip from "./security/HashChip";
+import FieldSidebar from "./filters/FieldSidebar";
 import { formatTime, errorMessage } from "@/lib/format";
 
 // Loosely-typed decision record from the gateway. The datasource/DataFrame
@@ -110,11 +111,21 @@ export default function ExploreTab() {
         </button>
       </form>
 
-      {/* Decisions Results List */}
-      <div className="panel-card">
-        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-4">
-          FTS5 Decision Index Explorer
-        </h3>
+      <div className="grid grid-cols-1 lg:grid-cols-[210px_minmax(0,1fr)] gap-4">
+        {/* Field facet sidebar (computed from loaded results) */}
+        <FieldSidebar
+          rows={(decisions ?? []) as Array<Record<string, unknown>>}
+          onSelect={(v) => {
+            setSearchQuery(v);
+            setDebouncedQuery(v);
+          }}
+        />
+
+        {/* Decisions Results List */}
+        <div className="panel-card min-w-0">
+          <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-4">
+            FTS5 Decision Index Explorer
+          </h3>
 
         {isLoading ? (
           <p className="text-sm text-[var(--text-muted)] text-center py-12">Querying decision records...</p>
@@ -237,6 +248,7 @@ export default function ExploreTab() {
             })}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
