@@ -3,7 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { getDecisions, verifyReceipt } from "../app/api";
+import { searchDecisions, verifyReceipt } from "../app/api";
+import { parseAql } from "@/datasources/aql/parse";
 import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint } from "lucide-react";
 import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
@@ -53,7 +54,7 @@ export default function ExploreTab() {
   // Fetch decisions based on query
   const { data: decisions, isLoading, error } = useQuery({
     queryKey: ["decisions", gatewayUrl, bearerToken, debouncedQuery],
-    queryFn: () => getDecisions(apiOpts, 50, debouncedQuery),
+    queryFn: () => searchDecisions(apiOpts, { limit: 50, ...parseAql(debouncedQuery) }),
     refetchInterval: 10000, // Poll every 10s
   });
 
@@ -96,7 +97,7 @@ export default function ExploreTab() {
         <div className="relative flex-1">
           <input
             type="text"
-            placeholder="Search decisions by Agent ID, tool name, reason, or action hash..."
+            placeholder="AQL: agent_id:coding-agent AND decision:deny untrusted   (field:value + keywords)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-lg pl-10 pr-4 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none"
@@ -115,9 +116,10 @@ export default function ExploreTab() {
         {/* Field facet sidebar (computed from loaded results) */}
         <FieldSidebar
           rows={(decisions ?? []) as Array<Record<string, unknown>>}
-          onSelect={(v) => {
-            setSearchQuery(v);
-            setDebouncedQuery(v);
+          onSelect={(field, value) => {
+            const q = `${field}:${value}`;
+            setSearchQuery(q);
+            setDebouncedQuery(q);
           }}
         />
 

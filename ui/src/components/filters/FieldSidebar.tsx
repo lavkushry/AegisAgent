@@ -56,7 +56,7 @@ function countFacet(rows: ReadonlyArray<Row>, facet: FacetField): Array<[string,
 
 type Props = {
   rows: ReadonlyArray<Row>;
-  onSelect: (value: string) => void;
+  onSelect: (field: string, value: string) => void;
 };
 
 /** Kibana-Discover-style facet sidebar computed from the loaded results. */
@@ -93,9 +93,9 @@ export default function FieldSidebar({ rows, onSelect }: Props) {
                   <li key={value}>
                     <button
                       type="button"
-                      onClick={() => onSelect(value)}
+                      onClick={() => onSelect(facet.key, value)}
                       className="w-full flex items-center justify-between gap-2 text-left group cursor-pointer"
-                      title={`Filter by ${value}`}
+                      title={`Filter by ${facet.key}:${value}`}
                     >
                       <span className="truncate">
                         {facet.type === "decision" ? (

@@ -158,6 +158,23 @@ export function getDecisions(opts: FetchOptions, limit = 50, q = "") {
   return fetchFromGateway<any[]>(opts, path);
 }
 
+export interface DecisionFilters {
+  limit?: number;
+  agentId?: string;
+  decision?: string;
+  q?: string;
+}
+
+// Compiled AQL -> the gateway's parameterized /v1/decisions filters.
+export function searchDecisions(opts: FetchOptions, filters: DecisionFilters) {
+  const params = new URLSearchParams();
+  params.set("limit", String(filters.limit ?? 50));
+  if (filters.agentId) params.set("agent_id", filters.agentId);
+  if (filters.decision) params.set("decision", filters.decision);
+  if (filters.q) params.set("q", filters.q);
+  return fetchFromGateway<any[]>(opts, `/v1/decisions?${params.toString()}`);
+}
+
 // Evidence graph
 export function getIncidentGraph(opts: FetchOptions, incidentId: string) {
   return fetchFromGateway<any>(opts, `/v1/graph/incident/${incidentId}`);
