@@ -124,21 +124,23 @@ pub async fn list_decisions(
 /// `0018_fts5_search_index.sql`), scoped to this row's `source_table` and
 /// `tenant_id` so a search can never surface another tenant's or another
 /// source table's rows.
-#[allow(clippy::too_many_arguments)]
 pub async fn list_decisions_cursor(
     pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
     cursor: Option<i64>,
-    agent_id: Option<&str>,
-    decision: Option<&str>,
-    q: Option<&str>,
-    source_trust: Option<&str>,
-    skill: Option<&str>,
-    from: Option<&str>,
-    to: Option<&str>,
+    filters: crate::traits::DecisionListFilters<'_>,
 ) -> Result<(Vec<DecisionRecord>, Option<i64>), sqlx::Error> {
+    let crate::traits::DecisionListFilters {
+        agent_id,
+        decision,
+        q,
+        source_trust,
+        skill,
+        from,
+        to,
+    } = filters;
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let query = "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
          FROM decisions
@@ -721,6 +723,7 @@ mod tests {
     use super::*;
     use crate::db::test_utils::*;
     use crate::db::*;
+    use crate::traits::DecisionListFilters;
 
     /// #0106: rows older than the cutoff are moved to audit_events_archive
     /// and removed from audit_events; recent rows are untouched.
@@ -982,11 +985,9 @@ mod tests {
             .unwrap();
 
         let (page, next_cursor) =
-            list_decisions_cursor(
-                &pool, "tenant_a", 2, 0, None, None, None, None, None, None, None, None,
-            )
-            .await
-            .unwrap();
+            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, DecisionListFilters::default())
+                .await
+                .unwrap();
         assert_eq!(page.len(), 2);
         assert_eq!(
             next_cursor, None,
@@ -1001,13 +1002,7 @@ mod tests {
             2,
             0,
             Some(oldest_rowid),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            DecisionListFilters::default(),
         )
         .await
         .unwrap();
@@ -1055,13 +1050,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            Some("merge_pull_request*"),
-            None,
-            None,
-            None,
-            None,
+            DecisionListFilters {
+                q: Some("merge_pull_request*"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1077,13 +1069,10 @@ mod tests {
                 50,
                 0,
                 None,
-                None,
-                None,
-                Some("mer*"),
-                None,
-                None,
-                None,
-                None,
+                DecisionListFilters {
+                    q: Some("mer*"),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -1098,13 +1087,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            Some("merge_pull_request*"),
-            None,
-            None,
-            None,
-            None,
+            DecisionListFilters {
+                q: Some("merge_pull_request*"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1118,13 +1104,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            Some("zzzznomatch*"),
-            None,
-            None,
-            None,
-            None,
+            DecisionListFilters {
+                q: Some("zzzznomatch*"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1165,13 +1148,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            None,
-            Some("untrusted_external"),
-            None,
-            None,
-            None,
+            DecisionListFilters {
+                source_trust: Some("untrusted_external"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1179,11 +1159,10 @@ mod tests {
         assert_eq!(page[0].id, "dec_untrusted");
 
         // No source_trust filter returns both tenant_a rows.
-        let (all, _) = list_decisions_cursor(
-            &pool, "tenant_a", 50, 0, None, None, None, None, None, None, None, None,
-        )
-        .await
-        .unwrap();
+        let (all, _) =
+            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, DecisionListFilters::default())
+                .await
+                .unwrap();
         assert_eq!(all.len(), 2);
     }
 
@@ -1214,13 +1193,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            None,
-            None,
-            Some("github"),
-            None,
-            None,
+            DecisionListFilters {
+                skill: Some("github"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1251,13 +1227,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("2000-01-01 00:00:00"),
-            None,
+            DecisionListFilters {
+                from: Some("2000-01-01 00:00:00"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1270,13 +1243,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("2099-01-01 00:00:00"),
-            None,
+            DecisionListFilters {
+                from: Some("2099-01-01 00:00:00"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1289,13 +1259,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("2000-01-01 00:00:00"),
+            DecisionListFilters {
+                to: Some("2000-01-01 00:00:00"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

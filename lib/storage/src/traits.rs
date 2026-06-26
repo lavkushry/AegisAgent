@@ -6,6 +6,22 @@ use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
+/// Optional, parameterized filters for [`StorageBackend::list_decisions`].
+/// Bundled into one struct so call sites name each filter (no positional
+/// `Option<&str>` transposition risk) and new filters don't ripple through
+/// every signature. All bounds are exact equality except `from`/`to`, which
+/// are inclusive `created_at` range bounds in the DB timestamp format.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DecisionListFilters<'a> {
+    pub agent_id: Option<&'a str>,
+    pub decision: Option<&'a str>,
+    pub q: Option<&'a str>,
+    pub source_trust: Option<&'a str>,
+    pub skill: Option<&'a str>,
+    pub from: Option<&'a str>,
+    pub to: Option<&'a str>,
+}
+
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + 'static {
     // Agents & Skills
@@ -201,15 +217,9 @@ pub trait StorageBackend: Send + Sync + 'static {
     async fn list_decisions(
         &self,
         tenant_id: &str,
-        agent_id: Option<&str>,
-        decision_filter: Option<&str>,
         limit: i64,
         cursor: Option<i64>,
-        q: Option<&str>,
-        source_trust: Option<&str>,
-        skill: Option<&str>,
-        from: Option<&str>,
-        to: Option<&str>,
+        filters: DecisionListFilters<'_>,
     ) -> Result<(Vec<DecisionRecord>, Option<i64>), AegisError>;
     async fn get_decision_count_24h_for_agent(
         &self,

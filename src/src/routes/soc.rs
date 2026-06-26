@@ -32,7 +32,7 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 use aegis_common::errors::AegisError;
-use aegis_storage::traits::StorageBackend;
+use aegis_storage::traits::{DecisionListFilters, StorageBackend};
 
 use super::*;
 
@@ -157,15 +157,17 @@ pub async fn list_decisions(
         .storage
         .list_decisions(
             &tenant_id,
-            agent_id.as_deref(),
-            decision.as_deref(),
             limit,
             cursor,
-            q.as_deref(),
-            source_trust.as_deref(),
-            skill.as_deref(),
-            from.as_deref(),
-            to.as_deref(),
+            DecisionListFilters {
+                agent_id: agent_id.as_deref(),
+                decision: decision.as_deref(),
+                q: q.as_deref(),
+                source_trust: source_trust.as_deref(),
+                skill: skill.as_deref(),
+                from: from.as_deref(),
+                to: to.as_deref(),
+            },
         )
         .await
     {

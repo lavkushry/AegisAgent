@@ -26,6 +26,7 @@ use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
+use aegis_storage::traits::DecisionListFilters;
 
 use super::*;
 
@@ -2662,9 +2663,7 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(
-                &tenant_id, None, None, 10, None, None, None, None, None, None,
-            )
+            .list_decisions(&tenant_id, 10, None, DecisionListFilters::default())
             .await
             .unwrap()
             .0;
@@ -2701,9 +2700,7 @@ mod tests {
         // drain.
         let decisions = state
             .storage
-            .list_decisions(
-                &tenant_id, None, None, 10, None, None, None, None, None, None,
-            )
+            .list_decisions(&tenant_id, 10, None, DecisionListFilters::default())
             .await
             .unwrap()
             .0;
@@ -7150,9 +7147,7 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(
-                &tenant_id, None, None, 100, None, None, None, None, None, None,
-            )
+            .list_decisions(&tenant_id, 100, None, DecisionListFilters::default())
             .await
             .unwrap()
             .0;
@@ -7254,9 +7249,7 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(
-                &tenant_id, None, None, 100, None, None, None, None, None, None,
-            )
+            .list_decisions(&tenant_id, 100, None, DecisionListFilters::default())
             .await
             .unwrap()
             .0;

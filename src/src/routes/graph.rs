@@ -26,6 +26,7 @@ use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
 use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
+use aegis_storage::traits::DecisionListFilters;
 
 use super::*;
 
@@ -455,15 +456,12 @@ pub async fn get_graph_for_agent(
         .storage
         .list_decisions(
             &tenant_id,
-            Some(agent_id.as_str()),
-            None,
             GRAPH_AGENT_DECISION_LIMIT,
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            DecisionListFilters {
+                agent_id: Some(agent_id.as_str()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap_or_default()

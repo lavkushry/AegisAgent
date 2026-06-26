@@ -1,7 +1,7 @@
 use crate::db;
 use crate::db::DbPool;
 use crate::tenant_bloom::TenantBloomFilter;
-use crate::traits::StorageBackend;
+use crate::traits::{DecisionListFilters, StorageBackend};
 use aegis_api::models::*;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
@@ -472,32 +472,13 @@ impl StorageBackend for SqlDbStorage {
     async fn list_decisions(
         &self,
         tenant_id: &str,
-        agent_id: Option<&str>,
-        decision_filter: Option<&str>,
         limit: i64,
         cursor: Option<i64>,
-        q: Option<&str>,
-        source_trust: Option<&str>,
-        skill: Option<&str>,
-        from: Option<&str>,
-        to: Option<&str>,
+        filters: DecisionListFilters<'_>,
     ) -> Result<(Vec<DecisionRecord>, Option<i64>), AegisError> {
-        db::list_decisions_cursor(
-            &self.pool,
-            tenant_id,
-            limit,
-            0,
-            cursor,
-            agent_id,
-            decision_filter,
-            q,
-            source_trust,
-            skill,
-            from,
-            to,
-        )
-        .await
-        .map_err(AegisError::Database)
+        db::list_decisions_cursor(&self.pool, tenant_id, limit, 0, cursor, filters)
+            .await
+            .map_err(AegisError::Database)
     }
 
     async fn get_decision_count_24h_for_agent(
