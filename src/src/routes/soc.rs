@@ -32,7 +32,7 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 use aegis_common::errors::AegisError;
-use aegis_storage::traits::{DecisionListFilters, StorageBackend};
+use aegis_storage::traits::{DecisionListFilters, StorageBackend, TimeBucket};
 
 use super::*;
 
@@ -174,6 +174,58 @@ pub async fn list_decisions(
         Ok((decisions, next_cursor)) => paginated_response(&decisions, next_cursor),
         Err(e) => {
             error!("Failed to list decisions: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// GET /v1/decisions/timeseries — decision counts bucketed over time for the
+/// authenticated tenant. Accepts the same filters as `/v1/decisions`
+/// (`agent_id`/`decision`/`source_trust`/`skill`/`from`/`to`) plus `interval`
+/// (`minute`|`hour`|`day`, default `hour`). Returns `[{ bucket, count }]`.
+pub async fn decision_timeseries(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    let agent_id = parse_filter(raw_query.as_deref(), "agent_id");
+    let decision = parse_filter(raw_query.as_deref(), "decision");
+    let source_trust = parse_filter(raw_query.as_deref(), "source_trust");
+    let skill = parse_filter(raw_query.as_deref(), "skill");
+    let from = parse_filter(raw_query.as_deref(), "from").and_then(|raw| to_db_timestamp(&raw));
+    let to = parse_filter(raw_query.as_deref(), "to").and_then(|raw| to_db_timestamp(&raw));
+    let bucket = TimeBucket::parse(
+        parse_filter(raw_query.as_deref(), "interval")
+            .as_deref()
+            .unwrap_or("hour"),
+    );
+
+    match state
+        .storage
+        .count_decisions_over_time(
+            &tenant_id,
+            bucket,
+            DecisionListFilters {
+                agent_id: agent_id.as_deref(),
+                decision: decision.as_deref(),
+                source_trust: source_trust.as_deref(),
+                skill: skill.as_deref(),
+                from: from.as_deref(),
+                to: to.as_deref(),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(buckets) => {
+            let points: Vec<_> = buckets
+                .into_iter()
+                .map(|(bucket, count)| serde_json::json!({ "bucket": bucket, "count": count }))
+                .collect();
+            (StatusCode::OK, Json(points)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to count decisions over time: {:?}", e);
             StatusError::internal("Database error").into_response()
         }
     }

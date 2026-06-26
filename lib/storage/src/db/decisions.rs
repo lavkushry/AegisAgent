@@ -718,12 +718,108 @@ pub async fn count_decisions_by_outcome(
     Ok(row)
 }
 
+/// #SOC-query: decision counts bucketed over time, for timeseries panels.
+/// The time bucket is chosen server-side (allowlisted [`TimeBucket`]), never
+/// raw user input. Tenant-scoped and parameterized; `q` (FTS) is intentionally
+/// unsupported here. Returns `(bucket_label, count)` ascending.
+pub async fn count_decisions_over_time(
+    pool: &DbPool,
+    tenant_id: &str,
+    bucket: crate::traits::TimeBucket,
+    filters: crate::traits::DecisionListFilters<'_>,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let crate::traits::DecisionListFilters {
+        agent_id,
+        decision,
+        source_trust,
+        skill,
+        from,
+        to,
+        ..
+    } = filters;
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(
+                "SELECT strftime(?, created_at) AS bucket, COUNT(*) AS cnt
+                 FROM decisions
+                 WHERE tenant_id = ?
+                   AND (? IS NULL OR agent_id = ?)
+                   AND (? IS NULL OR decision = ?)
+                   AND (? IS NULL OR root_trust_level = ?)
+                   AND (? IS NULL OR skill = ?)
+                   AND (? IS NULL OR created_at >= ?)
+                   AND (? IS NULL OR created_at <= ?)
+                 GROUP BY bucket
+                 ORDER BY bucket ASC",
+            )
+            .bind(bucket.sqlite_fmt())
+            .bind(tenant_id)
+            .bind(agent_id)
+            .bind(agent_id)
+            .bind(decision)
+            .bind(decision)
+            .bind(source_trust)
+            .bind(source_trust)
+            .bind(skill)
+            .bind(skill)
+            .bind(from)
+            .bind(from)
+            .bind(to)
+            .bind(to)
+            .fetch_all(p)
+            .await?;
+            Ok(rows
+                .iter()
+                .map(|r| (r.get::<String, _>("bucket"), r.get::<i64, _>("cnt")))
+                .collect())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(
+                "SELECT to_char(date_trunc(?, created_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket, COUNT(*) AS cnt
+                 FROM decisions
+                 WHERE tenant_id = ?
+                   AND (? IS NULL OR agent_id = ?)
+                   AND (? IS NULL OR decision = ?)
+                   AND (? IS NULL OR root_trust_level = ?)
+                   AND (? IS NULL OR skill = ?)
+                   AND (? IS NULL OR created_at >= ?)
+                   AND (? IS NULL OR created_at <= ?)
+                 GROUP BY bucket
+                 ORDER BY bucket ASC",
+            );
+            let rows = sqlx::query(&pg_sql)
+                .bind(bucket.pg_unit())
+                .bind(tenant_id)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(decision)
+                .bind(decision)
+                .bind(source_trust)
+                .bind(source_trust)
+                .bind(skill)
+                .bind(skill)
+                .bind(from)
+                .bind(from)
+                .bind(to)
+                .bind(to)
+                .fetch_all(p)
+                .await?;
+            Ok(rows
+                .iter()
+                .map(|r| (r.get::<String, _>("bucket"), r.get::<i64, _>("cnt")))
+                .collect())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::test_utils::*;
     use crate::db::*;
-    use crate::traits::DecisionListFilters;
+    use crate::traits::{DecisionListFilters, TimeBucket};
 
     /// #0106: rows older than the cutoff are moved to audit_events_archive
     /// and removed from audit_events; recent rows are untouched.
@@ -1267,6 +1363,71 @@ mod tests {
         .await
         .unwrap();
         assert!(before.is_empty());
+    }
+
+    /// #SOC-query: `count_decisions_over_time` aggregates counts, honors the
+    /// decision filter, and is tenant-scoped.
+    #[tokio::test]
+    async fn count_decisions_over_time_buckets_and_filters() {
+        let pool = setup_pool("decisions_count_ot").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_ct', 'CT Agent', 'dev', 'low', 'active')")
+        .unwrap();
+
+        for (id, tenant, decision) in [
+            ("ct_deny_1", "tenant_a", "deny"),
+            ("ct_deny_2", "tenant_a", "deny"),
+            ("ct_allow_1", "tenant_a", "allow"),
+            ("ct_deny_b", "tenant_b", "deny"),
+        ] {
+            let mut d = graph_perf_decision(id, tenant);
+            d.decision = decision.to_string();
+            insert_decision(&pool, &d).await.unwrap();
+        }
+
+        let sum = |rows: &[(String, i64)]| rows.iter().map(|(_, c)| c).sum::<i64>();
+
+        // All tenant_a decisions.
+        let all = count_decisions_over_time(
+            &pool,
+            "tenant_a",
+            TimeBucket::Hour,
+            DecisionListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum(&all), 3);
+
+        // Filtered to denies.
+        let denies = count_decisions_over_time(
+            &pool,
+            "tenant_a",
+            TimeBucket::Hour,
+            DecisionListFilters {
+                decision: Some("deny"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum(&denies), 2);
+
+        // Tenant isolation: tenant_b sees only its own row.
+        let b = count_decisions_over_time(
+            &pool,
+            "tenant_b",
+            TimeBucket::Hour,
+            DecisionListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum(&b), 1);
     }
 
     /// Same off-by-one regression as the decisions test above, for

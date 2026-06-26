@@ -1,7 +1,7 @@
 use crate::db;
 use crate::db::DbPool;
 use crate::tenant_bloom::TenantBloomFilter;
-use crate::traits::{DecisionListFilters, StorageBackend};
+use crate::traits::{DecisionListFilters, StorageBackend, TimeBucket};
 use aegis_api::models::*;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
@@ -496,6 +496,17 @@ impl StorageBackend for SqlDbStorage {
         tenant_id: &str,
     ) -> Result<(i64, i64, i64, i64), AegisError> {
         db::count_decisions_by_outcome(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn count_decisions_over_time(
+        &self,
+        tenant_id: &str,
+        bucket: TimeBucket,
+        filters: DecisionListFilters<'_>,
+    ) -> Result<Vec<(String, i64)>, AegisError> {
+        db::count_decisions_over_time(&self.pool, tenant_id, bucket, filters)
             .await
             .map_err(AegisError::Database)
     }

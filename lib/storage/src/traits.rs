@@ -22,6 +22,45 @@ pub struct DecisionListFilters<'a> {
     pub to: Option<&'a str>,
 }
 
+/// Time-bucket granularity for `count_decisions_over_time`. A closed
+/// allowlist — the bucket is chosen server-side and never interpolated from
+/// raw user input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TimeBucket {
+    Minute,
+    #[default]
+    Hour,
+    Day,
+}
+
+impl TimeBucket {
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "minute" => Self::Minute,
+            "day" => Self::Day,
+            _ => Self::Hour,
+        }
+    }
+
+    /// SQLite `strftime` format string for this bucket.
+    pub fn sqlite_fmt(self) -> &'static str {
+        match self {
+            Self::Minute => "%Y-%m-%d %H:%M:00",
+            Self::Hour => "%Y-%m-%d %H:00:00",
+            Self::Day => "%Y-%m-%d",
+        }
+    }
+
+    /// PostgreSQL `date_trunc` unit for this bucket.
+    pub fn pg_unit(self) -> &'static str {
+        match self {
+            Self::Minute => "minute",
+            Self::Hour => "hour",
+            Self::Day => "day",
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + 'static {
     // Agents & Skills
@@ -230,6 +269,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         &self,
         tenant_id: &str,
     ) -> Result<(i64, i64, i64, i64), AegisError>;
+    /// Decision counts bucketed over time (for timeseries panels). Returns
+    /// `(bucket_label, count)` ascending. Tenant-scoped and parameterized.
+    async fn count_decisions_over_time(
+        &self,
+        tenant_id: &str,
+        bucket: TimeBucket,
+        filters: DecisionListFilters<'_>,
+    ) -> Result<Vec<(String, i64)>, AegisError>;
     async fn list_decisions_by_ids(
         &self,
         tenant_id: &str,

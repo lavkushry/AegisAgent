@@ -51,6 +51,10 @@ export interface QueryRequest {
   readonly limit?: number;
   readonly cursor?: string;
   readonly search?: string;
+  /** Aggregate mode — when set, the datasource returns a bucketed series. */
+  readonly aggregate?: "count_over_time";
+  /** Bucket granularity for count_over_time ("minute" | "hour" | "day"). */
+  readonly interval?: string;
   readonly signal?: AbortSignal;
 }
 

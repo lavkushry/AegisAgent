@@ -66,6 +66,25 @@ export const overviewDashboard: DashboardSchema = {
       ],
     },
     {
+      id: "volume",
+      title: "Decision volume",
+      panels: [
+        {
+          panel: {
+            id: "ts-decisions",
+            type: "timeseries",
+            title: "Decisions over time (hourly)",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            entity: "decision",
+            aggregate: "count_over_time",
+            interval: "hour",
+          },
+          w: 12,
+          h: 3,
+        },
+      ],
+    },
+    {
       id: "recent",
       title: "Recent decisions",
       panels: [

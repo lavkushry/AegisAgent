@@ -47,6 +47,8 @@ export interface PanelDefinition<TOptions = Record<string, unknown>> {
   readonly entity?: EntityKind;
   readonly query?: string;
   readonly search?: string;
+  readonly aggregate?: "count_over_time";
+  readonly interval?: string;
   readonly options?: TOptions;
   readonly drilldowns?: ReadonlyArray<DrilldownLink>;
 }

@@ -1,6 +1,7 @@
 import type { PanelProps, PanelRegistryEntry, PanelType } from "./types";
 import StatPanel from "./standard/StatPanel";
 import TablePanel from "./standard/TablePanel";
+import TimeSeriesPanel from "./standard/TimeSeriesPanel";
 import AgentTablePanel from "./standard/AgentTablePanel";
 import ApprovalCard from "./differentiators/ApprovalCard";
 import ProvableTimeline from "./differentiators/ProvableTimeline";
@@ -23,6 +24,12 @@ const entries: PanelRegistryEntry[] = [
     Component: TablePanel as PanelRegistryEntry["Component"],
     defaultOptions: {},
     chartLib: "none",
+  },
+  {
+    type: "timeseries",
+    Component: TimeSeriesPanel as PanelRegistryEntry["Component"],
+    defaultOptions: {},
+    chartLib: "recharts",
   },
   {
     type: "agent-table",

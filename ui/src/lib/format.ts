@@ -57,3 +57,24 @@ export function relativeRangeToFrom(range: string): string | undefined {
   if (!ms) return undefined;
   return new Date(Date.now() - ms).toISOString();
 }
+
+const UNIT_MS: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/**
+ * Resolve a Grafana-style time token ("now", "now-24h", "now-7d") to an
+ * RFC3339 timestamp. Already-absolute ISO strings pass through. Returns
+ * undefined for anything unrecognized.
+ */
+export function resolveTimeToken(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  const t = token.trim();
+  if (t === "now") return new Date().toISOString();
+  const m = /^now-(\d+)([smhd])$/.exec(t);
+  if (m) {
+    const ms = parseInt(m[1], 10) * (UNIT_MS[m[2]] ?? 0);
+    return new Date(Date.now() - ms).toISOString();
+  }
+  // Assume an absolute timestamp; validate it parses.
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
