@@ -24,6 +24,20 @@
 
 // === FORBID RULES FIRST (highest priority; abort on known-unsafe patterns) ===
 
+// Rule "mcp-unknown-tool-forbid": unknown MCP tools are denied by default.
+// @id surfaces as the matched-policy name so authorize callers and the SOC
+// detection rules (rule_dsl `matched_policy_contains: [mcp_unknown_tool]`)
+// see a stable identifier instead of Cedar's positional `policyN`.
+@id("mcp_unknown_tool")
+forbid (
+    principal,
+    action == Action::"tool_call",
+    resource
+)
+when {
+    context.is_mcp_tool_known == false
+};
+
 // Rule "untrusted-mutation-forbid": untrusted, suspected-malicious, OR
 // unclassified (unknown) context can NEVER directly trigger a mutating action.
 // `unknown` is denied — not merely paused — because provenance is fail-closed:

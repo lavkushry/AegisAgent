@@ -265,7 +265,17 @@ impl PolicyEngine {
         let mut redacted_fields: Vec<String> = Vec::new();
 
         for policy_id in response.diagnostics().reason() {
-            matched_policies.push(policy_id.to_string());
+            // Prefer the policy's `@id` annotation as the matched-policy name so
+            // callers and SOC detection rules see a stable identifier (e.g.
+            // `mcp_unknown_tool`) rather than Cedar's positional `policyN`,
+            // which shifts as rules are added/reordered. Falls back to the
+            // Cedar policy id when no `@id` annotation is present.
+            let matched_name = policy_set
+                .policy(policy_id)
+                .and_then(|p| p.annotation("id"))
+                .map(|a| a.trim_matches('"').to_string())
+                .unwrap_or_else(|| policy_id.to_string());
+            matched_policies.push(matched_name);
             if let Some(policy) = policy_set.policy(policy_id) {
                 // Escalate the binary Cedar `allow` using annotation overrides.
                 // Severity order (most → least restrictive):
