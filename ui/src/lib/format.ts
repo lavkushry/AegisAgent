@@ -40,3 +40,20 @@ export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Unexpected error";
 }
+
+const RANGE_MS: Record<string, number> = {
+  "1h": 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+};
+
+/**
+ * Convert a relative range token ("24h", "7d", …) to an RFC3339 lower bound
+ * (now - range). Returns undefined for unknown tokens (no time filter).
+ */
+export function relativeRangeToFrom(range: string): string | undefined {
+  const ms = RANGE_MS[range];
+  if (!ms) return undefined;
+  return new Date(Date.now() - ms).toISOString();
+}

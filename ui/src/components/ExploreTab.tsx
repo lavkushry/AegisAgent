@@ -10,7 +10,7 @@ import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
 import HashChip from "./security/HashChip";
 import FieldSidebar from "./filters/FieldSidebar";
-import { formatTime, errorMessage } from "@/lib/format";
+import { formatTime, errorMessage, relativeRangeToFrom } from "@/lib/format";
 
 // Loosely-typed decision record from the gateway. The datasource/DataFrame
 // layer (HLD/LLD section 5) will replace this with a generated type.
@@ -37,6 +37,7 @@ export default function ExploreTab() {
   const { gatewayUrl, bearerToken } = useAppStore();
   const exploreSeed = useAppStore((s) => s.exploreSeed);
   const consumeExploreSeed = useAppStore((s) => s.consumeExploreSeed);
+  const timeRange = useAppStore((s) => s.timeRange);
   const apiOpts = { gatewayUrl, bearerToken };
 
   // Seed the query from a drilldown at mount (this tab remounts on switch).
@@ -54,8 +55,13 @@ export default function ExploreTab() {
 
   // Fetch decisions based on query
   const { data: decisions, isLoading, error } = useQuery({
-    queryKey: ["decisions", gatewayUrl, bearerToken, debouncedQuery],
-    queryFn: () => searchDecisions(apiOpts, { limit: 50, ...parseAql(debouncedQuery) }),
+    queryKey: ["decisions", gatewayUrl, bearerToken, debouncedQuery, timeRange],
+    queryFn: () =>
+      searchDecisions(apiOpts, {
+        limit: 50,
+        from: relativeRangeToFrom(timeRange),
+        ...parseAql(debouncedQuery),
+      }),
     refetchInterval: 10000, // Poll every 10s
   });
 

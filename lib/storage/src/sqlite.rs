@@ -479,6 +479,8 @@ impl StorageBackend for SqlDbStorage {
         q: Option<&str>,
         source_trust: Option<&str>,
         skill: Option<&str>,
+        from: Option<&str>,
+        to: Option<&str>,
     ) -> Result<(Vec<DecisionRecord>, Option<i64>), AegisError> {
         db::list_decisions_cursor(
             &self.pool,
@@ -491,6 +493,8 @@ impl StorageBackend for SqlDbStorage {
             q,
             source_trust,
             skill,
+            from,
+            to,
         )
         .await
         .map_err(AegisError::Database)

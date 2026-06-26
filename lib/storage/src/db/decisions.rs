@@ -136,6 +136,8 @@ pub async fn list_decisions_cursor(
     q: Option<&str>,
     source_trust: Option<&str>,
     skill: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
 ) -> Result<(Vec<DecisionRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let query = "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
@@ -145,6 +147,8 @@ pub async fn list_decisions_cursor(
            AND (? IS NULL OR decision = ?)
            AND (? IS NULL OR root_trust_level = ?)
            AND (? IS NULL OR skill = ?)
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
            AND (? IS NULL OR rowid < ?)
            AND (? IS NULL OR id IN (
                  SELECT source_id FROM audit_search_index
@@ -164,6 +168,10 @@ pub async fn list_decisions_cursor(
                 .bind(source_trust)
                 .bind(skill)
                 .bind(skill)
+                .bind(from)
+                .bind(from)
+                .bind(to)
+                .bind(to)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(q)
@@ -188,6 +196,10 @@ pub async fn list_decisions_cursor(
                 .bind(source_trust)
                 .bind(skill)
                 .bind(skill)
+                .bind(from)
+                .bind(from)
+                .bind(to)
+                .bind(to)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(q)
@@ -970,9 +982,11 @@ mod tests {
             .unwrap();
 
         let (page, next_cursor) =
-            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, None, None, None, None, None)
-                .await
-                .unwrap();
+            list_decisions_cursor(
+                &pool, "tenant_a", 2, 0, None, None, None, None, None, None, None, None,
+            )
+            .await
+            .unwrap();
         assert_eq!(page.len(), 2);
         assert_eq!(
             next_cursor, None,
@@ -987,6 +1001,8 @@ mod tests {
             2,
             0,
             Some(oldest_rowid),
+            None,
+            None,
             None,
             None,
             None,
@@ -1044,6 +1060,8 @@ mod tests {
             Some("merge_pull_request*"),
             None,
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1053,9 +1071,22 @@ mod tests {
         // Prefix match — exactly what `sanitize_fts5_query` produces for a
         // partial term like `?q=mer`.
         let (prefix_page, _) =
-            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, None, None, Some("mer*"), None, None)
-                .await
-                .unwrap();
+            list_decisions_cursor(
+                &pool,
+                "tenant_a",
+                50,
+                0,
+                None,
+                None,
+                None,
+                Some("mer*"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
         assert_eq!(prefix_page.len(), 1);
         assert_eq!(prefix_page[0].id, "dec_merge");
 
@@ -1070,6 +1101,8 @@ mod tests {
             None,
             None,
             Some("merge_pull_request*"),
+            None,
+            None,
             None,
             None,
         )
@@ -1088,6 +1121,8 @@ mod tests {
             None,
             None,
             Some("zzzznomatch*"),
+            None,
+            None,
             None,
             None,
         )
@@ -1135,6 +1170,8 @@ mod tests {
             None,
             Some("untrusted_external"),
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1142,10 +1179,11 @@ mod tests {
         assert_eq!(page[0].id, "dec_untrusted");
 
         // No source_trust filter returns both tenant_a rows.
-        let (all, _) =
-            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, None, None, None, None, None)
-                .await
-                .unwrap();
+        let (all, _) = list_decisions_cursor(
+            &pool, "tenant_a", 50, 0, None, None, None, None, None, None, None, None,
+        )
+        .await
+        .unwrap();
         assert_eq!(all.len(), 2);
     }
 
@@ -1181,11 +1219,87 @@ mod tests {
             None,
             None,
             Some("github"),
+            None,
+            None,
         )
         .await
         .unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].id, "dec_github");
+    }
+
+    /// #SOC-query: `from`/`to` are inclusive, parameterized bounds on
+    /// `created_at` (string-compared against the DB timestamp format).
+    #[tokio::test]
+    async fn list_decisions_cursor_filters_by_time_range() {
+        let pool = setup_pool("decisions_time_range").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_tr', 'TR Agent', 'dev', 'low', 'active')")
+        .unwrap();
+        // created_at defaults to the current timestamp on insert.
+        insert_decision(&pool, &graph_perf_decision("dec_now", "tenant_a"))
+            .await
+            .unwrap();
+
+        // `from` in the past includes the row.
+        let (past, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("2000-01-01 00:00:00"),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(past.len(), 1);
+
+        // `from` in the future excludes it.
+        let (future, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("2099-01-01 00:00:00"),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(future.is_empty());
+
+        // `to` in the past excludes it.
+        let (before, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("2000-01-01 00:00:00"),
+        )
+        .await
+        .unwrap();
+        assert!(before.is_empty());
     }
 
     /// Same off-by-one regression as the decisions test above, for

@@ -2662,7 +2662,9 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 10, None, None, None, None)
+            .list_decisions(
+                &tenant_id, None, None, 10, None, None, None, None, None, None,
+            )
             .await
             .unwrap()
             .0;
@@ -2699,7 +2701,9 @@ mod tests {
         // drain.
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 10, None, None, None, None)
+            .list_decisions(
+                &tenant_id, None, None, 10, None, None, None, None, None, None,
+            )
             .await
             .unwrap()
             .0;
@@ -7146,7 +7150,9 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 100, None, None, None, None)
+            .list_decisions(
+                &tenant_id, None, None, 100, None, None, None, None, None, None,
+            )
             .await
             .unwrap()
             .0;
@@ -7248,7 +7254,9 @@ mod tests {
 
         let decisions = state
             .storage
-            .list_decisions(&tenant_id, None, None, 100, None, None, None, None)
+            .list_decisions(
+                &tenant_id, None, None, 100, None, None, None, None, None, None,
+            )
             .await
             .unwrap()
             .0;

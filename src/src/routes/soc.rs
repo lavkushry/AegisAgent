@@ -119,6 +119,22 @@ pub async fn get_audit_events(
 ///   `decision` — optional equality filter.
 ///   `q` (#1450) — optional full-text keyword search (FTS5, prefix-matching)
 ///   over `skill`/`action`/`resource`/`reason`/`decision`/`agent_id`.
+///   `source_trust`/`skill` — optional equality filters.
+///   `from`/`to` — optional RFC3339 time bounds on `created_at` (inclusive).
+///
+/// Parse an RFC3339 timestamp into the DB's `created_at` string format
+/// (`%F %T%.6f`, space-separated) so range comparisons sort correctly — the
+/// same formatting `list_decisions_in_range` (#1283) relies on. Invalid input
+/// is dropped (no filter) rather than erroring, since the time range is a UI
+/// convenience, not a security control.
+fn to_db_timestamp(raw: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(raw).ok().map(|dt| {
+        dt.with_timezone(&chrono::Utc)
+            .format("%F %T%.6f")
+            .to_string()
+    })
+}
+
 pub async fn list_decisions(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -133,6 +149,8 @@ pub async fn list_decisions(
     let decision = parse_filter(raw_query.as_deref(), "decision");
     let source_trust = parse_filter(raw_query.as_deref(), "source_trust");
     let skill = parse_filter(raw_query.as_deref(), "skill");
+    let from = parse_filter(raw_query.as_deref(), "from").and_then(|raw| to_db_timestamp(&raw));
+    let to = parse_filter(raw_query.as_deref(), "to").and_then(|raw| to_db_timestamp(&raw));
     let q = parse_filter(raw_query.as_deref(), "q").and_then(|raw| sanitize_fts5_query(&raw));
 
     match state
@@ -146,6 +164,8 @@ pub async fn list_decisions(
             q.as_deref(),
             source_trust.as_deref(),
             skill.as_deref(),
+            from.as_deref(),
+            to.as_deref(),
         )
         .await
     {

@@ -164,6 +164,8 @@ export interface DecisionFilters {
   decision?: string;
   sourceTrust?: string;
   skill?: string;
+  from?: string;
+  to?: string;
   q?: string;
 }
 
@@ -175,6 +177,8 @@ export function searchDecisions(opts: FetchOptions, filters: DecisionFilters) {
   if (filters.decision) params.set("decision", filters.decision);
   if (filters.sourceTrust) params.set("source_trust", filters.sourceTrust);
   if (filters.skill) params.set("skill", filters.skill);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
   if (filters.q) params.set("q", filters.q);
   return fetchFromGateway<any[]>(opts, `/v1/decisions?${params.toString()}`);
 }
