@@ -549,6 +549,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         &self,
         tenant_id: &str,
     ) -> Result<Vec<WebhookSubscriptionRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of `list_webhook_subscriptions`.
+    async fn list_webhook_subscriptions_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<WebhookSubscriptionRecord>, Option<i64>), AegisError>;
     async fn get_webhook_subscription(
         &self,
         tenant_id: &str,
@@ -630,6 +638,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         id: &str,
     ) -> Result<Option<ApiKeyRecord>, AegisError>;
     async fn list_api_keys(&self, tenant_id: &str) -> Result<Vec<ApiKeyRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of `list_api_keys`.
+    async fn list_api_keys_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ApiKeyRecord>, Option<i64>), AegisError>;
     async fn insert_api_key(&self, record: &ApiKeyRecord) -> Result<(), AegisError>;
     async fn revoke_api_key(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
     async fn is_active_api_key(&self, tenant_id: &str, key_hash: &str) -> Result<bool, AegisError>;
@@ -675,6 +691,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         steps_json: &str,
     ) -> Result<PlaybookRecord, AegisError>;
     async fn list_playbooks(&self, tenant_id: &str) -> Result<Vec<PlaybookRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of `list_playbooks`.
+    async fn list_playbooks_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<PlaybookRecord>, Option<i64>), AegisError>;
     async fn get_playbook_by_id(
         &self,
         tenant_id: &str,

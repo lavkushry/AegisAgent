@@ -1139,6 +1139,18 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_webhook_subscriptions_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<WebhookSubscriptionRecord>, Option<i64>), AegisError> {
+        db::list_webhook_subscriptions_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_webhook_subscription(
         &self,
         tenant_id: &str,
@@ -1308,6 +1320,18 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_api_keys_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ApiKeyRecord>, Option<i64>), AegisError> {
+        db::list_api_keys_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn insert_api_key(&self, record: &ApiKeyRecord) -> Result<(), AegisError> {
         db::insert_api_key(&self.pool, record)
             .await
@@ -1425,6 +1449,18 @@ impl StorageBackend for SqlDbStorage {
 
     async fn list_playbooks(&self, tenant_id: &str) -> Result<Vec<PlaybookRecord>, AegisError> {
         db::list_playbooks(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_playbooks_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<PlaybookRecord>, Option<i64>), AegisError> {
+        db::list_playbooks_cursor(&self.pool, tenant_id, limit, offset, cursor)
             .await
             .map_err(AegisError::Database)
     }
