@@ -124,23 +124,33 @@ pub async fn list_decisions(
 /// `0018_fts5_search_index.sql`), scoped to this row's `source_table` and
 /// `tenant_id` so a search can never surface another tenant's or another
 /// source table's rows.
-#[allow(clippy::too_many_arguments)]
 pub async fn list_decisions_cursor(
     pool: &DbPool,
     tenant_id: &str,
     limit: i64,
     offset: i64,
     cursor: Option<i64>,
-    agent_id: Option<&str>,
-    decision: Option<&str>,
-    q: Option<&str>,
+    filters: crate::traits::DecisionListFilters<'_>,
 ) -> Result<(Vec<DecisionRecord>, Option<i64>), sqlx::Error> {
+    let crate::traits::DecisionListFilters {
+        agent_id,
+        decision,
+        q,
+        source_trust,
+        skill,
+        from,
+        to,
+    } = filters;
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let query = "SELECT id, tenant_id, agent_id, user_id, run_id, trace_id, skill, action, resource, input_json, decision, risk_score, reason, matched_policy_ids, request_id, latency_ms, composite_risk_score, root_trust_level, parent_run_id, created_at, rowid
          FROM decisions
          WHERE tenant_id = ?
            AND (? IS NULL OR agent_id = ?)
            AND (? IS NULL OR decision = ?)
+           AND (? IS NULL OR root_trust_level = ?)
+           AND (? IS NULL OR skill = ?)
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
            AND (? IS NULL OR rowid < ?)
            AND (? IS NULL OR id IN (
                  SELECT source_id FROM audit_search_index
@@ -156,6 +166,14 @@ pub async fn list_decisions_cursor(
                 .bind(agent_id)
                 .bind(decision)
                 .bind(decision)
+                .bind(source_trust)
+                .bind(source_trust)
+                .bind(skill)
+                .bind(skill)
+                .bind(from)
+                .bind(from)
+                .bind(to)
+                .bind(to)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(q)
@@ -176,6 +194,14 @@ pub async fn list_decisions_cursor(
                 .bind(agent_id)
                 .bind(decision)
                 .bind(decision)
+                .bind(source_trust)
+                .bind(source_trust)
+                .bind(skill)
+                .bind(skill)
+                .bind(from)
+                .bind(from)
+                .bind(to)
+                .bind(to)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(q)
@@ -692,11 +718,108 @@ pub async fn count_decisions_by_outcome(
     Ok(row)
 }
 
+/// #SOC-query: decision counts bucketed over time, for timeseries panels.
+/// The time bucket is chosen server-side (allowlisted [`TimeBucket`]), never
+/// raw user input. Tenant-scoped and parameterized; `q` (FTS) is intentionally
+/// unsupported here. Returns `(bucket_label, count)` ascending.
+pub async fn count_decisions_over_time(
+    pool: &DbPool,
+    tenant_id: &str,
+    bucket: crate::traits::TimeBucket,
+    filters: crate::traits::DecisionListFilters<'_>,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let crate::traits::DecisionListFilters {
+        agent_id,
+        decision,
+        source_trust,
+        skill,
+        from,
+        to,
+        ..
+    } = filters;
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(
+                "SELECT strftime(?, created_at) AS bucket, COUNT(*) AS cnt
+                 FROM decisions
+                 WHERE tenant_id = ?
+                   AND (? IS NULL OR agent_id = ?)
+                   AND (? IS NULL OR decision = ?)
+                   AND (? IS NULL OR root_trust_level = ?)
+                   AND (? IS NULL OR skill = ?)
+                   AND (? IS NULL OR created_at >= ?)
+                   AND (? IS NULL OR created_at <= ?)
+                 GROUP BY bucket
+                 ORDER BY bucket ASC",
+            )
+            .bind(bucket.sqlite_fmt())
+            .bind(tenant_id)
+            .bind(agent_id)
+            .bind(agent_id)
+            .bind(decision)
+            .bind(decision)
+            .bind(source_trust)
+            .bind(source_trust)
+            .bind(skill)
+            .bind(skill)
+            .bind(from)
+            .bind(from)
+            .bind(to)
+            .bind(to)
+            .fetch_all(p)
+            .await?;
+            Ok(rows
+                .iter()
+                .map(|r| (r.get::<String, _>("bucket"), r.get::<i64, _>("cnt")))
+                .collect())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(
+                "SELECT to_char(date_trunc(?, created_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket, COUNT(*) AS cnt
+                 FROM decisions
+                 WHERE tenant_id = ?
+                   AND (? IS NULL OR agent_id = ?)
+                   AND (? IS NULL OR decision = ?)
+                   AND (? IS NULL OR root_trust_level = ?)
+                   AND (? IS NULL OR skill = ?)
+                   AND (? IS NULL OR created_at >= ?)
+                   AND (? IS NULL OR created_at <= ?)
+                 GROUP BY bucket
+                 ORDER BY bucket ASC",
+            );
+            let rows = sqlx::query(&pg_sql)
+                .bind(bucket.pg_unit())
+                .bind(tenant_id)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(decision)
+                .bind(decision)
+                .bind(source_trust)
+                .bind(source_trust)
+                .bind(skill)
+                .bind(skill)
+                .bind(from)
+                .bind(from)
+                .bind(to)
+                .bind(to)
+                .fetch_all(p)
+                .await?;
+            Ok(rows
+                .iter()
+                .map(|r| (r.get::<String, _>("bucket"), r.get::<i64, _>("cnt")))
+                .collect())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::test_utils::*;
     use crate::db::*;
+    use crate::traits::{DecisionListFilters, TimeBucket};
 
     /// #0106: rows older than the cutoff are moved to audit_events_archive
     /// and removed from audit_events; recent rows are untouched.
@@ -958,7 +1081,7 @@ mod tests {
             .unwrap();
 
         let (page, next_cursor) =
-            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, None, None, None)
+            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, DecisionListFilters::default())
                 .await
                 .unwrap();
         assert_eq!(page.len(), 2);
@@ -975,9 +1098,7 @@ mod tests {
             2,
             0,
             Some(oldest_rowid),
-            None,
-            None,
-            None,
+            DecisionListFilters::default(),
         )
         .await
         .unwrap();
@@ -1025,9 +1146,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            Some("merge_pull_request*"),
+            DecisionListFilters {
+                q: Some("merge_pull_request*"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1037,9 +1159,19 @@ mod tests {
         // Prefix match — exactly what `sanitize_fts5_query` produces for a
         // partial term like `?q=mer`.
         let (prefix_page, _) =
-            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, None, None, Some("mer*"))
-                .await
-                .unwrap();
+            list_decisions_cursor(
+                &pool,
+                "tenant_a",
+                50,
+                0,
+                None,
+                DecisionListFilters {
+                    q: Some("mer*"),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(prefix_page.len(), 1);
         assert_eq!(prefix_page[0].id, "dec_merge");
 
@@ -1051,9 +1183,10 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            Some("merge_pull_request*"),
+            DecisionListFilters {
+                q: Some("merge_pull_request*"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -1067,13 +1200,234 @@ mod tests {
             50,
             0,
             None,
-            None,
-            None,
-            Some("zzzznomatch*"),
+            DecisionListFilters {
+                q: Some("zzzznomatch*"),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
         assert!(no_match.is_empty());
+    }
+
+    /// #SOC-query: `source_trust` is an exact, parameterized filter on
+    /// `root_trust_level` (the provenance differentiator) and is tenant-scoped.
+    #[tokio::test]
+    async fn list_decisions_cursor_filters_by_source_trust_and_is_tenant_scoped() {
+        let pool = setup_pool("decisions_source_trust").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_st', 'ST Agent', 'dev', 'low', 'active')")
+        .unwrap();
+
+        let mut untrusted = graph_perf_decision("dec_untrusted", "tenant_a");
+        untrusted.root_trust_level = Some("untrusted_external".to_string());
+        insert_decision(&pool, &untrusted).await.unwrap();
+
+        let mut trusted = graph_perf_decision("dec_trusted", "tenant_a");
+        trusted.root_trust_level = Some("trusted_internal_signed".to_string());
+        insert_decision(&pool, &trusted).await.unwrap();
+
+        // Same trust level under a different tenant must never leak.
+        let mut cross = graph_perf_decision("dec_cross", "tenant_b");
+        cross.root_trust_level = Some("untrusted_external".to_string());
+        insert_decision(&pool, &cross).await.unwrap();
+
+        let (page, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            DecisionListFilters {
+                source_trust: Some("untrusted_external"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "dec_untrusted");
+
+        // No source_trust filter returns both tenant_a rows.
+        let (all, _) =
+            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, DecisionListFilters::default())
+                .await
+                .unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    /// #SOC-query: `skill` (the tool / integration name) is an exact,
+    /// parameterized filter.
+    #[tokio::test]
+    async fn list_decisions_cursor_filters_by_skill_tool() {
+        let pool = setup_pool("decisions_skill").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_sk', 'SK Agent', 'dev', 'low', 'active')")
+        .unwrap();
+
+        // graph_perf_decision defaults to skill "github".
+        insert_decision(&pool, &graph_perf_decision("dec_github", "tenant_a"))
+            .await
+            .unwrap();
+
+        let mut slack = graph_perf_decision("dec_slack", "tenant_a");
+        slack.skill = "slack".to_string();
+        insert_decision(&pool, &slack).await.unwrap();
+
+        let (page, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            DecisionListFilters {
+                skill: Some("github"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "dec_github");
+    }
+
+    /// #SOC-query: `from`/`to` are inclusive, parameterized bounds on
+    /// `created_at` (string-compared against the DB timestamp format).
+    #[tokio::test]
+    async fn list_decisions_cursor_filters_by_time_range() {
+        let pool = setup_pool("decisions_time_range").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_tr', 'TR Agent', 'dev', 'low', 'active')")
+        .unwrap();
+        // created_at defaults to the current timestamp on insert.
+        insert_decision(&pool, &graph_perf_decision("dec_now", "tenant_a"))
+            .await
+            .unwrap();
+
+        // `from` in the past includes the row.
+        let (past, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            DecisionListFilters {
+                from: Some("2000-01-01 00:00:00"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(past.len(), 1);
+
+        // `from` in the future excludes it.
+        let (future, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            DecisionListFilters {
+                from: Some("2099-01-01 00:00:00"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(future.is_empty());
+
+        // `to` in the past excludes it.
+        let (before, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            DecisionListFilters {
+                to: Some("2000-01-01 00:00:00"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(before.is_empty());
+    }
+
+    /// #SOC-query: `count_decisions_over_time` aggregates counts, honors the
+    /// decision filter, and is tenant-scoped.
+    #[tokio::test]
+    async fn count_decisions_over_time_buckets_and_filters() {
+        let pool = setup_pool("decisions_count_ot").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+        crate::execute_query!(pool, "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_graph_perf', 'tenant_a', 'agent_graph_perf', 'token_ct', 'CT Agent', 'dev', 'low', 'active')")
+        .unwrap();
+
+        for (id, tenant, decision) in [
+            ("ct_deny_1", "tenant_a", "deny"),
+            ("ct_deny_2", "tenant_a", "deny"),
+            ("ct_allow_1", "tenant_a", "allow"),
+            ("ct_deny_b", "tenant_b", "deny"),
+        ] {
+            let mut d = graph_perf_decision(id, tenant);
+            d.decision = decision.to_string();
+            insert_decision(&pool, &d).await.unwrap();
+        }
+
+        let sum = |rows: &[(String, i64)]| rows.iter().map(|(_, c)| c).sum::<i64>();
+
+        // All tenant_a decisions.
+        let all = count_decisions_over_time(
+            &pool,
+            "tenant_a",
+            TimeBucket::Hour,
+            DecisionListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum(&all), 3);
+
+        // Filtered to denies.
+        let denies = count_decisions_over_time(
+            &pool,
+            "tenant_a",
+            TimeBucket::Hour,
+            DecisionListFilters {
+                decision: Some("deny"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum(&denies), 2);
+
+        // Tenant isolation: tenant_b sees only its own row.
+        let b = count_decisions_over_time(
+            &pool,
+            "tenant_b",
+            TimeBucket::Hour,
+            DecisionListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum(&b), 1);
     }
 
     /// Same off-by-one regression as the decisions test above, for

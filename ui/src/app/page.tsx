@@ -2,25 +2,28 @@
 
 import React, { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAppStore } from "./store";
 import { errorMessage } from "@/lib/format";
 import ConfigBar from "../components/ConfigBar";
 import OverviewTab from "../components/OverviewTab";
 import ExploreTab from "../components/ExploreTab";
 import IncidentsTab from "../components/IncidentsTab";
 import ApprovalsTab from "../components/ApprovalsTab";
-import AgentsTab from "../components/AgentsTab";
 import McpTab from "../components/McpTab";
 import ReceiptsTab from "../components/ReceiptsTab";
 import SettingsTab from "../components/SettingsTab";
 import DetectionsTab from "../components/DetectionsTab";
 import DashboardLoader from "../dashboards/DashboardLoader";
 import { overviewDashboard } from "../dashboards/system/overview";
-import { Shield, LayoutDashboard, LayoutGrid, Search, AlertOctagon, ShieldAlert, Clock, Users, Server, FileCheck2, Settings as SettingsIcon } from "lucide-react";
+import { integrityDashboard } from "../dashboards/system/integrity";
+import { fleetDashboard } from "../dashboards/system/fleet";
+import { Shield, LayoutDashboard, LayoutGrid, Fingerprint, Search, AlertOctagon, ShieldAlert, Clock, Users, Server, FileCheck2, Settings as SettingsIcon } from "lucide-react";
 
-type ActiveTab = "overview" | "dashboards" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
+type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const activeTab = useAppStore((s) => s.activeView) as ActiveTab;
+  const setActiveTab = useAppStore((s) => s.setActiveView);
   const [isFetching, setIsFetching] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
   const queryClient = useQueryClient();
@@ -44,6 +47,8 @@ export default function Home() {
         return <OverviewTab />;
       case "dashboards":
         return <DashboardLoader schema={overviewDashboard} />;
+      case "integrity":
+        return <DashboardLoader schema={integrityDashboard} />;
       case "explore":
         return <ExploreTab />;
       case "incidents":
@@ -53,7 +58,7 @@ export default function Home() {
       case "approvals":
         return <ApprovalsTab />;
       case "agents":
-        return <AgentsTab />;
+        return <DashboardLoader schema={fleetDashboard} />;
       case "mcp":
         return <McpTab />;
       case "receipts":
@@ -68,6 +73,7 @@ export default function Home() {
   const navItems = [
     { id: "overview" as ActiveTab, label: "Overview", icon: <LayoutDashboard size={16} /> },
     { id: "dashboards" as ActiveTab, label: "Dashboards", icon: <LayoutGrid size={16} /> },
+    { id: "integrity" as ActiveTab, label: "Integrity Console", icon: <Fingerprint size={16} /> },
     { id: "explore" as ActiveTab, label: "Explore", icon: <Search size={16} /> },
     { id: "incidents" as ActiveTab, label: "Incidents", icon: <AlertOctagon size={16} /> },
     { id: "detections" as ActiveTab, label: "Detections & Rules", icon: <ShieldAlert size={16} /> },

@@ -76,7 +76,10 @@ pub async fn serve_dashboard_index() -> impl IntoResponse {
         }
         Err(e) => {
             tracing::error!("Failed to read dashboard index.html: {:?}", e);
-            StatusError::not_found("Dashboard assets not found. Run 'npm run build' inside 'ui' directory.").into_response()
+            StatusError::not_found(
+                "Dashboard assets not found. Run 'npm run build' inside 'ui' directory.",
+            )
+            .into_response()
         }
     }
 }
@@ -140,7 +143,11 @@ mod tests {
     async fn test_dashboard_index_csrf_and_csp() {
         // Ensure index file exists for test
         let _ = tokio::fs::create_dir_all("ui/dist").await;
-        let _ = tokio::fs::write("ui/dist/index.html", "<html><head></head><body></body></html>").await;
+        let _ = tokio::fs::write(
+            "ui/dist/index.html",
+            "<html><head></head><body></body></html>",
+        )
+        .await;
 
         let response = serve_dashboard_index().await.into_response();
         assert_eq!(response.status(), StatusCode::OK);

@@ -1,14 +1,16 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { getDecisions, verifyReceipt } from "../app/api";
+import { searchDecisions, verifyReceipt } from "../app/api";
+import { parseAql } from "@/datasources/aql/parse";
 import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint } from "lucide-react";
 import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
 import HashChip from "./security/HashChip";
-import { formatTime, errorMessage } from "@/lib/format";
+import FieldSidebar from "./filters/FieldSidebar";
+import { formatTime, errorMessage, relativeRangeToFrom } from "@/lib/format";
 
 // Loosely-typed decision record from the gateway. The datasource/DataFrame
 // layer (HLD/LLD section 5) will replace this with a generated type.
@@ -16,6 +18,7 @@ interface DecisionRecord {
   id: string;
   decision?: string;
   tool?: string;
+  skill?: string;
   tool_call?: { name?: string; parameters?: Record<string, unknown> };
   agent_id?: string;
   root_trust_level?: string;
@@ -32,17 +35,33 @@ interface DecisionRecord {
 
 export default function ExploreTab() {
   const { gatewayUrl, bearerToken } = useAppStore();
+  const exploreSeed = useAppStore((s) => s.exploreSeed);
+  const consumeExploreSeed = useAppStore((s) => s.consumeExploreSeed);
+  const timeRange = useAppStore((s) => s.timeRange);
   const apiOpts = { gatewayUrl, bearerToken };
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // Seed the query from a drilldown at mount (this tab remounts on switch).
+  const [searchQuery, setSearchQuery] = useState(() => exploreSeed ?? "");
+  const [debouncedQuery, setDebouncedQuery] = useState(() => exploreSeed ?? "");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [verificationResult, setVerificationResult] = useState<Record<string, { ok: boolean; msg: string; loading: boolean }>>({});
 
+  // Clear the one-time seed after the initializers above have consumed it.
+  useEffect(() => {
+    if (exploreSeed) consumeExploreSeed();
+    // Mount-only: the seed is read once via the useState initializers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Fetch decisions based on query
   const { data: decisions, isLoading, error } = useQuery({
-    queryKey: ["decisions", gatewayUrl, bearerToken, debouncedQuery],
-    queryFn: () => getDecisions(apiOpts, 50, debouncedQuery),
+    queryKey: ["decisions", gatewayUrl, bearerToken, debouncedQuery, timeRange],
+    queryFn: () =>
+      searchDecisions(apiOpts, {
+        limit: 50,
+        from: relativeRangeToFrom(timeRange),
+        ...parseAql(debouncedQuery),
+      }),
     refetchInterval: 10000, // Poll every 10s
   });
 
@@ -85,7 +104,7 @@ export default function ExploreTab() {
         <div className="relative flex-1">
           <input
             type="text"
-            placeholder="Search decisions by Agent ID, tool name, reason, or action hash..."
+            placeholder="AQL: agent_id:coding-agent AND decision:deny untrusted   (field:value + keywords)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-lg pl-10 pr-4 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none"
@@ -100,11 +119,22 @@ export default function ExploreTab() {
         </button>
       </form>
 
-      {/* Decisions Results List */}
-      <div className="panel-card">
-        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-4">
-          FTS5 Decision Index Explorer
-        </h3>
+      <div className="grid grid-cols-1 lg:grid-cols-[210px_minmax(0,1fr)] gap-4">
+        {/* Field facet sidebar (computed from loaded results) */}
+        <FieldSidebar
+          rows={(decisions ?? []) as Array<Record<string, unknown>>}
+          onSelect={(field, value) => {
+            const q = `${field}:${value}`;
+            setSearchQuery(q);
+            setDebouncedQuery(q);
+          }}
+        />
+
+        {/* Decisions Results List */}
+        <div className="panel-card min-w-0">
+          <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-4">
+            FTS5 Decision Index Explorer
+          </h3>
 
         {isLoading ? (
           <p className="text-sm text-[var(--text-muted)] text-center py-12">Querying decision records...</p>
@@ -131,7 +161,7 @@ export default function ExploreTab() {
                       <DecisionBadge decision={dec.decision} />
                       <div className="flex flex-col">
                         <span className="text-xs font-mono font-bold text-[var(--brand)]">
-                          {dec.tool_call?.name || dec.tool || "generic_action"}
+                          {dec.tool_call?.name || dec.skill || dec.tool || "generic_action"}
                         </span>
                         <span className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">
                           Agent: {dec.agent_id}
@@ -227,6 +257,7 @@ export default function ExploreTab() {
             })}
           </div>
         )}
+        </div>
       </div>
     </div>
   );

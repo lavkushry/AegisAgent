@@ -40,3 +40,41 @@ export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Unexpected error";
 }
+
+const RANGE_MS: Record<string, number> = {
+  "1h": 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+};
+
+/**
+ * Convert a relative range token ("24h", "7d", …) to an RFC3339 lower bound
+ * (now - range). Returns undefined for unknown tokens (no time filter).
+ */
+export function relativeRangeToFrom(range: string): string | undefined {
+  const ms = RANGE_MS[range];
+  if (!ms) return undefined;
+  return new Date(Date.now() - ms).toISOString();
+}
+
+const UNIT_MS: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/**
+ * Resolve a Grafana-style time token ("now", "now-24h", "now-7d") to an
+ * RFC3339 timestamp. Already-absolute ISO strings pass through. Returns
+ * undefined for anything unrecognized.
+ */
+export function resolveTimeToken(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  const t = token.trim();
+  if (t === "now") return new Date().toISOString();
+  const m = /^now-(\d+)([smhd])$/.exec(t);
+  if (m) {
+    const ms = parseInt(m[1], 10) * (UNIT_MS[m[2]] ?? 0);
+    return new Date(Date.now() - ms).toISOString();
+  }
+  // Assume an absolute timestamp; validate it parses.
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}

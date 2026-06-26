@@ -759,7 +759,8 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let templates: Vec<aegis_policy::compiler::PolicyTemplate> = serde_json::from_slice(&body).unwrap();
+        let templates: Vec<aegis_policy::compiler::PolicyTemplate> =
+            serde_json::from_slice(&body).unwrap();
         assert_eq!(templates.len(), 10);
         assert_eq!(templates[0].key, "production-baseline");
 
@@ -779,7 +780,9 @@ spec:
         .await
         .into_response();
         assert_eq!(response_compile.status(), StatusCode::OK);
-        let compile_body = to_bytes(response_compile.into_body(), usize::MAX).await.unwrap();
+        let compile_body = to_bytes(response_compile.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let compile_json: Value = serde_json::from_slice(&compile_body).unwrap();
         let cedar = compile_json["cedar"].as_str().unwrap();
         assert!(cedar.contains("context.is_mcp_tool_known == false"));

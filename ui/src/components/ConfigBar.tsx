@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useAppStore, type Theme, type Density } from "../app/store";
+import { useAppStore, type Theme, type Density, type Role } from "../app/store";
 import { RefreshCw, Database, ShieldAlert, KeyRound } from "lucide-react";
 
 const INPUT_CLASS =
@@ -23,12 +23,14 @@ export default function ConfigBar({
     timeRange,
     theme,
     density,
+    role,
     setGatewayUrl,
     setBearerToken,
     setActiveTenant,
     setTimeRange,
     setTheme,
     setDensity,
+    setRole,
   } = useAppStore();
 
   const [localUrl, setLocalUrl] = useState(gatewayUrl);
@@ -132,6 +134,21 @@ export default function ConfigBar({
         >
           <option value="compact">Compact</option>
           <option value="cozy">Cozy</option>
+        </select>
+      </div>
+
+      {/* Role */}
+      <div className="flex flex-col gap-1 min-w-[110px]">
+        <label className="text-xs text-[var(--text-secondary)] font-medium">Role</label>
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value as Role)}
+          className={INPUT_CLASS}
+        >
+          <option value="viewer">Viewer</option>
+          <option value="analyst">Analyst</option>
+          <option value="approver">Approver</option>
+          <option value="admin">Admin</option>
         </select>
       </div>
 

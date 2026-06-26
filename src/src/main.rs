@@ -825,19 +825,14 @@ fn api_routes() -> Router<Arc<AppState>> {
         // #1381: dedicated GitHub App webhook receiver with HMAC-SHA256 verification
         .route("/webhooks/github", post(routes::receive_github_webhook))
         .route("/decisions", get(routes::list_decisions))
+        .route("/decisions/timeseries", get(routes::decision_timeseries))
         .route("/decisions/:id", get(routes::get_decision))
         .route(
             "/policies",
             get(routes::list_policies).post(routes::create_policy),
         )
-        .route(
-            "/policies/compile",
-            post(routes::compile_policy),
-        )
-        .route(
-            "/policies/templates",
-            get(routes::list_policy_templates),
-        )
+        .route("/policies/compile", post(routes::compile_policy))
+        .route("/policies/templates", get(routes::list_policy_templates))
         .route(
             "/policies/:id",
             put(routes::update_policy).delete(routes::delete_policy),

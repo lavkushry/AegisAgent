@@ -1,4 +1,5 @@
 import { fetchFromGateway, type FetchOptions } from "@/app/api";
+import { resolveTimeToken } from "@/lib/format";
 import { rowsToFrame } from "./frame";
 import type {
   DataFrame,
@@ -51,6 +52,9 @@ export class GatewayEntityDatasource implements Datasource {
   constructor(private readonly opts: FetchOptions) {}
 
   async query(req: QueryRequest): Promise<DataFrame> {
+    if (req.aggregate === "count_over_time") {
+      return this.countOverTime(req);
+    }
     const entity = req.entity ?? "decision";
     const limit = req.limit ?? 50;
     const params = new URLSearchParams({ limit: String(limit) });
@@ -58,6 +62,28 @@ export class GatewayEntityDatasource implements Datasource {
     const path = `${ENTITY_PATHS[entity]}?${params.toString()}`;
     const rows = await fetchFromGateway<Array<Record<string, unknown>>>(this.opts, path);
     return rowsToFrame(Array.isArray(rows) ? rows : []);
+  }
+
+  /** Decision count bucketed over time -> a [time, number] DataFrame. */
+  private async countOverTime(req: QueryRequest): Promise<DataFrame> {
+    const params = new URLSearchParams({ interval: req.interval ?? "hour" });
+    const from = resolveTimeToken(req.timeRange.from);
+    const to = resolveTimeToken(req.timeRange.to);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    const points = await fetchFromGateway<Array<{ bucket: string; count: number }>>(
+      this.opts,
+      `/v1/decisions/timeseries?${params.toString()}`,
+    );
+    const rows = Array.isArray(points) ? points : [];
+    return {
+      fields: [
+        { name: "bucket", type: "time", values: rows.map((p) => p.bucket) },
+        { name: "count", type: "number", values: rows.map((p) => p.count) },
+      ],
+      length: rows.length,
+      meta: { total: rows.length },
+    };
   }
 
   async fields(entity: EntityKind): Promise<ReadonlyArray<FieldDescriptor>> {
