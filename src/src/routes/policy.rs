@@ -1687,8 +1687,8 @@ spec: {}
 
         // Evaluated through a fresh `PolicyEngine` loaded with ONLY the
         // uploaded Cedar text — no base policy, no upload/signing pipeline.
-        let standalone_path = std::env::temp_dir()
-            .join(format!("aegis-bundle-roundtrip-{}.cedar", Uuid::new_v4()));
+        let standalone_path =
+            std::env::temp_dir().join(format!("aegis-bundle-roundtrip-{}.cedar", Uuid::new_v4()));
         tokio::fs::write(&standalone_path, &cedar_body)
             .await
             .unwrap();
@@ -1705,5 +1705,47 @@ spec: {}
             "a signed bundle's policy, once uploaded and hot-reloaded, must \
              evaluate identically to loading the same Cedar text directly"
         );
+    }
+
+    /// Guards against the exact regression this test was added to catch: the
+    /// repo carries FOUR copies of the base Cedar policy set — the canonical
+    /// root `policies.cedar`, `lib/policy/policies.cedar` (read by
+    /// `aegis-policy`'s own unit tests), `src/policies.cedar` (read by
+    /// `PolicyEngine::init("policies.cedar")` at gateway runtime/test time —
+    /// the one that actually governs production behavior), and the Helm
+    /// chart's deployment copy. These had silently drifted: `src/` and
+    /// `helm/`'s copies were missing the "deny unknown MCP tools by default"
+    /// forbid rule entirely, silently downgrading a fail-closed security
+    /// default to "critical risk requires approval" for any unregistered MCP
+    /// tool — a real security regression that two existing tests caught,
+    /// but nothing explained *why* the rule that's plainly present in the
+    /// root file wasn't taking effect. Byte-equality here turns "drift" into
+    /// an immediate, obvious CI failure instead of a silent policy gap.
+    #[test]
+    fn policies_cedar_copies_stay_byte_identical() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let canonical = std::fs::read_to_string(format!("{manifest_dir}/../policies.cedar"))
+            .expect("root policies.cedar must exist");
+
+        for (label, path) in [
+            ("src/policies.cedar", format!("{manifest_dir}/policies.cedar")),
+            (
+                "lib/policy/policies.cedar",
+                format!("{manifest_dir}/../lib/policy/policies.cedar"),
+            ),
+            (
+                "helm/aegis-gateway/files/policies.cedar",
+                format!("{manifest_dir}/../helm/aegis-gateway/files/policies.cedar"),
+            ),
+        ] {
+            let copy = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{label} must exist at {path}: {e}"));
+            assert_eq!(
+                copy, canonical,
+                "{label} has drifted from the canonical root policies.cedar — \
+                 every copy must be byte-identical, since the gateway loads \
+                 {label} at runtime/test time, not the root copy"
+            );
+        }
     }
 }
