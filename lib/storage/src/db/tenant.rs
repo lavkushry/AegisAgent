@@ -1190,10 +1190,9 @@ mod tests {
         assert_eq!(page.len(), 2);
         assert!(next_cursor.is_some(), "a third row exists beyond the page");
 
-        let (page2, next_cursor2) =
-            list_api_keys_cursor(&pool, &tenant_id, 2, 0, next_cursor)
-                .await
-                .unwrap();
+        let (page2, next_cursor2) = list_api_keys_cursor(&pool, &tenant_id, 2, 0, next_cursor)
+            .await
+            .unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(next_cursor2, None);
     }

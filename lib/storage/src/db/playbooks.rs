@@ -130,14 +130,10 @@ pub async fn set_playbook_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_utils::setup_pool;
     use crate::db::register_tenant;
+    use crate::db::test_utils::setup_pool;
 
-    async fn insert_test_playbook(
-        pool: &DbPool,
-        tenant_id: &str,
-        name: &str,
-    ) -> PlaybookRecord {
+    async fn insert_test_playbook(pool: &DbPool, tenant_id: &str, name: &str) -> PlaybookRecord {
         insert_playbook(
             pool,
             tenant_id,
@@ -171,10 +167,9 @@ mod tests {
         assert_eq!(page.len(), 2);
         assert!(next_cursor.is_some(), "a third row exists beyond the page");
 
-        let (page2, next_cursor2) =
-            list_playbooks_cursor(&pool, &tenant_id, 2, 0, next_cursor)
-                .await
-                .unwrap();
+        let (page2, next_cursor2) = list_playbooks_cursor(&pool, &tenant_id, 2, 0, next_cursor)
+            .await
+            .unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(next_cursor2, None);
     }

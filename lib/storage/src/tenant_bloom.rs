@@ -76,9 +76,9 @@ impl TenantBloomFilter {
     /// `true` may be a false positive — callers must still confirm via the
     /// authoritative lookup before relying on it.
     pub fn might_contain(&self, tenant_id: &str) -> bool {
-        Self::hash_indices(tenant_id).iter().all(|&idx| {
-            self.bits[idx / 64].load(Ordering::Relaxed) & (1u64 << (idx % 64)) != 0
-        })
+        Self::hash_indices(tenant_id)
+            .iter()
+            .all(|&idx| self.bits[idx / 64].load(Ordering::Relaxed) & (1u64 << (idx % 64)) != 0)
     }
 
     /// Until at least one tenant has been inserted (typically via an
@@ -124,7 +124,8 @@ mod tests {
 
     #[test]
     fn build_from_inserts_every_id() {
-        let filter = TenantBloomFilter::build_from(&["tenant_a".to_string(), "tenant_b".to_string()]);
+        let filter =
+            TenantBloomFilter::build_from(&["tenant_a".to_string(), "tenant_b".to_string()]);
         assert!(filter.is_populated());
         assert!(filter.might_contain("tenant_a"));
         assert!(filter.might_contain("tenant_b"));

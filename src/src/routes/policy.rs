@@ -1728,7 +1728,10 @@ spec: {}
             .expect("root policies.cedar must exist");
 
         for (label, path) in [
-            ("src/policies.cedar", format!("{manifest_dir}/policies.cedar")),
+            (
+                "src/policies.cedar",
+                format!("{manifest_dir}/policies.cedar"),
+            ),
             (
                 "lib/policy/policies.cedar",
                 format!("{manifest_dir}/../lib/policy/policies.cedar"),

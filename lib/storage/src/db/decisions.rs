@@ -1080,10 +1080,16 @@ mod tests {
             .await
             .unwrap();
 
-        let (page, next_cursor) =
-            list_decisions_cursor(&pool, "tenant_a", 2, 0, None, DecisionListFilters::default())
-                .await
-                .unwrap();
+        let (page, next_cursor) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            2,
+            0,
+            None,
+            DecisionListFilters::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(page.len(), 2);
         assert_eq!(
             next_cursor, None,
@@ -1158,20 +1164,19 @@ mod tests {
 
         // Prefix match — exactly what `sanitize_fts5_query` produces for a
         // partial term like `?q=mer`.
-        let (prefix_page, _) =
-            list_decisions_cursor(
-                &pool,
-                "tenant_a",
-                50,
-                0,
-                None,
-                DecisionListFilters {
-                    q: Some("mer*"),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
+        let (prefix_page, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            DecisionListFilters {
+                q: Some("mer*"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(prefix_page.len(), 1);
         assert_eq!(prefix_page[0].id, "dec_merge");
 
@@ -1255,10 +1260,16 @@ mod tests {
         assert_eq!(page[0].id, "dec_untrusted");
 
         // No source_trust filter returns both tenant_a rows.
-        let (all, _) =
-            list_decisions_cursor(&pool, "tenant_a", 50, 0, None, DecisionListFilters::default())
-                .await
-                .unwrap();
+        let (all, _) = list_decisions_cursor(
+            &pool,
+            "tenant_a",
+            50,
+            0,
+            None,
+            DecisionListFilters::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(all.len(), 2);
     }
 
