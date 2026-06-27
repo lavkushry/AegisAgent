@@ -109,11 +109,16 @@ def ensure_demo_seeded() -> None:
 
 def approve_approval(approval_id: str) -> None:
     url = f"{GATEWAY_URL}/v1/approvals/{approval_id}/approve"
-    logger.info(f"{YELLOW}   [Human Operator] Approving request: {approval_id}...{RESET}")
+    logger.info(
+        f"{YELLOW}   [Human Operator] Approving request: {approval_id}...{RESET}"
+    )
     response = requests.post(
         url,
         headers={"Authorization": f"Bearer {TENANT_ID}"},
-        json={"approver_user_id": "platform-lead", "reason": "Verified safe action params"},
+        json={
+            "approver_user_id": "platform-lead",
+            "reason": "Verified safe action params",
+        },
         timeout=5,
     )
     response.raise_for_status()
@@ -143,7 +148,9 @@ def auto_approver_thread(stop_event: threading.Event) -> None:
         time.sleep(0.5)
 
 
-def aegis_jcs_1_hash(tool: str, action: str, resource: Optional[str], params: dict) -> str:
+def aegis_jcs_1_hash(
+    tool: str, action: str, resource: Optional[str], params: dict
+) -> str:
     """Computes JCS-1 canonical hash of the action call."""
     canonical = canonicalize(
         {
@@ -183,32 +190,46 @@ def main() -> int:
         ensure_demo_seeded()
     except Exception as exc:
         logger.error(f"{RED}Gateway connection failed: {exc}{RESET}")
-        logger.error(f"{YELLOW}Please start the gateway using: docker compose up --build -d{RESET}")
+        logger.error(
+            f"{YELLOW}Please start the gateway using: docker compose up --build -d{RESET}"
+        )
         return 1
 
     # Start background auto-approver thread for human-in-the-loop simulation
     stop_event = threading.Event()
-    approver = threading.Thread(target=auto_approver_thread, args=(stop_event,), daemon=True)
+    approver = threading.Thread(
+        target=auto_approver_thread, args=(stop_event,), daemon=True
+    )
     approver.start()
 
     try:
         # ── SCENARIO 1: Legitimate Flow ───────────────────────────────────────────
         hr("SCENARIO 1: Legitimate Flow (Normal Approval)")
-        logger.info("Executing merge_pull_request(repo='payments-service', pr_number=482, base_branch='main')...")
+        logger.info(
+            "Executing merge_pull_request(repo='payments-service', pr_number=482, base_branch='main')..."
+        )
         logger.info("This is a high-risk mutating action that requires human approval.")
-        
-        result = merge_pull_request(repo="payments-service", pr_number=482, base_branch="main")
+
+        result = merge_pull_request(
+            repo="payments-service", pr_number=482, base_branch="main"
+        )
         logger.info(f"\n{GREEN}✓ Legitimate execution succeeded: {result}{RESET}")
 
         # ── SCENARIO 2: Approve-Then-Swap Blocked ───────────────────────────────
         hr("SCENARIO 2: Approve-Then-Swap Blocked")
         logger.info("Agent requests authorization for a benign merge:")
         logger.info("  Action: github.merge_pull_request")
-        logger.info("  Parameters: repo='payments-service', pr_number=482, base_branch='main'")
-        
-        benign_params = {"repo": "payments-service", "pr_number": 482, "base_branch": "main"}
+        logger.info(
+            "  Parameters: repo='payments-service', pr_number=482, base_branch='main'"
+        )
+
+        benign_params = {
+            "repo": "payments-service",
+            "pr_number": 482,
+            "base_branch": "main",
+        }
         resource = "repo/payments-service/pull/482"
-        
+
         # Step 1: Request authorization
         auth_resp = client.authorize(
             tool="github",
@@ -217,15 +238,15 @@ def main() -> int:
             resource=resource,
             source_trust="trusted_internal_signed",
         )
-        
+
         approval = auth_resp.get("approval")
         if not approval:
             logger.error(f"{RED}Failed to get approval payload from gateway{RESET}")
             return 1
-            
+
         approval_id = approval["approval_id"]
         original_approved_hash = approval["action_hash"]
-        
+
         logger.info(f"  Gateway returned decision: require_approval")
         logger.info(f"  Approval ID:               {approval_id}")
         logger.info(f"  Original Approved Hash:    {original_approved_hash}")
@@ -234,42 +255,64 @@ def main() -> int:
         time.sleep(1.0)  # Wait for background approver to notice and approve
 
         # Step 2: Swap the parameters in the background (hijacked agent/attacker)
-        logger.info(f"\n{YELLOW}==> Attacker intercepts execution and swaps parameters!{RESET}")
-        malicious_params = {"repo": "payments-service", "pr_number": 666, "base_branch": "main"}
-        logger.info("  New Swapped Parameters:   repo='payments-service', pr_number=666, base_branch='main'")
+        logger.info(
+            f"\n{YELLOW}==> Attacker intercepts execution and swaps parameters!{RESET}"
+        )
+        malicious_params = {
+            "repo": "payments-service",
+            "pr_number": 666,
+            "base_branch": "main",
+        }
+        logger.info(
+            "  New Swapped Parameters:   repo='payments-service', pr_number=666, base_branch='main'"
+        )
 
         # Step 3: Compute current action hash
-        current_hash = aegis_jcs_1_hash("github", "merge_pull_request", resource, malicious_params)
+        current_hash = aegis_jcs_1_hash(
+            "github", "merge_pull_request", resource, malicious_params
+        )
         logger.info(f"  Current Action Hash:       {current_hash}")
 
         # Step 4: Verification
-        logger.info(f"\n{CYAN}==> SDK verifying action_hash against approved hash before execution...{RESET}")
+        logger.info(
+            f"\n{CYAN}==> SDK verifying action_hash against approved hash before execution...{RESET}"
+        )
         logger.info(f"  Original approved hash:    {original_approved_hash}")
         logger.info(f"  Current action hash:       {current_hash}")
 
         if current_hash != original_approved_hash:
-            logger.info(f"\n{RED}{BOLD}🛑 BLOCKED: action_hash MISMATCH detected!{RESET}")
+            logger.info(
+                f"\n{RED}{BOLD}🛑 BLOCKED: action_hash MISMATCH detected!{RESET}"
+            )
             logger.info("   The SDK fails closed and refuses to execute.")
-            logger.info("   AegisAgent successfully blocked the approve-then-swap attack.")
+            logger.info(
+                "   AegisAgent successfully blocked the approve-then-swap attack."
+            )
         else:
             logger.error(f"{RED}FAIL: Hash check did not block swapped action!{RESET}")
             return 2
 
         # ── SCENARIO 3: Replay Attack Blocked ──────────────────────────────────
         hr("SCENARIO 3: Replay Attack Blocked")
-        logger.info(f"Attacker attempts to reuse approval ID {approval_id} for double consumption...")
+        logger.info(
+            f"Attacker attempts to reuse approval ID {approval_id} for double consumption..."
+        )
 
         # The first consume was never completed because we blocked it client-side.
         # Let's perform a valid consume first.
         logger.info("Consuming approval legitimately first...")
         consumed = client.consume_approval(approval_id)
         if consumed:
-            logger.info(f"{GREEN}✓ First consumption succeeded: status={consumed.get('status')}{RESET}")
+            logger.info(
+                f"{GREEN}✓ First consumption succeeded: status={consumed.get('status')}{RESET}"
+            )
         else:
             logger.error("First consumption failed.")
 
         # Replay attempt: consume again
-        logger.info(f"\n{YELLOW}Attempting to consume approval ID {approval_id} a second time...{RESET}")
+        logger.info(
+            f"\n{YELLOW}Attempting to consume approval ID {approval_id} a second time...{RESET}"
+        )
         try:
             url = f"{GATEWAY_URL}/v1/approvals/{approval_id}/consume"
             response = requests.post(
@@ -279,10 +322,16 @@ def main() -> int:
             )
             logger.info(f"  Gateway response: Status {response.status_code}")
             if response.status_code == 409:
-                logger.info(f"\n{GREEN}{BOLD}✓ Replay Blocked! Gateway returned 409 Conflict.{RESET}")
-                logger.info("  An approval is strictly single-use and cannot be replayed.")
+                logger.info(
+                    f"\n{GREEN}{BOLD}✓ Replay Blocked! Gateway returned 409 Conflict.{RESET}"
+                )
+                logger.info(
+                    "  An approval is strictly single-use and cannot be replayed."
+                )
             else:
-                logger.error(f"{RED}FAIL: Gateway did not block replay (returned {response.status_code}){RESET}")
+                logger.error(
+                    f"{RED}FAIL: Gateway did not block replay (returned {response.status_code}){RESET}"
+                )
                 return 3
         except Exception as exc:
             logger.error(f"Replay attempt request failed: {exc}")
