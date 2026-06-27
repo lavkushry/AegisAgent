@@ -2195,6 +2195,12 @@ pub(crate) mod test_helpers {
             ("github", "read_file", "low", false),
             ("github", "push_commit", "high", true),
             ("github", "delete_branch", "high", true),
+            // Many tests build this request inline (not via
+            // create_pending_approval) to exercise the production-merge
+            // require_approval policy directly — register it centrally too.
+            ("github", "merge_pull_request", "high", true),
+            // Cedar's redact rule requires `mutates_state == false`.
+            ("secrets", "rotate_credential", "high", false),
             // Cedar's quarantine-canary rule requires `mutates_state == false`.
             ("quarantine_canary", "trigger", "critical", false),
         ];
