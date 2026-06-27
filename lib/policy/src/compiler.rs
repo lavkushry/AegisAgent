@@ -368,17 +368,23 @@ spec:
         use aegis_api::models::{
             AuthorizeAgentContext, AuthorizeDynamicContext, AuthorizeRequest, AuthorizeToolCall,
         };
-        use uuid::Uuid;
 
         /// Loads `cedar_src` as a *standalone* policy set (no base
         /// `policies.cedar` mixed in) so each template's behavior is tested
         /// in isolation.
+        ///
+        /// Uses `tempfile::Builder` rather than a predictable path under
+        /// `std::env::temp_dir()` (a shared, world-writable directory):
+        /// `NamedTempFile` atomically creates a uniquely-named file with
+        /// restricted permissions and cleans it up on drop.
         async fn engine_from_cedar(cedar_src: &str) -> PolicyEngine {
-            let path = std::env::temp_dir().join(format!("aegis-rt-test-{}.cedar", Uuid::new_v4()));
-            tokio::fs::write(&path, cedar_src).await.unwrap();
-            let engine = PolicyEngine::init(&path).await.unwrap();
-            let _ = tokio::fs::remove_file(&path).await;
-            engine
+            let file = tempfile::Builder::new()
+                .prefix("aegis-rt-test-")
+                .suffix(".cedar")
+                .tempfile()
+                .unwrap();
+            tokio::fs::write(file.path(), cedar_src).await.unwrap();
+            PolicyEngine::init(file.path()).await.unwrap()
         }
 
         fn compile_template(key: &str) -> String {

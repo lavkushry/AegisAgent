@@ -1687,13 +1687,18 @@ spec: {}
 
         // Evaluated through a fresh `PolicyEngine` loaded with ONLY the
         // uploaded Cedar text — no base policy, no upload/signing pipeline.
-        let standalone_path =
-            std::env::temp_dir().join(format!("aegis-bundle-roundtrip-{}.cedar", Uuid::new_v4()));
-        tokio::fs::write(&standalone_path, &cedar_body)
+        // `tempfile::Builder` (rather than a predictable path under the
+        // shared `std::env::temp_dir()`) atomically creates a uniquely-named
+        // file with restricted permissions and cleans it up on drop.
+        let standalone_file = tempfile::Builder::new()
+            .prefix("aegis-bundle-roundtrip-")
+            .suffix(".cedar")
+            .tempfile()
+            .unwrap();
+        tokio::fs::write(standalone_file.path(), &cedar_body)
             .await
             .unwrap();
-        let standalone_engine = PolicyEngine::init(&standalone_path).await.unwrap();
-        let _ = tokio::fs::remove_file(&standalone_path).await;
+        let standalone_engine = PolicyEngine::init(standalone_file.path()).await.unwrap();
         let standalone_decision = standalone_engine
             .authorize("any_tenant", &request, "low", true, true)
             .unwrap()
