@@ -1608,4 +1608,102 @@ spec: {}
         .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
+
+    /// #1328: signed bundle -> verified -> persisted -> hot-reloaded into the
+    /// live `PolicyEngine` -> evaluated produces the SAME decision as loading
+    /// that exact Cedar text standalone (no upload/signing involved at all).
+    /// This is the "signed bundle round-trip" half of the issue's acceptance
+    /// criteria — the other half (tampered bundle rejected) is already
+    /// covered by `upload_policy_bundle_rejects_tampered_bundle` above.
+    ///
+    /// Uses an unconditional `forbid` keyed to a resource id nothing else in
+    /// `policies.cedar` mentions, so the assertion isn't sensitive to
+    /// whatever else the base policy set happens to decide for this
+    /// tenant — a forbid wins regardless of what any other permit in the
+    /// combined (base + bundle) policy set says.
+    #[tokio::test]
+    async fn upload_policy_bundle_evaluation_matches_standalone_cedar_load() {
+        let signer = test_signing_key();
+        let (state, tenant_id, _) =
+            setup_state_with_policy_signing_key("bundle_roundtrip_eval", &signer.public_key_hex())
+                .await;
+
+        let cedar_body = "forbid (principal, action, resource == ToolAction::\"roundtrip_test_tool_dangerous_action\");".to_string();
+
+        let mut payload = PolicyBundleUploadRequest {
+            policies: vec![PolicyBundleEntry {
+                policy_key: "roundtrip-forbid".to_string(),
+                name: "Round-trip Forbid".to_string(),
+                body: cedar_body.clone(),
+            }],
+            version: 1,
+            created_at: Utc::now(),
+            signature: String::new(),
+        };
+        payload.signature = sign_bundle(&payload, &signer);
+
+        let response = upload_policy_bundle(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let request = AuthorizeRequest {
+            request_id: None,
+            callback: None,
+            nonce: None,
+            timestamp: None,
+            dry_run: None,
+            agent: AuthorizeAgentContext {
+                id: "roundtrip-agent".to_string(),
+                environment: "production".to_string(),
+            },
+            user: None,
+            tool_call: AuthorizeToolCall {
+                tool: "roundtrip_test_tool".to_string(),
+                action: "dangerous_action".to_string(),
+                resource: None,
+                mutates_state: false,
+                parameters: json!({}),
+            },
+            context: AuthorizeDynamicContext {
+                source_trust: "trusted_internal_signed".to_string(),
+                contains_sensitive_data: false,
+            },
+            trace: None,
+        };
+
+        // Evaluated through the tenant's live (base + uploaded bundle)
+        // policy set — the same path `/v1/authorize` uses.
+        let live_decision = state
+            .policy_engine
+            .authorize(&tenant_id, &request, "low", true, true)
+            .unwrap()
+            .decision;
+        assert_eq!(live_decision, "deny");
+
+        // Evaluated through a fresh `PolicyEngine` loaded with ONLY the
+        // uploaded Cedar text — no base policy, no upload/signing pipeline.
+        let standalone_path = std::env::temp_dir()
+            .join(format!("aegis-bundle-roundtrip-{}.cedar", Uuid::new_v4()));
+        tokio::fs::write(&standalone_path, &cedar_body)
+            .await
+            .unwrap();
+        let standalone_engine = PolicyEngine::init(&standalone_path).await.unwrap();
+        let _ = tokio::fs::remove_file(&standalone_path).await;
+        let standalone_decision = standalone_engine
+            .authorize("any_tenant", &request, "low", true, true)
+            .unwrap()
+            .decision;
+        assert_eq!(standalone_decision, "deny");
+
+        assert_eq!(
+            live_decision, standalone_decision,
+            "a signed bundle's policy, once uploaded and hot-reloaded, must \
+             evaluate identically to loading the same Cedar text directly"
+        );
+    }
 }
