@@ -158,23 +158,34 @@ pub fn to_postgres_sql(sql: &str) -> String {
     result
 }
 
+// #900: every db::*query* macro below wraps the sqlx future with a
+// `db_query` tracing span (sql text + backend) via `.instrument(...)`. This
+// is the single point all ~170 query functions across lib/storage/src/db/
+// funnel through, so instrumenting here gives every query timing/tracing
+// coverage without annotating each call site individually. The span flows
+// into the OTel layer configured in src/src/main.rs, which records
+// start/end timestamps (i.e. query duration) for each one.
 #[macro_export]
 macro_rules! execute_query {
     ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query($sql)
                     $(.bind($bind))*
                     .execute(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
                     .map($crate::db::DbQueryResult::Sqlite)
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query(&pg_sql)
                     $(.bind($bind))*
                     .execute(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
                     .map($crate::db::DbQueryResult::Postgres)
             }
@@ -187,17 +198,21 @@ macro_rules! fetch_optional {
     ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query($sql)
                     $(.bind($bind))*
                     .fetch_optional(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query(&pg_sql)
                     $(.bind($bind))*
                     .fetch_optional(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
@@ -209,17 +224,21 @@ macro_rules! fetch_all {
     ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query($sql)
                     $(.bind($bind))*
                     .fetch_all(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query(&pg_sql)
                     $(.bind($bind))*
                     .fetch_all(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
@@ -231,17 +250,21 @@ macro_rules! fetch_one {
     ($pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query($sql)
                     $(.bind($bind))*
                     .fetch_one(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query(&pg_sql)
                     $(.bind($bind))*
                     .fetch_one(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
@@ -253,17 +276,21 @@ macro_rules! fetch_one_as {
     ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query_as::<_, $ty>($sql)
                     $(.bind($bind))*
                     .fetch_one(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query_as::<_, $ty>(&pg_sql)
                     $(.bind($bind))*
                     .fetch_one(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
@@ -275,17 +302,21 @@ macro_rules! fetch_optional_as {
     ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query_as::<_, $ty>($sql)
                     $(.bind($bind))*
                     .fetch_optional(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query_as::<_, $ty>(&pg_sql)
                     $(.bind($bind))*
                     .fetch_optional(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
@@ -297,17 +328,21 @@ macro_rules! fetch_all_as {
     ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query_as::<_, $ty>($sql)
                     $(.bind($bind))*
                     .fetch_all(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query_as::<_, $ty>(&pg_sql)
                     $(.bind($bind))*
                     .fetch_all(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
@@ -319,17 +354,21 @@ macro_rules! fetch_one_scalar {
     ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query_scalar::<_, $ty>($sql)
                     $(.bind($bind))*
                     .fetch_one(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query_scalar::<_, $ty>(&pg_sql)
                     $(.bind($bind))*
                     .fetch_one(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
@@ -341,17 +380,21 @@ macro_rules! fetch_optional_scalar {
     ($ty:ty, $pool:expr, $sql:expr $(, $bind:expr)* $(,)?) => {
         match &$pool {
             $crate::db::DbPool::Sqlite(p) => {
+                use tracing::Instrument as _;
                 sqlx::query_scalar::<_, $ty>($sql)
                     $(.bind($bind))*
                     .fetch_optional(p)
+                    .instrument(tracing::debug_span!("db_query", sql = $sql, backend = "sqlite"))
                     .await
             }
             #[cfg(feature = "postgres")]
             $crate::db::DbPool::Postgres(p) => {
+                use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query_scalar::<_, $ty>(&pg_sql)
                     $(.bind($bind))*
                     .fetch_optional(p)
+                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
             }
         }
