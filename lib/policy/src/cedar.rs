@@ -267,6 +267,14 @@ impl PolicyEngine {
         for policy_id in response.diagnostics().reason() {
             matched_policies.push(policy_id.to_string());
             if let Some(policy) = policy_set.policy(policy_id) {
+                // Surface the stable, human-assigned `@id` annotation (if any) in
+                // addition to Cedar's auto-numbered policy id ("policy0", ...),
+                // so callers/tests can match on a name that doesn't shift if
+                // policy ordering in the .cedar file changes.
+                if let Some(id) = policy.annotation("id") {
+                    matched_policies.push(id.trim_matches('"').to_string());
+                }
+
                 // Escalate the binary Cedar `allow` using annotation overrides.
                 // Severity order (most → least restrictive):
                 //   quarantine > require_approval > redact > allow
