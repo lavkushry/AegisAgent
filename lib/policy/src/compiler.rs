@@ -434,14 +434,28 @@ spec:
         #[tokio::test]
         async fn production_baseline_unknown_tool_denied() {
             let engine = engine_from_cedar(&compile_template("production-baseline")).await;
-            let req = request("github", "read", false, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "read",
+                false,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, false, true).await, "deny");
         }
 
         #[tokio::test]
         async fn production_baseline_known_tool_production_mutation_requires_approval() {
             let engine = engine_from_cedar(&compile_template("production-baseline")).await;
-            let req = request("github", "merge", true, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "merge",
+                true,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "require_approval");
         }
 
@@ -458,7 +472,14 @@ spec:
         #[tokio::test]
         async fn production_baseline_missing_mtls_denied_regardless_of_action() {
             let engine = engine_from_cedar(&compile_template("production-baseline")).await;
-            let req = request("github", "read", false, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "read",
+                false,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, false).await, "deny");
         }
 
@@ -478,7 +499,14 @@ spec:
             // mistaken for "allow" if the compiler ever added an implicit
             // catch-all permit.
             let engine = engine_from_cedar(&compile_template("production-baseline")).await;
-            let req = request("github", "read", false, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "read",
+                false,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "deny");
         }
 
@@ -523,12 +551,54 @@ when {
             let hand_written_engine = engine_from_cedar(hand_written_production_baseline()).await;
 
             let scenarios = [
-                request("github", "read", false, "trusted_internal_signed", "production", false), // unknown tool case driven by is_tool_known below
-                request("github", "merge", true, "trusted_internal_signed", "production", false),
-                request("github", "merge", true, "untrusted_external", "production", false),
-                request("github", "read", false, "trusted_internal_signed", "production", false),
-                request("github", "read", false, "trusted_internal_signed", "staging", false),
-                request("github", "read", false, "trusted_internal_signed", "production", false),
+                request(
+                    "github",
+                    "read",
+                    false,
+                    "trusted_internal_signed",
+                    "production",
+                    false,
+                ), // unknown tool case driven by is_tool_known below
+                request(
+                    "github",
+                    "merge",
+                    true,
+                    "trusted_internal_signed",
+                    "production",
+                    false,
+                ),
+                request(
+                    "github",
+                    "merge",
+                    true,
+                    "untrusted_external",
+                    "production",
+                    false,
+                ),
+                request(
+                    "github",
+                    "read",
+                    false,
+                    "trusted_internal_signed",
+                    "production",
+                    false,
+                ),
+                request(
+                    "github",
+                    "read",
+                    false,
+                    "trusted_internal_signed",
+                    "staging",
+                    false,
+                ),
+                request(
+                    "github",
+                    "read",
+                    false,
+                    "trusted_internal_signed",
+                    "production",
+                    false,
+                ),
             ];
             let is_tool_known = [false, true, true, true, true, true];
             let is_mtls = [true, true, true, false, true, true];
@@ -562,7 +632,14 @@ when {
             // forbid (production_mutations) must win over the require_approval
             // permit (force_approval_for_all) that also matches.
             let engine = engine_from_cedar(&compile_template("read-only-access")).await;
-            let req = request("github", "merge", true, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "merge",
+                true,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "deny");
         }
 
@@ -593,7 +670,14 @@ when {
         #[tokio::test]
         async fn strict_write_review_production_mutation_requires_approval() {
             let engine = engine_from_cedar(&compile_template("strict-write-review")).await;
-            let req = request("github", "merge", true, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "merge",
+                true,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "require_approval");
         }
 
@@ -618,7 +702,14 @@ when {
         #[tokio::test]
         async fn unrestricted_dev_unknown_tool_in_allowed_env_is_allowed() {
             let engine = engine_from_cedar(&compile_template("unrestricted-dev")).await;
-            let req = request("github", "read", false, "trusted_internal_signed", "development", false);
+            let req = request(
+                "github",
+                "read",
+                false,
+                "trusted_internal_signed",
+                "development",
+                false,
+            );
             assert_eq!(decide(&engine, &req, false, true).await, "allow");
         }
 
@@ -627,7 +718,14 @@ when {
             // allowed_environments' forbid must win over the unconditional
             // "allow" permits from the other three fields.
             let engine = engine_from_cedar(&compile_template("unrestricted-dev")).await;
-            let req = request("github", "merge", true, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "merge",
+                true,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "deny");
         }
 
@@ -644,20 +742,29 @@ when {
             // tool / mutation / untrusted-trust mutation); a plain read in an
             // allowed environment matches none of them.
             let engine = engine_from_cedar(&compile_template("unrestricted-dev")).await;
-            let req = request("github", "read", false, "trusted_internal_signed", "development", false);
+            let req = request(
+                "github",
+                "read",
+                false,
+                "trusted_internal_signed",
+                "development",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "deny");
         }
 
         #[tokio::test]
         async fn quarantine_on_untrusted_mutation_untrusted_write_denied() {
-            let engine = engine_from_cedar(&compile_template("quarantine-on-untrusted-mutation")).await;
+            let engine =
+                engine_from_cedar(&compile_template("quarantine-on-untrusted-mutation")).await;
             let req = request("github", "merge", true, "untrusted_external", "dev", false);
             assert_eq!(decide(&engine, &req, true, true).await, "deny");
         }
 
         #[tokio::test]
         async fn quarantine_on_untrusted_mutation_sensitive_data_quarantined() {
-            let engine = engine_from_cedar(&compile_template("quarantine-on-untrusted-mutation")).await;
+            let engine =
+                engine_from_cedar(&compile_template("quarantine-on-untrusted-mutation")).await;
             let req = request("github", "read", false, "trusted_internal_signed", "dev", true);
             assert_eq!(decide(&engine, &req, true, true).await, "quarantine");
         }
@@ -668,7 +775,8 @@ when {
             // sensitive-data quarantine permit must end up denied — a forbid
             // is final and must never be downgraded to (or coexist with) a
             // quarantine annotation from a separately-matching permit.
-            let engine = engine_from_cedar(&compile_template("quarantine-on-untrusted-mutation")).await;
+            let engine =
+                engine_from_cedar(&compile_template("quarantine-on-untrusted-mutation")).await;
             let req = request("github", "merge", true, "untrusted_external", "dev", true);
             assert_eq!(decide(&engine, &req, true, true).await, "deny");
         }
@@ -710,7 +818,14 @@ when {
         #[tokio::test]
         async fn audit_only_mode_production_mutation_allowed() {
             let engine = engine_from_cedar(&compile_template("audit-only-mode")).await;
-            let req = request("github", "merge", true, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "merge",
+                true,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "allow");
         }
 
@@ -751,7 +866,14 @@ when {
             // even the most unremarkable, fully-trusted, non-mutating request
             // denies, because nothing in the policy set ever grants `allow`.
             let engine = engine_from_cedar(&compile_template("fail-closed-default")).await;
-            let req = request("github", "read", false, "trusted_internal_signed", "production", false);
+            let req = request(
+                "github",
+                "read",
+                false,
+                "trusted_internal_signed",
+                "production",
+                false,
+            );
             assert_eq!(decide(&engine, &req, true, true).await, "deny");
         }
 

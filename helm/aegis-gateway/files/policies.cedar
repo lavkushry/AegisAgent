@@ -24,6 +24,16 @@
 
 // === FORBID RULES FIRST (highest priority; abort on known-unsafe patterns) ===
 
+// Rule "mcp-unknown-tool-forbid": unknown MCP tools are denied by default.
+forbid (
+    principal,
+    action == Action::"tool_call",
+    resource
+)
+when {
+    context.is_mcp_tool_known == false
+};
+
 // Rule "untrusted-mutation-forbid": untrusted, suspected-malicious, OR
 // unclassified (unknown) context can NEVER directly trigger a mutating action.
 // `unknown` is denied — not merely paused — because provenance is fail-closed:
