@@ -1,0 +1,24 @@
+# TEST-006 (#1166): cargo-mutants configuration.
+#
+# Scoped to the four modules called out in the issue's acceptance criteria —
+# the security-critical decision/signing/correlation surface where a missed
+# mutation (e.g. a flipped `==`/`!=` in a trust check) would silently weaken
+# enforcement rather than just fail a test loudly. Mutation testing across
+# the full workspace would take far too long to be a useful CI signal; this
+# keeps the run focused on the modules where test *quality* (not just line
+# coverage) matters most.
+#
+# Run locally with: cargo mutants
+# Or against this exact scope explicitly: cargo mutants --file lib/policy/src/cedar.rs --file lib/soc/src/detect.rs --file lib/soc/src/correlate.rs --file src/src/sign.rs
+examine_globs = [
+    "lib/policy/src/cedar.rs",
+    "lib/soc/src/detect.rs",
+    "lib/soc/src/correlate.rs",
+    "src/src/sign.rs",
+]
+
+# Mutants are run with `cargo test --workspace`-equivalent scope per package;
+# give each mutant generous headroom over the baseline build+test time before
+# declaring it "timeout" (these packages pull in cedar-policy/qdrant-client,
+# which are not fast to rebuild).
+minimum_test_timeout = 60

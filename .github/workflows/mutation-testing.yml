@@ -1,0 +1,62 @@
+name: Mutation testing (weekly, informational)
+
+# TEST-006 (#1166): cargo-mutants against the security-critical modules
+# (lib/policy/src/cedar.rs, lib/soc/src/detect.rs, lib/soc/src/correlate.rs,
+# src/src/sign.rs — see mutants.toml) to measure whether tests actually
+# catch broken logic, not just exercise lines.
+#
+# Informational only, per the issue's own acceptance criteria ("tracked in
+# CI, not blocking") — surviving mutants are reported in the job summary but
+# never fail the workflow or gate a PR. A full mutation run rebuilds and
+# retests the workspace once per mutant, which is far too slow to run on
+# every push; this runs weekly plus on manual dispatch.
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: cargo-mutants (detect/correlate/policy/sign)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: mutants
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+      - name: Run cargo-mutants (scope set by mutants.toml)
+        # Informational: a non-zero exit (surviving/timeout mutants are
+        # expected below the 80% target) must not fail the job.
+        continue-on-error: true
+        run: cargo mutants --no-shuffle -j 2 --output mutants-out
+      - name: Publish kill-rate summary
+        if: always()
+        run: |
+          echo "### Mutation testing (cargo-mutants)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Target: >80% kill rate on detect.rs, correlate.rs, cedar.rs, sign.rs (#1166)." >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 src/scripts/summarize_mutants.py mutants-out/outcomes.json
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload full mutants report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-report
+          path: mutants-out/
+          retention-days: 30
