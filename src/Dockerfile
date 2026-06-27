@@ -1,3 +1,16 @@
+# Dashboard (#1326): the gateway's serve_dashboard_index/serve_dashboard_static
+# handlers (src/src/routes/dashboard.rs) read a static-exported Next.js build
+# from the relative path `ui/dist` at runtime — ui/next.config.ts sets
+# `output: "export", distDir: "dist"` for exactly this. Build it here and copy
+# the result into the final image; without this stage the gateway has no
+# `ui/dist` and every /dashboard/* request 404s.
+FROM node:20-bookworm AS ui-builder
+WORKDIR /build/ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui ./
+RUN npm run build
+
 FROM rust:1.96-bookworm AS builder
 WORKDIR /build
 
@@ -56,6 +69,7 @@ WORKDIR /app
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=builder /build/target/release/gateway /usr/local/bin/aegis-gateway
 COPY policies.cedar /app/policies.cedar
+COPY --from=ui-builder --chown=65532:65532 /build/ui/dist /app/ui/dist
 COPY --from=builder --chown=65532:65532 /data /data
 
 ENV DATABASE_URL=sqlite:///data/aegis.db
