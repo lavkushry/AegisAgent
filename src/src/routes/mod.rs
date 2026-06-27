@@ -2168,7 +2168,66 @@ pub(crate) mod test_helpers {
             background_task_handles: std::sync::Mutex::new(Vec::new()),
         });
 
+        register_default_test_fixtures(&state, &tenant_id).await;
+
         (state, tenant_id, agent_token, events_rx)
+    }
+
+    /// Registers the generic fixture tool/action pairs exercised across the
+    /// route test suite (`filesystem/read_file`, `github/read_issue`, etc.)
+    /// as known skill actions, with `default_decision: "policy"` so Cedar's
+    /// own rules — not this fixture — still govern the actual decision.
+    ///
+    /// Before the `mcp-unknown-tool-forbid` Cedar rule was restored, these
+    /// tests silently relied on unknown tools/actions falling through to a
+    /// permissive default. Now that unknown tools are correctly denied
+    /// (forbid always wins over permit), every fixture pair used by more
+    /// than one call site needs to be registered up front so each test
+    /// still exercises the policy decision it actually intends to test,
+    /// rather than the unrelated fail-closed unknown-tool guard.
+    /// `github/merge_pull_request` and `deployer/ship` are registered by
+    /// their own dedicated helpers ([`create_pending_approval`],
+    /// `register_ship_action`) and are intentionally not duplicated here.
+    async fn register_default_test_fixtures(state: &Arc<AppState>, tenant_id: &str) {
+        let fixtures = [
+            ("filesystem", "read_file", "low", false),
+            ("github", "read_issue", "low", false),
+            ("github", "read_file", "low", false),
+            ("github", "push_commit", "high", true),
+            ("github", "delete_branch", "high", true),
+            // Cedar's quarantine-canary rule requires `mutates_state == false`.
+            ("quarantine_canary", "trigger", "critical", false),
+        ];
+        for (skill_key, action_key, risk, mutates_state) in fixtures {
+            let resp = register_tool(
+                State(state.clone()),
+                TenantId(tenant_id.to_string()),
+                Json(RegisterToolRequest {
+                    skill_key: skill_key.to_string(),
+                    name: skill_key.to_string(),
+                    r#type: "static".to_string(),
+                    auth_type: None,
+                    owner_team: None,
+                    default_risk: None,
+                    actions: vec![RegisterToolAction {
+                        action_key: action_key.to_string(),
+                        description: None,
+                        risk: risk.to_string(),
+                        mutates_state,
+                        data_access: None,
+                        approval_required: false,
+                        default_decision: "policy".to_string(),
+                    }],
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "register_default_test_fixtures: failed to register {skill_key}/{action_key}"
+            );
+        }
     }
 
     /// Like [`setup_state`], but `audit_batch` is backed by a real channel
@@ -2332,12 +2391,48 @@ pub(crate) mod test_helpers {
     /// Shared helper for the approval-lifecycle tests below: triggers a
     /// require_approval decision (a production GitHub merge) and returns its
     /// approval id plus the bound `action_hash`.
+    ///
+    /// Registers `github`/`merge_pull_request` as a known skill action first
+    /// (`default_decision: "policy"`, i.e. defer entirely to Cedar) — without
+    /// this, the action is "unknown" and the fail-closed
+    /// `mcp-unknown-tool-forbid` rule denies it outright before Cedar's
+    /// named "production GitHub merges to main require approval" permit
+    /// ever gets a chance to fire (a forbid always wins over a permit).
     pub(crate) async fn create_pending_approval(
         state: &Arc<AppState>,
         tenant_id: &str,
         agent_token: &str,
         pr_number: &str,
     ) -> (Uuid, String) {
+        let register_resp = register_tool(
+            State(state.clone()),
+            TenantId(tenant_id.to_string()),
+            Json(RegisterToolRequest {
+                skill_key: "github".to_string(),
+                name: "GitHub".to_string(),
+                r#type: "static".to_string(),
+                auth_type: None,
+                owner_team: None,
+                default_risk: None,
+                actions: vec![RegisterToolAction {
+                    action_key: "merge_pull_request".to_string(),
+                    description: None,
+                    risk: "high".to_string(),
+                    mutates_state: true,
+                    data_access: None,
+                    approval_required: false,
+                    default_decision: "policy".to_string(),
+                }],
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            register_resp.status(),
+            StatusCode::OK,
+            "create_pending_approval: failed to register the github/merge_pull_request fixture action"
+        );
+
         let mut request = mcp_authorize_request("github", "merge_pull_request");
         request.tool_call.mutates_state = true;
         request.tool_call.resource = Some(format!("repo/example/pull/{pr_number}"));

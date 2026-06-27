@@ -25,6 +25,7 @@
 // === FORBID RULES FIRST (highest priority; abort on known-unsafe patterns) ===
 
 // Rule "mcp-unknown-tool-forbid": unknown MCP tools are denied by default.
+@id("mcp_unknown_tool")
 forbid (
     principal,
     action == Action::"tool_call",
