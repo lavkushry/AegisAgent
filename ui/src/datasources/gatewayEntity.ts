@@ -1,4 +1,5 @@
 import { fetchFromGateway, type FetchOptions } from "@/app/api";
+import { normalizeVerification } from "./receiptVerification";
 import { resolveTimeToken } from "@/lib/format";
 import { rowsToFrame } from "./frame";
 import type {
@@ -95,31 +96,6 @@ export class GatewayEntityDatasource implements Datasource {
       this.opts,
       `/v1/receipts/${receiptId}/verify`,
     );
-    return normalizeVerify(data);
+    return normalizeVerification(data);
   }
-}
-
-/**
- * Normalize the gateway's loose verify response into a VerifyResult. The
- * gateway has shipped several shapes ({verified}, {status}, {error}); this
- * centralizes the interpretation that ExploreTab previously inlined.
- */
-export function normalizeVerify(data: Record<string, unknown>): VerifyResult {
-  const err = data.error;
-  const ok =
-    data.verified === true ||
-    data.status === "verified" ||
-    (err === undefined || err === null);
-  const brokenRaw = data.broken_at_row ?? data.brokenAtRow;
-  const brokenAtRow = typeof brokenRaw === "number" ? brokenRaw : undefined;
-  const message = err
-    ? `Tamper detected: ${String(err)}`
-    : "Receipt cryptographic signature matches the hash chain.";
-  const head = data.chain_head ?? data.chainHead;
-  return {
-    ok,
-    brokenAtRow,
-    message,
-    chainHead: typeof head === "string" ? head : undefined,
-  };
 }

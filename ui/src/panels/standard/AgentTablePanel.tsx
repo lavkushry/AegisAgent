@@ -24,10 +24,10 @@ interface AgentRow {
  * endpoints. The gateway enforces authorization server-side regardless.
  */
 export default function AgentTablePanel({ data }: PanelProps) {
-  const { gatewayUrl, bearerToken } = useAppStore();
+  const { gatewayUrl, bearerToken, activeTenant } = useAppStore();
   const { role } = useEffectiveRole();
   const canRespond = role !== "viewer";
-  const apiOpts = { gatewayUrl, bearerToken };
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const queryClient = useQueryClient();
 
   const invalidate = () => {

@@ -2,6 +2,9 @@ import type { PanelProps, PanelRegistryEntry, PanelType } from "./types";
 import StatPanel from "./standard/StatPanel";
 import TablePanel from "./standard/TablePanel";
 import TimeSeriesPanel from "./standard/TimeSeriesPanel";
+import StatusPanel from "./standard/StatusPanel";
+import FeedPanel from "./standard/FeedPanel";
+import HeatmapPlaceholder from "./standard/HeatmapPlaceholder";
 import AgentTablePanel from "./standard/AgentTablePanel";
 import ApprovalCard from "./differentiators/ApprovalCard";
 import ProvableTimeline from "./differentiators/ProvableTimeline";
@@ -30,6 +33,24 @@ const entries: PanelRegistryEntry[] = [
     Component: TimeSeriesPanel as PanelRegistryEntry["Component"],
     defaultOptions: {},
     chartLib: "recharts",
+  },
+  {
+    type: "status",
+    Component: StatusPanel as PanelRegistryEntry["Component"],
+    defaultOptions: {},
+    chartLib: "none",
+  },
+  {
+    type: "feed",
+    Component: FeedPanel as PanelRegistryEntry["Component"],
+    defaultOptions: {},
+    chartLib: "none",
+  },
+  {
+    type: "heatmap",
+    Component: HeatmapPlaceholder as PanelRegistryEntry["Component"],
+    defaultOptions: {},
+    chartLib: "echarts",
   },
   {
     type: "agent-table",

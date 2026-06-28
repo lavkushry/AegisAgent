@@ -3,50 +3,56 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { getIncidents, getIncidentDetail, fetchFromGateway, getIncidentGraph, verifyReceipt } from "../app/api";
-import { AlertOctagon, CheckSquare, FileText, Download, ShieldCheck, HelpCircle, Activity, User, ShieldAlert, AlertTriangle } from "lucide-react";
+import { downloadFromGateway, getIncidents, getIncidentDetail, fetchFromGateway, getIncidentGraph, verifyReceipt, type IncidentNarration } from "../app/api";
+import { normalizeVerification } from "@/datasources/receiptVerification";
+import { AlertOctagon, CheckSquare, FileText, Download, ShieldCheck, Activity, ShieldAlert, AlertTriangle } from "lucide-react";
 import SeverityTag from "./security/SeverityTag";
+import { errorMessage } from "@/lib/format";
 
 export default function IncidentsTab() {
-  const { gatewayUrl, bearerToken } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken };
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const queryClient = useQueryClient();
 
-  const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
+  const selectedIncidentId = useAppStore((state) => state.activeIncidentId);
+  const setSelectedIncidentId = useAppStore((state) => state.setActiveIncidentId);
   const [verifyingTimeline, setVerifyingTimeline] = useState(false);
-  const [verificationOutput, setVerificationOutput] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [verificationOutput, setVerificationOutput] = useState<{
+    status: "verified" | "failed" | "unknown";
+    msg: string;
+  } | null>(null);
 
   // Fetch list of incidents
   const { data: incidents, isLoading: isIncidentsLoading } = useQuery({
-    queryKey: ["incidents", gatewayUrl, bearerToken],
+    queryKey: ["incidents", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getIncidents(apiOpts),
     refetchInterval: 5000,
   });
 
   // Fetch details for the selected incident
   const { data: incidentDetail, isLoading: isDetailLoading } = useQuery({
-    queryKey: ["incidentDetail", gatewayUrl, bearerToken, selectedIncidentId],
+    queryKey: ["incidentDetail", gatewayUrl, activeTenant, authEpoch, selectedIncidentId],
     queryFn: () => getIncidentDetail(apiOpts, selectedIncidentId!),
     enabled: !!selectedIncidentId,
   });
 
   // Fetch RCA narration
   const { data: narration, isLoading: isNarrationLoading } = useQuery({
-    queryKey: ["incidentNarration", gatewayUrl, bearerToken, selectedIncidentId],
-    queryFn: () => fetchFromGateway<any>(apiOpts, `/v1/incidents/${selectedIncidentId}/narrate`),
+    queryKey: ["incidentNarration", gatewayUrl, activeTenant, authEpoch, selectedIncidentId],
+    queryFn: () => fetchFromGateway<IncidentNarration>(apiOpts, `/v1/incidents/${selectedIncidentId}/narrate`),
     enabled: !!selectedIncidentId,
   });
 
   // Fetch evidence graph
   const { data: graph, isLoading: isGraphLoading } = useQuery({
-    queryKey: ["incidentGraph", gatewayUrl, bearerToken, selectedIncidentId],
+    queryKey: ["incidentGraph", gatewayUrl, activeTenant, authEpoch, selectedIncidentId],
     queryFn: () => getIncidentGraph(apiOpts, selectedIncidentId!),
     enabled: !!selectedIncidentId,
   });
 
   // Mutation to close incident
   const closeIncidentMutation = useMutation({
-    mutationFn: (id: string) => fetchFromGateway<any>(apiOpts, `/v1/incidents/${id}/close`, "POST"),
+    mutationFn: (id: string) => fetchFromGateway<Record<string, unknown>>(apiOpts, `/v1/incidents/${id}/close`, "POST"),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["incidents"] });
       queryClient.invalidateQueries({ queryKey: ["incidentDetail", selectedIncidentId] });
@@ -58,10 +64,14 @@ export default function IncidentsTab() {
     closeIncidentMutation.mutate(id);
   };
 
-  const handleDownloadEvidencePack = (id: string) => {
-    // Open the download link directly in a new tab/window
-    const url = `${gatewayUrl.replace(/\/+$/, "")}/v1/incidents/${id}/evidence-pack`;
-    window.open(url, "_blank");
+  const handleDownloadEvidencePack = async (id: string) => {
+    const blob = await downloadFromGateway(apiOpts, `/v1/incidents/${id}/evidence-pack`);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `aegis-incident-${id}-evidence-pack.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleVerifyTimeline = async () => {
@@ -70,12 +80,12 @@ export default function IncidentsTab() {
     setVerificationOutput(null);
 
     // Find all receipt nodes in the graph
-    const receiptNodes = graph.nodes.filter((node: any) => node.group === "receipt");
+    const receiptNodes = graph.nodes.filter((node) => node.group === "receipt");
 
     if (receiptNodes.length === 0) {
       setVerificationOutput({
-        ok: true,
-        msg: "No actions or receipts associated with this incident timeline yet.",
+        status: "unknown",
+        msg: "No receipts are available, so this timeline cannot be verified.",
       });
       setVerifyingTimeline(false);
       return;
@@ -86,24 +96,25 @@ export default function IncidentsTab() {
       let checkedCount = 0;
       for (const node of receiptNodes) {
         const verifyRes = await verifyReceipt(apiOpts, node.id);
-        const ok = verifyRes.verified || (verifyRes.status === "verified") || (!verifyRes.error);
-        if (!ok) {
+        const result = normalizeVerification(verifyRes);
+        if (result.status !== "verified") {
           allOk = false;
+          setVerificationOutput({ status: result.status, msg: result.message });
           break;
         }
         checkedCount++;
       }
 
+      if (allOk) {
+        setVerificationOutput({
+          status: "verified",
+          msg: `Cryptographic validation complete: All ${checkedCount} actions in this incident timeline verified as tamper-free.`,
+        });
+      }
+    } catch (err: unknown) {
       setVerificationOutput({
-        ok: allOk,
-        msg: allOk
-          ? `Cryptographic validation complete: All ${checkedCount} actions in this incident timeline verified as tamper-free.`
-          : "Verification failed: A discrepancy in the receipt hash chain signature was detected.",
-      });
-    } catch (err: any) {
-      setVerificationOutput({
-        ok: false,
-        msg: `Verification failed: ${err.message}`,
+        status: "failed",
+        msg: `Verification failed: ${errorMessage(err)}`,
       });
     } finally {
       setVerifyingTimeline(false);
@@ -124,7 +135,7 @@ export default function IncidentsTab() {
           <p className="text-xs text-[var(--text-muted)] text-center py-8">No incidents recorded.</p>
         ) : (
           <div className="space-y-2 overflow-y-auto max-h-[500px] custom-scrollbar">
-            {incidents.map((inc: any) => (
+            {incidents.map((inc) => (
               <div
                 key={inc.id}
                 onClick={() => {
@@ -140,14 +151,14 @@ export default function IncidentsTab() {
                 <div className="flex justify-between items-start gap-2">
                   <SeverityTag severity={inc.severity} />
                   <span className={`text-[10px] font-semibold ${inc.status === "open" ? "text-red-400" : "text-green-400"}`}>
-                    {inc.status.toUpperCase()}
+                    {(inc.status ?? "unknown").toUpperCase()}
                   </span>
                 </div>
                 <h4 className="font-semibold mt-2 text-[var(--text-primary)] truncate">{inc.kind}</h4>
                 <p className="text-[var(--text-secondary)] text-[11px] mt-1 line-clamp-2">{inc.summary}</p>
                 <div className="flex justify-between items-center text-[10px] text-[var(--text-muted)] mt-3">
                   <span>Agent: {inc.agent_id}</span>
-                  <span>{new Date(inc.opened_at).toLocaleDateString()}</span>
+                  <span>{new Date(inc.opened_at ?? 0).toLocaleDateString()}</span>
                 </div>
               </div>
             ))}
@@ -239,11 +250,13 @@ export default function IncidentsTab() {
               {/* Verification Output Bar */}
               {verificationOutput && (
                 <div className={`p-3 border rounded-lg text-xs flex items-center gap-2 ${
-                  verificationOutput.ok
+                  verificationOutput.status === "verified"
                     ? "bg-green-950/20 border-green-500/30 text-green-400"
-                    : "bg-red-950/20 border-red-500/30 text-red-400"
+                    : verificationOutput.status === "unknown"
+                      ? "bg-amber-950/20 border-amber-500/30 text-amber-400"
+                      : "bg-red-950/20 border-red-500/30 text-red-400"
                 }`}>
-                  {verificationOutput.ok ? <ShieldCheck size={16} /> : <AlertTriangle size={16} />}
+                  {verificationOutput.status === "verified" ? <ShieldCheck size={16} /> : <AlertTriangle size={16} />}
                   <span>{verificationOutput.msg}</span>
                 </div>
               )}
@@ -256,9 +269,9 @@ export default function IncidentsTab() {
                   <p className="text-xs text-[var(--text-muted)] text-center py-6 font-mono">No actions bound to this incident case.</p>
                 ) : (
                   graph.nodes
-                    .filter((node: any) => node.group === "decision" || node.group === "receipt" || node.group === "approval")
-                    .sort((a: any, b: any) => (a.timestamp || "").localeCompare(b.timestamp || ""))
-                    .map((node: any, idx: number) => (
+                    .filter((node) => node.group === "decision" || node.group === "receipt" || node.group === "approval")
+                    .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""))
+                    .map((node, idx: number) => (
                       <div
                         key={idx}
                         className="flex justify-between items-center gap-4 p-3 bg-[var(--surface-app)]/30 border border-[var(--border-default)] rounded-lg text-xs"
@@ -269,7 +282,7 @@ export default function IncidentsTab() {
                           }`} />
                           <div className="flex flex-col">
                             <span className="font-semibold text-[var(--text-primary)]">{node.label}</span>
-                            {node.metadata && (
+                            {node.metadata !== undefined && node.metadata !== null && (
                               <span className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5 truncate max-w-[300px]">
                                 {typeof node.metadata === "string" ? node.metadata : JSON.stringify(node.metadata)}
                               </span>

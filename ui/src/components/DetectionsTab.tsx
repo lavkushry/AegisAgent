@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import {
@@ -10,33 +10,34 @@ import {
   createSocRule,
   deleteDetectionRule,
   backtestSocRule,
-  UpsertRulePayload
+  UpsertRulePayload,
+  type BacktestResult,
+  type SocRuleRecord,
 } from "../app/api";
+import { errorMessage } from "@/lib/format";
 import {
   ShieldAlert,
   Plus,
   Play,
   Check,
-  X,
   ChevronDown,
   ChevronUp,
   Search,
   Filter,
-  Calendar,
   AlertCircle,
   Terminal,
   Activity,
-  FileText,
   Trash2,
   AlertTriangle
 } from "lucide-react";
 
 // Local helper to format RuleCondition JSON object to a YAML-like string for display
-function jsonToYaml(obj: any): string {
+function jsonToYaml(obj: unknown): string {
   if (!obj) return "";
   if (typeof obj === "string") return obj;
+  if (typeof obj !== "object") return String(obj);
 
-  const formatValue = (val: any): string => {
+  const formatValue = (val: unknown): string => {
     if (typeof val === "string") {
       if (/[\s:#[\]{}]/.test(val)) {
         return JSON.stringify(val);
@@ -47,8 +48,7 @@ function jsonToYaml(obj: any): string {
   };
 
   const lines: string[] = [];
-  for (const key of Object.keys(obj)) {
-    const val = obj[key];
+  for (const [key, val] of Object.entries(obj)) {
     if (val === undefined || val === null) continue;
     if (Array.isArray(val)) {
       if (val.length === 0) {
@@ -73,8 +73,8 @@ function jsonToYaml(obj: any): string {
 }
 
 export default function DetectionsTab() {
-  const { gatewayUrl, bearerToken } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken };
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const queryClient = useQueryClient();
 
   const [subTab, setSubTab] = useState<"alerts" | "rules">("alerts");
@@ -109,26 +109,26 @@ export default function DetectionsTab() {
     const d = new Date();
     return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   });
-  const [backtestResult, setBacktestResult] = useState<any | null>(null);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const [isBacktesting, setIsBacktesting] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
   // Fetch Alerts (Active Detections)
   const { data: alerts, isLoading: loadingAlerts, error: alertsError } = useQuery({
-    queryKey: ["alerts", gatewayUrl, bearerToken],
+    queryKey: ["alerts", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getAlerts(apiOpts, 100),
     refetchInterval: 5000, // Poll every 5s for live alerts feed
   });
 
   // Fetch Effective Rules (what's active on the gateway)
-  const { data: effectiveRules, isLoading: loadingEffective, error: effectiveError } = useQuery({
-    queryKey: ["socRules", gatewayUrl, bearerToken],
+  const { data: effectiveRules, isLoading: loadingEffective } = useQuery({
+    queryKey: ["socRules", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getSocRules(apiOpts),
   });
 
   // Fetch Custom Rules (to retrieve DB record ID and status including disabled rules)
-  const { data: customRules, isLoading: loadingCustom, error: customError } = useQuery({
-    queryKey: ["customRules", gatewayUrl, bearerToken],
+  const { data: customRules, isLoading: loadingCustom } = useQuery({
+    queryKey: ["customRules", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getDetectionRules(apiOpts),
   });
 
@@ -179,21 +179,21 @@ export default function DetectionsTab() {
     return catalog.find(r => r.rule_key === selectedRuleKey) || null;
   }, [catalog, selectedRuleKey]);
 
-  // Populate form fields on selected rule change
-  useEffect(() => {
-    if (selectedRule && !isCreatingNew) {
-      setFormRuleKey(selectedRule.rule_key);
-      setFormName(selectedRule.name);
-      setFormSeverity(selectedRule.severity);
-      setFormCondition(jsonToYaml(selectedRule.condition));
-      setFormSummaryTemplate(selectedRule.summary_template);
-      setFormEnabled(selectedRule.enabled);
-      setFormError(null);
-      setFormSuccess(null);
-      setBacktestResult(null);
-      setBacktestError(null);
-    }
-  }, [selectedRule, isCreatingNew]);
+  const selectRule = (rule: SocRuleRecord & { dbId?: string }) => {
+    setSelectedRuleKey(rule.rule_key);
+    setIsCreatingNew(false);
+    setIsEditing(false);
+    setFormRuleKey(rule.rule_key);
+    setFormName(rule.name);
+    setFormSeverity(rule.severity);
+    setFormCondition(jsonToYaml(rule.condition));
+    setFormSummaryTemplate(rule.summary_template);
+    setFormEnabled(rule.enabled);
+    setFormError(null);
+    setFormSuccess(null);
+    setBacktestResult(null);
+    setBacktestError(null);
+  };
 
   // Filter alerts client-side for immediate responsiveness
   const filteredAlerts = useMemo(() => {
@@ -221,8 +221,8 @@ export default function DetectionsTab() {
       setIsEditing(false);
       setIsCreatingNew(false);
     },
-    onError: (err: any) => {
-      setFormError(err.message || "Failed to save rule.");
+    onError: (err: unknown) => {
+      setFormError(errorMessage(err) || "Failed to save rule.");
       setFormSuccess(null);
     }
   });
@@ -239,8 +239,8 @@ export default function DetectionsTab() {
       setFormSuccess("Custom rule deleted successfully.");
       setFormError(null);
     },
-    onError: (err: any) => {
-      setFormError(err.message || "Failed to delete rule.");
+    onError: (err: unknown) => {
+      setFormError(errorMessage(err) || "Failed to delete rule.");
       setFormSuccess(null);
     }
   });
@@ -294,8 +294,8 @@ export default function DetectionsTab() {
       const toISO = new Date(backtestTo).toISOString();
       const res = await backtestSocRule(apiOpts, selectedRuleKey, fromISO, toISO);
       setBacktestResult(res);
-    } catch (err: any) {
-      setBacktestError(err.message || "Failed to complete historical backtest.");
+    } catch (err: unknown) {
+      setBacktestError(errorMessage(err) || "Failed to complete historical backtest.");
     } finally {
       setIsBacktesting(false);
     }
@@ -406,13 +406,13 @@ export default function DetectionsTab() {
             ) : alertsError ? (
               <div className="flex items-center gap-2 text-red-400 bg-red-950/20 border border-red-500/20 p-4 rounded-lg text-xs">
                 <AlertCircle size={16} />
-                <span>Error fetching alerts: {(alertsError as any).message}</span>
+                <span>Error fetching alerts: {errorMessage(alertsError)}</span>
               </div>
             ) : filteredAlerts.length === 0 ? (
               <p className="text-xs text-[var(--text-muted)] text-center py-12">No active alerts matched the filter conditions.</p>
             ) : (
               <div className="space-y-2">
-                {filteredAlerts.map((alert: any) => {
+                {filteredAlerts.map((alert) => {
                   const isExpanded = expandedAlertId === alert.alert_id;
                   const severityStyle = getSeverityStyle(alert.severity);
 
@@ -511,11 +511,7 @@ export default function DetectionsTab() {
                   return (
                     <div
                       key={rule.rule_key}
-                      onClick={() => {
-                        setSelectedRuleKey(rule.rule_key);
-                        setIsCreatingNew(false);
-                        setIsEditing(false);
-                      }}
+                      onClick={() => selectRule(rule)}
                       className={`p-3 rounded-lg border cursor-pointer select-none transition-all flex flex-col gap-1.5 ${
                         isSelected
                           ? "bg-[var(--border-default)]/80 border-[var(--border-active)] ring-1 ring-[var(--border-focus)]"

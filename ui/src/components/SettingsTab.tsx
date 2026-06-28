@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Settings, Shield, Sliders, Volume2, Database, Info } from "lucide-react";
+import { Shield, Volume2, Database } from "lucide-react";
 
 export default function SettingsTab() {
   return (

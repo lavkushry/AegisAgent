@@ -30,11 +30,15 @@ interface SessionResponse {
 export function useEffectiveRole(): EffectiveRole {
   const gatewayUrl = useAppStore((s) => s.gatewayUrl);
   const bearerToken = useAppStore((s) => s.bearerToken);
+  const tenantId = useAppStore((s) => s.activeTenant);
+  const authEpoch = useAppStore((s) => s.authEpoch);
   const override = useAppStore((s) => s.role);
 
   const { data } = useQuery({
-    queryKey: ["session", gatewayUrl, bearerToken],
-    queryFn: () => fetchFromGateway<SessionResponse>({ gatewayUrl, bearerToken }, "/v1/session"),
+    queryKey: ["session", gatewayUrl, tenantId, authEpoch],
+    queryFn: () =>
+      fetchFromGateway<SessionResponse>({ gatewayUrl, bearerToken, tenantId }, "/v1/session"),
+    enabled: Boolean(tenantId),
     retry: false,
     staleTime: 60_000,
     // A missing endpoint (404) is expected today; do not surface it as an error.

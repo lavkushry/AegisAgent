@@ -4,6 +4,7 @@ import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDatasources } from "@/datasources/registry";
 import { useDrilldownRouter } from "@/hooks/useDrilldownRouter";
+import { useAppStore } from "@/app/store";
 import { errorMessage } from "@/lib/format";
 import type { TimeRange, VariableValues, DataFrame } from "@/datasources/types";
 import { getPanelEntry } from "./registry";
@@ -34,11 +35,13 @@ export default function PanelRuntime({
   onDrilldown,
 }: Props) {
   const datasources = useDatasources();
+  const activeTenant = useAppStore((state) => state.activeTenant);
+  const authEpoch = useAppStore((state) => state.authEpoch);
   const datasource = datasources.get(definition.datasourceId);
   const entry = getPanelEntry(definition.type);
   const router = useDrilldownRouter();
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, isFetching, isStale, error } = useQuery({
     queryKey: [
       "panel",
       definition.id,
@@ -48,10 +51,13 @@ export default function PanelRuntime({
       definition.query,
       definition.aggregate,
       definition.interval,
+      activeTenant,
+      authEpoch,
       timeRange,
       variables,
     ],
     enabled: Boolean(datasource),
+    staleTime: (refreshSec ?? 30) * 2_000,
     refetchInterval: refreshSec ? refreshSec * 1000 : false,
     queryFn: ({ signal }) => {
       if (!datasource) throw new Error(`Unknown datasource: ${definition.datasourceId}`);
@@ -84,6 +90,8 @@ export default function PanelRuntime({
     <PanelContainer
       title={definition.title}
       isLoading={isLoading}
+      isRefreshing={isFetching && !isLoading}
+      isStale={isStale && !isFetching}
       error={error ? errorMessage(error) : undefined}
       isEmpty={!isLoading && frame.length === 0}
     >

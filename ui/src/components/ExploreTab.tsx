@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { searchDecisions, verifyReceipt } from "../app/api";
 import { parseAql } from "@/datasources/aql/parse";
+import { normalizeVerification } from "@/datasources/receiptVerification";
 import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint } from "lucide-react";
 import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
@@ -34,17 +35,21 @@ interface DecisionRecord {
 }
 
 export default function ExploreTab() {
-  const { gatewayUrl, bearerToken } = useAppStore();
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
   const exploreSeed = useAppStore((s) => s.exploreSeed);
   const consumeExploreSeed = useAppStore((s) => s.consumeExploreSeed);
+  const exploreQuery = useAppStore((s) => s.exploreQuery);
+  const setExploreQuery = useAppStore((s) => s.setExploreQuery);
   const timeRange = useAppStore((s) => s.timeRange);
-  const apiOpts = { gatewayUrl, bearerToken };
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
 
   // Seed the query from a drilldown at mount (this tab remounts on switch).
-  const [searchQuery, setSearchQuery] = useState(() => exploreSeed ?? "");
-  const [debouncedQuery, setDebouncedQuery] = useState(() => exploreSeed ?? "");
+  const [searchQuery, setSearchQuery] = useState(() => exploreSeed ?? exploreQuery);
+  const [debouncedQuery, setDebouncedQuery] = useState(() => exploreSeed ?? exploreQuery);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [verificationResult, setVerificationResult] = useState<Record<string, { ok: boolean; msg: string; loading: boolean }>>({});
+  const [verificationResult, setVerificationResult] = useState<
+    Record<string, { status: "verified" | "failed" | "unknown"; msg: string; loading: boolean }>
+  >({});
 
   // Clear the one-time seed after the initializers above have consumed it.
   useEffect(() => {
@@ -55,7 +60,7 @@ export default function ExploreTab() {
 
   // Fetch decisions based on query
   const { data: decisions, isLoading, error } = useQuery({
-    queryKey: ["decisions", gatewayUrl, bearerToken, debouncedQuery, timeRange],
+    queryKey: ["decisions", gatewayUrl, activeTenant, authEpoch, debouncedQuery, timeRange],
     queryFn: () =>
       searchDecisions(apiOpts, {
         limit: 50,
@@ -68,23 +73,22 @@ export default function ExploreTab() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setDebouncedQuery(searchQuery);
+    setExploreQuery(searchQuery);
   };
 
   const verifyMutation = useMutation({
     mutationFn: (receiptId: string) => verifyReceipt(apiOpts, receiptId),
     onSuccess: (data, receiptId) => {
-      // Assuming response is like { verified: true, error: null } or similar
-      const isVerified = data.verified || (data.status === "verified") || (!data.error);
-      const message = data.error ? `Tamper detected: ${data.error}` : "Receipt cryptographic signature matches the hash chain.";
+      const result = normalizeVerification(data);
       setVerificationResult((prev) => ({
         ...prev,
-        [receiptId]: { ok: isVerified, msg: message, loading: false },
+        [receiptId]: { status: result.status, msg: result.message, loading: false },
       }));
     },
     onError: (err: unknown, receiptId) => {
       setVerificationResult((prev) => ({
         ...prev,
-        [receiptId]: { ok: false, msg: `Verification failed: ${errorMessage(err)}`, loading: false },
+        [receiptId]: { status: "failed", msg: `Verification failed: ${errorMessage(err)}`, loading: false },
       }));
     },
   });
@@ -92,7 +96,7 @@ export default function ExploreTab() {
   const triggerVerification = (receiptId: string) => {
     setVerificationResult((prev) => ({
       ...prev,
-      [receiptId]: { ok: false, msg: "", loading: true },
+      [receiptId]: { status: "unknown", msg: "", loading: true },
     }));
     verifyMutation.mutate(receiptId);
   };
@@ -127,6 +131,7 @@ export default function ExploreTab() {
             const q = `${field}:${value}`;
             setSearchQuery(q);
             setDebouncedQuery(q);
+            setExploreQuery(q);
           }}
         />
 
@@ -229,10 +234,10 @@ export default function ExploreTab() {
                         
                         <div className="flex items-center gap-3">
                           {vResult && (
-                            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${vResult.loading ? "bg-amber-950/20 border-amber-500/30 text-amber-400" : vResult.ok ? "bg-green-950/20 border-green-500/30 text-green-400" : "bg-red-950/20 border-red-500/30 text-red-400"}`}>
+                            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${vResult.loading || vResult.status === "unknown" ? "bg-amber-950/20 border-amber-500/30 text-amber-400" : vResult.status === "verified" ? "bg-green-950/20 border-green-500/30 text-green-400" : "bg-red-950/20 border-red-500/30 text-red-400"}`}>
                               {vResult.loading ? (
                                 <Cpu size={14} className="animate-spin" />
-                              ) : vResult.ok ? (
+                              ) : vResult.status === "verified" ? (
                                 <Check size={14} />
                               ) : (
                                 <AlertTriangle size={14} />

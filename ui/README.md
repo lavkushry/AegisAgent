@@ -1,36 +1,35 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AegisAgent SOC Console
 
-## Getting Started
+Next.js console for operating AegisAgent as an integrity-anchored Agent SOC.
 
-First, run the development server:
+## Local development
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`. Validate changes with:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm test
+npm run lint
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Set `NEXT_PUBLIC_AEGIS_DEMO_MODE=true` only for a local demo. Demo mode supplies the historical `tenant_123` tenant/token defaults and permits local role overrides. A production build has no default bearer token, removes legacy persisted tokens, keeps newly entered tokens in memory only, and defaults to a read-only viewer until the gateway session supplies a role.
 
-## Learn More
+`NEXT_PUBLIC_AEGIS_GATEWAY_URL` may set the initial gateway URL. The active tenant is sent on every request as `X-Aegis-Tenant-ID`; credentials are never serialized into console URLs.
 
-To learn more about Next.js, take a look at the following resources:
+## UI architecture
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `src/chrome`: responsive AppShell, navigation, and global controls.
+- `src/state`: shareable, non-sensitive URL state.
+- `src/datasources`: entity, structured query, receipt, and SSE transports. Panels never call REST directly.
+- `src/dashboards`: typed dashboards-as-code using `DashboardSchema`.
+- `src/panels`: `PanelRuntime`, registry, standard panels, and AegisAgent differentiator panels.
+- `src/components/primitives`: accessible loading/error/empty states, confirmation, redacted JSON, hashes, evidence links, and layout primitives.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Standard panel types are `stat`, `timeseries`, `table`, `status`, `feed`, and the U6 `heatmap` placeholder. AegisAgent-specific types are `approval-card`, `provable-timeline`, and `receipt-integrity`. Each panel receives only a `DataFrame`; its options live in its `PanelDefinition` and are type-checked by the component.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Receipt verification is fail closed. Only explicit gateway responses (`verified: true`, `ok: true`, or `status: "verified"`) render green. Missing or ambiguous responses render an unknown warning.
