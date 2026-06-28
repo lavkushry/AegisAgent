@@ -2187,6 +2187,7 @@ mod tests {
             matched_policies: vec!["critical_policy".to_string()],
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         };
         events_sink.emit(event);
 

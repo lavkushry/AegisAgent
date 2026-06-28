@@ -218,6 +218,7 @@ pub async fn discover_mcp_tools(
             matched_policies: Vec::new(),
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         });
 
         // Fail-closed response (Phase 4): drift is a tool-hijack signal, so

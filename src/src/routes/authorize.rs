@@ -451,6 +451,8 @@ pub async fn authorize_action(
             audit_event_type,
             started_at,
             dry_run,
+            "",
+            &root_trust_level,
         )
         .await
         {
@@ -521,6 +523,8 @@ pub async fn authorize_action(
                     audit_event_type,
                     started_at,
                     dry_run,
+                    "",
+                    &root_trust_level,
                 )
                 .await
                 {
@@ -713,6 +717,8 @@ pub async fn authorize_action(
                     "mcp_tool_called",
                     started_at,
                     dry_run,
+                    &action_hash,
+                    &root_trust_level,
                 )
                 .await
                 {
@@ -798,6 +804,8 @@ pub async fn authorize_action(
                         "mcp_tool_called",
                         started_at,
                         dry_run,
+                        &action_hash,
+                        &root_trust_level,
                     )
                     .await
                     {
@@ -957,6 +965,8 @@ pub async fn authorize_action(
         audit_event_type,
         started_at,
         dry_run,
+        &action_hash,
+        &root_trust_level,
     )
     .await
     {
@@ -1124,6 +1134,7 @@ pub async fn authorize_action(
                     matched_policies: matched_policies.clone(),
                     redacted_fields: vec![],
                     schema_version: 1,
+                    evidence: None,
                 });
             }
             Err(e) => {
@@ -1277,6 +1288,7 @@ pub async fn authorize_action(
                     matched_policies: matched_policies.clone(),
                     redacted_fields: vec![],
                     schema_version: 1,
+                    evidence: None,
                 });
             }
             Ok(None) => {}
@@ -2090,6 +2102,29 @@ mod tests {
         assert_eq!(event.tool, "filesystem");
         assert_eq!(event.action, "read_file");
         assert_eq!(event.run_id.as_deref(), Some("run_routes"));
+
+        // PR3: the event carries verifiable evidence linkage — decision id,
+        // the canonical action hash, and the trust levels — so SOC
+        // alerts/incidents can reference evidence, not just logs.
+        let evidence = event
+            .evidence
+            .expect("authorize_decision events must carry evidence linkage");
+        assert_eq!(
+            evidence.decision_id.as_deref(),
+            Some(response.decision_id.to_string().as_str())
+        );
+        let action_hash = evidence
+            .action_hash
+            .expect("evidence must include the canonical action hash");
+        assert_eq!(action_hash.len(), 64, "action_hash is a SHA-256 hex digest");
+        assert_eq!(
+            evidence.source_trust.as_deref(),
+            Some("trusted_internal_signed")
+        );
+        assert_eq!(
+            evidence.root_trust_level.as_deref(),
+            Some(response.root_trust_level.as_str())
+        );
     }
 
     #[test]
@@ -5906,6 +5941,7 @@ mod tests {
             matched_policies: vec![],
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         };
 
         sink.emit(event.clone());
@@ -7144,6 +7180,7 @@ mod tests {
             matched_policies: vec![],
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         });
         assert!(!state.events.has_capacity());
 
