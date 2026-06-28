@@ -2569,4 +2569,53 @@ pub(crate) mod test_helpers {
             ]
         })
     }
+
+    // #1606: the `TenantId` extractor is the single auth gate every
+    // tenant/admin-scoped route depends on (policy reload, agent management,
+    // approvals, etc.). These assert it rejects unauthenticated requests before
+    // any handler runs — the regression guard for "admin routes require auth".
+    async fn extract_tenant(
+        state: &Arc<AppState>,
+        auth_header: Option<&str>,
+    ) -> Result<TenantId, StatusError> {
+        let mut builder = axum::http::Request::builder().uri("/v1/policies/reload");
+        if let Some(h) = auth_header {
+            builder = builder.header("Authorization", h);
+        }
+        let req = builder.body(axum::body::Body::empty()).unwrap();
+        let (mut parts, _) = req.into_parts();
+        <TenantId as axum::extract::FromRequestParts<Arc<AppState>>>::from_request_parts(
+            &mut parts, state,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn tenant_extractor_rejects_request_with_no_authorization_header() {
+        let (state, _tenant_id, _agent_token) = setup_state("auth_gate_missing").await;
+        let err = extract_tenant(&state, None)
+            .await
+            .expect_err("a request with no Authorization header must be rejected");
+        assert_eq!(err.into_response().status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn tenant_extractor_rejects_non_bearer_authorization() {
+        let (state, _tenant_id, _agent_token) = setup_state("auth_gate_nonbearer").await;
+        let err = extract_tenant(&state, Some("Basic dXNlcjpwYXNz"))
+            .await
+            .expect_err("a non-Bearer Authorization header must be rejected");
+        assert_eq!(err.into_response().status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn tenant_extractor_rejects_bearer_token_without_valid_tenant() {
+        let (state, _tenant_id, _agent_token) = setup_state("auth_gate_badtoken").await;
+        // Not a JWT and not a `tenant_`-prefixed token → rejected before any DB
+        // lookup (JWT is not required in the test environment).
+        let err = extract_tenant(&state, Some("Bearer not-a-valid-token"))
+            .await
+            .expect_err("an unrecognized bearer token must be rejected");
+        assert_eq!(err.into_response().status(), StatusCode::UNAUTHORIZED);
+    }
 }
