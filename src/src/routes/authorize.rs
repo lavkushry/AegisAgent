@@ -210,13 +210,14 @@ pub async fn authorize_action(
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
 
-    // Compute or retrieve the cached action hash of the tool call
-    let action_hash = hash_tool_call_cached(
-        &state,
-        &tenant_id,
-        payload.request_id.as_deref(),
-        &payload.tool_call,
-    );
+    // #1602: the action hash is computed AFTER the admission webhook block below,
+    // not here — the webhook can mutate `payload.tool_call.parameters`, and the
+    // hash bound to the approval/receipt/audit event/response must describe the
+    // FINAL action that Cedar evaluates and the agent executes, never the
+    // pre-mutation one. Computing it here (before the mutation) silently broke
+    // the "approval bound to the exact executable bytes" guarantee. `action_hash`
+    // is not referenced between this point and the admission block, so deferring
+    // its computation is safe.
 
     // Request signing (#1403, opt-in): verify X-Aegis-Request-Signature header
     // when the agent has a signing key registered. Missing or incorrect
@@ -546,6 +547,19 @@ pub async fn authorize_action(
             }
         }
     }
+
+    // #1602: compute the action hash now — after any admission-webhook mutation
+    // above — so it binds the final, post-mutation tool call. Everything
+    // downstream (Cedar evaluation, the receipt, the approval record + its
+    // returned `action_hash`, the audit event's `input_hash`) uses this value,
+    // keeping the SDK's hash re-verification and the human approval bound to the
+    // exact bytes that will execute.
+    let action_hash = hash_tool_call_cached(
+        &state,
+        &tenant_id,
+        payload.request_id.as_deref(),
+        &payload.tool_call,
+    );
 
     // Map risk levels based on DB registered action, falling back to policy engine defaults.
     let mut risk_score = 10;
@@ -1719,6 +1733,57 @@ mod tests {
         );
 
         let approval = response.approval.expect("approval info should be present");
+
+        // #1602: the hash bound to the approval must be the hash of the MUTATED
+        // tool call (base_branch=main), not the agent's original one
+        // (base_branch=develop). Before the fix, action_hash was computed before
+        // the admission webhook mutated the parameters, so the approval/receipt
+        // carried the stale pre-mutation hash while storing the post-mutation
+        // action — breaking the "approval bound to the exact executable bytes"
+        // guarantee.
+        let mutated_tool_call = AuthorizeToolCall {
+            tool: "github".to_string(),
+            action: "merge_pull_request".to_string(),
+            resource: Some("repo/example/pull/42".to_string()),
+            mutates_state: true,
+            parameters: serde_json::json!({"base_branch": "main"}),
+        };
+        let expected_hash = hash_tool_call(&mutated_tool_call);
+        assert_eq!(
+            approval.action_hash, expected_hash,
+            "the approval's bound action_hash must be the hash of the mutated action"
+        );
+
+        // Sanity: the agent's original (develop) action must hash differently —
+        // guards against the assertion passing trivially.
+        let original_tool_call = AuthorizeToolCall {
+            parameters: serde_json::json!({"base_branch": "develop"}),
+            ..mutated_tool_call.clone()
+        };
+        assert_ne!(
+            hash_tool_call(&original_tool_call),
+            expected_hash,
+            "sanity: the original and mutated actions must hash differently"
+        );
+
+        // The hash-chained receipt for this decision must also bind the mutated
+        // hash. Receipt writes are deferred (#1512), so drain first.
+        state
+            .deferred_write_tracker
+            .drain(std::time::Duration::from_secs(5))
+            .await;
+        let (receipt_action_hash,): (String,) = sqlx::query_as(
+            "SELECT action_hash FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(tenant_id.as_str())
+        .fetch_one(state.storage.get_pool().sqlite_pool())
+        .await
+        .expect("a receipt should have been emitted for the decision");
+        assert_eq!(
+            receipt_action_hash, expected_hash,
+            "the emitted receipt must bind the mutated action's hash"
+        );
+
         let status_response = get_approval(
             State(state),
             TenantId(tenant_id.to_string()),
@@ -1733,6 +1798,10 @@ mod tests {
         assert_eq!(
             status_json["tool_call"]["parameters"]["base_branch"], "main",
             "the bound approval must carry the mutated parameters, not the agent's original ones"
+        );
+        assert_eq!(
+            status_json["action_hash"], expected_hash,
+            "the approval status endpoint must report the mutated action's hash"
         );
     }
 
