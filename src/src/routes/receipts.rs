@@ -1068,4 +1068,77 @@ mod tests {
             "verify-range must be tenant-scoped — no cross-tenant receipts"
         );
     }
+
+    // ── PR7: cross-tenant negative tests for receipt object lookups ──────────
+    // Closes the tenant-isolation test gap for GET /v1/receipts/:id and
+    // GET /v1/receipts/:id/verify (decisions/approvals/incidents/graph/policy
+    // already have these). Both must 404 a receipt owned by another tenant —
+    // never leak existence or content across the tenant boundary.
+
+    #[tokio::test]
+    async fn get_receipt_returns_404_cross_tenant() {
+        let (state, tenant_a, _) = setup_state("get_receipt_cross_tenant").await;
+        append_n_receipts(&state, &tenant_a, 1).await;
+        let id = state
+            .storage
+            .list_action_receipts_chain_order(&tenant_a)
+            .await
+            .unwrap()
+            .last()
+            .unwrap()
+            .id
+            .clone();
+
+        // Owner can read it.
+        let ok = get_receipt(
+            State(state.clone()),
+            TenantId(tenant_a.clone()),
+            Path(id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        // A different tenant gets 404 — not the receipt, not a 200.
+        let cross = get_receipt(
+            State(state.clone()),
+            TenantId("tenant_other".to_string()),
+            Path(id),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            cross.status(),
+            StatusCode::NOT_FOUND,
+            "another tenant must not read this receipt"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_receipt_returns_404_cross_tenant() {
+        let (state, tenant_a, _) = setup_state("verify_receipt_cross_tenant").await;
+        append_n_receipts(&state, &tenant_a, 1).await;
+        let id = state
+            .storage
+            .list_action_receipts_chain_order(&tenant_a)
+            .await
+            .unwrap()
+            .last()
+            .unwrap()
+            .id
+            .clone();
+
+        let cross = verify_receipt(
+            State(state.clone()),
+            TenantId("tenant_other".to_string()),
+            Path(id),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            cross.status(),
+            StatusCode::NOT_FOUND,
+            "another tenant must not verify this receipt"
+        );
+    }
 }
