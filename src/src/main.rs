@@ -1003,6 +1003,46 @@ async fn strip_mtls_cn_header(
     next.run(req).await
 }
 
+/// PR4: refuse to start a publicly-reachable gateway without authentication.
+///
+/// Binding a non-loopback address (e.g. `0.0.0.0` or a routable IP) exposes
+/// `/v1/*` — and the metrics/debug endpoints — to the network. With JWT not
+/// required, the `TenantId` extractor accepts any `tenant_`-prefixed bearer
+/// token, so a public bind + no JWT is effectively unauthenticated. Fail closed
+/// unless the operator explicitly opts into demo mode (`AEGIS_DEMO_MODE=true`),
+/// which is allowed but logged loudly by the caller.
+///
+/// Loopback binds (`127.0.0.1`, `::1`, `localhost`) are always allowed — that's
+/// the dev/test default and is not network-reachable.
+fn assert_bind_security(
+    bind_addr: &str,
+    jwt_required: bool,
+    demo_mode: bool,
+) -> Result<(), String> {
+    // Split host from the trailing `:port` (rsplit so IPv6 `[::1]:8080` works),
+    // then strip any IPv6 brackets.
+    let host = bind_addr
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(bind_addr)
+        .trim_matches(|c| c == '[' || c == ']');
+
+    let is_loopback = match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => host.eq_ignore_ascii_case("localhost"),
+    };
+
+    if is_loopback || jwt_required || demo_mode {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Refusing to start: AEGIS_BIND_ADDR='{bind_addr}' is a non-loopback (network-reachable) \
+         address but authentication is not enforced. Set AEGIS_JWT_REQUIRED=true (production) or, \
+         only for an explicit insecure/demo deployment, AEGIS_DEMO_MODE=true."
+    ))
+}
+
 /// Self-healthcheck for the distroless runtime image (#1207): no shell, no
 /// `curl`, no package manager in `gcr.io/distroless/cc-debian12` — Docker's
 /// `HEALTHCHECK` directive instead execs this binary with `--healthcheck`,
@@ -1078,6 +1118,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         tracing::warn!("AEGIS_JWT_SECRET is not set. JWT validation will be disabled.");
+    }
+
+    // PR4: fail closed if binding a network-reachable address without auth.
+    let demo_mode = std::env::var("AEGIS_DEMO_MODE")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let configured_bind =
+        std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    assert_bind_security(&configured_bind, jwt_required, demo_mode)?;
+    if demo_mode && !jwt_required {
+        tracing::warn!(
+            bind_addr = %configured_bind,
+            "AEGIS_DEMO_MODE is enabled with JWT not required — the gateway is running WITHOUT \
+             enforced authentication. Do not use this configuration in production."
+        );
     }
 
     // Database setup (local SQLite file)
@@ -2088,6 +2143,36 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bind_security_allows_loopback_without_auth() {
+        for addr in ["127.0.0.1:8080", "[::1]:8080", "localhost:8080"] {
+            assert!(
+                assert_bind_security(addr, false, false).is_ok(),
+                "loopback {addr} must be allowed without auth"
+            );
+        }
+    }
+
+    #[test]
+    fn bind_security_rejects_public_bind_without_auth() {
+        for addr in ["0.0.0.0:8080", "10.0.0.5:8080", "[2001:db8::1]:8080"] {
+            assert!(
+                assert_bind_security(addr, false, false).is_err(),
+                "non-loopback {addr} without JWT or demo mode must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn bind_security_allows_public_bind_with_jwt_required() {
+        assert!(assert_bind_security("0.0.0.0:8080", true, false).is_ok());
+    }
+
+    #[test]
+    fn bind_security_allows_public_bind_in_explicit_demo_mode() {
+        assert!(assert_bind_security("0.0.0.0:8080", false, true).is_ok());
+    }
 
     #[test]
     fn test_redact_secrets_bearer() {
