@@ -40,6 +40,7 @@ fn base_event(tenant_id: &str, kind: &str) -> AseEvent {
         matched_policies: Vec::new(),
         redacted_fields: vec![],
         schema_version: 1,
+        evidence: None,
     }
 }
 

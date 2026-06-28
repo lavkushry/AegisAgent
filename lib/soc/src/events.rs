@@ -34,6 +34,29 @@ fn default_schema_version() -> u32 {
     1
 }
 
+/// Cryptographic evidence linkage carried on an [`AseEvent`] (PR3). Lets SOC
+/// alerts/incidents reference the verifiable action/receipt identity behind an
+/// event — not just free-text logs — so an incident timeline can be checked
+/// against the receipt chain. Hashes/identifiers only; never secrets or params.
+///
+/// `decision_id`, `action_hash`, `source_trust`, and `root_trust_level` are
+/// populated for `authorize_decision` events (the deterministic identity of the
+/// decision). `approval_id` and the `receipt_*`/`canon_version` fields are
+/// `None`/empty until threaded from the post-decision receipt write — tracked as
+/// a follow-up; the schema is forward-ready so consumers can rely on the shape.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EventEvidence {
+    pub decision_id: Option<String>,
+    pub approval_id: Option<String>,
+    pub action_hash: Option<String>,
+    pub receipt_id: Option<String>,
+    pub receipt_hash: Option<String>,
+    pub prev_receipt_hash: Option<String>,
+    pub canon_version: Option<String>,
+    pub source_trust: Option<String>,
+    pub root_trust_level: Option<String>,
+}
+
 /// An Agent Security Event — the unit the SOC plane consumes. Schema v1:
 /// a normalized record of one authorize decision. Carries no secrets (the
 /// moat's redaction rule); identifiers and the decision only.
@@ -68,6 +91,11 @@ pub struct AseEvent {
     /// versions gracefully (ignore unknown fields; reject only on breakage).
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
+    /// PR3: cryptographic evidence linkage (action/receipt/decision identity).
+    /// `None` for events that predate this field or carry no decision evidence
+    /// (e.g. lifecycle events); `Some` for `authorize_decision` events.
+    #[serde(default)]
+    pub evidence: Option<EventEvidence>,
 }
 
 /// Non-blocking handle the authorize hot path holds to feed the SOC stream.
@@ -616,6 +644,7 @@ mod tests {
             matched_policies: vec!["untrusted-mutation-forbid".to_string()],
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         }
     }
 

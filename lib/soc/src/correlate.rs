@@ -585,6 +585,7 @@ mod tests {
             matched_policies: vec![],
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         }
     }
 
@@ -614,6 +615,7 @@ mod tests {
             matched_policies: vec![],
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         }
     }
 
@@ -1480,6 +1482,7 @@ mod tests {
             matched_policies: vec![],
             redacted_fields: vec![],
             schema_version: 1,
+            evidence: None,
         }
     }
 

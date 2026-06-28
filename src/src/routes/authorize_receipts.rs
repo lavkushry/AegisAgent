@@ -295,5 +295,6 @@ pub(crate) async fn emit_tamper_attempt_receipt(
         matched_policies: Vec::new(),
         redacted_fields: vec![],
         schema_version: 1,
+        evidence: None,
     });
 }

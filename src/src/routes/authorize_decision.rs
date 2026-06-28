@@ -94,6 +94,10 @@ pub(crate) async fn write_decision_and_audit(
     audit_event_type: &str,
     started_at: std::time::Instant,
     dry_run: bool,
+    // PR3: evidence linkage for the emitted SOC event — the canonical action
+    // hash and the effective (tighten-only) root trust level for this decision.
+    action_hash: &str,
+    root_trust_level: &str,
 ) -> Result<i32, aegis_common::errors::AegisError> {
     // #1289: advisory composite risk score (Law 1 — never gates `decision`,
     // computed only for display/audit metadata). Per-tenant weight overrides
@@ -257,6 +261,18 @@ pub(crate) async fn write_decision_and_audit(
         matched_policies: matched_policies.to_vec(),
         redacted_fields: vec![],
         schema_version: 1,
+        // PR3: bind the verifiable decision identity onto the SOC event so
+        // downstream alerts/incidents reference evidence hashes, not just logs.
+        evidence: Some(crate::events::EventEvidence {
+            decision_id: Some(decision_id.to_string()),
+            // Empty for the few early-return deny paths that decide before the
+            // canonical action hash is computed (frozen agent, admission reject);
+            // populated for every post-canonicalization decision.
+            action_hash: (!action_hash.is_empty()).then(|| action_hash.to_string()),
+            source_trust: Some(payload.context.source_trust.clone()),
+            root_trust_level: Some(root_trust_level.to_string()),
+            ..Default::default()
+        }),
     });
 
     Ok(composite_risk_score)
