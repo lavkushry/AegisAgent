@@ -2330,6 +2330,162 @@ mod tests {
         assert_eq!(consume.status(), StatusCode::CONFLICT);
     }
 
+    /// #1603: a `consume_approval` call with a wrong `claimed_action_hash` must
+    /// NOT burn the single-use slot — the approval must remain consumable
+    /// afterward by a caller with the correct hash. Before the fix, the storage
+    /// layer consumed the approval unconditionally and only compared the hash
+    /// as a separate step afterward, so a single wrong-hash call permanently
+    /// invalidated a legitimately approved action (a self-inflicted DoS on the
+    /// replay defense).
+    #[tokio::test]
+    async fn consume_approval_wrong_hash_does_not_consume_then_correct_hash_succeeds() {
+        let (state, tenant_id, agent_token) = setup_state("consume_hash_mismatch_retry").await;
+        let (approval_id, bound_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "25").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        // Wrong-hash consume must be rejected AND must not consume the approval.
+        let wrong = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some("0".repeat(64)),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            wrong.status(),
+            StatusCode::CONFLICT,
+            "wrong claimed_action_hash must be rejected"
+        );
+
+        // The correct-hash retry must still succeed — the approval was not burned.
+        let correct = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some(bound_hash.clone()),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            correct.status(),
+            StatusCode::OK,
+            "correct claimed_action_hash must still succeed after a prior mismatch"
+        );
+
+        let body = to_bytes(correct.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["action_hash"].as_str(), Some(bound_hash.as_str()));
+
+        // And now it's truly single-use: a third attempt (even with the right
+        // hash) must fail.
+        let third = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some(bound_hash),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(third.status(), StatusCode::CONFLICT);
+    }
+
+    /// #1603: concurrent consumes with a mix of wrong and correct claimed
+    /// hashes — exactly one consume must succeed, and it must be one of the
+    /// correct-hash callers (a wrong-hash caller must never win the race).
+    #[tokio::test]
+    async fn consume_approval_concurrent_mixed_hash_only_correct_hash_can_win() {
+        let (state, tenant_id, agent_token) = setup_state("consume_mixed_hash_race").await;
+        let (approval_id, bound_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "26").await;
+
+        let approve = approve_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let state = state.clone();
+            let tenant_id = tenant_id.clone();
+            // Half the callers claim the wrong hash, half the correct one.
+            let claimed = if i % 2 == 0 {
+                bound_hash.clone()
+            } else {
+                "f".repeat(64)
+            };
+            handles.push(tokio::spawn(async move {
+                consume_approval(
+                    State(state),
+                    TenantId(tenant_id),
+                    Path(approval_id),
+                    Some(Json(ConsumeApprovalBody {
+                        claimed_action_hash: Some(claimed.clone()),
+                    })),
+                )
+                .await
+                .into_response()
+                .status()
+            }));
+        }
+
+        let mut ok_count = 0;
+        for handle in handles {
+            if handle.await.unwrap() == StatusCode::OK {
+                ok_count += 1;
+            }
+        }
+        assert_eq!(
+            ok_count, 1,
+            "exactly one consume must succeed, and only a correct-hash caller can win"
+        );
+
+        // The approval must still be consumable by nobody now — including a
+        // late correct-hash caller.
+        let late = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some(bound_hash),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(late.status(), StatusCode::CONFLICT);
+    }
+
     /// #0134: consume_approval returns the original action_hash that the
     /// approval was bound to, so the SDK can re-verify it before executing.
     #[tokio::test]

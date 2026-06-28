@@ -310,8 +310,19 @@ impl StorageBackend for SqlDbStorage {
         &self,
         tenant_id: &str,
         approval_id: &str,
+        claimed_action_hash: Option<&str>,
     ) -> Result<bool, AegisError> {
-        db::consume_approval(&self.pool, tenant_id, approval_id)
+        db::consume_approval(&self.pool, tenant_id, approval_id, claimed_action_hash)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn approval_is_still_consumable(
+        &self,
+        tenant_id: &str,
+        approval_id: &str,
+    ) -> Result<bool, AegisError> {
+        db::approval_is_still_consumable(&self.pool, tenant_id, approval_id)
             .await
             .map_err(AegisError::Database)
     }

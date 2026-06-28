@@ -5,12 +5,20 @@ use chrono::{DateTime, Utc};
 
 /// Atomically consume an APPROVED approval (single-use). Returns `true` only if
 /// THIS call consumed it (one row updated); `false` if it was already consumed,
-/// expired, not approved, or not found. The `consumed_at IS NULL` guard makes
-/// concurrent double-consume safe — at most one UPDATE matches.
+/// expired, not approved, not found, or (when `claimed_action_hash` is supplied)
+/// the claimed hash doesn't match the bound `original_call_hash`. The
+/// `consumed_at IS NULL` guard makes concurrent double-consume safe — at most one
+/// UPDATE matches.
+///
+/// #1603: the hash check is folded into this same conditional `UPDATE` rather than
+/// performed as a separate step after consuming — a mismatch must not burn the
+/// single-use slot, otherwise one wrong-hash call could permanently invalidate a
+/// legitimately approved action before the real executor consumes it.
 pub async fn consume_approval(
     pool: &DbPool,
     tenant_id: &str,
     approval_id: &str,
+    claimed_action_hash: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
     retry_on_busy(3, || async {
         let now = Utc::now();
@@ -19,15 +27,44 @@ pub async fn consume_approval(
             "UPDATE approvals
              SET consumed_at = ?
              WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
-               AND (expires_at IS NULL OR expires_at > ?)",
+               AND (expires_at IS NULL OR expires_at > ?)
+               AND (? IS NULL OR original_call_hash = ?)",
             now,
             tenant_id,
             approval_id,
-            now
+            now,
+            claimed_action_hash,
+            claimed_action_hash
         )?;
         Ok(result.rows_affected() == 1)
     })
     .await
+}
+
+/// #1603: after a `consume_approval` call fails to consume (returns `false`),
+/// this distinguishes "the claimed hash didn't match, but the approval is
+/// otherwise still valid and consumable" from every other not-consumable
+/// reason (already consumed, expired, never approved). `consumed_at` isn't a
+/// field on `ApprovalRecord` (it's an internal single-use marker, not part of
+/// the public approval shape), so this is a dedicated existence check rather
+/// than reusing `get_approval_by_id`.
+pub async fn approval_is_still_consumable(
+    pool: &DbPool,
+    tenant_id: &str,
+    approval_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let now = Utc::now();
+    let count: i64 = crate::fetch_one_scalar!(
+        i64,
+        pool,
+        "SELECT COUNT(*) FROM approvals
+         WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
+           AND (expires_at IS NULL OR expires_at > ?)",
+        tenant_id,
+        approval_id,
+        now
+    )?;
+    Ok(count > 0)
 }
 
 /// #1298 (Compliance Evidence Pack): tenant-scoped `approvals`, optionally

@@ -180,6 +180,12 @@ pub trait StorageBackend: Send + Sync + 'static {
         &self,
         tenant_id: &str,
         approval_id: &str,
+        claimed_action_hash: Option<&str>,
+    ) -> Result<bool, AegisError>;
+    async fn approval_is_still_consumable(
+        &self,
+        tenant_id: &str,
+        approval_id: &str,
     ) -> Result<bool, AegisError>;
     async fn list_approvals_in_range(
         &self,
