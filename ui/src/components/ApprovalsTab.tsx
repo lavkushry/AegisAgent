@@ -3,13 +3,14 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { getApprovals, approveApproval, rejectApproval } from "../app/api";
-import { Clock, ShieldCheck, ShieldAlert, Check, X, AlertTriangle, Edit3, Save } from "lucide-react";
+import { getApprovals, approveApproval, rejectApproval, editApproval, type ApprovalRecord } from "../app/api";
+import { Clock, ShieldCheck, Check, X, Edit3, Save } from "lucide-react";
+import { errorMessage } from "@/lib/format";
 import TrustBadge from "./security/TrustBadge";
 
 export default function ApprovalsTab() {
-  const { gatewayUrl, bearerToken } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken };
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const queryClient = useQueryClient();
 
   const [approverId, setApproverId] = useState("platform_admin");
@@ -19,7 +20,7 @@ export default function ApprovalsTab() {
 
   // Fetch pending approvals
   const { data: approvals, isLoading, error } = useQuery({
-    queryKey: ["approvals", gatewayUrl, bearerToken],
+    queryKey: ["approvals", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getApprovals(apiOpts),
     refetchInterval: 3000, // Poll more frequently for approvals (every 3s)
   });
@@ -50,42 +51,23 @@ export default function ApprovalsTab() {
     rejectMutation.mutate({ id, reason: "Rejected via SOC dashboard." });
   };
 
-  const startEditing = (approval: any) => {
-    setEditingId(approval.id || approval.approval_id);
+  const startEditing = (approval: ApprovalRecord) => {
+    setEditingId(approval.id || approval.approval_id || null);
     const params = approval.tool_call?.parameters || {};
     setEditParamsJson(JSON.stringify(params, null, 2));
     setEditReason("Edited and adjusted parameters to comply with security guidelines.");
   };
 
-  const handleSaveEdit = async (approval: any) => {
+  const handleSaveEdit = async (approval: ApprovalRecord) => {
     try {
       const parsedParams = JSON.parse(editParamsJson);
-      // To perform "Edit & Re-evaluate", we hit the edit endpoint
-      // We will perform a PUT/POST to `/v1/approvals/:id/edit` (or whatever the path is)
-      // Let's verify how edit approval is implemented in the gateway.
-      // In CLAUDE.md:
-      // "edit_approval_rehashes_and_stores_edited_call: edit approval rehashes and stores edited call"
-      // Wait! Let's search for "edit" in `routes/approval.rs` to find the exact route.
-      // Let's do that!
       const approvalId = approval.id || approval.approval_id;
-      const res = await fetch(`${gatewayUrl.replace(/\/+$/, "")}/v1/approvals/${approvalId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          parameters: parsedParams,
-          reason: editReason,
-        }),
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
+      if (!approvalId) throw new Error("Approval ID is missing.");
+      await editApproval(apiOpts, approvalId, parsedParams, editReason);
       setEditingId(null);
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
-    } catch (err: any) {
-      alert(`Failed to save edit: ${err.message}`);
+    } catch (err: unknown) {
+      alert(`Failed to save edit: ${errorMessage(err)}`);
     }
   };
 
@@ -122,7 +104,7 @@ export default function ApprovalsTab() {
         {isLoading ? (
           <p className="text-sm text-[var(--text-muted)] text-center py-16">Loading approvals queue...</p>
         ) : error ? (
-          <p className="text-sm text-red-400 text-center py-16">Error: {(error as any).message}</p>
+          <p className="text-sm text-red-400 text-center py-16">Error: {errorMessage(error)}</p>
         ) : !approvals || approvals.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center text-[var(--text-muted)]">
             <ShieldCheck size={48} className="text-green-500 mb-4 animate-pulse" />
@@ -131,8 +113,8 @@ export default function ApprovalsTab() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {approvals.map((app: any) => {
-              const app_id = app.id || app.approval_id;
+            {approvals.map((app) => {
+              const app_id = app.id || app.approval_id || "";
               const isEditing = editingId === app_id;
               return (
                 <div
@@ -223,6 +205,7 @@ export default function ApprovalsTab() {
                       <>
                         <button
                           onClick={() => handleApprove(app_id)}
+                          disabled={!app_id}
                           className="flex-1 flex items-center justify-center gap-1 bg-green-700 hover:bg-green-800 text-white font-medium text-xs rounded-lg py-2 transition-colors cursor-pointer"
                         >
                           <Check size={14} /> Approve Action
@@ -236,6 +219,7 @@ export default function ApprovalsTab() {
                         </button>
                         <button
                           onClick={() => handleReject(app_id)}
+                          disabled={!app_id}
                           className="flex-1 flex items-center justify-center gap-1 bg-red-700 hover:bg-red-800 text-white font-medium text-xs rounded-lg py-2 transition-colors cursor-pointer"
                         >
                           <X size={14} /> Reject Action

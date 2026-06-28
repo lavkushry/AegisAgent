@@ -2,6 +2,7 @@
 
 import React from "react";
 import PanelRuntime from "@/panels/PanelRuntime";
+import { useAppStore } from "@/app/store";
 import type { DashboardSchema } from "./schema";
 
 const ROW_UNIT_PX = 88;
@@ -16,7 +17,12 @@ type Props = {
  * later additions (HLD/LLD section 7.3).
  */
 export default function DashboardLoader({ schema }: Props) {
-  const { defaultRange, refreshSec } = schema.time;
+  const selectedRange = useAppStore((state) => state.timeRange);
+  const variables = useAppStore((state) => state.variables);
+  const liveMode = useAppStore((state) => state.liveMode);
+  const timeRange = selectedRange
+    ? { from: `now-${selectedRange}`, to: "now" }
+    : schema.time.defaultRange;
 
   return (
     <div className="space-y-4">
@@ -35,9 +41,9 @@ export default function DashboardLoader({ schema }: Props) {
               >
                 <PanelRuntime
                   definition={item.panel}
-                  timeRange={defaultRange}
-                  variables={{}}
-                  refreshSec={refreshSec}
+                  timeRange={timeRange}
+                  variables={variables}
+                  refreshSec={liveMode ? schema.time.refreshSec : undefined}
                 />
               </div>
             ))}

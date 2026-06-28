@@ -4,18 +4,23 @@ import React, { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { getReceipts, verifyReceipt } from "../app/api";
-import { ShieldCheck, ShieldAlert, Cpu, Fingerprint, Activity, Clock, FileText, Check } from "lucide-react";
+import { normalizeVerification } from "@/datasources/receiptVerification";
+import { ShieldCheck, ShieldAlert, Cpu, Fingerprint, Activity } from "lucide-react";
+import { errorMessage } from "@/lib/format";
 
 export default function ReceiptsTab() {
-  const { gatewayUrl, bearerToken } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken };
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
 
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [verificationResult, setVerificationResult] = useState<Record<string, { ok: boolean; msg: string; loading: boolean }>>({});
+  const expandedId = useAppStore((state) => state.activeReceiptId);
+  const setExpandedId = useAppStore((state) => state.setActiveReceiptId);
+  const [verificationResult, setVerificationResult] = useState<
+    Record<string, { status: "verified" | "failed" | "unknown"; msg: string; loading: boolean }>
+  >({});
 
   // Fetch receipts list
   const { data: receipts, isLoading, error } = useQuery({
-    queryKey: ["receipts", gatewayUrl, bearerToken],
+    queryKey: ["receipts", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getReceipts(apiOpts),
     refetchInterval: 5000,
   });
@@ -23,17 +28,16 @@ export default function ReceiptsTab() {
   const verifyMutation = useMutation({
     mutationFn: (receiptId: string) => verifyReceipt(apiOpts, receiptId),
     onSuccess: (data, receiptId) => {
-      const isVerified = data.verified || (data.status === "verified") || (!data.error);
-      const message = data.error ? `Tamper detected: ${data.error}` : "Block verified. Signature matches preceding links.";
+      const result = normalizeVerification(data);
       setVerificationResult((prev) => ({
         ...prev,
-        [receiptId]: { ok: isVerified, msg: message, loading: false },
+        [receiptId]: { status: result.status, msg: result.message, loading: false },
       }));
     },
-    onError: (err: any, receiptId) => {
+    onError: (err: unknown, receiptId) => {
       setVerificationResult((prev) => ({
         ...prev,
-        [receiptId]: { ok: false, msg: `Verification failed: ${err.message}`, loading: false },
+        [receiptId]: { status: "failed", msg: `Verification failed: ${errorMessage(err)}`, loading: false },
       }));
     },
   });
@@ -41,7 +45,7 @@ export default function ReceiptsTab() {
   const triggerVerification = (receiptId: string) => {
     setVerificationResult((prev) => ({
       ...prev,
-      [receiptId]: { ok: false, msg: "", loading: true },
+      [receiptId]: { status: "unknown", msg: "", loading: true },
     }));
     verifyMutation.mutate(receiptId);
   };
@@ -52,15 +56,15 @@ export default function ReceiptsTab() {
         <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1.5">
           <Fingerprint size={14} className="text-[var(--brand)]" /> Cryptographic Receipts Integrity Log
         </h3>
-        <span className="text-[10px] text-green-400 bg-green-950/20 border border-green-500/30 px-2 py-0.5 rounded flex items-center gap-1 font-bold">
-          <ShieldCheck size={12} /> Chain Verified
+        <span className="text-[10px] text-amber-400 bg-amber-950/20 border border-amber-500/30 px-2 py-0.5 rounded flex items-center gap-1 font-bold">
+          <ShieldAlert size={12} /> Verification required
         </span>
       </div>
 
       {isLoading ? (
         <p className="text-xs text-[var(--text-muted)] text-center py-16">Loading receipt chain...</p>
       ) : error ? (
-        <p className="text-xs text-red-400 text-center py-16">Error: {(error as any).message}</p>
+        <p className="text-xs text-red-400 text-center py-16">Error: {errorMessage(error)}</p>
       ) : !receipts || receipts.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center text-[var(--text-muted)]">
           <Fingerprint size={48} className="mb-4" />
@@ -69,7 +73,7 @@ export default function ReceiptsTab() {
         </div>
       ) : (
         <div className="space-y-2">
-          {receipts.map((rec: any, idx: number) => {
+          {receipts.map((rec, idx: number) => {
             const isExpanded = expandedId === rec.id;
             const vResult = verificationResult[rec.id];
             return (
@@ -99,7 +103,7 @@ export default function ReceiptsTab() {
                       link: {rec.receipt_hash ? rec.receipt_hash.slice(0, 12) : "N/A"}
                     </code>
                     <span className="text-xs text-[var(--text-muted)]">
-                      {new Date(rec.ts || rec.created_at).toLocaleTimeString()}
+                      {new Date(rec.ts || rec.created_at || 0).toLocaleTimeString()}
                     </span>
                   </div>
                 </div>
@@ -140,15 +144,15 @@ export default function ReceiptsTab() {
                     {/* Action Block details */}
                     <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[var(--border-default)]">
                       <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] font-sans">
-                        <Activity size={14} /> Link verified in active ledger database.
+                        <Activity size={14} /> Link recorded in the active receipt ledger.
                       </div>
 
                       <div className="flex items-center gap-3">
                         {vResult && (
-                          <div className={`flex items-center gap-1 text-[11px] font-sans px-2.5 py-1 rounded border ${vResult.ok ? "bg-green-950/20 border-green-500/30 text-green-400" : "bg-red-950/20 border-red-500/30 text-red-400"}`}>
+                          <div className={`flex items-center gap-1 text-[11px] font-sans px-2.5 py-1 rounded border ${vResult.loading || vResult.status === "unknown" ? "bg-amber-950/20 border-amber-500/30 text-amber-400" : vResult.status === "verified" ? "bg-green-950/20 border-green-500/30 text-green-400" : "bg-red-950/20 border-red-500/30 text-red-400"}`}>
                             {vResult.loading ? (
                               <Cpu size={12} className="animate-spin" />
-                            ) : vResult.ok ? (
+                            ) : vResult.status === "verified" ? (
                               <ShieldCheck size={12} />
                             ) : (
                               <ShieldAlert size={12} />

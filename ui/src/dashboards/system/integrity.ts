@@ -1,4 +1,5 @@
 import { DEFAULT_DATASOURCE_ID } from "@/datasources/registry";
+import { RECEIPT_DATASOURCE_ID } from "@/datasources/receipt";
 import type { DashboardSchema } from "../schema";
 
 /**
@@ -60,7 +61,7 @@ export const integrityDashboard: DashboardSchema = {
             id: "receipt-chain",
             type: "receipt-integrity",
             title: "Per-tenant hash chain",
-            datasourceId: DEFAULT_DATASOURCE_ID,
+            datasourceId: RECEIPT_DATASOURCE_ID,
             entity: "receipt",
           },
           w: 12,

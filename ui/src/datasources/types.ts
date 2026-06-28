@@ -88,6 +88,7 @@ export interface DatasourceCapabilities {
 }
 
 export interface VerifyResult {
+  readonly status: "verified" | "failed" | "unknown";
   readonly ok: boolean;
   readonly brokenAtRow?: number;
   readonly message: string;

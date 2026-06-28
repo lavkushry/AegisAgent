@@ -4,26 +4,27 @@ import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { getMcpServers, quarantineMcpServer, restoreMcpServer, getMcpManifestHistory } from "../app/api";
-import { Server, ShieldAlert, ShieldCheck, Lock, Unlock, HelpCircle, History, Clock } from "lucide-react";
+import { Server, Lock, Unlock, History, Clock } from "lucide-react";
 import StatusBadge from "./security/StatusBadge";
+import { errorMessage } from "@/lib/format";
 
 export default function McpTab() {
-  const { gatewayUrl, bearerToken } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken };
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const queryClient = useQueryClient();
 
   const [selectedServerKey, setSelectedServerKey] = useState<string | null>(null);
 
   // Fetch MCP servers list
   const { data: servers, isLoading, error } = useQuery({
-    queryKey: ["mcpServers", gatewayUrl, bearerToken],
+    queryKey: ["mcpServers", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getMcpServers(apiOpts),
     refetchInterval: 5000,
   });
 
   // Fetch manifest history for selected server
   const { data: history, isLoading: isHistoryLoading } = useQuery({
-    queryKey: ["mcpHistory", gatewayUrl, bearerToken, selectedServerKey],
+    queryKey: ["mcpHistory", gatewayUrl, activeTenant, authEpoch, selectedServerKey],
     queryFn: () => getMcpManifestHistory(apiOpts, selectedServerKey!),
     enabled: !!selectedServerKey,
   });
@@ -61,7 +62,7 @@ export default function McpTab() {
         {isLoading ? (
           <p className="text-xs text-[var(--text-muted)] text-center py-8">Loading MCP servers...</p>
         ) : error ? (
-          <p className="text-xs text-red-400 text-center py-8">Error: {(error as any).message}</p>
+          <p className="text-xs text-red-400 text-center py-8">Error: {errorMessage(error)}</p>
         ) : !servers || servers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center text-[var(--text-muted)]">
             <Server size={36} className="mb-4" />
@@ -70,7 +71,7 @@ export default function McpTab() {
           </div>
         ) : (
           <div className="space-y-2">
-            {servers.map((srv: any) => (
+            {servers.map((srv) => (
               <div
                 key={srv.server_key}
                 onClick={() => setSelectedServerKey(srv.server_key)}
@@ -140,7 +141,7 @@ export default function McpTab() {
               <p className="text-xs text-[var(--text-muted)] text-center py-8">No drift history logs available for this server.</p>
             ) : (
               <div className="space-y-3 max-h-[350px] overflow-y-auto custom-scrollbar">
-                {history.map((record: any, idx: number) => (
+                {history.map((record, idx: number) => (
                   <div key={idx} className="p-3 bg-[var(--surface-app)]/40 border border-[var(--border-default)] rounded-lg text-xs flex justify-between items-start gap-4">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
@@ -154,7 +155,7 @@ export default function McpTab() {
                       </p>
                     </div>
                     <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap flex items-center gap-1">
-                      <Clock size={10} /> {new Date(record.created_at || record.ts).toLocaleTimeString()}
+                      <Clock size={10} /> {new Date(record.created_at || record.ts || 0).toLocaleTimeString()}
                     </span>
                   </div>
                 ))}

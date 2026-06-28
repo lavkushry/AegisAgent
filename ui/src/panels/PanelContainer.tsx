@@ -1,8 +1,11 @@
 import React from "react";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/components/primitives";
 
 type Props = {
   title: string;
   isLoading: boolean;
+  isRefreshing?: boolean;
+  isStale?: boolean;
   error?: string;
   isEmpty: boolean;
   emptyLabel?: string;
@@ -16,6 +19,8 @@ type Props = {
 export default function PanelContainer({
   title,
   isLoading,
+  isRefreshing,
+  isStale,
   error,
   isEmpty,
   emptyLabel = "No data",
@@ -23,16 +28,14 @@ export default function PanelContainer({
 }: Props) {
   return (
     <section className="panel-card flex flex-col h-full">
-      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-3">
-        {title}
-      </h3>
+      <header className="mb-3 flex items-center justify-between gap-2"><h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{title}</h3>{isRefreshing ? <span className="text-[10px] text-[var(--state-pending)]">Refreshing…</span> : isStale ? <span className="text-[10px] text-[var(--state-pending)]">Stale</span> : null}</header>
       <div className="flex-1 min-h-0">
         {isLoading ? (
-          <div className="h-full w-full animate-pulse rounded-md bg-[var(--surface-elevated)]/40" />
+          <LoadingSkeleton label={`Loading ${title}`} />
         ) : error ? (
-          <p className="text-xs text-[var(--state-failed)] py-6 text-center">{error}</p>
+          <ErrorState message={error} />
         ) : isEmpty ? (
-          <p className="text-xs text-[var(--text-muted)] py-6 text-center">{emptyLabel}</p>
+          <EmptyState title={emptyLabel} />
         ) : (
           children
         )}

@@ -9,41 +9,41 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useChartColors } from "@/hooks/useChartColors";
 
 export default function OverviewTab() {
-  const { gatewayUrl, bearerToken } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken };
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const chart = useChartColors();
 
   // Fetch summary counters
   const { data: summary, isLoading: isSummaryLoading, error: summaryError } = useQuery({
-    queryKey: ["socSummary", gatewayUrl, bearerToken],
+    queryKey: ["socSummary", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getSocSummary(apiOpts),
     refetchInterval: 5000, // Poll every 5s
   });
 
   // Fetch tenant decisions/receipts stats
   const { data: stats, isLoading: isStatsLoading } = useQuery({
-    queryKey: ["tenantStats", gatewayUrl, bearerToken],
+    queryKey: ["tenantStats", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getStats(apiOpts),
     refetchInterval: 5000,
   });
 
   // Fetch top risky agents scoreboard
   const { data: scoreboard, isLoading: isScoreboardLoading } = useQuery({
-    queryKey: ["scoreboard", gatewayUrl, bearerToken],
+    queryKey: ["scoreboard", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getAgentScoreboard(apiOpts),
     refetchInterval: 5000,
   });
 
   // Fetch recent alerts
   const { data: recentAlerts } = useQuery({
-    queryKey: ["recentAlerts", gatewayUrl, bearerToken],
+    queryKey: ["recentAlerts", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getAlerts(apiOpts, 5),
     refetchInterval: 5000,
   });
 
   // Fetch recent incidents
   const { data: recentIncidents } = useQuery({
-    queryKey: ["recentIncidents", gatewayUrl, bearerToken],
+    queryKey: ["recentIncidents", gatewayUrl, activeTenant, authEpoch],
     queryFn: () => getIncidents(apiOpts, 5),
     refetchInterval: 5000,
   });
@@ -68,7 +68,7 @@ export default function OverviewTab() {
   const decisionsDeny = stats?.decisions_deny ?? 7;
   const pendingApprovals = summary?.approvals_pending ?? 3;
   const openIncidents = summary?.incidents_open ?? 1;
-  const totalAlerts = summary?.alerts_total ?? 12;
+  const receiptChainVerified = stats?.receipt_chain_verified === true;
 
   // Formatting chart data from 24h hourly decisions
   const chartData = summary?.hourly_decisions_24h
@@ -126,13 +126,14 @@ export default function OverviewTab() {
         </div>
 
         {/* Tile: Receipt Integrity */}
-        <div className="panel-card flex flex-col justify-between h-28 border-green-500/30">
+        <div className={`panel-card flex flex-col justify-between h-28 ${receiptChainVerified ? "border-green-500/30" : "border-amber-500/30"}`}>
           <div className="flex items-center justify-between text-xs text-[var(--text-secondary)] font-medium">
             <span>RECEIPT CHAIN</span>
-            <CheckCircle size={16} className="text-green-500" />
+            {receiptChainVerified ? <CheckCircle size={16} className="text-green-500" /> : <AlertTriangle size={16} className="text-amber-500" />}
           </div>
-          <div className="text-xl font-bold text-green-400 flex items-center gap-1.5">
-            <CheckCircle size={18} /> Verified
+          <div className={`text-xl font-bold flex items-center gap-1.5 ${receiptChainVerified ? "text-green-400" : "text-amber-400"}`}>
+            {receiptChainVerified ? <CheckCircle size={18} /> : <AlertTriangle size={18} />}
+            {receiptChainVerified ? "Verified" : "Not verified"}
           </div>
           <div className="text-[10px] text-[var(--text-secondary)] truncate">
             {stats?.total_receipts ?? 0} blocks cryptographically linked
@@ -192,7 +193,7 @@ export default function OverviewTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {scoreboard.slice(0, 5).map((row: any, idx: number) => (
+                  {scoreboard.slice(0, 5).map((row, idx: number) => (
                     <tr key={idx} className="border-b border-[var(--border-default)] hover:bg-[var(--border-default)]/30">
                       <td className="py-3 font-mono text-[var(--brand)]">{row.agent_id}</td>
                       <td className="py-3 text-right font-bold text-rose-500">
@@ -221,7 +222,7 @@ export default function OverviewTab() {
             {!recentIncidents || recentIncidents.length === 0 ? (
               <p className="text-xs text-[var(--text-muted)] text-center py-6">No incidents recorded.</p>
             ) : (
-              recentIncidents.slice(0, 3).map((inc: any, idx: number) => (
+              recentIncidents.slice(0, 3).map((inc, idx: number) => (
                 <div key={idx} className="p-3 bg-[var(--surface-app)] border border-rose-500/20 rounded-lg hover:border-rose-500/40 transition-colors">
                   <div className="flex justify-between items-start gap-2">
                     <strong className="text-xs font-semibold text-rose-500">{inc.kind}</strong>
@@ -247,7 +248,7 @@ export default function OverviewTab() {
             {!recentAlerts || recentAlerts.length === 0 ? (
               <p className="text-xs text-[var(--text-muted)] text-center py-6">No alerts triggered.</p>
             ) : (
-              recentAlerts.slice(0, 3).map((alert: any, idx: number) => (
+              recentAlerts.slice(0, 3).map((alert, idx: number) => (
                 <div key={idx} className="p-3 bg-[var(--surface-app)] border border-[var(--border-default)] rounded-lg hover:border-[var(--border-active)]/30 transition-colors">
                   <div className="flex justify-between items-start gap-2">
                     <strong className="text-xs font-semibold text-amber-500">{alert.rule}</strong>

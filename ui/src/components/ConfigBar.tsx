@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { useAppStore, type Theme, type Density, type Role } from "../app/store";
 import { RefreshCw, Database, ShieldAlert, KeyRound } from "lucide-react";
+import { DEMO_MODE } from "../app/runtimeConfig";
 
 const INPUT_CLASS =
   "bg-[var(--surface-app)] border border-[var(--border-default)] rounded-md px-3 py-1.5 text-xs text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none";
@@ -21,6 +22,8 @@ export default function ConfigBar({
     bearerToken,
     activeTenant,
     timeRange,
+    variables,
+    liveMode,
     theme,
     density,
     role,
@@ -28,6 +31,8 @@ export default function ConfigBar({
     setBearerToken,
     setActiveTenant,
     setTimeRange,
+    setVariables,
+    setLiveMode,
     setTheme,
     setDensity,
     setRole,
@@ -47,6 +52,13 @@ export default function ConfigBar({
 
   return (
     <div className="flex flex-wrap items-center gap-4 bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-xl p-4 text-sm">
+      {(!activeTenant || !bearerToken) && (
+        <div className="basis-full rounded-md border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-300" role="status">
+          {!activeTenant
+            ? "Select a tenant before loading SOC data."
+            : "No bearer token is stored. Configure an in-memory token or use gateway-managed session/mTLS authentication."}
+        </div>
+      )}
       {/* Gateway URL */}
       <div className="flex flex-col gap-1 min-w-[200px]">
         <label className="text-xs text-[var(--text-secondary)] font-medium flex items-center gap-1">
@@ -110,6 +122,22 @@ export default function ConfigBar({
         </select>
       </div>
 
+      <div className="flex flex-col gap-1 min-w-[120px]">
+        <label className="text-xs text-[var(--text-secondary)] font-medium">Agent variable</label>
+        <input
+          type="text"
+          value={variables.agent ?? ""}
+          placeholder="All agents"
+          onChange={(event) => setVariables({ ...variables, agent: event.target.value })}
+          className={INPUT_CLASS}
+        />
+      </div>
+
+      <label className="flex items-center gap-2 self-end pb-2 text-xs text-[var(--text-secondary)]">
+        <input type="checkbox" checked={liveMode} onChange={(event) => setLiveMode(event.target.checked)} />
+        Live refresh
+      </label>
+
       {/* Theme */}
       <div className="flex flex-col gap-1 min-w-[110px]">
         <label className="text-xs text-[var(--text-secondary)] font-medium">Theme</label>
@@ -143,6 +171,8 @@ export default function ConfigBar({
         <select
           value={role}
           onChange={(e) => setRole(e.target.value as Role)}
+          disabled={!DEMO_MODE}
+          title={DEMO_MODE ? "Local demo role override" : "Role is supplied by the authenticated gateway session"}
           className={INPUT_CLASS}
         >
           <option value="viewer">Viewer</option>
