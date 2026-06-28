@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 /// Atomically consume an APPROVED approval (single-use). Returns `true` only if
 /// THIS call consumed it (one row updated); `false` if it was already consumed,
 /// expired, not approved, not found, or (when `claimed_action_hash` is supplied)
-/// the claimed hash doesn't match the bound `original_call_hash`. The
+/// the claimed hash doesn't match the bound effective hash. The
 /// `consumed_at IS NULL` guard makes concurrent double-consume safe — at most one
 /// UPDATE matches.
 ///
@@ -14,6 +14,11 @@ use chrono::{DateTime, Utc};
 /// performed as a separate step after consuming — a mismatch must not burn the
 /// single-use slot, otherwise one wrong-hash call could permanently invalidate a
 /// legitimately approved action before the real executor consumes it.
+///
+/// #approval-edit-lifecycle: the hash compared is the *effective* hash
+/// `COALESCE(effective_call_hash, original_call_hash)` — for an edited approval
+/// that is the edited action's hash, so a consume presenting the original
+/// (pre-edit) hash correctly fails (and, per #1603, does not burn the approval).
 pub async fn consume_approval(
     pool: &DbPool,
     tenant_id: &str,
@@ -28,7 +33,7 @@ pub async fn consume_approval(
              SET consumed_at = ?
              WHERE tenant_id = ? AND id = ? AND status = 'APPROVED' AND consumed_at IS NULL
                AND (expires_at IS NULL OR expires_at > ?)
-               AND (? IS NULL OR original_call_hash = ?)",
+               AND (? IS NULL OR COALESCE(effective_call_hash, original_call_hash) = ?)",
             now,
             tenant_id,
             approval_id,
@@ -174,7 +179,7 @@ pub async fn list_pending_approvals(
 ) -> Result<Vec<ApprovalRecord>, sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
     let now = Utc::now();
-    crate::fetch_all_as!(ApprovalRecord, pool, "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, expires_at, decided_at, callback_url, callback_secret_hash, created_at
+    crate::fetch_all_as!(ApprovalRecord, pool, "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, effective_call_hash, expires_at, decided_at, callback_url, callback_secret_hash, created_at
          FROM approvals
          WHERE tenant_id = ?
            AND status = 'created'
@@ -197,17 +202,25 @@ pub async fn get_approval_by_id(
     )
 }
 
-/// Apply an edit to a pending approval (#0130): the edited tool call is
-/// re-hashed and that new hash becomes the approval's bound `action_hash`, so
-/// any subsequent approve/consume is bound to the edited action, not the
-/// original one.
+/// Apply an edit to a pending approval (#0130, #approval-edit-lifecycle): the
+/// edited tool call is re-hashed and that hash is stored as `effective_call_hash`,
+/// re-pointing the binding so a subsequent approve/consume validates against the
+/// edited action — **not** the agent's original. The original `original_call_hash`
+/// and `original_skill_call` are preserved for provenance/evidence, and a consume
+/// presenting the *original* hash of an edited approval therefore fails closed.
 ///
-/// #1300: the UPDATE is the atomic source of truth for the transition — it
-/// only matches a still-`created`, non-expired approval (mirroring
-/// `consume_approval`'s pattern), closing the TOCTOU window between a
-/// handler's pre-read and this write. Returns `true` only if this call
-/// performed the transition (one row updated); `false` if the approval was
-/// already decided or has expired.
+/// Crucially the approval **stays `status = 'created'`** so it remains pending,
+/// listed, and approvable after an edit — the prior behavior set status to
+/// `'EDITED'`, which `update_approval_status` (approve) and `list_pending_approvals`
+/// both treat as not-`created`, silently making an edited approval invisible and
+/// unapprovable.
+///
+/// #1300: the UPDATE is the atomic source of truth — it only matches a still-
+/// `created`, non-expired approval (mirroring `consume_approval`'s pattern),
+/// closing the TOCTOU window between a handler's pre-read and this write. Returns
+/// `true` only if this call performed the edit (one row updated); `false` if the
+/// approval was already decided/consumed or has expired. `decided_at` is left
+/// untouched — an edit is not a decision.
 pub async fn update_approval_edit(
     pool: &DbPool,
     tenant_id: &str,
@@ -222,15 +235,14 @@ pub async fn update_approval_edit(
         let result = crate::execute_query!(
             pool,
             "UPDATE approvals
-             SET status = 'EDITED', approver_user_id = ?, reason = ?, edited_skill_call = ?,
-                 original_call_hash = ?, decided_at = ?
+             SET approver_user_id = ?, reason = ?, edited_skill_call = ?,
+                 effective_call_hash = ?
              WHERE tenant_id = ? AND id = ? AND status = 'created'
                AND (expires_at IS NULL OR expires_at > ?)",
             user_id,
             reason,
             edited_call,
             new_action_hash,
-            now,
             tenant_id,
             approval_id,
             now
@@ -369,6 +381,7 @@ mod tests {
                     original_skill_call: "{}".to_string(),
                     original_call_hash: "sha256:deadbeef".to_string(),
                     edited_skill_call: None,
+                    effective_call_hash: None,
                     expires_at,
                     decided_at: None,
                     callback_url: None,

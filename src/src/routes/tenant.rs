@@ -1382,6 +1382,7 @@ mod tests {
             original_skill_call: "{}".to_string(),
             original_call_hash: "deadbeef".to_string(),
             edited_skill_call: None,
+            effective_call_hash: None,
             expires_at: None,
             decided_at: Some(Utc::now()),
             callback_url: None,

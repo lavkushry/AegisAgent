@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     original_skill_call TEXT NOT NULL,
     original_call_hash TEXT NOT NULL DEFAULT '',
     edited_skill_call TEXT,
+    effective_call_hash TEXT,
     expires_at TIMESTAMP WITH TIME ZONE,
     decided_at TIMESTAMP WITH TIME ZONE,
     consumed_at TIMESTAMP WITH TIME ZONE,

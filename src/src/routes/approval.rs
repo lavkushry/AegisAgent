@@ -228,7 +228,16 @@ pub async fn get_approval(
                     "approver_group": app.approver_group,
                     "approver_user_id": app.approver_user_id,
                     "reason": app.reason,
-                    "action_hash": app.original_call_hash,
+                    // #approval-edit-lifecycle: surface the full hash story so a
+                    // human/SDK can see exactly what they're acting on.
+                    // `action_hash` (kept for SDK back-compat) and
+                    // `effective_action_hash` are the hash an approve/consume
+                    // binds to — the edited action's hash once edited.
+                    "action_hash": app.effective_action_hash(),
+                    "original_action_hash": app.original_call_hash,
+                    "edited_action_hash": app.effective_call_hash,
+                    "effective_action_hash": app.effective_action_hash(),
+                    "is_edited": app.is_edited(),
                     "tool_call": tool_call,
                     "agent_id": agent_id,
                     "edited_tool_call": edited_call,
@@ -348,13 +357,16 @@ pub async fn consume_approval(
     }
 
     // Return the bound action hash so the SDK can re-verify before executing.
+    // #approval-edit-lifecycle: this is the *effective* hash — the edited
+    // action's hash for an edited approval, so the SDK re-verifies against what
+    // was actually approved, not the agent's original action.
     let action_hash = state
         .storage
         .get_approval_by_id(&tenant_id, &approval_id.to_string())
         .await
         .ok()
         .flatten()
-        .map(|a| a.original_call_hash)
+        .map(|a| a.effective_action_hash().to_string())
         .unwrap_or_default();
 
     (
@@ -411,7 +423,9 @@ pub(crate) async fn approve_approval_inner(
         }
     };
 
-    // Only a pending approval may be approved (no re-deciding an APPROVED/REJECTED/EDITED one).
+    // Only a pending approval may be approved (no re-deciding an
+    // APPROVED/REJECTED one). An edited approval stays `created` and is
+    // approvable — approve binds to its effective (edited) hash.
     if approval.status != "created" {
         return StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
             .into_response();
@@ -644,7 +658,7 @@ pub(crate) async fn edit_approval_inner(
     payload: EditApprovalRequest,
 ) -> axum::response::Response {
     // Load the approval first so we can fail closed on stale or already-decided
-    // requests instead of blindly transitioning to EDITED (#0131).
+    // requests instead of blindly re-binding the action (#0131).
     let approval = match state
         .storage
         .get_approval_by_id(&tenant_id, &approval_id.to_string())
@@ -660,8 +674,9 @@ pub(crate) async fn edit_approval_inner(
         }
     };
 
-    // Only a pending approval may be edited (no editing an APPROVED/REJECTED/
-    // already-EDITED/consumed one).
+    // Only a pending approval may be edited (no editing an
+    // APPROVED/REJECTED/consumed one). Re-editing an already-edited approval is
+    // fine — it is still `created`, and the new edit re-binds the effective hash.
     if approval.status != "created" {
         return StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
             .into_response();
@@ -673,10 +688,12 @@ pub(crate) async fn edit_approval_inner(
     // not the original.
     let new_action_hash = hash_tool_call(&payload.edited_tool_call);
 
-    // Atomically transition to EDITED, re-binding the action_hash (#1300). The
-    // UPDATE itself is the source of truth: it only matches a still-`created`,
-    // non-expired row, closing the TOCTOU window between the pre-check above
-    // and this write.
+    // Atomically re-bind the approval to the edited action (#1300,
+    // #approval-edit-lifecycle): store the edited call + its hash as the
+    // effective hash while keeping the approval pending (`status = 'created'`),
+    // so it stays listed and approvable. The UPDATE is the source of truth: it
+    // only matches a still-`created`, non-expired row, closing the TOCTOU window
+    // between the pre-check above and this write.
     let updated = match state
         .storage
         .update_approval_edit(
@@ -706,11 +723,13 @@ pub(crate) async fn edit_approval_inner(
         .await;
     }
 
-    // Write audit event
+    // Write audit event. The approval stays pending after an edit; record the
+    // edit as provenance, binding both the original and the new effective hash
+    // (no raw secrets — only the structured tool call + hashes).
     let audit_record = AuditEventRecord {
         id: Uuid::new_v4().to_string(),
         tenant_id,
-        event_type: "approval_decided".to_string(),
+        event_type: "approval_edited".to_string(),
         agent_id: None,
         user_id: Some(payload.approver_user_id),
         run_id: None,
@@ -721,13 +740,16 @@ pub(crate) async fn edit_approval_inner(
         resource: None,
         event_json: serde_json::to_string(&json!({
             "approval_id": approval_id,
-            "status": "EDITED",
+            "status": "created",
+            "edited": true,
             "reason": payload.reason,
+            "original_action_hash": approval.original_call_hash,
+            "effective_action_hash": new_action_hash,
             "edited_tool_call": payload.edited_tool_call
         }))
         .unwrap_or_default(),
-        input_hash: None,
-        output_hash: None,
+        input_hash: Some(approval.original_call_hash.clone()),
+        output_hash: Some(new_action_hash.clone()),
         decision_id: Some(approval.decision_id.clone()),
         approval_id: Some(approval.id.clone()),
         created_at: Utc::now(),
@@ -736,7 +758,12 @@ pub(crate) async fn edit_approval_inner(
 
     (
         StatusCode::OK,
-        Json(json!({"status": "success", "approval_id": approval_id})),
+        Json(json!({
+            "status": "success",
+            "approval_id": approval_id,
+            "effective_action_hash": new_action_hash,
+            "original_action_hash": approval.original_call_hash,
+        })),
     )
         .into_response()
 }
@@ -1212,8 +1239,10 @@ mod tests {
         );
     }
 
-    /// #0130: edit_approval re-hashes the edited tool call and binds the
-    /// approval to the new action_hash (not the original).
+    /// #0130 / #approval-edit-lifecycle: edit_approval re-hashes the edited tool
+    /// call and binds the approval's *effective* hash to it, while PRESERVING the
+    /// original hash and keeping the approval pending (`status = 'created'`) so it
+    /// stays listed and approvable.
     #[tokio::test]
     async fn edit_approval_rehashes_and_stores_edited_call() {
         let (state, tenant_id, agent_token) = setup_state("edit_rehashes").await;
@@ -1248,8 +1277,17 @@ mod tests {
             .await
             .unwrap()
             .expect("approval should exist");
-        assert_eq!(stored.status, "EDITED");
-        assert_eq!(stored.original_call_hash, expected_hash);
+        // Stays pending and approvable after an edit (the bug this fixes left it
+        // as "EDITED", which made it invisible and unapprovable).
+        assert_eq!(stored.status, "created");
+        // Original is preserved; the edited hash becomes the effective one.
+        assert_eq!(stored.original_call_hash, original_hash);
+        assert_eq!(
+            stored.effective_call_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert_eq!(stored.effective_action_hash(), expected_hash);
+        assert!(stored.is_edited());
         let stored_edited: AuthorizeToolCall =
             serde_json::from_str(stored.edited_skill_call.as_deref().unwrap()).unwrap();
         assert_eq!(stored_edited.parameters, edited_tool_call.parameters);
@@ -1306,6 +1344,268 @@ mod tests {
         .await
         .into_response();
         assert_eq!(edit.status(), StatusCode::CONFLICT);
+    }
+
+    // ── #approval-edit-lifecycle acceptance tests ────────────────────────────
+    // Before this fix, editing set status to 'EDITED', which approve and the
+    // pending list (both keyed on 'created') treated as not-pending — so an
+    // edited approval silently vanished and could never be approved. These lock
+    // in the corrected lifecycle: edit keeps the approval pending and re-binds
+    // it to the edited action's effective hash, preserving the original.
+
+    /// create → edit → approve → consume with the EDITED hash succeeds.
+    #[tokio::test]
+    async fn edit_then_approve_then_consume_with_edited_hash_succeeds() {
+        let (state, tenant_id, agent_token) = setup_state("edit_lifecycle_happy").await;
+        let (approval_id, original_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "40").await;
+
+        let mut edited = mcp_authorize_request("github", "merge_pull_request").tool_call;
+        edited.resource = Some("repo/example/pull/40".to_string());
+        edited.parameters = serde_json::json!({"base_branch": "release"});
+        let edited_hash = hash_tool_call(&edited);
+        assert_ne!(edited_hash, original_hash);
+
+        let edit = edit_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                edited_tool_call: edited,
+                reason: Some("retarget".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit.status(), StatusCode::OK);
+
+        // The edited approval is still approvable (the bug made this fail).
+        let approve = approve_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        // Consume with the EDITED hash succeeds.
+        let consume = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some(edited_hash.clone()),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(consume.status(), StatusCode::OK);
+        let body = to_bytes(consume.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["action_hash"].as_str(), Some(edited_hash.as_str()));
+    }
+
+    /// create → edit → approve → consume with the ORIGINAL hash fails (409) and
+    /// must NOT burn the approval; a follow-up consume with the edited hash works.
+    #[tokio::test]
+    async fn edit_then_consume_with_original_hash_fails_without_burning() {
+        let (state, tenant_id, agent_token) = setup_state("edit_lifecycle_oldhash").await;
+        let (approval_id, original_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "41").await;
+
+        let mut edited = mcp_authorize_request("github", "merge_pull_request").tool_call;
+        edited.resource = Some("repo/example/pull/41".to_string());
+        edited.parameters = serde_json::json!({"base_branch": "release"});
+        let edited_hash = hash_tool_call(&edited);
+
+        let edit = edit_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                edited_tool_call: edited,
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit.status(), StatusCode::OK);
+
+        let approve = approve_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(approve.status(), StatusCode::OK);
+
+        // Consume with the stale ORIGINAL hash must be rejected...
+        let wrong = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some(original_hash.clone()),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(wrong.status(), StatusCode::CONFLICT);
+
+        // ...and must NOT have burned the approval — the edited hash still works.
+        let ok = consume_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            Some(Json(ConsumeApprovalBody {
+                claimed_action_hash: Some(edited_hash),
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(ok.status(), StatusCode::OK);
+    }
+
+    /// An edited approval still appears in the pending list and exposes the
+    /// original/edited/effective hashes via GET.
+    #[tokio::test]
+    async fn edited_approval_is_listed_and_get_exposes_all_hashes() {
+        let (state, tenant_id, agent_token) = setup_state("edit_lifecycle_list").await;
+        let (approval_id, original_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "42").await;
+
+        let mut edited = mcp_authorize_request("github", "merge_pull_request").tool_call;
+        edited.resource = Some("repo/example/pull/42".to_string());
+        edited.parameters = serde_json::json!({"base_branch": "release"});
+        let edited_hash = hash_tool_call(&edited);
+
+        let edit = edit_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                edited_tool_call: edited,
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit.status(), StatusCode::OK);
+
+        // Still surfaced by the pending list.
+        let list = list_approvals(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
+        let list_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let found = list_json
+            .as_array()
+            .or_else(|| list_json.get("approvals").and_then(|a| a.as_array()))
+            .map(|arr| {
+                arr.iter()
+                    .any(|a| a["approval_id"] == approval_id.to_string())
+            })
+            .unwrap_or(false);
+        assert!(
+            found,
+            "edited approval must still appear in the pending list"
+        );
+
+        // GET exposes the full hash story.
+        let get = get_approval(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+        )
+        .await
+        .into_response();
+        let gbody = to_bytes(get.into_body(), usize::MAX).await.unwrap();
+        let gjson: serde_json::Value = serde_json::from_slice(&gbody).unwrap();
+        assert_eq!(gjson["status"], "created");
+        assert_eq!(gjson["is_edited"], true);
+        assert_eq!(
+            gjson["original_action_hash"].as_str(),
+            Some(original_hash.as_str())
+        );
+        assert_eq!(
+            gjson["edited_action_hash"].as_str(),
+            Some(edited_hash.as_str())
+        );
+        assert_eq!(
+            gjson["effective_action_hash"].as_str(),
+            Some(edited_hash.as_str())
+        );
+        assert_eq!(gjson["action_hash"].as_str(), Some(edited_hash.as_str()));
+    }
+
+    /// create → edit → reject succeeds (an edited approval is still rejectable).
+    #[tokio::test]
+    async fn edit_then_reject_succeeds() {
+        let (state, tenant_id, agent_token) = setup_state("edit_lifecycle_reject").await;
+        let (approval_id, _original_hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "43").await;
+
+        let mut edited = mcp_authorize_request("github", "merge_pull_request").tool_call;
+        edited.resource = Some("repo/example/pull/43".to_string());
+        edited.parameters = serde_json::json!({"base_branch": "release"});
+
+        let edit = edit_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(EditApprovalRequest {
+                approver_user_id: "reviewer".to_string(),
+                edited_tool_call: edited,
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(edit.status(), StatusCode::OK);
+
+        let reject = reject_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer".to_string(),
+                reason: Some("not allowed".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(reject.status(), StatusCode::OK);
     }
 
     /// #1307 (AC#1/AC#5): the per-IP rate limiter on approval-decision
@@ -1563,6 +1863,7 @@ mod tests {
             original_skill_call: "{}".to_string(),
             original_call_hash: "hash1".to_string(),
             edited_skill_call: None,
+            effective_call_hash: None,
             expires_at: Some(Utc::now() + Duration::minutes(10)),
             decided_at: None,
             callback_url: None,
@@ -1584,6 +1885,7 @@ mod tests {
             original_skill_call: "{}".to_string(),
             original_call_hash: "hash2".to_string(),
             edited_skill_call: None,
+            effective_call_hash: None,
             expires_at: Some(Utc::now() - Duration::minutes(10)),
             decided_at: None,
             callback_url: None,
@@ -1670,6 +1972,7 @@ mod tests {
             original_skill_call: tool_call_json,
             original_call_hash: "hash1".to_string(),
             edited_skill_call: None,
+            effective_call_hash: None,
             expires_at: Some(Utc::now() + Duration::minutes(10)),
             decided_at: None,
             callback_url: None,
