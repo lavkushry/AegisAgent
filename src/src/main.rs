@@ -914,6 +914,8 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/receipts/:id", get(routes::get_receipt))
         .route("/receipts/:id/verify", get(routes::verify_receipt))
         .route("/receipts/verify-chain", post(routes::verify_receipt_chain))
+        .route("/receipts/verify-range", post(routes::verify_receipt_range))
+        .route("/receipts/chain-head", get(routes::get_receipt_chain_head))
         // SOC Phase 5: Indexer Query API — paginated, tenant-scoped SOC views
         .route("/alerts", get(routes::list_alerts))
         .route("/incidents", get(routes::list_incidents))
