@@ -487,6 +487,58 @@ mod tests {
         assert_eq!(result.decision, "deny");
     }
 
+    /// #1606: a hot-reload of a malformed policy file must fail closed to the
+    /// PREVIOUSLY-loaded policy set — never silently install an empty/allow-all
+    /// set or panic. `reload_file` parses before swapping, so a parse error
+    /// returns `Err` and leaves the live policy set untouched; subsequent
+    /// authorize calls keep evaluating against the good policies.
+    #[tokio::test]
+    async fn malformed_policy_reload_fails_closed_to_previous_policies() {
+        use std::io::Write;
+
+        let engine = setup_engine().await;
+
+        // Baseline: a trusted-internal mutation auto-allows under the good policy.
+        let request = mutating_request_at_trust("trusted_internal_signed");
+        let before = engine
+            .authorize("test_tenant", &request, "low", true, false)
+            .unwrap();
+        assert_eq!(before.decision, "allow");
+
+        // Attempt to reload a syntactically invalid Cedar policy.
+        let mut bad = tempfile::Builder::new()
+            .prefix("bad-policy")
+            .suffix(".cedar")
+            .tempfile()
+            .unwrap();
+        write!(bad, "this is not valid cedar @@@ permit(((").unwrap();
+        bad.flush().unwrap();
+
+        let reload_result = engine.reload_file(bad.path()).await;
+        assert!(
+            matches!(reload_result, Err(PolicyError::Parse(_))),
+            "a malformed policy must surface a parse error, got {reload_result:?}"
+        );
+
+        // The live policy set must be unchanged — the same request still allows,
+        // and an untrusted mutation still denies (not allow-all, not a panic).
+        let after = engine
+            .authorize("test_tenant", &request, "low", true, false)
+            .unwrap();
+        assert_eq!(
+            after.decision, before.decision,
+            "a failed reload must leave the previous policy set in force"
+        );
+        let untrusted = mutating_request_at_trust("untrusted_external");
+        let untrusted_after = engine
+            .authorize("test_tenant", &untrusted, "low", true, false)
+            .unwrap();
+        assert_eq!(
+            untrusted_after.decision, "deny",
+            "fail-closed forbid rules must still apply after a failed reload"
+        );
+    }
+
     #[tokio::test]
     async fn test_readonly_allowed() {
         let engine = setup_engine().await;

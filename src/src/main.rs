@@ -1159,8 +1159,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         };
 
-        // Build Qdrant client
-        let mut builder = qdrant_client::Qdrant::from_url(&qdrant_url);
+        // Build Qdrant client. #1606: pin explicit request and connect timeouts
+        // so a slow/hung Qdrant endpoint can't stall the SOC indexing drain
+        // indefinitely (it runs out-of-band, but an unbounded await would still
+        // wedge the drain task). 10s request / 5s connect mirrors the bounds
+        // used for the Splunk HEC export.
+        let mut builder = qdrant_client::Qdrant::from_url(&qdrant_url)
+            .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(5));
         if let Some(ref api_key) = qdrant_api_key {
             builder = builder.api_key(api_key.as_str());
         }
