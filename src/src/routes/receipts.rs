@@ -79,6 +79,129 @@ pub async fn verify_receipt(
     }
 }
 
+/// GET /v1/receipts/chain-head — the current head of the tenant's receipt
+/// chain (the most recently appended receipt). Lets a verifier anchor/compare
+/// the chain tip without paging the whole list. Tenant-scoped; returns
+/// `head: null` for an empty chain.
+pub async fn get_receipt_chain_head(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match state.storage.get_latest_action_receipt(&tenant_id).await {
+        Ok(Some(rec)) => (
+            StatusCode::OK,
+            Json(json!({
+                "head": {
+                    "receipt_id": rec.id,
+                    "receipt_hash": rec.receipt_hash,
+                    "prev_receipt_hash": rec.prev_receipt_hash,
+                    "canon_version": rec.canon_version,
+                    "ts": rec.ts,
+                },
+            })),
+        )
+            .into_response(),
+        Ok(None) => (StatusCode::OK, Json(json!({ "head": null }))).into_response(),
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// Optional `[from, to]` RFC-3339 window for [`verify_receipt_range`].
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct VerifyRangeRequest {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+/// POST /v1/receipts/verify-range — verify a bounded slice of the tenant's own
+/// stored receipt chain (server-side, not client-supplied). Walks the receipts
+/// in chain order within the optional `[from, to]` window, recomputing each
+/// `receipt_hash` and checking `prev_receipt_hash` linkage. Unlike
+/// `verify-chain` (which verifies a caller-provided list), this verifies what
+/// the gateway has actually persisted. Tenant-scoped.
+pub async fn verify_receipt_range(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    body: Option<Json<VerifyRangeRequest>>,
+) -> impl IntoResponse {
+    let req = body.map(|Json(b)| b).unwrap_or_default();
+
+    // Parse the optional window; a malformed timestamp is a 400, not a silent
+    // full-range scan.
+    let parse = |s: &Option<String>| -> Result<Option<DateTime<Utc>>, ()> {
+        match s {
+            None => Ok(None),
+            Some(v) => DateTime::parse_from_rfc3339(v)
+                .map(|d| Some(d.with_timezone(&Utc)))
+                .map_err(|_| ()),
+        }
+    };
+    let (start, end) = match (parse(&req.from), parse(&req.to)) {
+        (Ok(s), Ok(e)) => (s, e),
+        _ => {
+            return StatusError::bad_request("from/to must be RFC-3339 timestamps").into_response()
+        }
+    };
+
+    let receipts = match state
+        .storage
+        .list_action_receipts_in_range(&tenant_id, start, end)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Database lookup error: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    // Walk in chain (append) order, recomputing each hash and checking linkage.
+    // Within a windowed slice the first link's `prev_receipt_hash` is taken as
+    // the expected predecessor (we verify internal consistency of the slice).
+    let mut expected_prev: Option<String> = None;
+    for (i, rec) in receipts.iter().enumerate() {
+        let recomputed = compute_receipt_hash(rec);
+        if recomputed != rec.receipt_hash {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "verified": false,
+                    "count": receipts.len(),
+                    "error": format!("Hash mismatch at index {i} (receipt {})", rec.id),
+                })),
+            )
+                .into_response();
+        }
+        if let Some(ref prev) = expected_prev {
+            if &rec.prev_receipt_hash != prev {
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "verified": false,
+                        "count": receipts.len(),
+                        "error": format!("Broken link at index {i} (receipt {})", rec.id),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        expected_prev = Some(rec.receipt_hash.clone());
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "verified": true,
+            "count": receipts.len(),
+            "error": null,
+        })),
+    )
+        .into_response()
+}
+
 /// GET /v1/receipts — list paginated action receipts for the authenticated tenant.
 ///
 /// Query params:
@@ -818,5 +941,131 @@ mod tests {
             .unwrap();
         let json_tampered: Value = serde_json::from_slice(&body_tampered).unwrap();
         assert_eq!(json_tampered["verified"].as_bool(), Some(false));
+    }
+
+    // ── PR6: chain-head + server-side range verification ─────────────────────
+
+    async fn append_n_receipts(state: &Arc<AppState>, tenant_id: &str, n: usize) {
+        for i in 0..n {
+            let receipt = ActionReceiptRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                decision_id: None,
+                ts: Utc::now().to_rfc3339(),
+                agent_id: None,
+                user_id: None,
+                run_id: None,
+                trace_id: None,
+                tool: Some("filesystem".to_string()),
+                action: Some("read_file".to_string()),
+                resource: Some(format!("/tmp/file-{i}")),
+                source_trust: "trusted_internal_signed".to_string(),
+                decision: "allow".to_string(),
+                approver: None,
+                action_hash: Some(format!("{i:064x}")),
+                prev_receipt_hash: String::new(),
+                receipt_hash: String::new(),
+                canon_version: CANON_VERSION.to_string(),
+                signature: None,
+                signer_public_key: None,
+                signer_key_id: None,
+                created_at: Utc::now(),
+            };
+            state
+                .storage
+                .append_action_receipt_atomic(tenant_id, receipt)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn chain_head_returns_latest_or_null() {
+        let (state, tenant_id, _) = setup_state("chain_head").await;
+
+        // Empty chain → head is null.
+        let resp = get_receipt_chain_head(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["head"].is_null());
+
+        append_n_receipts(&state, &tenant_id, 3).await;
+
+        let chain = state
+            .storage
+            .list_action_receipts_chain_order(&tenant_id)
+            .await
+            .unwrap();
+        let tip = chain.last().unwrap();
+
+        let resp = get_receipt_chain_head(State(state.clone()), TenantId(tenant_id.clone()))
+            .await
+            .into_response();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["head"]["receipt_id"].as_str(), Some(tip.id.as_str()));
+        assert_eq!(
+            json["head"]["receipt_hash"].as_str(),
+            Some(tip.receipt_hash.as_str())
+        );
+        assert_eq!(json["head"]["canon_version"].as_str(), Some(CANON_VERSION));
+    }
+
+    #[tokio::test]
+    async fn verify_range_verifies_stored_chain_and_rejects_bad_dates() {
+        let (state, tenant_id, _) = setup_state("verify_range").await;
+        append_n_receipts(&state, &tenant_id, 5).await;
+
+        // Full range (no window) → verified, count == 5.
+        let resp = verify_receipt_range(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Some(Json(VerifyRangeRequest::default())),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["verified"].as_bool(), Some(true));
+        assert_eq!(json["count"].as_u64(), Some(5));
+
+        // Malformed timestamp → 400.
+        let resp = verify_receipt_range(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Some(Json(VerifyRangeRequest {
+                from: Some("not-a-date".to_string()),
+                to: None,
+            })),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn verify_range_is_tenant_scoped() {
+        let (state, tenant_a, _) = setup_state("verify_range_tenant_a").await;
+        append_n_receipts(&state, &tenant_a, 4).await;
+
+        // A different tenant sees none of tenant A's receipts.
+        let resp = verify_receipt_range(
+            State(state.clone()),
+            TenantId("tenant_other".to_string()),
+            Some(Json(VerifyRangeRequest::default())),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["verified"].as_bool(), Some(true));
+        assert_eq!(
+            json["count"].as_u64(),
+            Some(0),
+            "verify-range must be tenant-scoped — no cross-tenant receipts"
+        );
     }
 }
