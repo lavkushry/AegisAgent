@@ -1417,6 +1417,7 @@ mod tests {
                 original_skill_call: "{}".to_string(),
                 original_call_hash: "hash".to_string(),
                 edited_skill_call: None,
+                effective_call_hash: None,
                 expires_at: Some(Utc::now() + Duration::hours(1)),
                 decided_at: None,
                 callback_url: None,

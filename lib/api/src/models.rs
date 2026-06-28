@@ -556,6 +556,14 @@ pub struct ApprovalRecord {
     pub original_skill_call: String, // JSON
     pub original_call_hash: String,
     pub edited_skill_call: Option<String>, // JSON
+    /// Set when the approval has been edited (#approval-edit-lifecycle): the
+    /// hash of the edited tool call. `original_call_hash` is preserved as the
+    /// agent's original action; the *effective* hash an approve/consume binds to
+    /// is `effective_call_hash` when present, else `original_call_hash`. NULL =
+    /// not edited. `#[sqlx(default)]` so SELECTs predating this column still
+    /// deserialize.
+    #[sqlx(default)]
+    pub effective_call_hash: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
     pub decided_at: Option<DateTime<Utc>>,
     /// Optional webhook URL to notify when this approval is decided
@@ -568,6 +576,24 @@ pub struct ApprovalRecord {
     #[sqlx(default)]
     pub callback_secret_hash: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+impl ApprovalRecord {
+    /// The hash an approve/consume binds to: the edited action's hash once the
+    /// approval has been edited, otherwise the agent's original action hash.
+    /// (#approval-edit-lifecycle) Editing re-points the binding without losing
+    /// the original, so a consume with the *original* hash of an edited approval
+    /// fails — the human approved the edited action, not the original.
+    pub fn effective_action_hash(&self) -> &str {
+        self.effective_call_hash
+            .as_deref()
+            .unwrap_or(&self.original_call_hash)
+    }
+
+    /// Whether this approval has been edited from the agent's original action.
+    pub fn is_edited(&self) -> bool {
+        self.effective_call_hash.is_some()
+    }
 }
 
 /// TASK-0092 (#938): a tenant-managed webhook subscription, registered via

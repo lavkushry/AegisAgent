@@ -2386,6 +2386,7 @@ pub(crate) mod test_helpers {
             original_skill_call: "{}".to_string(),
             original_call_hash: "x".to_string(),
             edited_skill_call: None,
+            effective_call_hash: None,
             expires_at,
             decided_at: None,
             callback_url: None,
