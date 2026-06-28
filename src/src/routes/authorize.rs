@@ -96,6 +96,9 @@ pub(crate) async fn idempotent_replay_response(
             // Idempotency replays only ever read a previously-persisted real
             // decision — dry-run requests bypass idempotency entirely (#1281).
             dry_run: false,
+            // The original decision already wrote its durable receipt; a replay
+            // returns the cached decision and does not re-emit one.
+            receipt: None,
         }),
     )
         .into_response()
@@ -472,6 +475,7 @@ pub async fn authorize_action(
                 redacted_fields: vec![],
                 root_trust_level: root_trust_level.clone(),
                 dry_run,
+                receipt: None,
             }),
         )
             .into_response();
@@ -541,6 +545,7 @@ pub async fn authorize_action(
                         redacted_fields: vec![],
                         root_trust_level: root_trust_level.clone(),
                         dry_run,
+                        receipt: None,
                     }),
                 )
                     .into_response();
@@ -732,6 +737,7 @@ pub async fn authorize_action(
                         redacted_fields: vec![],
                         root_trust_level: root_trust_level.clone(),
                         dry_run,
+                        receipt: None,
                     }),
                 )
                     .into_response();
@@ -816,6 +822,7 @@ pub async fn authorize_action(
                             redacted_fields: vec![],
                             root_trust_level: root_trust_level.clone(),
                             dry_run,
+                            receipt: None,
                         }),
                     )
                         .into_response();
@@ -926,6 +933,7 @@ pub async fn authorize_action(
                 redacted_fields: vec![],
                 root_trust_level: root_trust_level.clone(),
                 dry_run,
+                receipt: None,
             }),
         )
             .into_response();
@@ -982,6 +990,7 @@ pub async fn authorize_action(
                         redacted_fields: vec![],
                         root_trust_level: root_trust_level.clone(),
                         dry_run,
+                        receipt: None,
                     }),
                 )
                     .into_response();
@@ -1008,26 +1017,75 @@ pub async fn authorize_action(
                     redacted_fields: vec![],
                     root_trust_level: root_trust_level.clone(),
                     dry_run,
+                    receipt: None,
                 }),
             )
                 .into_response();
         }
     };
 
-    // Emit a verifiable, hash-chained receipt for this decision (non-fatal).
+    // Emit a verifiable, hash-chained receipt for this decision.
     // Skipped for dry-run (#1281) — no decision was persisted to chain from.
+    //
+    // PR2 (receipt durability): protected decisions (mutating, high/critical
+    // risk, or any non-`allow`) MUST have a durable receipt before we report
+    // success — written synchronously here and bound into the response. If that
+    // durable write fails we fail closed (500), so a protected action is never
+    // reported as authorized without verifiable evidence. Low-risk read-only
+    // `allow`s keep the best-effort async path (losing one isn't a compliance
+    // gap, and keeping the read hot path off the WAL write lock matters more).
+    let mut receipt_identity: Option<ReceiptIdentity> = None;
     if !dry_run {
-        emit_action_receipt(
-            &state.storage,
-            &state.deferred_write_tracker,
-            &tenant_id,
-            &agent_id,
-            &payload,
-            decision_id,
+        if decision_requires_durable_receipt(
             &decision_str,
-            &action_hash,
-        )
-        .await;
+            &risk_level,
+            payload.tool_call.mutates_state,
+        ) {
+            match emit_action_receipt_durable(
+                &state.storage,
+                &tenant_id,
+                &agent_id,
+                &payload,
+                decision_id,
+                &decision_str,
+                &action_hash,
+            )
+            .await
+            {
+                Ok(receipt) => {
+                    receipt_identity = Some(ReceiptIdentity {
+                        receipt_id: receipt.id,
+                        receipt_hash: receipt.receipt_hash,
+                        prev_receipt_hash: receipt.prev_receipt_hash,
+                        canon_version: receipt.canon_version,
+                    });
+                }
+                Err(e) => {
+                    error!(
+                        decision_id = %decision_id,
+                        tenant_id = %tenant_id,
+                        "Fail-closed: durable receipt write failed for protected decision: {:?}",
+                        e
+                    );
+                    return StatusError::internal(
+                        "Failed to durably record decision evidence; action not authorized",
+                    )
+                    .into_response();
+                }
+            }
+        } else {
+            emit_action_receipt(
+                &state.storage,
+                &state.deferred_write_tracker,
+                &tenant_id,
+                &agent_id,
+                &payload,
+                decision_id,
+                &decision_str,
+                &action_hash,
+            )
+            .await;
+        }
     }
 
     // Cedar @decision("quarantine"): quarantine the agent after the decision has
@@ -1309,6 +1367,7 @@ pub async fn authorize_action(
             redacted_fields,
             root_trust_level,
             dry_run,
+            receipt: receipt_identity,
         }),
     )
         .into_response()
@@ -2592,6 +2651,107 @@ mod tests {
         let body = to_bytes(consume.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["action_hash"].as_str(), Some(bound_hash.as_str()));
+    }
+
+    // ── PR2: receipt durability classes ─────────────────────────────────────
+
+    #[test]
+    fn decision_durability_classification() {
+        // Mutating actions are always protected (durable receipt required).
+        assert!(decision_requires_durable_receipt("allow", "low", true));
+        // High/critical risk are protected even when read-only.
+        assert!(decision_requires_durable_receipt("allow", "high", false));
+        assert!(decision_requires_durable_receipt(
+            "allow", "critical", false
+        ));
+        // Any non-allow decision is security-relevant evidence.
+        assert!(decision_requires_durable_receipt("deny", "low", false));
+        assert!(decision_requires_durable_receipt(
+            "require_approval",
+            "low",
+            false
+        ));
+        assert!(decision_requires_durable_receipt(
+            "quarantine",
+            "low",
+            false
+        ));
+        // Only a low/medium read-only allow may use the async best-effort path.
+        assert!(!decision_requires_durable_receipt("allow", "low", false));
+        assert!(!decision_requires_durable_receipt("allow", "medium", false));
+    }
+
+    /// A protected decision (here a mutating allow) writes its receipt
+    /// SYNCHRONOUSLY — it is queryable immediately, without draining the
+    /// deferred-write tracker — and the response carries the receipt identity.
+    #[tokio::test]
+    async fn protected_decision_writes_durable_receipt_and_returns_identity() {
+        let (state, tenant_id, agent_token) = setup_state("durable_protected").await;
+
+        // github/push_commit is high-risk + mutating; at trusted_internal_signed
+        // it is allowed, so decision=allow but the action is protected.
+        let request = mcp_authorize_request("github", "push_commit");
+        let resp = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(resp.decision, "allow");
+
+        let receipt = resp
+            .receipt
+            .expect("a protected decision must return receipt identity inline");
+        assert_eq!(receipt.receipt_hash.len(), 64);
+        assert_eq!(receipt.canon_version, super::authorize_canon::CANON_VERSION);
+
+        // Without draining the deferred tracker, the receipt is already durable.
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM action_receipts WHERE tenant_id = ? AND id = ?")
+                .bind(tenant_id.as_str())
+                .bind(receipt.receipt_id.as_str())
+                .fetch_one(state.storage.get_pool().sqlite_pool())
+                .await
+                .unwrap();
+        assert_eq!(count, 1, "protected receipt must be written synchronously");
+    }
+
+    /// A low-risk read-only allow is NOT protected: no receipt identity in the
+    /// response (its receipt is written best-effort/async).
+    #[tokio::test]
+    async fn unprotected_read_allow_has_no_inline_receipt() {
+        let (state, tenant_id, agent_token) = setup_state("durable_unprotected").await;
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let resp = call_authorize(state.clone(), &tenant_id, &agent_token, request).await;
+        assert_eq!(resp.decision, "allow");
+        assert!(
+            resp.receipt.is_none(),
+            "a low-risk read-only allow should not carry an inline durable receipt"
+        );
+    }
+
+    /// Fail-closed: if the durable receipt write fails for a protected decision,
+    /// the gateway returns 500 and does NOT report the action as authorized.
+    /// Simulated by dropping the action_receipts table so the append errors.
+    #[tokio::test]
+    async fn protected_decision_fails_closed_when_receipt_write_fails() {
+        let (state, tenant_id, agent_token) = setup_state("durable_failclosed").await;
+
+        sqlx::query("DROP TABLE action_receipts")
+            .execute(state.storage.get_pool().sqlite_pool())
+            .await
+            .unwrap();
+
+        let request = mcp_authorize_request("github", "push_commit");
+        let headers = agent_headers(&agent_token, &tenant_id);
+        let response = authorize_action(
+            State(state),
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a protected decision whose receipt cannot be durably written must fail closed"
+        );
     }
 
     #[tokio::test]

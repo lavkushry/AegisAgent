@@ -244,6 +244,26 @@ pub struct AuthorizeResponse {
     /// (`AuthorizeRequest.dry_run == Some(true)`) — nothing was persisted.
     #[serde(default)]
     pub dry_run: bool,
+    /// PR2 (receipt durability): identity of the hash-chained receipt durably
+    /// written for this decision. Present for *protected* decisions (mutating,
+    /// high/critical risk, or any non-`allow`), whose receipt is written
+    /// synchronously before this response is returned — so a client holds
+    /// verifiable evidence the action was authorized. `None` for low-risk
+    /// read-only `allow`s (their receipt is written best-effort/async) and for
+    /// dry-runs (nothing persisted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<ReceiptIdentity>,
+}
+
+/// Identity of a durably-written action receipt, returned inline on protected
+/// authorize decisions (PR2) so callers can verify/anchor evidence without a
+/// follow-up `GET /v1/receipts/:id`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReceiptIdentity {
+    pub receipt_id: String,
+    pub receipt_hash: String,
+    pub prev_receipt_hash: String,
+    pub canon_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

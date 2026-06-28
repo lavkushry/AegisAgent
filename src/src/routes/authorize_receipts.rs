@@ -59,10 +59,100 @@ pub(crate) async fn emit_action_receipt(
     decision: &str,
     action_hash: &str,
 ) {
-    // Build the head-referencing receipt inside one atomic transaction (T-D
-    // hardening): the chain head is read and the new link inserted under a single
-    // write lock, so concurrent authorizes for this tenant cannot fork the chain.
-    let receipt = ActionReceiptRecord {
+    let receipt = build_decision_receipt(
+        tenant_id,
+        agent_id,
+        payload,
+        decision_id,
+        decision,
+        action_hash,
+    );
+
+    let storage = Arc::clone(storage);
+    let tenant_id_owned = tenant_id.to_string();
+    deferred_write_tracker.spawn_tracked(async move {
+        // `SqliteStorage::append_action_receipt_atomic` doesn't retry on its
+        // own, so wrap it the same way the deferred risk-score write is.
+        if let Err(e) = super::retry_storage_write_on_busy(3, || {
+            storage.append_action_receipt_atomic(&tenant_id_owned, receipt.clone())
+        })
+        .await
+        {
+            error!("Failed to write action receipt: {:?}", e);
+        }
+    });
+}
+
+/// Receipt-durability class of a decision (PR2). Protected decisions MUST have a
+/// durable, verifiable receipt before the gateway reports success, so a crash
+/// between decision and (deferred) receipt write can never lose the evidence for
+/// a security-relevant action. Low-risk read-only `allow`s may use the async
+/// best-effort path — losing one is not a compliance gap, and keeping the hot
+/// read path off the WAL write lock matters more there.
+///
+/// Protected: any mutating action; any `high`/`critical` risk; and any decision
+/// that is itself security-relevant — `deny`, `require_approval`, `quarantine`,
+/// `redact`, `log_only`'s siblings — i.e. everything except a plain low/medium
+/// read-only `allow`.
+pub(crate) fn decision_requires_durable_receipt(
+    decision: &str,
+    risk_level: &str,
+    mutates_state: bool,
+) -> bool {
+    if mutates_state {
+        return true;
+    }
+    if matches!(risk_level, "high" | "critical") {
+        return true;
+    }
+    // Any non-allow decision is security-relevant evidence.
+    decision != "allow"
+}
+
+/// Synchronously append the decision's receipt to the hash chain and return the
+/// persisted record (with `receipt_hash`/`prev_receipt_hash` filled in). Used
+/// for protected decisions (see [`decision_requires_durable_receipt`]) so the
+/// caller can (a) bind the receipt identity into its response and (b) fail
+/// closed if the evidence can't be durably written. Retries on SQLITE_BUSY.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn emit_action_receipt_durable(
+    storage: &Arc<dyn aegis_storage::traits::StorageBackend>,
+    tenant_id: &str,
+    agent_id: &str,
+    payload: &AuthorizeRequest,
+    decision_id: Uuid,
+    decision: &str,
+    action_hash: &str,
+) -> Result<ActionReceiptRecord, aegis_common::errors::AegisError> {
+    let receipt = build_decision_receipt(
+        tenant_id,
+        agent_id,
+        payload,
+        decision_id,
+        decision,
+        action_hash,
+    );
+    super::retry_storage_write_on_busy(3, || {
+        storage.append_action_receipt_atomic(tenant_id, receipt.clone())
+    })
+    .await
+}
+
+/// Build the head-referencing receipt for a finalized decision. The chain head
+/// is read and the new link inserted under a single write lock inside
+/// `append_action_receipt_atomic` (T-D hardening), so concurrent authorizes for
+/// a tenant cannot fork the chain. Stores only hashes/identifiers — never raw
+/// parameters or secrets.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_decision_receipt(
+    tenant_id: &str,
+    agent_id: &str,
+    payload: &AuthorizeRequest,
+    decision_id: Uuid,
+    decision: &str,
+    action_hash: &str,
+) -> ActionReceiptRecord {
+    ActionReceiptRecord {
         id: Uuid::new_v4().to_string(),
         tenant_id: tenant_id.to_string(),
         decision_id: Some(decision_id.to_string()),
@@ -86,21 +176,7 @@ pub(crate) async fn emit_action_receipt(
         signer_public_key: None,
         signer_key_id: None,
         created_at: Utc::now(),
-    };
-
-    let storage = Arc::clone(storage);
-    let tenant_id_owned = tenant_id.to_string();
-    deferred_write_tracker.spawn_tracked(async move {
-        // `SqliteStorage::append_action_receipt_atomic` doesn't retry on its
-        // own, so wrap it the same way the deferred risk-score write is.
-        if let Err(e) = super::retry_storage_write_on_busy(3, || {
-            storage.append_action_receipt_atomic(&tenant_id_owned, receipt.clone())
-        })
-        .await
-        {
-            error!("Failed to write action receipt: {:?}", e);
-        }
-    });
+    }
 }
 
 /// Decision label for a receipt recording a detected integrity violation (T-D:
