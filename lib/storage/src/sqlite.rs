@@ -896,6 +896,25 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Replay nonces (PR8)
+    async fn check_and_insert_replay_nonce(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        nonce: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::check_and_insert_replay_nonce(&self.pool, tenant_id, agent_id, nonce, expires_at)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_expired_replay_nonces(&self, now: DateTime<Utc>) -> Result<u64, AegisError> {
+        db::delete_expired_replay_nonces(&self.pool, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
