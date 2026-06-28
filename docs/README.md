@@ -32,6 +32,7 @@ This folder is the **single source for AegisAgent product documentation**. It re
 | [Agent Workflow](AegisAgent_Agent_Workflow.md) | The seven workflows: authorization, approval integrity, audit, SOC |
 | [Threat Model](AegisAgent_Threat_Model.md) | T-A approval manipulation · T-B confused deputy · T-C evidence tampering · T-D attacks on the SOC |
 | [Operational Design](AegisAgent_Operational_Design.md) | Deployment, SLOs, fail-closed behavior, canonicalization & receipt-chain ops |
+| [Production Hardening](production-hardening.md) | Auth modes, public-bind safety, admin gating, replay store, receipt durability & verification endpoints, SOC query — config reference + checklist |
 | [Database Schema (ERD)](database-schema.md) | Entity-relationship diagram and migration notes |
 
 ---
