@@ -231,6 +231,140 @@ pub async fn decision_timeseries(
     }
 }
 
+/// Structured filter for [`soc_query`]. A fixed allowlist of fields —
+/// `deny_unknown_fields` rejects anything else (no raw SQL, no operator
+/// injection). Mirrors `DecisionListFilters`.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SocQueryFilters {
+    pub agent_id: Option<String>,
+    pub decision: Option<String>,
+    pub source_trust: Option<String>,
+    pub skill: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub q: Option<String>,
+}
+
+/// Request body for `POST /v1/soc/query`. `entity` and `aggregate` are
+/// validated against fixed allowlists; unknown JSON fields are rejected.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SocQueryRequest {
+    pub entity: String,
+    #[serde(default)]
+    pub filters: SocQueryFilters,
+    /// `none` (default, paginated rows) | `count` | `count_over_time`.
+    pub aggregate: Option<String>,
+    /// Bucket for `count_over_time`: `minute`|`hour`|`day` (default `hour`).
+    pub interval: Option<String>,
+    pub limit: Option<i64>,
+    pub cursor: Option<i64>,
+}
+
+/// POST /v1/soc/query — structured, tenant-scoped query API for the SOC console
+/// (PR5). Accepts a validated entity + filter allowlist + aggregation; never raw
+/// SQL. Backed entirely by existing parameterized, tenant-scoped storage
+/// methods. This slice supports the `decision` entity; the entity allowlist is
+/// the extension point for `alert`/`incident`/`receipt`/… (each must map only to
+/// parameterized, tenant-scoped queries).
+pub async fn soc_query(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(req): Json<SocQueryRequest>,
+) -> impl IntoResponse {
+    // Entity allowlist — fail closed on anything unknown.
+    if req.entity != "decision" {
+        return StatusError::bad_request(format!(
+            "unsupported entity '{}' (supported: decision)",
+            req.entity
+        ))
+        .into_response();
+    }
+
+    let from = req.filters.from.as_deref().and_then(to_db_timestamp);
+    let to = req.filters.to.as_deref().and_then(to_db_timestamp);
+    let q = req.filters.q.as_deref().and_then(sanitize_fts5_query);
+    let filters = DecisionListFilters {
+        agent_id: req.filters.agent_id.as_deref(),
+        decision: req.filters.decision.as_deref(),
+        q: q.as_deref(),
+        source_trust: req.filters.source_trust.as_deref(),
+        skill: req.filters.skill.as_deref(),
+        from: from.as_deref(),
+        to: to.as_deref(),
+    };
+
+    match req.aggregate.as_deref().unwrap_or("none") {
+        "none" => {
+            let limit = req.limit.unwrap_or(50).clamp(1, 200);
+            match state
+                .storage
+                .list_decisions(&tenant_id, limit, req.cursor, filters)
+                .await
+            {
+                Ok((rows, next_cursor)) => paginated_response(&rows, next_cursor),
+                Err(e) => {
+                    error!("soc_query list failed: {:?}", e);
+                    StatusError::internal("Database error").into_response()
+                }
+            }
+        }
+        "count" => match state.storage.count_decisions_by_outcome(&tenant_id).await {
+            Ok((total, allow, deny, require_approval)) => (
+                StatusCode::OK,
+                Json(json!({
+                    "entity": "decision",
+                    "aggregate": "count",
+                    "total": total,
+                    "by_decision": {
+                        "allow": allow,
+                        "deny": deny,
+                        "require_approval": require_approval,
+                    },
+                })),
+            )
+                .into_response(),
+            Err(e) => {
+                error!("soc_query count failed: {:?}", e);
+                StatusError::internal("Database error").into_response()
+            }
+        },
+        "count_over_time" => {
+            let bucket = TimeBucket::parse(req.interval.as_deref().unwrap_or("hour"));
+            match state
+                .storage
+                .count_decisions_over_time(&tenant_id, bucket, filters)
+                .await
+            {
+                Ok(buckets) => {
+                    let points: Vec<_> = buckets
+                        .into_iter()
+                        .map(|(bucket, count)| json!({ "bucket": bucket, "count": count }))
+                        .collect();
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "entity": "decision",
+                            "aggregate": "count_over_time",
+                            "points": points,
+                        })),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!("soc_query count_over_time failed: {:?}", e);
+                    StatusError::internal("Database error").into_response()
+                }
+            }
+        }
+        other => StatusError::bad_request(format!(
+            "unsupported aggregate '{other}' (supported: none, count, count_over_time)"
+        ))
+        .into_response(),
+    }
+}
+
 /// GET /v1/decisions/:id — get a single decision detail for the authenticated tenant.
 pub async fn get_decision(
     State(state): State<Arc<AppState>>,
@@ -2718,5 +2852,145 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["message"], "Query parameter cannot be empty");
+    }
+
+    // ── PR5: /v1/soc/query structured query API ──────────────────────────────
+
+    async fn seed_one_decision(state: &Arc<AppState>, tenant_id: &str, agent_token: &str) {
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let _ = call_authorize(state.clone(), tenant_id, agent_token, request).await;
+    }
+
+    #[tokio::test]
+    async fn soc_query_decision_list_count_and_timeseries() {
+        let (state, tenant_id, agent_token) = setup_state("soc_query_decision").await;
+        seed_one_decision(&state, &tenant_id, &agent_token).await;
+
+        // aggregate=none → paginated rows.
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: None,
+                interval: None,
+                limit: Some(10),
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        // paginated_response returns the rows array (envelope shape reused).
+        assert!(json.is_array() || json.get("data").is_some());
+
+        // aggregate=count → totals.
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: Some("count".to_string()),
+                interval: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["total"].as_i64().unwrap() >= 1);
+        assert!(json["by_decision"]["allow"].as_i64().unwrap() >= 1);
+
+        // aggregate=count_over_time → points array.
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: Some("count_over_time".to_string()),
+                interval: Some("day".to_string()),
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["points"].is_array());
+    }
+
+    #[tokio::test]
+    async fn soc_query_rejects_unknown_entity_and_aggregate() {
+        let (state, tenant_id, _) = setup_state("soc_query_reject").await;
+
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                entity: "secrets".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: None,
+                interval: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: Some("drop_table".to_string()),
+                interval: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn soc_query_is_tenant_scoped() {
+        let (state, tenant_id, agent_token) = setup_state("soc_query_tenant").await;
+        seed_one_decision(&state, &tenant_id, &agent_token).await;
+
+        // A different tenant must see zero of tenant A's decisions.
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId("tenant_other".to_string()),
+            Json(SocQueryRequest {
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: Some("count".to_string()),
+                interval: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["total"].as_i64(),
+            Some(0),
+            "soc_query must be tenant-scoped — no cross-tenant decisions"
+        );
     }
 }

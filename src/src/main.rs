@@ -922,6 +922,7 @@ fn api_routes() -> Router<Arc<AppState>> {
         // SOC query layer: incident detail + aggregate summary
         .route("/incidents/:id", get(routes::get_incident))
         .route("/soc/summary", get(routes::soc_summary))
+        .route("/soc/query", post(routes::soc_query))
         .route("/soc/semantic-search", get(routes::semantic_search))
         // SOC Phase 6: Incident lifecycle — close an open incident
         .route("/incidents/:id/close", post(routes::close_incident))
