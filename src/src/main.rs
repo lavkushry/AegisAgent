@@ -1609,6 +1609,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(10_000);
     let replay_nonce_cache = routes::ReplayNonceCache::new(replay_nonce_cache_capacity);
 
+    // PR8: AEGIS_REPLAY_STORE=db uses the durable, shared `replay_nonces` table
+    // for replay dedup (replay-safe across restart + multiple instances);
+    // anything else (default) uses the per-process in-memory cache above.
+    let replay_store_db = std::env::var("AEGIS_REPLAY_STORE")
+        .map(|v| v.eq_ignore_ascii_case("db"))
+        .unwrap_or(false);
+    if replay_store_db {
+        info!("Replay-nonce store: db (shared, multi-instance-safe)");
+    }
+
     // Bounded LRU cache for MCP server records (#1337)
     let mcp_server_cache_capacity: usize = std::env::var("AEGIS_MCP_SERVER_CACHE_CAPACITY")
         .ok()
@@ -1734,6 +1744,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mcp_tool_cache,
         canonical_hash_cache,
         replay_nonce_cache,
+        replay_store_db,
         risk_weight_cache,
         heartbeat_debouncer: heartbeat_debouncer.clone(),
         deferred_write_tracker: deferred_write_tracker.clone(),
@@ -2461,6 +2472,7 @@ mod tests {
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
@@ -2757,6 +2769,7 @@ mod tests {
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
@@ -3094,6 +3107,7 @@ mod tests {
             heartbeat_debouncer: Arc::new(routes::HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(routes::DeferredWriteTracker::new()),
             replay_nonce_cache: routes::ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,

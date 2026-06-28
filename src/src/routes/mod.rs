@@ -906,6 +906,11 @@ pub struct AppState {
     /// Opt-in replay-protection nonce dedup cache (#1306). See
     /// [`ReplayNonceCache`] for the LRU + timestamp-window approximation.
     pub replay_nonce_cache: ReplayNonceCache,
+    /// PR8: when true (`AEGIS_REPLAY_STORE=db`), replay-nonce dedup uses the
+    /// shared, durable `replay_nonces` table instead of the per-process
+    /// in-memory `replay_nonce_cache` — required to be replay-safe across a
+    /// restart or multiple gateway instances. Defaults to `false` (in-memory).
+    pub replay_store_db: bool,
     /// TTL cache for per-tenant composite-risk-score weights (#1513). See
     /// [`RiskWeightsCache`].
     pub risk_weight_cache: RiskWeightsCache,
@@ -1590,6 +1595,7 @@ pub mod benchutil {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -1890,6 +1896,7 @@ pub(crate) mod test_helpers {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -1941,6 +1948,7 @@ pub(crate) mod test_helpers {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -1994,6 +2002,7 @@ pub(crate) mod test_helpers {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -2049,6 +2058,7 @@ pub(crate) mod test_helpers {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -2154,6 +2164,7 @@ pub(crate) mod test_helpers {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -2282,6 +2293,7 @@ pub(crate) mod test_helpers {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),
             audit_batch,

@@ -35,6 +35,11 @@ pub(crate) use super::authorize_canon::*;
 pub(crate) use super::authorize_decision::*;
 pub(crate) use super::authorize_receipts::*;
 
+/// PR8: replay-nonce retention window for the DB-backed store, mirroring the
+/// 5-minute stale-timestamp bound enforced just above the nonce check. A nonce
+/// row past this window is treated as unseen again (and is cleanup-eligible).
+const REPLAY_NONCE_WINDOW_SECS: i64 = 300;
+
 /// Idempotent replay (#0072): rebuild the `AuthorizeResponse` for a previously
 /// recorded decision instead of re-evaluating Cedar / writing duplicate audit
 /// events, approvals, or receipts. For `require_approval` decisions, the
@@ -359,8 +364,30 @@ pub async fn authorize_action(
         // strict 5-minute store -- see `ReplayNonceCache` for why this, in
         // combination with the timestamp check above, approximates the
         // 5-minute replay window from the issue.
-        let nonce_key = ReplayNonceCache::cache_key(&tenant_id, &agent_id, nonce);
-        if state.replay_nonce_cache.check_and_insert(&nonce_key, now) {
+        // PR8: dispatch to the durable, shared store when AEGIS_REPLAY_STORE=db
+        // (replay-safe across restart + multiple instances), else the
+        // per-process in-memory cache. Both return true == replay. The nonce
+        // window mirrors the timestamp check above (5 min).
+        let is_replay = if state.replay_store_db {
+            let expires_at = now + Duration::seconds(REPLAY_NONCE_WINDOW_SECS);
+            match state
+                .storage
+                .check_and_insert_replay_nonce(&tenant_id, &agent_id, nonce, expires_at)
+                .await
+            {
+                Ok(replayed) => replayed,
+                Err(e) => {
+                    // Fail closed: if we can't consult the replay store we must
+                    // not silently accept a possibly-replayed request.
+                    error!("Replay store error (failing closed): {:?}", e);
+                    return StatusError::internal("Replay protection unavailable").into_response();
+                }
+            }
+        } else {
+            let nonce_key = ReplayNonceCache::cache_key(&tenant_id, &agent_id, nonce);
+            state.replay_nonce_cache.check_and_insert(&nonce_key, now)
+        };
+        if is_replay {
             warn!(
                 "Replay protection: rejecting duplicate nonce for tenant={} agent={}",
                 tenant_id, agent_id
@@ -1987,6 +2014,7 @@ mod tests {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -2046,6 +2074,7 @@ mod tests {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -7146,6 +7175,7 @@ mod tests {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
@@ -7352,6 +7382,7 @@ mod tests {
             heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
             deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
             replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,

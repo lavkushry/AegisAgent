@@ -451,6 +451,19 @@ pub trait StorageBackend: Send + Sync + 'static {
     ) -> Result<ActionReceiptRecord, AegisError>;
     async fn count_receipts(&self, tenant_id: &str) -> Result<i64, AegisError>;
 
+    // Replay nonces (PR8: durable, multi-instance-safe replay protection)
+    /// Atomically record a `(tenant, agent, nonce)` triple. Returns `true` if it
+    /// is a replay (already present and unexpired), `false` if first-seen now.
+    async fn check_and_insert_replay_nonce(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        nonce: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+    /// Delete replay-nonce rows whose window has elapsed; returns rows removed.
+    async fn delete_expired_replay_nonces(&self, now: DateTime<Utc>) -> Result<u64, AegisError>;
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
