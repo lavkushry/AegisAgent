@@ -1017,6 +1017,7 @@ async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             original_skill_call TEXT NOT NULL,
             original_call_hash TEXT NOT NULL DEFAULT '',
             edited_skill_call TEXT,
+            effective_call_hash TEXT,
             expires_at DATETIME,
             decided_at DATETIME,
             consumed_at DATETIME,
@@ -1031,6 +1032,7 @@ async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_approval_original_call_hash_column(pool).await?;
     ensure_approval_consumed_at_column(pool).await?;
     ensure_approval_callback_columns(pool).await?;
+    ensure_approval_effective_call_hash_column(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_events (
@@ -1641,6 +1643,31 @@ async fn ensure_approval_consumed_at_column(pool: &SqlitePool) -> Result<(), sql
 /// Idempotent migration: add `callback_url` (#1187/TASK-0082) and
 /// `callback_secret_hash` (#1187/TASK-0083) to `approvals`. Both are
 /// nullable — most approvals have no callback registered.
+/// Idempotent migration (#approval-edit-lifecycle): add `effective_call_hash` to
+/// `approvals`. When an approval is edited, its original `original_call_hash` is
+/// preserved and the edited action's hash is stored here; the *effective* hash an
+/// approve/consume binds to is `COALESCE(effective_call_hash, original_call_hash)`.
+/// NULL means "not edited — the original is effective". Safe on a fresh DB (the
+/// CREATE TABLE above already includes the column; the PRAGMA check short-circuits).
+async fn ensure_approval_effective_call_hash_column(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+        sqlx::query_as("PRAGMA table_info(approvals)")
+            .fetch_all(pool)
+            .await?;
+
+    if columns
+        .iter()
+        .any(|(_, name, _, _, _, _)| name == "effective_call_hash")
+    {
+        return Ok(());
+    }
+
+    sqlx::query("ALTER TABLE approvals ADD COLUMN effective_call_hash TEXT")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 async fn ensure_approval_callback_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
         sqlx::query_as("PRAGMA table_info(approvals)")

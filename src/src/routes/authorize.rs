@@ -1110,6 +1110,7 @@ pub async fn authorize_action(
             original_skill_call: serde_json::to_string(&payload.tool_call).unwrap_or_default(),
             original_call_hash: original_call_hash.clone(),
             edited_skill_call: None,
+            effective_call_hash: None,
             expires_at: Some(expires_at),
             decided_at: None,
             callback_url,

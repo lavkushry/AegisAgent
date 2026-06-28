@@ -187,6 +187,7 @@ pub fn graph_perf_approval(id: &str, tenant_id: &str, decision_id: &str) -> Appr
         original_skill_call: "{}".to_string(),
         original_call_hash: "sha256:deadbeef".to_string(),
         edited_skill_call: None,
+        effective_call_hash: None,
         expires_at: None,
         decided_at: None,
         callback_url: None,
