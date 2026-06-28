@@ -263,9 +263,19 @@ pub async fn consume_approval(
     // JSON body is optional; old callers that POST with no body still work.
     body: Option<Json<ConsumeApprovalBody>>,
 ) -> impl IntoResponse {
+    let claimed_action_hash = body
+        .as_ref()
+        .and_then(|Json(b)| b.claimed_action_hash.as_deref());
+
+    // #1603: the claimed-hash check is folded into the same atomic conditional
+    // UPDATE as the consume itself (db::consume_approval), so a mismatch never
+    // burns the single-use slot. Checking the hash as a separate step *after*
+    // consuming (the prior behavior) let one wrong-hash call permanently
+    // invalidate a legitimately approved action before the real executor could
+    // consume it — a self-inflicted DoS on the replay defense.
     let consumed = match state
         .storage
-        .consume_approval(&tenant_id, &approval_id.to_string())
+        .consume_approval(&tenant_id, &approval_id.to_string(), claimed_action_hash)
         .await
     {
         Ok(c) => c,
@@ -276,9 +286,6 @@ pub async fn consume_approval(
     };
 
     if !consumed {
-        // A consume of an already-used / expired / not-approved approval is an
-        // attack on the evidence chain (replay / T-D): record it as a tamper-attempt
-        // receipt so the chain itself captures the attempt. Hashes only, no payloads.
         let bound_approval = state
             .storage
             .get_approval_by_id(&tenant_id, &approval_id.to_string())
@@ -289,24 +296,55 @@ pub async fn consume_approval(
             .as_ref()
             .map(|a| a.original_call_hash.clone());
         let bound_decision_id = bound_approval.as_ref().map(|a| a.decision_id.clone());
-        // The approval record does not carry the agent id; the SOC event uses the
-        // "unknown" placeholder (the violation tag + approval id are the evidence).
+
+        // Distinguish a hash mismatch (the approval is otherwise still valid and
+        // consumable, but the claimed hash didn't match) from every other
+        // not-consumable reason (already used, expired, not approved) so the
+        // error message and tamper-attempt tag reflect what actually happened.
+        let is_hash_mismatch = claimed_action_hash.is_some()
+            && state
+                .storage
+                .approval_is_still_consumable(&tenant_id, &approval_id.to_string())
+                .await
+                .unwrap_or(false);
+
+        let (tamper_tag, error_message) = if is_hash_mismatch {
+            state.metrics.inc_hash_mismatch();
+            error!(
+                approval_id = %approval_id,
+                "approval_hash_mismatch: claimed hash does not match bound hash"
+            );
+            (
+                "consume_hash_mismatch",
+                "Action hash mismatch: the action to be executed differs from the approved action",
+            )
+        } else {
+            (
+                "consume_not_consumable",
+                "Approval not consumable (already used, expired, or not approved)",
+            )
+        };
+
+        // A consume that didn't take effect is an attack on the evidence chain
+        // (replay / approve-then-swap / T-D): record it as a tamper-attempt
+        // receipt so the chain itself captures the attempt. Hashes only, no
+        // payloads. The approval record does not carry the agent id; the SOC
+        // event uses the "unknown" placeholder (the violation tag + approval id
+        // are the evidence).
         emit_tamper_attempt_receipt(
             &*state.storage,
             &state.events,
             &tenant_id,
             None,
-            "consume_not_consumable",
+            tamper_tag,
             &approval_id.to_string(),
             bound_hash,
             bound_decision_id.as_deref(),
         )
         .await;
-        return StatusError::conflict(
-            "Approval not consumable (already used, expired, or not approved)",
-        )
-        .with_details(serde_json::json!({"approval_id": approval_id}))
-        .into_response();
+        return StatusError::conflict(error_message)
+            .with_details(serde_json::json!({"approval_id": approval_id}))
+            .into_response();
     }
 
     // Return the bound action hash so the SDK can re-verify before executing.
@@ -318,22 +356,6 @@ pub async fn consume_approval(
         .flatten()
         .map(|a| a.original_call_hash)
         .unwrap_or_default();
-
-    // Security metric: if the caller supplied a claimed_action_hash, compare it
-    // against the bound hash. A mismatch means an approve-then-swap was attempted.
-    if let Some(Json(ref b)) = body {
-        if let Some(ref claimed) = b.claimed_action_hash {
-            if *claimed != action_hash {
-                state.metrics.inc_hash_mismatch();
-                error!(
-                    approval_id = %approval_id,
-                    "approval_hash_mismatch: claimed hash does not match bound hash"
-                );
-                return StatusError::conflict("Action hash mismatch: the action to be executed differs from the approved action").with_details(serde_json::json!({"approval_id": approval_id}))
-                    .into_response();
-            }
-        }
-    }
 
     (
         StatusCode::OK,
