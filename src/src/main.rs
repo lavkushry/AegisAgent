@@ -970,8 +970,16 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/ws/events", get(routes::ws_events))
         // Statistics
         .route("/stats", get(routes::get_tenant_stats))
-        .route("/admin/db-stats", get(routes::get_db_stats))
-        .route("/admin/backup", post(routes::create_db_backup))
+        // PR4: admin endpoints are loopback-only unless an admin key is
+        // presented on a non-loopback bind (see admin_route_guard).
+        .route(
+            "/admin/db-stats",
+            get(routes::get_db_stats).layer(middleware::from_fn(admin_route_guard)),
+        )
+        .route(
+            "/admin/backup",
+            post(routes::create_db_backup).layer(middleware::from_fn(admin_route_guard)),
+        )
         // OpenAPI Specification
         .route("/openapi.json", get(routes::get_openapi_spec))
         .route("/version", get(version_handler))
@@ -1019,20 +1027,7 @@ fn assert_bind_security(
     jwt_required: bool,
     demo_mode: bool,
 ) -> Result<(), String> {
-    // Split host from the trailing `:port` (rsplit so IPv6 `[::1]:8080` works),
-    // then strip any IPv6 brackets.
-    let host = bind_addr
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(bind_addr)
-        .trim_matches(|c| c == '[' || c == ']');
-
-    let is_loopback = match host.parse::<std::net::IpAddr>() {
-        Ok(ip) => ip.is_loopback(),
-        Err(_) => host.eq_ignore_ascii_case("localhost"),
-    };
-
-    if is_loopback || jwt_required || demo_mode {
+    if host_is_loopback(bind_addr) || jwt_required || demo_mode {
         return Ok(());
     }
 
@@ -1041,6 +1036,83 @@ fn assert_bind_security(
          address but authentication is not enforced. Set AEGIS_JWT_REQUIRED=true (production) or, \
          only for an explicit insecure/demo deployment, AEGIS_DEMO_MODE=true."
     ))
+}
+
+/// Whether a `host:port` bind address is a loopback (not network-reachable)
+/// address — `127.0.0.0/8`, `::1`, or `localhost`. Shared by the public-bind
+/// safety check and the admin-route guard.
+fn host_is_loopback(bind_addr: &str) -> bool {
+    // Split host from the trailing `:port` (rsplit so IPv6 `[::1]:8080` works),
+    // then strip any IPv6 brackets.
+    let host = bind_addr
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(bind_addr)
+        .trim_matches(|c| c == '[' || c == ']');
+
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => host.eq_ignore_ascii_case("localhost"),
+    }
+}
+
+/// PR4 slice 2: decide whether an admin/debug/metrics request is allowed.
+///
+/// - **Loopback bind** (dev/ops on `127.0.0.1`) → always allowed; these
+///   endpoints aren't network-reachable.
+/// - **Non-loopback bind** → require `X-Aegis-Admin-Key` matching the configured
+///   `AEGIS_ADMIN_API_KEY`. If no admin key is configured, the endpoints are
+///   **disabled** (deny) rather than left open — safe by default.
+///
+/// Keys are compared as SHA-256 digests so a timing side-channel can't leak the
+/// configured key. Pure function (env read by the wrapper) for unit testing.
+fn admin_decision(
+    bind_is_loopback: bool,
+    configured_key: Option<&str>,
+    provided_key: Option<&str>,
+) -> bool {
+    if bind_is_loopback {
+        return true;
+    }
+    let Some(configured) = configured_key.filter(|k| !k.is_empty()) else {
+        return false;
+    };
+    let Some(provided) = provided_key.filter(|k| !k.is_empty()) else {
+        return false;
+    };
+    db::hash_token(provided) == db::hash_token(configured)
+}
+
+const ADMIN_KEY_HEADER: &str = "X-Aegis-Admin-Key";
+
+/// Router middleware guarding admin/debug/metrics endpoints. Reads
+/// `AEGIS_BIND_ADDR` + `AEGIS_ADMIN_API_KEY` from the environment (stable at
+/// runtime) and applies [`admin_decision`]. No `ConnectInfo`/handler-signature
+/// changes, so it composes onto individual routes.
+async fn admin_route_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let bind = std::env::var("AEGIS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let configured = std::env::var("AEGIS_ADMIN_API_KEY").ok();
+    let provided = req
+        .headers()
+        .get(ADMIN_KEY_HEADER)
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_string);
+
+    if admin_decision(
+        host_is_loopback(&bind),
+        configured.as_deref(),
+        provided.as_deref(),
+    ) {
+        next.run(req).await
+    } else {
+        StatusError::forbidden(
+            "Admin/diagnostic endpoint requires a valid X-Aegis-Admin-Key on a non-loopback bind",
+        )
+        .into_response()
+    }
 }
 
 /// Self-healthcheck for the distroless runtime image (#1207): no shell, no
@@ -1737,10 +1809,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/livez", get(livez_handler))
         .route("/readyz", get(readyz_handler))
         .route("/startupz", get(startupz_handler))
-        // Security metrics (Prometheus text, 127.0.0.1 only — same listener)
-        .route("/metrics", get(metrics_handler))
-        // Tokio runtime introspection (#1160, 127.0.0.1 only — same listener)
-        .route("/debug/runtime", get(debug_runtime_handler))
+        // Security metrics (Prometheus text). PR4: guarded — loopback-only
+        // unless an admin key is presented on a non-loopback bind.
+        .route(
+            "/metrics",
+            get(metrics_handler).layer(middleware::from_fn(admin_route_guard)),
+        )
+        // Tokio runtime introspection (#1160). PR4: same admin guard.
+        .route(
+            "/debug/runtime",
+            get(debug_runtime_handler).layer(middleware::from_fn(admin_route_guard)),
+        )
         .with_state(state.clone())
         // Middleware stack (outermost = first to run):
         // 1. CORS — must be outermost to handle preflight OPTIONS
@@ -2172,6 +2251,36 @@ mod tests {
     #[test]
     fn bind_security_allows_public_bind_in_explicit_demo_mode() {
         assert!(assert_bind_security("0.0.0.0:8080", false, true).is_ok());
+    }
+
+    #[test]
+    fn admin_decision_allows_anything_on_loopback_bind() {
+        // Local dev/ops: no admin key needed when not network-reachable.
+        assert!(admin_decision(true, None, None));
+        assert!(admin_decision(true, Some("k"), None));
+    }
+
+    #[test]
+    fn admin_decision_denies_on_public_bind_without_key_configured() {
+        // No admin key configured on a public bind → endpoints disabled.
+        assert!(!admin_decision(false, None, Some("anything")));
+        assert!(!admin_decision(false, Some(""), Some("anything")));
+    }
+
+    #[test]
+    fn admin_decision_requires_matching_key_on_public_bind() {
+        assert!(!admin_decision(false, Some("secret-key"), None));
+        assert!(!admin_decision(false, Some("secret-key"), Some("")));
+        assert!(!admin_decision(
+            false,
+            Some("secret-key"),
+            Some("wrong-key")
+        ));
+        assert!(admin_decision(
+            false,
+            Some("secret-key"),
+            Some("secret-key")
+        ));
     }
 
     #[test]
