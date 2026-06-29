@@ -69,7 +69,7 @@ export default function IncidentsTab() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `aegis-incident-${id}-evidence-pack.json`;
+    anchor.download = `aegis-incident-${id}-evidence-pack.zip`;
     anchor.click();
     URL.revokeObjectURL(url);
   };

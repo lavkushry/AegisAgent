@@ -6,7 +6,6 @@ import AppShell from "@/chrome/AppShell";
 import OverviewTab from "../components/OverviewTab";
 import ExploreTab from "../components/ExploreTab";
 import IncidentsTab from "../components/IncidentsTab";
-import ApprovalsTab from "../components/ApprovalsTab";
 import McpTab from "../components/McpTab";
 import ReceiptsTab from "../components/ReceiptsTab";
 import SettingsTab from "../components/SettingsTab";
@@ -15,6 +14,7 @@ import DashboardLoader from "../dashboards/DashboardLoader";
 import { overviewDashboard } from "../dashboards/system/overview";
 import { integrityDashboard } from "../dashboards/system/integrity";
 import { fleetDashboard } from "../dashboards/system/fleet";
+import { approvalsDashboard } from "../dashboards/system/approvals";
 
 type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
 
@@ -23,7 +23,7 @@ export default function Home() {
   const views: Record<ActiveTab, React.ReactNode> = {
     overview: <OverviewTab />, dashboards: <DashboardLoader schema={overviewDashboard} />,
     integrity: <DashboardLoader schema={integrityDashboard} />, explore: <ExploreTab />,
-    incidents: <IncidentsTab />, detections: <DetectionsTab />, approvals: <ApprovalsTab />,
+    incidents: <IncidentsTab />, detections: <DetectionsTab />, approvals: <DashboardLoader schema={approvalsDashboard} />,
     agents: <DashboardLoader schema={fleetDashboard} />, mcp: <McpTab />, receipts: <ReceiptsTab />,
     settings: <SettingsTab />,
   };

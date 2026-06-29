@@ -61,10 +61,11 @@ export default function ConfigBar({
       )}
       {/* Gateway URL */}
       <div className="flex flex-col gap-1 min-w-[200px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium flex items-center gap-1">
+        <label htmlFor="gateway-url-input" className="text-xs text-[var(--text-secondary)] font-medium flex items-center gap-1">
           <Database size={12} /> Gateway URL
         </label>
         <input
+          id="gateway-url-input"
           type="text"
           value={localUrl}
           onChange={(e) => setLocalUrl(e.target.value)}
@@ -74,11 +75,12 @@ export default function ConfigBar({
 
       {/* Bearer Token */}
       <div className="flex flex-col gap-1 min-w-[150px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium flex items-center gap-1">
+        <label htmlFor="bearer-token-input" className="text-xs text-[var(--text-secondary)] font-medium flex items-center gap-1">
           <KeyRound size={12} /> Bearer Token
         </label>
         <div className="relative">
           <input
+            id="bearer-token-input"
             type={showToken ? "text" : "password"}
             value={localToken}
             onChange={(e) => setLocalToken(e.target.value)}
@@ -96,10 +98,11 @@ export default function ConfigBar({
 
       {/* Tenant ID */}
       <div className="flex flex-col gap-1 min-w-[120px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium flex items-center gap-1">
+        <label htmlFor="tenant-id-input" className="text-xs text-[var(--text-secondary)] font-medium flex items-center gap-1">
           <ShieldAlert size={12} /> Tenant ID
         </label>
         <input
+          id="tenant-id-input"
           type="text"
           value={localTenant}
           onChange={(e) => setLocalTenant(e.target.value)}
@@ -109,8 +112,9 @@ export default function ConfigBar({
 
       {/* Time Range */}
       <div className="flex flex-col gap-1 min-w-[100px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium">Time Range</label>
+        <label htmlFor="time-range-input" className="text-xs text-[var(--text-secondary)] font-medium">Time Range</label>
         <select
+          id="time-range-input"
           value={timeRange}
           onChange={(e) => setTimeRange(e.target.value)}
           className={INPUT_CLASS}
@@ -123,8 +127,9 @@ export default function ConfigBar({
       </div>
 
       <div className="flex flex-col gap-1 min-w-[120px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium">Agent variable</label>
+        <label htmlFor="agent-variable-input" className="text-xs text-[var(--text-secondary)] font-medium">Agent variable</label>
         <input
+          id="agent-variable-input"
           type="text"
           value={variables.agent ?? ""}
           placeholder="All agents"
@@ -140,8 +145,9 @@ export default function ConfigBar({
 
       {/* Theme */}
       <div className="flex flex-col gap-1 min-w-[110px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium">Theme</label>
+        <label htmlFor="theme-input" className="text-xs text-[var(--text-secondary)] font-medium">Theme</label>
         <select
+          id="theme-input"
           value={theme}
           onChange={(e) => setTheme(e.target.value as Theme)}
           className={INPUT_CLASS}
@@ -154,8 +160,9 @@ export default function ConfigBar({
 
       {/* Density */}
       <div className="flex flex-col gap-1 min-w-[100px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium">Density</label>
+        <label htmlFor="density-input" className="text-xs text-[var(--text-secondary)] font-medium">Density</label>
         <select
+          id="density-input"
           value={density}
           onChange={(e) => setDensity(e.target.value as Density)}
           className={INPUT_CLASS}
@@ -167,8 +174,9 @@ export default function ConfigBar({
 
       {/* Role */}
       <div className="flex flex-col gap-1 min-w-[110px]">
-        <label className="text-xs text-[var(--text-secondary)] font-medium">Role</label>
+        <label htmlFor="role-input" className="text-xs text-[var(--text-secondary)] font-medium">Role</label>
         <select
+          id="role-input"
           value={role}
           onChange={(e) => setRole(e.target.value as Role)}
           disabled={!DEMO_MODE}

@@ -819,7 +819,14 @@ pub async fn list_approvals(
                         "approver_group": app.approver_group,
                         "approver_user_id": app.approver_user_id,
                         "reason": app.reason,
-                        "action_hash": app.original_call_hash,
+                        // Keep the queue contract aligned with GET /:id: the
+                        // hash beside the canonical action bytes must always be
+                        // the hash an approve/consume operation will bind to.
+                        "action_hash": app.effective_action_hash(),
+                        "original_action_hash": app.original_call_hash,
+                        "edited_action_hash": app.effective_call_hash,
+                        "effective_action_hash": app.effective_action_hash(),
+                        "is_edited": app.is_edited(),
                         "tool_call": tool_call,
                         "agent_id": agent_id,
                         "edited_tool_call": edited_call,
@@ -1525,18 +1532,28 @@ mod tests {
         .into_response();
         let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
         let list_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let found = list_json
+        let listed = list_json
             .as_array()
             .or_else(|| list_json.get("approvals").and_then(|a| a.as_array()))
-            .map(|arr| {
+            .and_then(|arr| {
                 arr.iter()
-                    .any(|a| a["approval_id"] == approval_id.to_string())
-            })
-            .unwrap_or(false);
+                    .find(|a| a["approval_id"] == approval_id.to_string())
+            });
         assert!(
-            found,
+            listed.is_some(),
             "edited approval must still appear in the pending list"
         );
+        let listed = listed.unwrap();
+        assert_eq!(listed["is_edited"], true);
+        assert_eq!(
+            listed["original_action_hash"].as_str(),
+            Some(original_hash.as_str())
+        );
+        assert_eq!(
+            listed["effective_action_hash"].as_str(),
+            Some(edited_hash.as_str())
+        );
+        assert_eq!(listed["action_hash"].as_str(), Some(edited_hash.as_str()));
 
         // GET exposes the full hash story.
         let get = get_approval(
