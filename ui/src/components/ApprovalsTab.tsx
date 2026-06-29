@@ -53,7 +53,7 @@ export default function ApprovalsTab() {
 
   const startEditing = (approval: ApprovalRecord) => {
     setEditingId(approval.id || approval.approval_id || null);
-    const params = approval.tool_call?.parameters || {};
+    const params = (approval.edited_tool_call ?? approval.tool_call)?.parameters || {};
     setEditParamsJson(JSON.stringify(params, null, 2));
     setEditReason("Edited and adjusted parameters to comply with security guidelines.");
   };
@@ -63,7 +63,15 @@ export default function ApprovalsTab() {
       const parsedParams = JSON.parse(editParamsJson);
       const approvalId = approval.id || approval.approval_id;
       if (!approvalId) throw new Error("Approval ID is missing.");
-      await editApproval(apiOpts, approvalId, parsedParams, editReason);
+      const currentToolCall = approval.edited_tool_call ?? approval.tool_call;
+      if (!currentToolCall) throw new Error("Frozen tool call is unavailable.");
+      await editApproval(
+        apiOpts,
+        approvalId,
+        approverId,
+        { ...currentToolCall, parameters: parsedParams },
+        editReason,
+      );
       setEditingId(null);
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
     } catch (err: unknown) {
@@ -129,7 +137,8 @@ export default function ApprovalsTab() {
                           ACTION AUTHORIZATION REQUEST
                         </span>
                         <h4 className="font-bold text-[var(--text-primary)] text-sm font-mono mt-1 text-[var(--brand)]">
-                          {app.tool_call?.name || app.tool_name || "action"}
+                          {(app.edited_tool_call ?? app.tool_call)?.tool || app.tool_name || "tool"}.
+                          {(app.edited_tool_call ?? app.tool_call)?.action || "action"}
                         </h4>
                       </div>
                       <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap">
@@ -178,7 +187,7 @@ export default function ApprovalsTab() {
                         </div>
                       ) : (
                         <pre className="bg-[var(--surface-app)] border border-[var(--border-default)] rounded-lg p-3 text-[11px] text-[var(--brand)] font-mono overflow-auto max-h-40 custom-scrollbar whitespace-pre-wrap">
-                          {JSON.stringify(app.tool_call?.parameters || {}, null, 2)}
+                          {JSON.stringify((app.edited_tool_call ?? app.tool_call)?.parameters || {}, null, 2)}
                         </pre>
                       )}
                     </div>
@@ -212,6 +221,7 @@ export default function ApprovalsTab() {
                         </button>
                         <button
                           onClick={() => startEditing(app)}
+                          disabled={!(app.edited_tool_call ?? app.tool_call)}
                           className="bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-white border border-[var(--border-default)] font-medium text-xs rounded-lg px-3 py-2 transition-colors cursor-pointer"
                           title="Edit action parameters"
                         >

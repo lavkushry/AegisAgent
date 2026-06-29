@@ -22,4 +22,11 @@ describe("receipt verification normalization", () => {
 
     expect(result).toMatchObject({ status: "failed", ok: false, brokenAtRow: 7 });
   });
+
+  it("maps the gateway's zero-based chain error index to a one-based UI row", () => {
+    expect(normalizeVerification({ verified: false, error: "Hash mismatch at index 3" })).toMatchObject({
+      status: "failed",
+      brokenAtRow: 4,
+    });
+  });
 });

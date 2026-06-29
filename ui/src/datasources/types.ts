@@ -95,6 +95,11 @@ export interface VerifyResult {
   readonly chainHead?: string;
 }
 
+export interface EvidenceExportRange {
+  readonly from?: string;
+  readonly to?: string;
+}
+
 export type StreamTopic = "ase" | "alert" | "approval";
 
 export interface StreamRequest {
@@ -119,6 +124,8 @@ export interface Datasource {
   query(req: QueryRequest): Promise<DataFrame>;
   fields?(entity: EntityKind): Promise<ReadonlyArray<FieldDescriptor>>;
   verifyReceipt?(receiptId: string, signal?: AbortSignal): Promise<VerifyResult>;
+  verifyRange?(receipts: ReadonlyArray<Record<string, unknown>>, signal?: AbortSignal): Promise<VerifyResult>;
+  exportEvidencePack?(range?: EvidenceExportRange, signal?: AbortSignal): Promise<Blob>;
   subscribe?(
     sub: StreamRequest,
     onEvent: (e: StreamEvent) => void,

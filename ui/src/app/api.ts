@@ -51,15 +51,31 @@ export interface IncidentRecord {
   opened_at: string;
 }
 
+export interface AuthorizeToolCall {
+  tool: string;
+  action: string;
+  resource?: string | null;
+  mutates_state: boolean;
+  parameters: unknown;
+}
+
 export interface ApprovalRecord {
   id?: string;
   approval_id?: string;
   tool_name?: string;
-  tool_call?: { name?: string; parameters?: Record<string, unknown> };
+  tool_call?: AuthorizeToolCall;
+  edited_tool_call?: AuthorizeToolCall;
   agent_id?: string;
   source_trust?: string;
   action_hash?: string;
+  original_action_hash?: string;
+  edited_action_hash?: string;
+  effective_action_hash?: string;
+  is_edited?: boolean;
   expires_in?: string;
+  expires_at?: string;
+  status?: string;
+  approver_group?: string;
 }
 
 export interface AgentRiskRecord {
@@ -265,11 +281,12 @@ export function approveApproval(
   opts: FetchOptions,
   approvalId: string,
   approverUserId: string,
-  reason?: string
+  reason: string,
 ) {
-  return fetchFromGateway<Record<string, unknown>>(opts, `/v1/approvals/${approvalId}/approve`, "POST", {
-    approverUserId,
-    reason: reason || "Approved from SOC console UI",
+  const id = encodeURIComponent(approvalId);
+  return fetchFromGateway<Record<string, unknown>>(opts, `/v1/approvals/${id}/approve`, "POST", {
+    approver_user_id: approverUserId,
+    reason,
   });
 }
 
@@ -277,22 +294,26 @@ export function rejectApproval(
   opts: FetchOptions,
   approvalId: string,
   approverUserId: string,
-  reason?: string
+  reason: string,
 ) {
-  return fetchFromGateway<Record<string, unknown>>(opts, `/v1/approvals/${approvalId}/reject`, "POST", {
-    approverUserId,
-    reason: reason || "Rejected from SOC console UI",
+  const id = encodeURIComponent(approvalId);
+  return fetchFromGateway<Record<string, unknown>>(opts, `/v1/approvals/${id}/reject`, "POST", {
+    approver_user_id: approverUserId,
+    reason,
   });
 }
 
 export function editApproval(
   opts: FetchOptions,
   approvalId: string,
-  parameters: unknown,
+  approverUserId: string,
+  editedToolCall: AuthorizeToolCall,
   reason: string,
 ) {
-  return fetchFromGateway<unknown>(opts, `/v1/approvals/${approvalId}`, "PUT", {
-    parameters,
+  const id = encodeURIComponent(approvalId);
+  return fetchFromGateway<Record<string, unknown>>(opts, `/v1/approvals/${id}/edit`, "POST", {
+    approver_user_id: approverUserId,
+    edited_tool_call: editedToolCall,
     reason,
   });
 }

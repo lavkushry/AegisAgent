@@ -14,7 +14,14 @@ export function normalizeVerification(value: unknown): VerifyResult {
   const data = recordOf(value);
   const error = data.error;
   const brokenRaw = data.broken_at_row ?? data.brokenAtRow;
-  const brokenAtRow = typeof brokenRaw === "number" ? brokenRaw : undefined;
+  const errorIndex =
+    typeof error === "string" ? /\bindex\s+(\d+)\b/i.exec(error)?.[1] : undefined;
+  const brokenAtRow =
+    typeof brokenRaw === "number"
+      ? brokenRaw
+      : errorIndex !== undefined
+        ? Number(errorIndex) + 1
+        : undefined;
   const statusValue = typeof data.status === "string" ? data.status.toLowerCase() : "";
   const explicitFailure =
     data.verified === false ||

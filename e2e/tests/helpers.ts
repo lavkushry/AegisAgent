@@ -1,6 +1,16 @@
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 
 export const TENANT_ID = "tenant_123";
+
+/** Configure production UI credentials for one browser page without persisting the bearer token. */
+export async function openConfiguredConsole(page: Page): Promise<void> {
+  await page.goto("/dashboard/");
+  await page.getByLabel("Gateway URL").fill("http://127.0.0.1:8080");
+  await page.getByLabel("Bearer Token").fill(TENANT_ID);
+  await page.getByLabel("Tenant ID").fill(TENANT_ID);
+  await page.getByRole("button", { name: "Apply Config" }).click();
+  await page.getByText(TENANT_ID, { exact: true }).first().waitFor();
+}
 
 export interface TestAgent {
   /** The agent's gateway-assigned UUID — this is what `approvals.agent_id` renders in the UI. */

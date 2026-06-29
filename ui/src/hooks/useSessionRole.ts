@@ -8,6 +8,7 @@ const VALID_ROLES: ReadonlyArray<Role> = ["viewer", "analyst", "approver", "admi
 
 export interface EffectiveRole {
   role: Role;
+  operatorId?: string;
   /** "session" when the gateway supplied it; "override" when using the local selector. */
   source: "session" | "override";
 }
@@ -15,6 +16,7 @@ export interface EffectiveRole {
 interface SessionResponse {
   role?: string;
   tenant_id?: string;
+  user_id?: string;
 }
 
 /**
@@ -49,6 +51,6 @@ export function useEffectiveRole(): EffectiveRole {
     data?.role && VALID_ROLES.includes(data.role as Role) ? (data.role as Role) : null;
 
   return sessionRole
-    ? { role: sessionRole, source: "session" }
-    : { role: override, source: "override" };
+    ? { role: sessionRole, operatorId: data?.user_id, source: "session" }
+    : { role: override, operatorId: "platform_admin", source: "override" };
 }
