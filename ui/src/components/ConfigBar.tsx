@@ -51,9 +51,9 @@ export default function ConfigBar({
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-4 bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-xl p-4 text-sm">
+    <div className="grid grid-cols-1 items-end gap-4 bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-xl p-4 text-sm sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
       {(!activeTenant || !bearerToken) && (
-        <div className="basis-full rounded-md border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-300" role="status">
+        <div className="rounded-md border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-300 sm:col-span-2 lg:col-span-3 2xl:col-span-4" role="status">
           {!activeTenant
             ? "Select a tenant before loading SOC data."
             : "No bearer token is stored. Configure an in-memory token or use gateway-managed session/mTLS authentication."}
@@ -138,7 +138,7 @@ export default function ConfigBar({
         />
       </div>
 
-      <label className="flex items-center gap-2 self-end pb-2 text-xs text-[var(--text-secondary)]">
+      <label className="flex items-center gap-2 pb-2 text-xs text-[var(--text-secondary)]">
         <input type="checkbox" checked={liveMode} onChange={(event) => setLiveMode(event.target.checked)} />
         Live refresh
       </label>
@@ -191,14 +191,16 @@ export default function ConfigBar({
       </div>
 
       {/* Buttons */}
-      <div className="flex items-end gap-2 h-full mt-auto pt-4 md:pt-0">
+      <div className="flex items-end gap-2">
         <button
+          type="button"
           onClick={handleSave}
           className="bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-[var(--text-on-brand)] font-medium text-xs rounded-md px-4 py-2 transition-colors cursor-pointer"
         >
           Apply Config
         </button>
         <button
+          type="button"
           onClick={onRefresh}
           disabled={isFetching}
           className="flex items-center gap-1.5 bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-[var(--text-primary)] text-xs border border-[var(--border-default)] rounded-md px-4 py-2 transition-colors cursor-pointer disabled:opacity-50"
@@ -210,7 +212,7 @@ export default function ConfigBar({
 
       {/* Status Message */}
       {statusMessage && (
-        <span className="ml-auto text-xs text-[var(--text-secondary)] italic max-w-[200px] text-right truncate">
+        <span className="text-xs text-[var(--text-secondary)] italic sm:col-span-2 lg:col-span-3 2xl:col-span-4">
           {statusMessage}
         </span>
       )}

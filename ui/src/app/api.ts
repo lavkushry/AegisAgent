@@ -100,10 +100,16 @@ export interface McpServerRecord {
 export interface McpManifestRecord {
   event_type?: string;
   manifest_hash?: string;
+  manifest_json?: string;
   description?: string;
   details?: string;
   created_at?: string;
   ts?: string;
+}
+
+interface McpManifestHistoryEnvelope {
+  server_key?: string;
+  snapshots?: McpManifestRecord[];
 }
 
 export interface ReceiptRecord {
@@ -340,8 +346,25 @@ export function getMcpServers(opts: FetchOptions) {
   return fetchFromGateway<McpServerRecord[]>(opts, "/v1/mcp/servers");
 }
 
-export function getMcpManifestHistory(opts: FetchOptions, serverKey: string) {
-  return fetchFromGateway<McpManifestRecord[]>(opts, `/v1/mcp/servers/${serverKey}/manifest-history`);
+export function normalizeMcpManifestHistory(
+  response: McpManifestRecord[] | McpManifestHistoryEnvelope | null | undefined,
+): McpManifestRecord[] {
+  if (Array.isArray(response)) {
+    return response;
+  }
+  if (response && Array.isArray(response.snapshots)) {
+    return response.snapshots;
+  }
+  return [];
+}
+
+export async function getMcpManifestHistory(opts: FetchOptions, serverKey: string) {
+  const encodedServerKey = encodeURIComponent(serverKey);
+  const response = await fetchFromGateway<McpManifestRecord[] | McpManifestHistoryEnvelope>(
+    opts,
+    `/v1/mcp/servers/${encodedServerKey}/manifest-history`,
+  );
+  return normalizeMcpManifestHistory(response);
 }
 
 export function getMcpTools(opts: FetchOptions, serverKey: string) {
