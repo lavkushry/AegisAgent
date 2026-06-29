@@ -955,6 +955,35 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Runtime events (Phase 2.2)
+    async fn insert_runtime_event(&self, record: &RuntimeEventRecord) -> Result<bool, AegisError> {
+        db::insert_runtime_event(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_runtime_events_for_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        limit: i64,
+    ) -> Result<Vec<RuntimeEventRecord>, AegisError> {
+        db::list_runtime_events_for_run(&self.pool, tenant_id, run_id, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_runtime_events(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<RuntimeEventRecord>, AegisError> {
+        db::list_runtime_events(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
