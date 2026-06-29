@@ -517,6 +517,31 @@ pub struct AgentRiskScoreRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Phase 2.1 (runtime control plane): one controlled execution of an agent.
+/// The spine that runtime events, control commands, bans, and quarantine records
+/// reference. `agent_id` is `None` for anonymous/cage runs; `policy_bundle_id`
+/// is `None` until a versioned policy bundle is bound. Tenant-scoped.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct AgentRunRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: Option<String>,
+    /// Caller-stable idempotency key, unique per tenant.
+    pub run_key: String,
+    /// Which component started/owns the run (e.g. `sdk`, `cage-runner`, `gateway`).
+    pub source_component: String,
+    /// Sensor enforcement posture for the run: `observe` | `enforce` | `lockdown`.
+    pub mode: String,
+    /// Lifecycle: `started` | `running` | `paused` | `killed` | `finished` | `quarantined`.
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub root_trace_id: Option<String>,
+    pub root_trust_level: Option<String>,
+    pub policy_bundle_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,
