@@ -915,6 +915,46 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Agent runs (Phase 2.1)
+    async fn insert_agent_run(&self, record: &AgentRunRecord) -> Result<(), AegisError> {
+        db::insert_agent_run(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_agent_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentRunRecord>, AegisError> {
+        db::get_agent_run(&self.pool, tenant_id, run_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn update_agent_run_status(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        status: &str,
+        finished_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, AegisError> {
+        db::update_agent_run_status(&self.pool, tenant_id, run_id, status, finished_at)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_agent_runs(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AgentRunRecord>, AegisError> {
+        db::list_agent_runs(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

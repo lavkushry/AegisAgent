@@ -464,6 +464,27 @@ pub trait StorageBackend: Send + Sync + 'static {
     /// Delete replay-nonce rows whose window has elapsed; returns rows removed.
     async fn delete_expired_replay_nonces(&self, now: DateTime<Utc>) -> Result<u64, AegisError>;
 
+    // Agent runs (Phase 2.1: runtime control-plane spine)
+    async fn insert_agent_run(&self, record: &AgentRunRecord) -> Result<(), AegisError>;
+    async fn get_agent_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentRunRecord>, AegisError>;
+    async fn update_agent_run_status(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        status: &str,
+        finished_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, AegisError>;
+    async fn list_agent_runs(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AgentRunRecord>, AegisError>;
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
