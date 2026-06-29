@@ -74,7 +74,16 @@ export default function McpTab() {
             {servers.map((srv) => (
               <div
                 key={srv.server_key}
+                role="button"
+                tabIndex={0}
+                aria-label={`Select MCP server ${srv.server_key}`}
                 onClick={() => setSelectedServerKey(srv.server_key)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedServerKey(srv.server_key);
+                  }
+                }}
                 className={`p-3 border rounded-lg cursor-pointer transition-colors text-xs ${
                   selectedServerKey === srv.server_key
                     ? "bg-[var(--brand)]/10 border-[var(--border-active)]"

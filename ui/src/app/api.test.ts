@@ -5,6 +5,8 @@ import {
   buildGatewayHeaders,
   editApproval,
   fetchFromGateway,
+  getMcpManifestHistory,
+  normalizeMcpManifestHistory,
   rejectApproval,
   type AuthorizeToolCall,
 } from "./api";
@@ -105,5 +107,35 @@ describe("gateway transport", () => {
       edited_tool_call: editedToolCall,
       reason: "Safer target",
     });
+  });
+
+  it("normalizes MCP manifest history envelopes from the gateway", () => {
+    expect(
+      normalizeMcpManifestHistory({
+        server_key: "github-mcp",
+        snapshots: [{ manifest_hash: "sha256:abc", created_at: "2026-06-29T00:00:00Z" }],
+      }),
+    ).toEqual([{ manifest_hash: "sha256:abc", created_at: "2026-06-29T00:00:00Z" }]);
+    expect(normalizeMcpManifestHistory([{ manifest_hash: "sha256:def" }])).toEqual([
+      { manifest_hash: "sha256:def" },
+    ]);
+    expect(normalizeMcpManifestHistory({ server_key: "missing-snapshots" })).toEqual([]);
+  });
+
+  it("fetches encoded MCP manifest history and returns snapshots", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        server_key: "server/key",
+        snapshots: [{ manifest_hash: "sha256:abc" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getMcpManifestHistory(options, "server/key")).resolves.toEqual([
+      { manifest_hash: "sha256:abc" },
+    ]);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8080/v1/mcp/servers/server%2Fkey/manifest-history",
+    );
   });
 });

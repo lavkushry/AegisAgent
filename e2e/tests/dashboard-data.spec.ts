@@ -18,6 +18,7 @@ test.describe("production SOC console data workflows", () => {
     await openConfiguredConsole(page);
     await page.getByRole("button", { name: "Detections & Rules" }).click();
     await expect(page.getByText("Detection Rules & Backtesting")).toBeVisible();
+    await page.getByRole("button", { name: "Detection Rules & Backtesting" }).click();
     await expect(page.getByText("Rules Catalogue")).toBeVisible({ timeout: 10_000 });
   });
 
@@ -26,8 +27,9 @@ test.describe("production SOC console data workflows", () => {
     await registerTestMcpServer(request, baseURL!, serverKey);
     await openConfiguredConsole(page);
     await page.getByRole("button", { name: "MCP Servers" }).click();
-    await expect(page.getByText(serverKey, { exact: true })).toBeVisible({ timeout: 10_000 });
-    await page.getByText(serverKey, { exact: true }).click();
+    const serverCard = page.getByRole("button", { name: new RegExp(serverKey) });
+    await expect(serverCard).toBeVisible({ timeout: 10_000 });
+    await serverCard.click();
     await expect(page.getByText(/Manifest Drift History/)).toBeVisible();
   });
 
@@ -39,7 +41,7 @@ test.describe("production SOC console data workflows", () => {
     await page.getByRole("button", { name: "Explore" }).click();
     await page.getByPlaceholder(/AQL:/).fill(`agent_id:${agent.id}`);
     await page.getByRole("button", { name: "Search", exact: true }).click();
-    await expect(page.getByText(agent.id, { exact: false })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(`Agent: ${agent.id}`, { exact: true })).toBeVisible({ timeout: 10_000 });
   });
 
   test("Receipts Log exposes gateway receipt verification", async ({ page, request, baseURL }) => {
