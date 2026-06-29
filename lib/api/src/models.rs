@@ -542,6 +542,41 @@ pub struct AgentRunRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Phase 2.2 (runtime control plane): one runtime event shipped by the node
+/// sensor / cage / SDK. `event_id` is the producer-assigned id; ingest dedupes
+/// on `(tenant_id, event_id)`. Hashes/identifiers only — never raw prompts,
+/// secrets, or payloads. `#[sqlx(default)]` on the optional tail so future
+/// columns and partial SELECTs stay compatible.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct RuntimeEventRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub event_id: String,
+    pub event_type: String,
+    pub severity: Option<String>,
+    pub agent_id: Option<String>,
+    pub run_id: Option<String>,
+    pub sandbox_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub parent_event_id: Option<String>,
+    pub source_component: String,
+    pub source_trust: Option<String>,
+    pub decision: Option<String>,
+    pub reason: Option<String>,
+    pub action_hash: Option<String>,
+    pub prompt_hash: Option<String>,
+    pub request_hash: Option<String>,
+    pub response_hash: Option<String>,
+    pub receipt_id: Option<String>,
+    pub receipt_hash: Option<String>,
+    pub prev_receipt_hash: Option<String>,
+    pub canonical_version: Option<String>,
+    pub redaction_status: Option<String>,
+    pub schema_version: i64,
+    pub observed_at: DateTime<Utc>,
+    pub received_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,

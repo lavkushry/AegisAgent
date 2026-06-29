@@ -485,6 +485,23 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: i64,
     ) -> Result<Vec<AgentRunRecord>, AegisError>;
 
+    // Runtime events (Phase 2.2: idempotent ingest substrate)
+    /// Idempotently append a runtime event; `true` = newly inserted, `false` =
+    /// deduped (the `(tenant_id, event_id)` was already present).
+    async fn insert_runtime_event(&self, record: &RuntimeEventRecord) -> Result<bool, AegisError>;
+    async fn list_runtime_events_for_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        limit: i64,
+    ) -> Result<Vec<RuntimeEventRecord>, AegisError>;
+    async fn list_runtime_events(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<RuntimeEventRecord>, AegisError>;
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
