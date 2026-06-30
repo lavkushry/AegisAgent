@@ -6211,6 +6211,7 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Path(server_key.to_string()),
+            None,
         )
         .await
         .into_response();

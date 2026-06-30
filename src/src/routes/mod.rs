@@ -1374,6 +1374,19 @@ pub(crate) fn parse_filter(query: Option<&str>, key: &str) -> Option<String> {
     })
 }
 
+/// Normalize operator-supplied active-response reasons before persisting them
+/// into audit/event JSON. Empty strings are treated as absent; long comments
+/// are capped so a control-plane action cannot create unbounded audit rows.
+pub(crate) fn active_response_reason(request: Option<ActiveResponseRequest>) -> Option<String> {
+    const MAX_REASON_CHARS: usize = 1024;
+
+    request
+        .and_then(|request| request.reason.or(request.comment))
+        .map(|reason| reason.trim().to_string())
+        .filter(|reason| !reason.is_empty())
+        .map(|reason| reason.chars().take(MAX_REASON_CHARS).collect())
+}
+
 /// #1157: a couple of destructive/state-changing admin endpoints
 /// (`delete_agent`, `revoke_agent_tool_permission`) wrote no audit trail at
 /// all — unlike their siblings (`freeze_agent`, `quarantine_mcp_server`,

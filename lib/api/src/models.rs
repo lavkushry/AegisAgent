@@ -109,6 +109,27 @@ pub struct DiscoverMcpToolsRequest {
     pub tools: Vec<McpToolManifestItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
+pub struct ActiveResponseRequest {
+    /// Operator-supplied audit reason for a containment/control action.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Optional alias accepted for UI clients that label the field as a comment.
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ActiveResponseStatusResponse {
+    pub status: String,
+    pub action: String,
+    pub reason_recorded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct McpToolStatusResponse {
     pub server_key: String,

@@ -11,6 +11,7 @@ import {
   normalizeMcpManifestHistory,
   rejectApproval,
   restoreMcpServer,
+  unfreezeAgent,
   type AuthorizeToolCall,
 } from "./api";
 
@@ -155,18 +156,34 @@ describe("gateway transport", () => {
     });
   });
 
+  it("sends unfreeze reason to preserve active-response audit context", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "agent/id", status: "active" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await unfreezeAgent(options, "agent/id", "Investigation cleared");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8080/v1/agents/agent%2Fid/unfreeze");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      reason: "Investigation cleared",
+    });
+  });
+
   it.each([
     ["quarantine", quarantineMcpServer, "/quarantine"],
     ["restore", restoreMcpServer, "/restore"],
-  ] as const)("encodes MCP server keys for %s controls", async (_action, helper, suffix) => {
+  ] as const)("sends MCP reason and encodes server keys for %s controls", async (_action, helper, suffix) => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ server_key: "server/key" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await helper(options, "server/key");
+    await helper(options, "server/key", "Manifest drift response");
 
     expect(fetchMock.mock.calls[0][0]).toBe(
       `http://127.0.0.1:8080/v1/mcp/servers/server%2Fkey${suffix}`,
     );
     expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      reason: "Manifest drift response",
+    });
   });
 });

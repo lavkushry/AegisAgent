@@ -85,6 +85,8 @@ use utoipa::OpenApi;
             RegisterMcpServerResponse,
             McpToolManifestItem,
             DiscoverMcpToolsRequest,
+            ActiveResponseRequest,
+            ActiveResponseStatusResponse,
             McpToolStatusResponse,
             AuthorizeAgentContext,
             AuthorizeUserContext,
@@ -271,8 +273,12 @@ fn delete_agent_api() {}
     params(
         ("id" = String, Path, description = "Agent ID")
     ),
+    request_body(
+        content = ActiveResponseRequest,
+        description = "Optional operator reason/comment recorded in the audit trail"
+    ),
     responses(
-        (status = 200, description = "Agent frozen"),
+        (status = 200, description = "Agent frozen", body = ActiveResponseStatusResponse),
         (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
@@ -285,8 +291,12 @@ fn freeze_agent_api() {}
     params(
         ("id" = String, Path, description = "Agent ID")
     ),
+    request_body(
+        content = ActiveResponseRequest,
+        description = "Optional operator reason/comment recorded in the audit trail"
+    ),
     responses(
-        (status = 200, description = "Agent unfrozen"),
+        (status = 200, description = "Agent unfrozen", body = ActiveResponseStatusResponse),
         (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
@@ -299,8 +309,12 @@ fn unfreeze_agent_api() {}
     params(
         ("id" = String, Path, description = "Agent ID")
     ),
+    request_body(
+        content = ActiveResponseRequest,
+        description = "Optional operator reason/comment recorded in the audit trail"
+    ),
     responses(
-        (status = 200, description = "Agent revoked"),
+        (status = 200, description = "Agent revoked", body = ActiveResponseStatusResponse),
         (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
@@ -313,8 +327,12 @@ fn revoke_agent_api() {}
     params(
         ("id" = String, Path, description = "Agent ID")
     ),
+    request_body(
+        content = ActiveResponseRequest,
+        description = "Optional operator reason/comment recorded in the audit trail"
+    ),
     responses(
-        (status = 200, description = "Agent restored"),
+        (status = 200, description = "Agent restored", body = ActiveResponseStatusResponse),
         (status = 404, description = "Agent not found", body = StatusError)
     )
 )]
@@ -519,8 +537,12 @@ fn disable_mcp_tool_api() {}
     params(
         ("server_key" = String, Path, description = "MCP Server Key")
     ),
+    request_body(
+        content = ActiveResponseRequest,
+        description = "Optional operator reason/comment recorded in the audit trail"
+    ),
     responses(
-        (status = 200, description = "MCP Server quarantined"),
+        (status = 200, description = "MCP Server quarantined", body = ActiveResponseStatusResponse),
         (status = 404, description = "Server not found", body = StatusError)
     )
 )]
@@ -533,8 +555,12 @@ fn quarantine_mcp_server_api() {}
     params(
         ("server_key" = String, Path, description = "MCP Server Key")
     ),
+    request_body(
+        content = ActiveResponseRequest,
+        description = "Optional operator reason/comment recorded in the audit trail"
+    ),
     responses(
-        (status = 200, description = "MCP Server restored"),
+        (status = 200, description = "MCP Server restored", body = ActiveResponseStatusResponse),
         (status = 404, description = "Server not found", body = StatusError)
     )
 )]

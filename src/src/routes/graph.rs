@@ -533,16 +533,6 @@ pub async fn get_graph_for_agent(
     (StatusCode::OK, Json(graph)).into_response()
 }
 
-// ── SOC Phase 4: Response API ─────────────────────────────────────────────────
-
-/// Optional request body for `POST /v1/agents/:id/freeze` (#0079) — an
-/// operator-supplied reason recorded on `agents.frozen_reason` and surfaced in
-/// the audit trail / SOC UI. Omit the body (or `reason`) to freeze without one.
-#[derive(Debug, serde::Deserialize, Default)]
-pub struct FreezeAgentRequest {
-    pub reason: Option<String>,
-}
-
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
