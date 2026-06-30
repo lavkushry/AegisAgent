@@ -132,7 +132,7 @@ Pointing Grafana at the gateway via the Infinity/JSON datasource (or shipping pr
 Two read surfaces (per `SOC_UI_Design.md §6`), one uniform abstraction.
 
 - **Entity API (typed REST)** — already present in `api.ts`: `/v1/incidents`, `/v1/incidents/:id`, `/v1/alerts`, `/v1/approvals`, `/v1/agents`, `/v1/mcp/servers`, `/v1/receipts`, `/v1/receipts/:id/verify`, `/v1/decisions`, `/v1/soc/summary`, `/v1/stats`, `/v1/soc/rules`, `/v1/detection_rules`. These become **`GatewayEntityDatasource` methods**, not loose functions.
-- **Event Query API (AQL)** — `POST /v1/soc/query` over the ASE store. *This endpoint does not exist yet* (today `ExploreTab` uses `GET /v1/decisions?q=` substring search). It is the one new gateway dependency the console needs to reach Kibana-Discover parity; until it lands, `SocQueryDatasource` degrades to the existing `getDecisions` path behind the same interface (graceful, fail-soft for a read surface).
+- **Event Query API (AQL)** — `POST /v1/soc/query` over the ASE/decision store. The current gateway contract is a flat, tenant-scoped JSON allowlist (`entity`, `filters`, `aggregate`, `interval`, `limit`, `cursor`) backed by parameterized SQLite queries; ClickHouse can implement the same contract later. `SocQueryDatasource` still degrades to `GET /v1/decisions?q=` only when older gateways return 404/405/501.
 - **Stream** — `GET /v1/soc/stream` (SSE). Advisory only; the query API is always the source of truth.
 
 **SQL-injection invariant carries to the UI boundary:** AQL is compiled to a **parameterized** ClickHouse/SQLite query server-side, never string-interpolated — same invariant as the gateway data layer.
@@ -224,7 +224,7 @@ export interface StreamSubscription { close(): void; }
 | File | Class | Notes |
 |---|---|---|
 | `gatewayEntity.ts` | `GatewayEntityDatasource` | Wraps the existing `fetchFromGateway` (kept as transport). Each `EntityKind` maps to a path. `query()` returns a `DataFrame` built from the JSON array. `capabilities = { query:false, stream:false, fields:true, verify:true }`. |
-| `socQuery.ts` | `SocQueryDatasource` | `POST /v1/soc/query` (AQL → DataFrame). Until that endpoint exists, internally falls back to `GET /v1/decisions?q=` and best-effort client-side facet counts. `capabilities.query = true`. |
+| `socQuery.ts` | `SocQueryDatasource` | `POST /v1/soc/query` (AQL → flat structured filters → DataFrame). Falls back to `GET /v1/decisions?q=` only for older gateways where the endpoint is absent. `capabilities.query = true`. |
 | `receipt.ts` | `ReceiptDatasource` | `verifyReceipt()` → `GET /v1/receipts/:id/verify`; normalizes the loose response (today `ExploreTab` guesses `data.verified || data.status === "verified" || !data.error` — this is centralized here once). |
 | `stream.ts` | `SocStreamDatasource` | `EventSource('/v1/soc/stream')` with reconnect/backoff; no-op `subscribe()` when the endpoint 404s (fail-soft). |
 | `registry.ts` | `datasourceRegistry` | `getDatasource(id)`; the app wires one of each, selected per panel `datasourceId`. |
@@ -489,7 +489,7 @@ Marked against what `ui/` **already has** (prototype) vs. the **gap** this bluep
 
 Newly raised by this blueprint:
 1. **`PUT /v1/approvals/:id` (Edit & re-evaluate)** — does the gateway already support editing a frozen action (re-hash + re-evaluate), or is Edit disabled until it lands? (Approval-integrity invariant: editing MUST re-hash + re-evaluate, never patch the approved hash.)
-2. **`POST /v1/soc/query` AST contract** — confirm the gateway accepts the structured AQL AST as JSON (not a raw string), preserving the no-interpolation invariant.
+2. **`POST /v1/soc/query` contract growth** — current gateway accepts flat structured filters rather than raw strings; future richer AQL AST support must preserve the no-interpolation invariant and remain backward-compatible with the flat contract.
 3. **Saved searches / saved dashboards persistence** — server-side keyed by `tenant_id`; confirm the storage table shape before U3/U6.
 
 ---
@@ -525,4 +525,3 @@ Static dashboard bundle assets are pre-compressed during build time at the maxim
 ## 13. Summary
 
 This blueprint turns the fixed-tabs prototype into a true Grafana/Kibana-grade console by introducing **one panel framework, one datasource abstraction, one dashboard JSON model, one variables/time/drilldown layer, and one real-time stream** — adopting the *best* mechanics from each product (Scenes panels, Discover, drilldowns, controls, dashboards-as-data) and **skipping** what doesn't fit a single-tenant integrity SOC (Git Sync, Spaces, NL query builders, SaaS connectors). The three surfaces that are uniquely AegisAgent — **Approval Card, Provable Timeline, Receipt Integrity** — are first-class panel types in the same registry, so the differentiators compose like everything else. The dashboard model is a **phased hybrid**: curated config-as-code now, the in-app editor as the capstone — shipping the AegisAgent-only value first and the commodity editor last, exactly as the product's own design and moat thesis demand.
-

@@ -43,6 +43,7 @@ use utoipa::OpenApi;
         narrate_incident_api,
         get_incident_evidence_pack_api,
         soc_summary_api,
+        soc_query_api,
         semantic_search_api,
         create_tenant_api,
         get_tenant_api,
@@ -117,6 +118,8 @@ use utoipa::OpenApi;
             SocAlertRecord,
             SocIncidentRecord,
             SocSummary,
+            SocQueryFilters,
+            SocQueryRequest,
             ActionReceiptRecord,
             PolicyAuditLogRecord,
             CreateTenantRequest,
@@ -1196,6 +1199,18 @@ fn get_incident_evidence_pack_api() {}
     )
 )]
 fn soc_summary_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/soc/query",
+    security(("bearer_auth" = [])),
+    request_body = SocQueryRequest,
+    responses(
+        (status = 200, description = "Structured SOC query result"),
+        (status = 400, description = "Invalid entity, aggregate, or filter shape", body = StatusError)
+    )
+)]
+fn soc_query_api() {}
 
 #[utoipa::path(
     get,

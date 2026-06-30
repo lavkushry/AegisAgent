@@ -31,8 +31,19 @@ describe("SocQueryDatasource", () => {
 
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     const body = JSON.parse(String(init.body));
-    expect(body.filters).toEqual({ agentId: "agent-1", decision: "deny" });
+    expect(body).toEqual({
+      entity: "decision",
+      filters: {
+        agent_id: "agent-1",
+        decision: "deny",
+        from: "now-24h",
+        to: "now",
+      },
+      limit: 50,
+    });
     expect(body).not.toHaveProperty("aql");
+    expect(body).not.toHaveProperty("time_range");
+    expect(body).not.toHaveProperty("pagination");
     expect(frame.length).toBe(1);
   });
 

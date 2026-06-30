@@ -10,6 +10,35 @@ service SocService {
     rpc ListPlaybooks (ListPlaybooksRequest) returns (ListPlaybooksResponse);
     rpc DeletePlaybook (DeletePlaybookRequest) returns (DeletePlaybookResponse);
     rpc SemanticSearch (SemanticSearchRequest) returns (SemanticSearchResponse);
+    rpc Query (SocQueryRequest) returns (SocQueryResponse);
+}
+
+// Structured, tenant-scoped query contract shared by Explore and dashboards.
+// Fields and aggregate values are server-side allowlists; no raw SQL is accepted.
+message SocQueryFilters {
+    string agent_id = 1;
+    string decision = 2;
+    string source_trust = 3;
+    string skill = 4;
+    string from = 5;
+    string to = 6;
+    string q = 7;
+}
+
+message SocQueryRequest {
+    string tenant_id = 1;
+    string entity = 2;
+    SocQueryFilters filters = 3;
+    string aggregate = 4;
+    string interval = 5;
+    optional int64 limit = 6;
+    optional int64 cursor = 7;
+}
+
+message SocQueryResponse {
+    // JSON preserves parity with the REST response while the query result can
+    // represent row, count, and time-series shapes.
+    string result_json = 1;
 }
 
 message CreatePlaybookRequest {

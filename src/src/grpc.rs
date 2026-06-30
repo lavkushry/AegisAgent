@@ -10,6 +10,7 @@ use aegis_api::grpc::aegis::{
     ListIncidentsResponse, ListPlaybooksRequest, ListPlaybooksResponse, McpToolStatusResponse,
     RegisterAgentRequest, RegisterAgentResponse, RegisterMcpServerRequest,
     RegisterMcpServerResponse, SemanticSearchRequest, SemanticSearchResponse, SemanticSearchResult,
+    SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
 };
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
@@ -501,6 +502,65 @@ impl SocGrpcServiceImpl {
 
 #[tonic::async_trait]
 impl SocService for SocGrpcServiceImpl {
+    /// gRPC counterpart of `POST /v1/soc/query`.
+    ///
+    /// This adapter maps the protobuf request to the same REST model and invokes
+    /// the same tenant-scoped query path, keeping validation and storage
+    /// behavior identical across protocols.
+    async fn query(
+        &self,
+        request: Request<GrpcSocQueryRequest>,
+    ) -> Result<Response<SocQueryResponse>, Status> {
+        let req = request.into_inner();
+        if req.tenant_id.trim().is_empty() {
+            return Err(Status::invalid_argument("tenant_id is required"));
+        }
+
+        let optional = |value: String| (!value.is_empty()).then_some(value);
+        let filters = req.filters.unwrap_or_default();
+        let rest_request = crate::models::SocQueryRequest {
+            entity: req.entity,
+            filters: crate::models::SocQueryFilters {
+                agent_id: optional(filters.agent_id),
+                decision: optional(filters.decision),
+                source_trust: optional(filters.source_trust),
+                skill: optional(filters.skill),
+                from: optional(filters.from),
+                to: optional(filters.to),
+                q: optional(filters.q),
+            },
+            aggregate: optional(req.aggregate),
+            interval: optional(req.interval),
+            limit: req.limit,
+            cursor: req.cursor,
+        };
+
+        let response = crate::routes::soc_query(
+            axum::extract::State(self._state.clone()),
+            crate::routes::TenantId(req.tenant_id),
+            axum::Json(rest_request),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .map_err(|error| Status::internal(error.to_string()))?;
+
+        if !status.is_success() {
+            let message = String::from_utf8_lossy(&body).into_owned();
+            return if status == axum::http::StatusCode::BAD_REQUEST {
+                Err(Status::invalid_argument(message))
+            } else {
+                Err(Status::internal(message))
+            };
+        }
+
+        let result_json = String::from_utf8(body.to_vec())
+            .map_err(|_| Status::internal("SOC query returned non-UTF-8 JSON"))?;
+        Ok(Response::new(SocQueryResponse { result_json }))
+    }
+
     async fn list_alerts(
         &self,
         request: Request<ListAlertsRequest>,
