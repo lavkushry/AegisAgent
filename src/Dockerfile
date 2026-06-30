@@ -4,7 +4,7 @@
 # `output: "export", distDir: "dist"` for exactly this. Build it here and copy
 # the result into the final image; without this stage the gateway has no
 # `ui/dist` and every /dashboard/* request 404s.
-FROM node:20-bookworm AS ui-builder
+FROM node:26-bookworm AS ui-builder
 WORKDIR /build/ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
