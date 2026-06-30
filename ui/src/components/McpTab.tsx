@@ -7,6 +7,12 @@ import { getMcpServers, quarantineMcpServer, restoreMcpServer, getMcpManifestHis
 import { Server, Lock, Unlock, History, Clock } from "lucide-react";
 import StatusBadge from "./security/StatusBadge";
 import { errorMessage } from "@/lib/format";
+import { ConfirmDialog } from "@/components/primitives";
+
+type PendingMcpAction = {
+  kind: "quarantine" | "restore";
+  serverKey: string;
+};
 
 export default function McpTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
@@ -14,6 +20,8 @@ export default function McpTab() {
   const queryClient = useQueryClient();
 
   const [selectedServerKey, setSelectedServerKey] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingMcpAction | null>(null);
+  const [auditReason, setAuditReason] = useState("");
 
   // Fetch MCP servers list
   const { data: servers, isLoading, error } = useQuery({
@@ -32,6 +40,8 @@ export default function McpTab() {
   const quarantineMutation = useMutation({
     mutationFn: (key: string) => quarantineMcpServer(apiOpts, key),
     onSuccess: () => {
+      setPendingAction(null);
+      setAuditReason("");
       queryClient.invalidateQueries({ queryKey: ["mcpServers"] });
     },
   });
@@ -39,15 +49,23 @@ export default function McpTab() {
   const restoreMutation = useMutation({
     mutationFn: (key: string) => restoreMcpServer(apiOpts, key),
     onSuccess: () => {
+      setPendingAction(null);
+      setAuditReason("");
       queryClient.invalidateQueries({ queryKey: ["mcpServers"] });
     },
   });
 
   const handleToggleQuarantine = (key: string, isQuarantined: boolean) => {
-    if (isQuarantined) {
-      restoreMutation.mutate(key);
+    setPendingAction({ kind: isQuarantined ? "restore" : "quarantine", serverKey: key });
+    setAuditReason("");
+  };
+
+  const confirmMcpAction = () => {
+    if (!pendingAction || !auditReason.trim()) return;
+    if (pendingAction.kind === "restore") {
+      restoreMutation.mutate(pendingAction.serverKey);
     } else {
-      quarantineMutation.mutate(key);
+      quarantineMutation.mutate(pendingAction.serverKey);
     }
   };
 
@@ -173,6 +191,25 @@ export default function McpTab() {
           </>
         )}
       </div>
+      <ConfirmDialog
+        open={pendingAction !== null}
+        title={pendingAction?.kind === "quarantine" ? "Quarantine this MCP server?" : "Restore this MCP server?"}
+        impact={
+          pendingAction?.kind === "quarantine"
+            ? "All tool calls routed through this MCP server will be denied until it is restored. Use this for manifest drift or suspected compromise."
+            : "This restores the MCP server to active status. Only continue if manifest drift has been investigated and the server is trusted."
+        }
+        target={pendingAction?.serverKey ?? ""}
+        reason={auditReason}
+        onReasonChange={setAuditReason}
+        confirmLabel={pendingAction?.kind === "quarantine" ? "Quarantine server" : "Restore server"}
+        confirmDisabled={!auditReason.trim() || quarantineMutation.isPending || restoreMutation.isPending}
+        onConfirm={confirmMcpAction}
+        onCancel={() => {
+          setPendingAction(null);
+          setAuditReason("");
+        }}
+      />
     </div>
   );
 }

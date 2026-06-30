@@ -7,6 +7,12 @@ import { getApprovals, approveApproval, rejectApproval, editApproval, type Appro
 import { Clock, ShieldCheck, Check, X, Edit3, Save } from "lucide-react";
 import { errorMessage } from "@/lib/format";
 import TrustBadge from "./security/TrustBadge";
+import { ConfirmDialog } from "@/components/primitives";
+
+type PendingApprovalAction =
+  | { kind: "approve"; approval: ApprovalRecord; approvalId: string }
+  | { kind: "reject"; approval: ApprovalRecord; approvalId: string }
+  | { kind: "edit"; approval: ApprovalRecord; approvalId: string; editedToolCall: NonNullable<ApprovalRecord["tool_call"]> };
 
 export default function ApprovalsTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
@@ -17,6 +23,10 @@ export default function ApprovalsTab() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editParamsJson, setEditParamsJson] = useState("");
   const [editReason, setEditReason] = useState("");
+  const [pendingAction, setPendingAction] = useState<PendingApprovalAction | null>(null);
+  const [auditReason, setAuditReason] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
 
   // Fetch pending approvals
   const { data: approvals, isLoading, error } = useQuery({
@@ -29,26 +39,36 @@ export default function ApprovalsTab() {
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       approveApproval(apiOpts, id, approverId, reason),
     onSuccess: () => {
+      setPendingAction(null);
+      setAuditReason("");
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
       queryClient.invalidateQueries({ queryKey: ["socSummary"] });
     },
+    onError: (err: unknown) => setActionError(errorMessage(err)),
   });
 
   const rejectMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       rejectApproval(apiOpts, id, approverId, reason),
     onSuccess: () => {
+      setPendingAction(null);
+      setAuditReason("");
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
       queryClient.invalidateQueries({ queryKey: ["socSummary"] });
     },
+    onError: (err: unknown) => setActionError(errorMessage(err)),
   });
 
-  const handleApprove = (id: string) => {
-    approveMutation.mutate({ id, reason: "Approved via SOC dashboard." });
+  const handleApprove = (approval: ApprovalRecord, id: string) => {
+    setPendingAction({ kind: "approve", approval, approvalId: id });
+    setAuditReason("");
+    setActionError(null);
   };
 
-  const handleReject = (id: string) => {
-    rejectMutation.mutate({ id, reason: "Rejected via SOC dashboard." });
+  const handleReject = (approval: ApprovalRecord, id: string) => {
+    setPendingAction({ kind: "reject", approval, approvalId: id });
+    setAuditReason("");
+    setActionError(null);
   };
 
   const startEditing = (approval: ApprovalRecord) => {
@@ -58,24 +78,47 @@ export default function ApprovalsTab() {
     setEditReason("Edited and adjusted parameters to comply with security guidelines.");
   };
 
-  const handleSaveEdit = async (approval: ApprovalRecord) => {
+  const handleSaveEdit = (approval: ApprovalRecord) => {
     try {
       const parsedParams = JSON.parse(editParamsJson);
       const approvalId = approval.id || approval.approval_id;
       if (!approvalId) throw new Error("Approval ID is missing.");
       const currentToolCall = approval.edited_tool_call ?? approval.tool_call;
       if (!currentToolCall) throw new Error("Frozen tool call is unavailable.");
-      await editApproval(
-        apiOpts,
+      setPendingAction({
+        kind: "edit",
+        approval,
         approvalId,
-        approverId,
-        { ...currentToolCall, parameters: parsedParams },
-        editReason,
-      );
-      setEditingId(null);
-      queryClient.invalidateQueries({ queryKey: ["approvals"] });
+        editedToolCall: { ...currentToolCall, parameters: parsedParams },
+      });
+      setAuditReason(editReason);
+      setActionError(null);
     } catch (err: unknown) {
-      alert(`Failed to save edit: ${errorMessage(err)}`);
+      setActionError(`Failed to prepare edit: ${errorMessage(err)}`);
+    }
+  };
+
+  const confirmApprovalAction = async () => {
+    if (!pendingAction || !auditReason.trim() || editSubmitting) return;
+    try {
+      setActionError(null);
+      if (pendingAction.kind === "approve") {
+        approveMutation.mutate({ id: pendingAction.approvalId, reason: auditReason.trim() });
+      } else if (pendingAction.kind === "reject") {
+        rejectMutation.mutate({ id: pendingAction.approvalId, reason: auditReason.trim() });
+      } else {
+        setEditSubmitting(true);
+        await editApproval(apiOpts, pendingAction.approvalId, approverId, pendingAction.editedToolCall, auditReason.trim());
+        setPendingAction(null);
+        setAuditReason("");
+        setEditingId(null);
+        queryClient.invalidateQueries({ queryKey: ["approvals"] });
+        queryClient.invalidateQueries({ queryKey: ["socSummary"] });
+      }
+    } catch (err: unknown) {
+      setActionError(errorMessage(err));
+    } finally {
+      setEditSubmitting(false);
     }
   };
 
@@ -213,7 +256,7 @@ export default function ApprovalsTab() {
                     ) : (
                       <>
                         <button
-                          onClick={() => handleApprove(app_id)}
+                          onClick={() => handleApprove(app, app_id)}
                           disabled={!app_id}
                           className="flex-1 flex items-center justify-center gap-1 bg-green-700 hover:bg-green-800 text-white font-medium text-xs rounded-lg py-2 transition-colors cursor-pointer"
                         >
@@ -228,7 +271,7 @@ export default function ApprovalsTab() {
                           <Edit3 size={14} />
                         </button>
                         <button
-                          onClick={() => handleReject(app_id)}
+                          onClick={() => handleReject(app, app_id)}
                           disabled={!app_id}
                           className="flex-1 flex items-center justify-center gap-1 bg-red-700 hover:bg-red-800 text-white font-medium text-xs rounded-lg py-2 transition-colors cursor-pointer"
                         >
@@ -243,6 +286,32 @@ export default function ApprovalsTab() {
           </div>
         )}
       </div>
+      {actionError ? (
+        <p className="rounded border border-rose-500/30 px-3 py-2 text-xs text-[var(--state-failed)]" role="alert">
+          {actionError}
+        </p>
+      ) : null}
+      <ConfirmDialog
+        open={pendingAction !== null}
+        title={pendingAction?.kind === "approve" ? "Approve this frozen action?" : pendingAction?.kind === "reject" ? "Reject this action?" : "Submit edited action for re-evaluation?"}
+        impact={
+          pendingAction?.kind === "edit"
+            ? "Editing creates a new canonical action, a new action hash, and a new policy evaluation. The original approval cannot authorize edited bytes."
+            : pendingAction?.kind === "approve"
+              ? "This approval is bound to the frozen action hash. The gateway remains the source of truth and rejects expired or changed actions."
+              : "The agent action will remain blocked and the reason will be sent to the gateway approval audit path."
+        }
+        target={pendingAction ? `${pendingAction.approvalId} · ${pendingAction.approval.action_hash ?? "hash unavailable"}` : ""}
+        reason={auditReason}
+        onReasonChange={setAuditReason}
+        confirmLabel={pendingAction?.kind === "approve" ? "Approve exact action" : pendingAction?.kind === "reject" ? "Reject action" : "Create new hash & re-evaluate"}
+        confirmDisabled={!auditReason.trim() || approveMutation.isPending || rejectMutation.isPending || editSubmitting}
+        onConfirm={() => void confirmApprovalAction()}
+        onCancel={() => {
+          setPendingAction(null);
+          setAuditReason("");
+        }}
+      />
     </div>
   );
 }
