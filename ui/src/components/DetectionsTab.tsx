@@ -30,6 +30,7 @@ import {
   Trash2,
   AlertTriangle
 } from "lucide-react";
+import { ConfirmDialog } from "@/components/primitives";
 
 // Local helper to format RuleCondition JSON object to a YAML-like string for display
 function jsonToYaml(obj: unknown): string {
@@ -98,6 +99,8 @@ export default function DetectionsTab() {
   const [formEnabled, setFormEnabled] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
 
   // Backtest parameters
   const [backtestFrom, setBacktestFrom] = useState(() => {
@@ -233,6 +236,8 @@ export default function DetectionsTab() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["socRules"] });
       queryClient.invalidateQueries({ queryKey: ["customRules"] });
+      setDeleteConfirmOpen(false);
+      setDeleteReason("");
       setSelectedRuleKey(null);
       setIsEditing(false);
       setIsCreatingNew(false);
@@ -263,9 +268,13 @@ export default function DetectionsTab() {
 
   const handleDelete = () => {
     if (!selectedRule || !selectedRule.dbId) return;
-    if (confirm(`Are you sure you want to permanently delete custom rule '${selectedRule.rule_key}'?`)) {
-      deleteRuleMutation.mutate(selectedRule.dbId);
-    }
+    setDeleteConfirmOpen(true);
+    setDeleteReason("");
+  };
+
+  const confirmDelete = () => {
+    if (!selectedRule || !selectedRule.dbId || !deleteReason.trim()) return;
+    deleteRuleMutation.mutate(selectedRule.dbId);
   };
 
   const handleCreateNew = () => {
@@ -834,6 +843,21 @@ export default function DetectionsTab() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="Delete this custom detection rule?"
+        impact="This removes the custom deterministic rule from the gateway catalogue. Existing alerts and receipts remain as evidence, but the rule will no longer fire."
+        target={selectedRule ? `${selectedRule.rule_key} · ${selectedRule.name}` : ""}
+        reason={deleteReason}
+        onReasonChange={setDeleteReason}
+        confirmLabel="Delete custom rule"
+        confirmDisabled={!deleteReason.trim() || deleteRuleMutation.isPending}
+        onConfirm={confirmDelete}
+        onCancel={() => {
+          setDeleteConfirmOpen(false);
+          setDeleteReason("");
+        }}
+      />
     </div>
   );
 }

@@ -329,12 +329,15 @@ export function getAgents(opts: FetchOptions) {
   return fetchFromGateway<AgentRecord[]>(opts, "/v1/agents");
 }
 
-export function freezeAgent(opts: FetchOptions, agentId: string) {
-  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${agentId}/freeze`, "POST");
+export function freezeAgent(opts: FetchOptions, agentId: string, reason?: string) {
+  const id = encodeURIComponent(agentId);
+  const body = reason?.trim() ? { reason: reason.trim() } : undefined;
+  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/freeze`, "POST", body);
 }
 
 export function unfreezeAgent(opts: FetchOptions, agentId: string) {
-  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${agentId}/unfreeze`, "POST");
+  const id = encodeURIComponent(agentId);
+  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/unfreeze`, "POST");
 }
 
 export function getAgentScoreboard(opts: FetchOptions) {
@@ -368,15 +371,18 @@ export async function getMcpManifestHistory(opts: FetchOptions, serverKey: strin
 }
 
 export function getMcpTools(opts: FetchOptions, serverKey: string) {
-  return fetchFromGateway<Array<Record<string, unknown>>>(opts, `/v1/mcp/servers/${serverKey}/tools`);
+  const encodedServerKey = encodeURIComponent(serverKey);
+  return fetchFromGateway<Array<Record<string, unknown>>>(opts, `/v1/mcp/servers/${encodedServerKey}/tools`);
 }
 
 export function quarantineMcpServer(opts: FetchOptions, serverKey: string) {
-  return fetchFromGateway<McpServerRecord>(opts, `/v1/mcp/servers/${serverKey}/quarantine`, "POST");
+  const encodedServerKey = encodeURIComponent(serverKey);
+  return fetchFromGateway<McpServerRecord>(opts, `/v1/mcp/servers/${encodedServerKey}/quarantine`, "POST");
 }
 
 export function restoreMcpServer(opts: FetchOptions, serverKey: string) {
-  return fetchFromGateway<McpServerRecord>(opts, `/v1/mcp/servers/${serverKey}/restore`, "POST");
+  const encodedServerKey = encodeURIComponent(serverKey);
+  return fetchFromGateway<McpServerRecord>(opts, `/v1/mcp/servers/${encodedServerKey}/restore`, "POST");
 }
 
 // Receipts

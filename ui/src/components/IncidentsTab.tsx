@@ -8,6 +8,12 @@ import { normalizeVerification } from "@/datasources/receiptVerification";
 import { AlertOctagon, CheckSquare, FileText, Download, ShieldCheck, Activity, ShieldAlert, AlertTriangle } from "lucide-react";
 import SeverityTag from "./security/SeverityTag";
 import { errorMessage } from "@/lib/format";
+import { ConfirmDialog } from "@/components/primitives";
+
+type PendingIncidentAction = {
+  kind: "close" | "export";
+  incidentId: string;
+};
 
 export default function IncidentsTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
@@ -21,6 +27,9 @@ export default function IncidentsTab() {
     status: "verified" | "failed" | "unknown";
     msg: string;
   } | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingIncidentAction | null>(null);
+  const [auditReason, setAuditReason] = useState("");
+  const [exportingEvidence, setExportingEvidence] = useState(false);
 
   // Fetch list of incidents
   const { data: incidents, isLoading: isIncidentsLoading } = useQuery({
@@ -54,6 +63,8 @@ export default function IncidentsTab() {
   const closeIncidentMutation = useMutation({
     mutationFn: (id: string) => fetchFromGateway<Record<string, unknown>>(apiOpts, `/v1/incidents/${id}/close`, "POST"),
     onSuccess: () => {
+      setPendingAction(null);
+      setAuditReason("");
       queryClient.invalidateQueries({ queryKey: ["incidents"] });
       queryClient.invalidateQueries({ queryKey: ["incidentDetail", selectedIncidentId] });
       queryClient.invalidateQueries({ queryKey: ["socSummary"] });
@@ -61,17 +72,35 @@ export default function IncidentsTab() {
   });
 
   const handleCloseIncident = (id: string) => {
-    closeIncidentMutation.mutate(id);
+    setPendingAction({ kind: "close", incidentId: id });
+    setAuditReason("");
   };
 
-  const handleDownloadEvidencePack = async (id: string) => {
-    const blob = await downloadFromGateway(apiOpts, `/v1/incidents/${id}/evidence-pack`);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `aegis-incident-${id}-evidence-pack.zip`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+  const handleDownloadEvidencePack = (id: string) => {
+    setPendingAction({ kind: "export", incidentId: id });
+    setAuditReason("");
+  };
+
+  const confirmIncidentAction = async () => {
+    if (!pendingAction || !auditReason.trim()) return;
+    if (pendingAction.kind === "close") {
+      closeIncidentMutation.mutate(pendingAction.incidentId);
+      return;
+    }
+    setExportingEvidence(true);
+    try {
+      const blob = await downloadFromGateway(apiOpts, `/v1/incidents/${pendingAction.incidentId}/evidence-pack`);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `aegis-incident-${pendingAction.incidentId}-evidence-pack.zip`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setPendingAction(null);
+      setAuditReason("");
+    } finally {
+      setExportingEvidence(false);
+    }
   };
 
   const handleVerifyTimeline = async () => {
@@ -196,6 +225,7 @@ export default function IncidentsTab() {
               <div className="flex gap-2">
                 <button
                   onClick={() => handleDownloadEvidencePack(incidentDetail.id)}
+                  disabled={exportingEvidence}
                   className="flex items-center gap-1.5 bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-[var(--text-primary)] border border-[var(--border-default)] px-3.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
                 >
                   <Download size={14} /> Download Evidence Pack
@@ -301,6 +331,25 @@ export default function IncidentsTab() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={pendingAction !== null}
+        title={pendingAction?.kind === "close" ? "Resolve this incident?" : "Export this incident evidence pack?"}
+        impact={
+          pendingAction?.kind === "close"
+            ? "This marks the incident as closed. Confirm only after the evidence, proof, and containment state have been reviewed."
+            : "This downloads a gateway-generated evidence pack for the incident. Exported material may contain sensitive operational metadata and should be handled as audit evidence."
+        }
+        target={pendingAction?.incidentId ?? ""}
+        reason={auditReason}
+        onReasonChange={setAuditReason}
+        confirmLabel={pendingAction?.kind === "close" ? "Resolve incident" : "Export evidence pack"}
+        confirmDisabled={!auditReason.trim() || closeIncidentMutation.isPending || exportingEvidence}
+        onConfirm={() => void confirmIncidentAction()}
+        onCancel={() => {
+          setPendingAction(null);
+          setAuditReason("");
+        }}
+      />
     </div>
   );
 }

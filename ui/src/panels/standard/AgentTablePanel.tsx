@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Lock, Unlock } from "lucide-react";
 import { useAppStore } from "@/app/store";
@@ -8,6 +8,7 @@ import { useEffectiveRole } from "@/hooks/useSessionRole";
 import { freezeAgent, unfreezeAgent } from "@/app/api";
 import { frameRows } from "@/datasources/frame";
 import StatusBadge from "@/components/security/StatusBadge";
+import { ConfirmDialog } from "@/components/primitives";
 import type { PanelProps } from "../types";
 
 interface AgentRow {
@@ -17,6 +18,11 @@ interface AgentRow {
   environment?: string;
   model?: string;
 }
+
+type PendingAgentAction = {
+  kind: "freeze" | "unfreeze";
+  agentId: string;
+};
 
 /**
  * Fleet inventory panel with role-gated Active Response (freeze / restore).
@@ -29,6 +35,8 @@ export default function AgentTablePanel({ data }: PanelProps) {
   const canRespond = role !== "viewer";
   const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const queryClient = useQueryClient();
+  const [pendingAction, setPendingAction] = useState<PendingAgentAction | null>(null);
+  const [auditReason, setAuditReason] = useState("");
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["panel"] });
@@ -36,16 +44,38 @@ export default function AgentTablePanel({ data }: PanelProps) {
   };
 
   const freezeMutation = useMutation({
-    mutationFn: (id: string) => freezeAgent(apiOpts, id),
-    onSuccess: invalidate,
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => freezeAgent(apiOpts, id, reason),
+    onSuccess: () => {
+      setPendingAction(null);
+      setAuditReason("");
+      invalidate();
+    },
   });
   const unfreezeMutation = useMutation({
     mutationFn: (id: string) => unfreezeAgent(apiOpts, id),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setPendingAction(null);
+      setAuditReason("");
+      invalidate();
+    },
   });
   const busy = freezeMutation.isPending || unfreezeMutation.isPending;
 
   const agents = frameRows(data) as AgentRow[];
+
+  const requestAgentAction = (kind: PendingAgentAction["kind"], agentId: string) => {
+    setPendingAction({ kind, agentId });
+    setAuditReason("");
+  };
+
+  const confirmAgentAction = () => {
+    if (!pendingAction || !auditReason.trim()) return;
+    if (pendingAction.kind === "freeze") {
+      freezeMutation.mutate({ id: pendingAction.agentId, reason: auditReason.trim() });
+    } else {
+      unfreezeMutation.mutate(pendingAction.agentId);
+    }
+  };
 
   return (
     <div className="overflow-auto custom-scrollbar h-full">
@@ -83,7 +113,7 @@ export default function AgentTablePanel({ data }: PanelProps) {
                     <span className="text-[var(--text-muted)] italic">Revoked</span>
                   ) : (
                     <button
-                      onClick={() => id && (isFrozen ? unfreezeMutation : freezeMutation).mutate(id)}
+                      onClick={() => id && requestAgentAction(isFrozen ? "unfreeze" : "freeze", id)}
                       disabled={busy || !canRespond || !id}
                       title={canRespond ? undefined : "Requires analyst, approver, or admin role"}
                       className="inline-flex items-center gap-1 text-[11px] font-semibold border rounded-lg px-3 py-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
@@ -110,6 +140,25 @@ export default function AgentTablePanel({ data }: PanelProps) {
           })}
         </tbody>
       </table>
+      <ConfirmDialog
+        open={pendingAction !== null}
+        title={pendingAction?.kind === "freeze" ? "Freeze this agent?" : "Restore this frozen agent?"}
+        impact={
+          pendingAction?.kind === "freeze"
+            ? "Future authorize calls for this agent will fail closed until an operator restores the agent. The reason is sent to the gateway frozen_reason field."
+            : "The agent will be restored to active status. The gateway currently clears frozen_reason on restore; this UI reason is required to prevent accidental recovery."
+        }
+        target={pendingAction?.agentId ?? ""}
+        reason={auditReason}
+        onReasonChange={setAuditReason}
+        confirmLabel={pendingAction?.kind === "freeze" ? "Freeze agent" : "Restore agent"}
+        confirmDisabled={!auditReason.trim() || busy}
+        onConfirm={confirmAgentAction}
+        onCancel={() => {
+          setPendingAction(null);
+          setAuditReason("");
+        }}
+      />
     </div>
   );
 }

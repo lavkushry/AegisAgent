@@ -5,9 +5,12 @@ import {
   buildGatewayHeaders,
   editApproval,
   fetchFromGateway,
+  freezeAgent,
   getMcpManifestHistory,
+  quarantineMcpServer,
   normalizeMcpManifestHistory,
   rejectApproval,
+  restoreMcpServer,
   type AuthorizeToolCall,
 } from "./api";
 
@@ -137,5 +140,33 @@ describe("gateway transport", () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://127.0.0.1:8080/v1/mcp/servers/server%2Fkey/manifest-history",
     );
+  });
+
+  it("sends freeze reason and encodes active-response path parameters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "agent/id", status: "frozen" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await freezeAgent(options, "agent/id", "Suspected compromised token");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8080/v1/agents/agent%2Fid/freeze");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      reason: "Suspected compromised token",
+    });
+  });
+
+  it.each([
+    ["quarantine", quarantineMcpServer, "/quarantine"],
+    ["restore", restoreMcpServer, "/restore"],
+  ] as const)("encodes MCP server keys for %s controls", async (_action, helper, suffix) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ server_key: "server/key" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await helper(options, "server/key");
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `http://127.0.0.1:8080/v1/mcp/servers/server%2Fkey${suffix}`,
+    );
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
   });
 });
