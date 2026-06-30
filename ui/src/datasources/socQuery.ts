@@ -56,15 +56,24 @@ export class SocQueryDatasource implements Datasource {
 
   async query(req: QueryRequest): Promise<DataFrame> {
     const filters = parseAql(req.aql ?? req.search ?? "");
+    const gatewayFilters = {
+      agent_id: filters.agentId,
+      decision: filters.decision,
+      source_trust: filters.sourceTrust,
+      skill: filters.skill,
+      q: filters.q,
+      from: req.timeRange.from,
+      to: req.timeRange.to,
+    };
     const body = {
       entity: req.entity ?? "decision",
-      filters,
-      time_range: req.timeRange,
-      aggregate: req.aggregate
-        ? { operation: req.aggregate, interval: req.interval ?? "hour" }
-        : undefined,
-      pagination: { limit: req.limit ?? 50, cursor: req.cursor },
-      variables: req.variables,
+      filters: Object.fromEntries(
+        Object.entries(gatewayFilters).filter(([, value]) => value !== undefined && value !== ""),
+      ),
+      aggregate: req.aggregate,
+      interval: req.aggregate === "count_over_time" ? req.interval ?? "hour" : undefined,
+      limit: req.limit ?? 50,
+      cursor: req.cursor,
     };
 
     try {

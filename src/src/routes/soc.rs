@@ -231,37 +231,6 @@ pub async fn decision_timeseries(
     }
 }
 
-/// Structured filter for [`soc_query`]. A fixed allowlist of fields —
-/// `deny_unknown_fields` rejects anything else (no raw SQL, no operator
-/// injection). Mirrors `DecisionListFilters`.
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SocQueryFilters {
-    pub agent_id: Option<String>,
-    pub decision: Option<String>,
-    pub source_trust: Option<String>,
-    pub skill: Option<String>,
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub q: Option<String>,
-}
-
-/// Request body for `POST /v1/soc/query`. `entity` and `aggregate` are
-/// validated against fixed allowlists; unknown JSON fields are rejected.
-#[derive(Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SocQueryRequest {
-    pub entity: String,
-    #[serde(default)]
-    pub filters: SocQueryFilters,
-    /// `none` (default, paginated rows) | `count` | `count_over_time`.
-    pub aggregate: Option<String>,
-    /// Bucket for `count_over_time`: `minute`|`hour`|`day` (default `hour`).
-    pub interval: Option<String>,
-    pub limit: Option<i64>,
-    pub cursor: Option<i64>,
-}
-
 /// POST /v1/soc/query — structured, tenant-scoped query API for the SOC console
 /// (PR5). Accepts a validated entity + filter allowlist + aggregation; never raw
 /// SQL. Backed entirely by existing parameterized, tenant-scoped storage

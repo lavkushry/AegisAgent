@@ -871,6 +871,43 @@ pub struct SocSummary {
     pub hourly_decisions_24h: Vec<i64>,
 }
 
+/// Structured filter for `POST /v1/soc/query`.
+///
+/// The gateway accepts a fixed allowlist only. Unknown fields are rejected
+/// before execution so clients cannot smuggle raw SQL/operators into the query
+/// builder.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SocQueryFilters {
+    pub agent_id: Option<String>,
+    pub decision: Option<String>,
+    pub source_trust: Option<String>,
+    pub skill: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub q: Option<String>,
+}
+
+/// Request body for `POST /v1/soc/query`.
+///
+/// `entity` and `aggregate` are validated by the gateway against fixed
+/// allowlists. This REST contract is intentionally flat and storage-neutral so
+/// the same datasource can back Explore tables, dashboard stats, and
+/// count-over-time panels.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SocQueryRequest {
+    pub entity: String,
+    #[serde(default)]
+    pub filters: SocQueryFilters,
+    /// `none`/omitted for paginated rows, `count`, or `count_over_time`.
+    pub aggregate: Option<String>,
+    /// Bucket for `count_over_time`: `minute`, `hour`, or `day`.
+    pub interval: Option<String>,
+    pub limit: Option<i64>,
+    pub cursor: Option<i64>,
+}
+
 /// Tamper-evident, hash-chained action receipt. The hashed body is every field
 /// here EXCEPT `receipt_hash` and `created_at` (see routes::receipt_body_value),
 /// with the previous link (`prev_receipt_hash`) inside the body. Scheme aegis-jcs-1.
