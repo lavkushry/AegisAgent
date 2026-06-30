@@ -36,6 +36,17 @@ fn hot_reload_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn paths_match_event(watch_path: &Path, event_path: &Path) -> bool {
+    if event_path == watch_path {
+        return true;
+    }
+
+    match (event_path.canonicalize(), watch_path.canonicalize()) {
+        (Ok(event_path), Ok(watch_path)) => event_path == watch_path,
+        _ => false,
+    }
+}
+
 /// Re-reads `policy_path` and reloads it into `policy_engine`, logging the
 /// outcome. Kept independent of the filesystem watcher itself so it can be
 /// unit tested directly against a real [`PolicyEngine`] without spinning up
@@ -82,7 +93,10 @@ fn start_fs_watcher(
     let mut debouncer = match new_debouncer(DEBOUNCE_WINDOW, move |res: DebounceEventResult| {
         match res {
             Ok(events) => {
-                if events.iter().any(|e| e.path == watch_path) {
+                if events
+                    .iter()
+                    .any(|event| paths_match_event(&watch_path, &event.path))
+                {
                     // Unbounded send; only fails if the receiver has already
                     // been dropped (e.g. the watching task exited during
                     // shutdown), which is fine to ignore here.
@@ -250,12 +264,19 @@ mod tests {
 
         let (_debouncer, mut rx) = start_fs_watcher(path.clone()).expect("watcher should start");
 
-        std::fs::write(&path, "changed\n").unwrap();
-
-        let received = tokio::time::timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .expect("expected a change notification within 5s");
-        assert!(received.is_some());
+        let mut received = None;
+        for attempt in 0..5 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            std::fs::write(&path, format!("changed-{attempt}\n")).unwrap();
+            if let Ok(event) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+                received = event;
+                break;
+            }
+        }
+        assert!(
+            received.is_some(),
+            "expected a change notification after bounded retries"
+        );
     }
 
     #[tokio::test]

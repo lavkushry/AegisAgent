@@ -335,9 +335,10 @@ export function freezeAgent(opts: FetchOptions, agentId: string, reason?: string
   return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/freeze`, "POST", body);
 }
 
-export function unfreezeAgent(opts: FetchOptions, agentId: string) {
+export function unfreezeAgent(opts: FetchOptions, agentId: string, reason?: string) {
   const id = encodeURIComponent(agentId);
-  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/unfreeze`, "POST");
+  const body = reason?.trim() ? { reason: reason.trim() } : undefined;
+  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/unfreeze`, "POST", body);
 }
 
 export function getAgentScoreboard(opts: FetchOptions) {
@@ -375,14 +376,26 @@ export function getMcpTools(opts: FetchOptions, serverKey: string) {
   return fetchFromGateway<Array<Record<string, unknown>>>(opts, `/v1/mcp/servers/${encodedServerKey}/tools`);
 }
 
-export function quarantineMcpServer(opts: FetchOptions, serverKey: string) {
+export function quarantineMcpServer(opts: FetchOptions, serverKey: string, reason?: string) {
   const encodedServerKey = encodeURIComponent(serverKey);
-  return fetchFromGateway<McpServerRecord>(opts, `/v1/mcp/servers/${encodedServerKey}/quarantine`, "POST");
+  const body = reason?.trim() ? { reason: reason.trim() } : undefined;
+  return fetchFromGateway<McpServerRecord>(
+    opts,
+    `/v1/mcp/servers/${encodedServerKey}/quarantine`,
+    "POST",
+    body,
+  );
 }
 
-export function restoreMcpServer(opts: FetchOptions, serverKey: string) {
+export function restoreMcpServer(opts: FetchOptions, serverKey: string, reason?: string) {
   const encodedServerKey = encodeURIComponent(serverKey);
-  return fetchFromGateway<McpServerRecord>(opts, `/v1/mcp/servers/${encodedServerKey}/restore`, "POST");
+  const body = reason?.trim() ? { reason: reason.trim() } : undefined;
+  return fetchFromGateway<McpServerRecord>(
+    opts,
+    `/v1/mcp/servers/${encodedServerKey}/restore`,
+    "POST",
+    body,
+  );
 }
 
 // Receipts

@@ -396,12 +396,18 @@ pub async fn freeze_agent(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
-    body: Option<Json<FreezeAgentRequest>>,
+    body: Option<Json<ActiveResponseRequest>>,
 ) -> impl IntoResponse {
-    let reason = body.and_then(|Json(b)| b.reason);
-    let resp =
-        set_agent_operational_status(state.clone(), tenant_id.clone(), agent_id.clone(), "frozen")
-            .await;
+    let reason = active_response_reason(body.map(|Json(b)| b));
+    let resp = set_agent_operational_status(
+        state.clone(),
+        tenant_id.clone(),
+        agent_id.clone(),
+        "frozen",
+        "agent_frozen",
+        reason.as_deref(),
+    )
+    .await;
     if resp.status() == StatusCode::OK {
         let _ = state
             .storage
@@ -416,8 +422,18 @@ pub async fn unfreeze_agent(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
+    body: Option<Json<ActiveResponseRequest>>,
 ) -> impl IntoResponse {
-    set_agent_operational_status(state, tenant_id, agent_id, "active").await
+    let reason = active_response_reason(body.map(|Json(b)| b));
+    set_agent_operational_status(
+        state,
+        tenant_id,
+        agent_id,
+        "active",
+        "agent_unfrozen",
+        reason.as_deref(),
+    )
+    .await
 }
 
 /// Permanently revoke an agent — not reversible via API.
@@ -425,8 +441,18 @@ pub async fn revoke_agent(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
+    body: Option<Json<ActiveResponseRequest>>,
 ) -> impl IntoResponse {
-    set_agent_operational_status(state, tenant_id, agent_id, "revoked").await
+    let reason = active_response_reason(body.map(|Json(b)| b));
+    set_agent_operational_status(
+        state,
+        tenant_id,
+        agent_id,
+        "revoked",
+        "agent_revoked",
+        reason.as_deref(),
+    )
+    .await
 }
 
 /// Restore a quarantined agent to active status (#1386).
@@ -436,8 +462,18 @@ pub async fn restore_agent(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Path(agent_id): Path<String>,
+    body: Option<Json<ActiveResponseRequest>>,
 ) -> impl IntoResponse {
-    set_agent_operational_status(state, tenant_id, agent_id, "active").await
+    let reason = active_response_reason(body.map(|Json(b)| b));
+    set_agent_operational_status(
+        state,
+        tenant_id,
+        agent_id,
+        "active",
+        "agent_restored",
+        reason.as_deref(),
+    )
+    .await
 }
 
 /// Optional request body for `POST /v1/agents/:id/rotate-token` (#1295).
@@ -643,6 +679,8 @@ pub(crate) async fn set_agent_operational_status(
     tenant_id: String,
     agent_id: String,
     status: &str,
+    audit_action: &str,
+    reason: Option<&str>,
 ) -> axum::response::Response {
     match state
         .storage
@@ -653,18 +691,20 @@ pub(crate) async fn set_agent_operational_status(
             let audit = AuditEventRecord {
                 id: Uuid::new_v4().to_string(),
                 tenant_id: tenant_id.clone(),
-                event_type: format!("agent_{}", status),
+                event_type: audit_action.to_string(),
                 agent_id: Some(agent_id.clone()),
                 user_id: None,
                 run_id: None,
                 trace_id: None,
                 span_id: None,
                 skill: None,
-                action: Some(format!("agent_{}", status)),
+                action: Some(audit_action.to_string()),
                 resource: None,
                 event_json: serde_json::to_string(&json!({
                     "agent_id": agent_id,
                     "new_status": status,
+                    "action": audit_action,
+                    "reason": reason,
                 }))
                 .unwrap_or_default(),
                 input_hash: None,
@@ -677,7 +717,13 @@ pub(crate) async fn set_agent_operational_status(
             info!(agent_id = %agent_id, status = %status, "Agent status changed");
             (
                 StatusCode::OK,
-                Json(json!({ "agent_id": agent_id, "status": status })),
+                Json(ActiveResponseStatusResponse {
+                    agent_id: Some(agent_id),
+                    server_key: None,
+                    status: status.to_string(),
+                    action: audit_action.to_string(),
+                    reason_recorded: reason.is_some(),
+                }),
             )
                 .into_response()
         }
@@ -1532,6 +1578,7 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Path(agent_id.clone()),
+            None,
         )
         .await
         .into_response();
@@ -1665,8 +1712,9 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Path(agent_id.clone()),
-            Some(Json(FreezeAgentRequest {
+            Some(Json(ActiveResponseRequest {
                 reason: Some("compromised credentials".to_string()),
+                comment: None,
             })),
         )
         .await
@@ -1688,6 +1736,7 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Path(agent_id.clone()),
+            None,
         )
         .await
         .into_response();
@@ -1746,6 +1795,10 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Path(agent_id.clone()),
+            Some(Json(ActiveResponseRequest {
+                reason: Some("Credential leak confirmed".to_string()),
+                comment: None,
+            })),
         )
         .await
         .into_response();
@@ -1758,6 +1811,21 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(agent.status, "revoked");
+
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
+        let event = events
+            .iter()
+            .find(|event| event.event_type == "agent_revoked")
+            .expect("revoke must write an explicit agent_revoked audit event");
+        assert_eq!(event.action.as_deref(), Some("agent_revoked"));
+        let event_json: serde_json::Value = serde_json::from_str(&event.event_json).unwrap();
+        assert_eq!(event_json["new_status"], "revoked");
+        assert_eq!(event_json["reason"], "Credential leak confirmed");
     }
 
     /// #0142: quarantine_mcp_server sets the MCP server's status to
@@ -1783,6 +1851,10 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Path("github-mcp".to_string()),
+            Some(Json(ActiveResponseRequest {
+                reason: None,
+                comment: Some("Manifest drift investigation".to_string()),
+            })),
         )
         .await
         .into_response();
@@ -1795,6 +1867,22 @@ mod tests {
             .unwrap()
             .expect("server should exist");
         assert_eq!(server.status, "quarantined");
+
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
+        let event = events
+            .iter()
+            .find(|event| event.event_type == "mcp_server_quarantined")
+            .expect("quarantine must write an explicit mcp_server_quarantined audit event");
+        assert_eq!(event.action.as_deref(), Some("mcp_server_quarantined"));
+        assert_eq!(event.resource.as_deref(), Some("github-mcp"));
+        let event_json: serde_json::Value = serde_json::from_str(&event.event_json).unwrap();
+        assert_eq!(event_json["new_status"], "quarantined");
+        assert_eq!(event_json["reason"], "Manifest drift investigation");
     }
 
     /// #0111: POST /v1/agents/register with a valid payload returns 201 and

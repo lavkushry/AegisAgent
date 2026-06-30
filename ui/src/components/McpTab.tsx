@@ -38,7 +38,8 @@ export default function McpTab() {
   });
 
   const quarantineMutation = useMutation({
-    mutationFn: (key: string) => quarantineMcpServer(apiOpts, key),
+    mutationFn: ({ key, reason }: { key: string; reason: string }) =>
+      quarantineMcpServer(apiOpts, key, reason),
     onSuccess: () => {
       setPendingAction(null);
       setAuditReason("");
@@ -47,7 +48,8 @@ export default function McpTab() {
   });
 
   const restoreMutation = useMutation({
-    mutationFn: (key: string) => restoreMcpServer(apiOpts, key),
+    mutationFn: ({ key, reason }: { key: string; reason: string }) =>
+      restoreMcpServer(apiOpts, key, reason),
     onSuccess: () => {
       setPendingAction(null);
       setAuditReason("");
@@ -63,9 +65,9 @@ export default function McpTab() {
   const confirmMcpAction = () => {
     if (!pendingAction || !auditReason.trim()) return;
     if (pendingAction.kind === "restore") {
-      restoreMutation.mutate(pendingAction.serverKey);
+      restoreMutation.mutate({ key: pendingAction.serverKey, reason: auditReason.trim() });
     } else {
-      quarantineMutation.mutate(pendingAction.serverKey);
+      quarantineMutation.mutate({ key: pendingAction.serverKey, reason: auditReason.trim() });
     }
   };
 

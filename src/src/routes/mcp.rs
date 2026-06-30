@@ -478,8 +478,18 @@ pub async fn quarantine_mcp_server(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
+    body: Option<Json<ActiveResponseRequest>>,
 ) -> impl IntoResponse {
-    update_mcp_server_quarantine(state, tenant_id, server_key, "quarantined").await
+    let reason = active_response_reason(body.map(|Json(b)| b));
+    update_mcp_server_quarantine(
+        state,
+        tenant_id,
+        server_key,
+        "quarantined",
+        "mcp_server_quarantined",
+        reason.as_deref(),
+    )
+    .await
 }
 
 /// Restore a quarantined MCP server to active status.
@@ -487,8 +497,18 @@ pub async fn restore_mcp_server(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     Path(server_key): Path<String>,
+    body: Option<Json<ActiveResponseRequest>>,
 ) -> impl IntoResponse {
-    update_mcp_server_quarantine(state, tenant_id, server_key, "active").await
+    let reason = active_response_reason(body.map(|Json(b)| b));
+    update_mcp_server_quarantine(
+        state,
+        tenant_id,
+        server_key,
+        "active",
+        "mcp_server_restored",
+        reason.as_deref(),
+    )
+    .await
 }
 
 /// #1193: soft-deletes an MCP server (sets `deleted_at`) — it stops
@@ -543,6 +563,8 @@ pub(crate) async fn update_mcp_server_quarantine(
     tenant_id: String,
     server_key: String,
     status: &str,
+    audit_action: &str,
+    reason: Option<&str>,
 ) -> axum::response::Response {
     match state
         .storage
@@ -564,18 +586,20 @@ pub(crate) async fn update_mcp_server_quarantine(
             let audit = AuditEventRecord {
                 id: Uuid::new_v4().to_string(),
                 tenant_id: tenant_id.clone(),
-                event_type: format!("mcp_server_{}", status),
+                event_type: audit_action.to_string(),
                 agent_id: None,
                 user_id: None,
                 run_id: None,
                 trace_id: None,
                 span_id: None,
                 skill: Some(format!("mcp:{}", server_key)),
-                action: None,
+                action: Some(audit_action.to_string()),
                 resource: Some(server_key.clone()),
                 event_json: serde_json::to_string(&json!({
                     "server_key": server_key,
                     "new_status": status,
+                    "action": audit_action,
+                    "reason": reason,
                 }))
                 .unwrap_or_default(),
                 input_hash: None,
@@ -593,7 +617,13 @@ pub(crate) async fn update_mcp_server_quarantine(
 
             (
                 StatusCode::OK,
-                Json(json!({ "server_key": server_key, "status": status })),
+                Json(ActiveResponseStatusResponse {
+                    agent_id: None,
+                    server_key: Some(server_key),
+                    status: status.to_string(),
+                    action: audit_action.to_string(),
+                    reason_recorded: reason.is_some(),
+                }),
             )
                 .into_response()
         }

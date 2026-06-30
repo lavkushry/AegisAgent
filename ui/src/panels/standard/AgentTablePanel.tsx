@@ -52,7 +52,7 @@ export default function AgentTablePanel({ data }: PanelProps) {
     },
   });
   const unfreezeMutation = useMutation({
-    mutationFn: (id: string) => unfreezeAgent(apiOpts, id),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => unfreezeAgent(apiOpts, id, reason),
     onSuccess: () => {
       setPendingAction(null);
       setAuditReason("");
@@ -73,7 +73,7 @@ export default function AgentTablePanel({ data }: PanelProps) {
     if (pendingAction.kind === "freeze") {
       freezeMutation.mutate({ id: pendingAction.agentId, reason: auditReason.trim() });
     } else {
-      unfreezeMutation.mutate(pendingAction.agentId);
+      unfreezeMutation.mutate({ id: pendingAction.agentId, reason: auditReason.trim() });
     }
   };
 
