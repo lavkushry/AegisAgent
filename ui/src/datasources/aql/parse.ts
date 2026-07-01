@@ -13,6 +13,9 @@
  */
 
 export interface ParsedQuery {
+  eventType?: string;
+  severity?: string;
+  sourceComponent?: string;
   agentId?: string;
   decision?: string;
   sourceTrust?: string;
@@ -37,6 +40,9 @@ export function parseAql(input: string): ParsedQuery {
   const tokens = raw.split(/\s+/).filter((t) => t && !BOOLEANS.has(t.toUpperCase()));
 
   let agentId: string | undefined;
+  let eventType: string | undefined;
+  let severity: string | undefined;
+  let sourceComponent: string | undefined;
   let decision: string | undefined;
   let sourceTrust: string | undefined;
   let skill: string | undefined;
@@ -53,7 +59,13 @@ export function parseAql(input: string): ParsedQuery {
     if (match) {
       const field = match[1].toLowerCase();
       const value = match[2];
-      if (field === "agent_id" && !agentId) {
+      if (field === "event_type" && !eventType) {
+        eventType = value;
+      } else if (field === "severity" && !severity) {
+        severity = value;
+      } else if (field === "source_component" && !sourceComponent) {
+        sourceComponent = value;
+      } else if (field === "agent_id" && !agentId) {
         agentId = value;
       } else if (field === "decision" && !decision) {
         decision = value;
@@ -83,6 +95,9 @@ export function parseAql(input: string): ParsedQuery {
   }
 
   return {
+    eventType,
+    severity,
+    sourceComponent,
     agentId,
     decision,
     sourceTrust,

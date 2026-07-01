@@ -879,12 +879,15 @@ pub struct SocSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SocQueryFilters {
+    pub event_type: Option<String>,
+    pub severity: Option<String>,
     pub agent_id: Option<String>,
     pub decision: Option<String>,
     pub source_trust: Option<String>,
     pub skill: Option<String>,
     /// Public alias for the legacy `skill` storage field.
     pub tool: Option<String>,
+    pub source_component: Option<String>,
     pub action: Option<String>,
     pub resource: Option<String>,
     pub run_id: Option<String>,

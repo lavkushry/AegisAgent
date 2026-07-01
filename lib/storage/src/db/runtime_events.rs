@@ -110,6 +110,210 @@ pub async fn list_runtime_events(
     )
 }
 
+const FILTER_SQL: &str = "
+   AND (? IS NULL OR event_type = ?)
+   AND (? IS NULL OR severity = ?)
+   AND (? IS NULL OR agent_id = ?)
+   AND (? IS NULL OR run_id = ?)
+   AND (? IS NULL OR trace_id = ?)
+   AND (? IS NULL OR source_component = ?)
+   AND (? IS NULL OR source_trust = ?)
+   AND (? IS NULL OR decision = ?)
+   AND (? IS NULL OR action_hash = ?)
+   AND (? IS NULL OR receipt_hash = ?)
+   AND (? IS NULL OR observed_at >= ?)
+   AND (? IS NULL OR observed_at <= ?)
+   AND (? IS NULL OR (
+        event_type LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\'
+        OR source_component LIKE ? ESCAPE '\\'
+   ))";
+
+fn like_pattern(raw: Option<&str>) -> Option<String> {
+    raw.map(|value| {
+        let escaped = value
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        format!("%{escaped}%")
+    })
+}
+
+macro_rules! bind_runtime_filters {
+    ($query:expr, $filters:expr, $q:expr) => {{
+        let filters = $filters;
+        $query
+            .bind(filters.event_type)
+            .bind(filters.event_type)
+            .bind(filters.severity)
+            .bind(filters.severity)
+            .bind(filters.agent_id)
+            .bind(filters.agent_id)
+            .bind(filters.run_id)
+            .bind(filters.run_id)
+            .bind(filters.trace_id)
+            .bind(filters.trace_id)
+            .bind(filters.source_component)
+            .bind(filters.source_component)
+            .bind(filters.source_trust)
+            .bind(filters.source_trust)
+            .bind(filters.decision)
+            .bind(filters.decision)
+            .bind(filters.action_hash)
+            .bind(filters.action_hash)
+            .bind(filters.receipt_hash)
+            .bind(filters.receipt_hash)
+            .bind(filters.from)
+            .bind(filters.from)
+            .bind(filters.to)
+            .bind(filters.to)
+            .bind($q)
+            .bind($q)
+            .bind($q)
+            .bind($q)
+    }};
+}
+
+/// Bounded, tenant-scoped ASE query. The cursor is an opaque offset for this
+/// append-only event stream; callers receive it only when another row exists.
+pub async fn query_runtime_events(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+    cursor: Option<i64>,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+) -> Result<(Vec<RuntimeEventRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let offset = cursor.unwrap_or(0).max(0);
+    let q = like_pattern(filters.q);
+    let sql = format!(
+        "SELECT {COLS} FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+         ORDER BY observed_at DESC, id DESC LIMIT ? OFFSET ?"
+    );
+
+    let mut rows = match pool {
+        DbPool::Sqlite(pool) => {
+            bind_runtime_filters!(
+                sqlx::query_as::<_, RuntimeEventRecord>(&sql).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .bind(limit + 1)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(
+                sqlx::query_as::<_, RuntimeEventRecord>(&sql).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .bind(limit + 1)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    Ok((rows, has_more.then_some(offset + limit)))
+}
+
+pub async fn count_runtime_events_over_time(
+    pool: &DbPool,
+    tenant_id: &str,
+    bucket: crate::traits::TimeBucket,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let q = like_pattern(filters.q);
+    let rows = match pool {
+        DbPool::Sqlite(pool) => {
+            let sql = format!(
+                "SELECT strftime(?, observed_at) AS bucket, COUNT(*) AS cnt
+                 FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+                 GROUP BY bucket ORDER BY bucket ASC"
+            );
+            bind_runtime_filters!(
+                sqlx::query(&sql).bind(bucket.sqlite_fmt()).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .fetch_all(pool)
+            .await?
+            .iter()
+            .map(|row| (row.get("bucket"), row.get("cnt")))
+            .collect()
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = format!(
+                "SELECT to_char(date_trunc(?, observed_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket,
+                        COUNT(*) AS cnt
+                 FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+                 GROUP BY bucket ORDER BY bucket ASC"
+            );
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(
+                sqlx::query(&sql).bind(bucket.pg_unit()).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .fetch_all(pool)
+            .await?
+            .iter()
+            .map(|row| (row.get("bucket"), row.get("cnt")))
+            .collect()
+        }
+    };
+    Ok(rows)
+}
+
+pub async fn count_runtime_events_grouped(
+    pool: &DbPool,
+    tenant_id: &str,
+    field: crate::traits::RuntimeEventGroupField,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+    limit: i64,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let q = like_pattern(filters.q);
+    let limit = limit.clamp(1, 100);
+    let sql = format!(
+        "SELECT COALESCE(CAST({} AS TEXT), 'unknown') AS group_value, COUNT(*) AS cnt
+         FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+         GROUP BY group_value ORDER BY cnt DESC, group_value ASC LIMIT ?",
+        field.sql_column()
+    );
+    let rows = match pool {
+        DbPool::Sqlite(pool) => {
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .bind(limit)
+                .fetch_all(pool)
+                .await?
+                .iter()
+                .map(|row| (row.get("group_value"), row.get("cnt")))
+                .collect()
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .bind(limit)
+                .fetch_all(pool)
+                .await?
+                .iter()
+                .map(|row| (row.get("group_value"), row.get("cnt")))
+                .collect()
+        }
+    };
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

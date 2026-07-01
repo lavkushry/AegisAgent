@@ -13,6 +13,7 @@ import type {
 } from "./types";
 
 const ENTITY_PATHS: Record<EntityKind, string> = {
+  ase: "/v1/runtime/events",
   incident: "/v1/incidents",
   alert: "/v1/alerts",
   approval: "/v1/approvals",
