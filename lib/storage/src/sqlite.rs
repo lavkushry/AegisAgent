@@ -999,6 +999,41 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn query_runtime_events(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        cursor: Option<i64>,
+        filters: RuntimeEventListFilters<'_>,
+    ) -> Result<(Vec<RuntimeEventRecord>, Option<i64>), AegisError> {
+        db::query_runtime_events(&self.pool, tenant_id, limit, cursor, filters)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn count_runtime_events_over_time(
+        &self,
+        tenant_id: &str,
+        bucket: TimeBucket,
+        filters: RuntimeEventListFilters<'_>,
+    ) -> Result<Vec<(String, i64)>, AegisError> {
+        db::count_runtime_events_over_time(&self.pool, tenant_id, bucket, filters)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn count_runtime_events_grouped(
+        &self,
+        tenant_id: &str,
+        field: RuntimeEventGroupField,
+        filters: RuntimeEventListFilters<'_>,
+        limit: i64,
+    ) -> Result<Vec<(String, i64)>, AegisError> {
+        db::count_runtime_events_grouped(&self.pool, tenant_id, field, filters, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // Control commands (Phase 2.3)
     async fn insert_control_command(
         &self,
