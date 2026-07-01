@@ -30,6 +30,9 @@ message SocQueryFilters {
     string action_hash = 12;
     string receipt_hash = 13;
     string tool = 14;
+    string event_type = 15;
+    string severity = 16;
+    string source_component = 17;
 }
 
 message SocQueryRequest {

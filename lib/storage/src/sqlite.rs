@@ -1,7 +1,10 @@
 use crate::db;
 use crate::db::DbPool;
 use crate::tenant_bloom::TenantBloomFilter;
-use crate::traits::{DecisionGroupField, DecisionListFilters, StorageBackend, TimeBucket};
+use crate::traits::{
+    DecisionGroupField, DecisionListFilters, RuntimeEventGroupField, RuntimeEventListFilters,
+    StorageBackend, TimeBucket,
+};
 use aegis_api::models::*;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
