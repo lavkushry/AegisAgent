@@ -924,6 +924,14 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/soc/summary", get(routes::soc_summary))
         .route("/soc/query", post(routes::soc_query))
         .route("/soc/semantic-search", get(routes::semantic_search))
+        // Runtime control plane (Phase 2.6): agent-cage runs + runtime-event ingest
+        .route(
+            "/agent-cage/runs",
+            post(routes::create_agent_run).get(routes::list_agent_runs),
+        )
+        .route("/agent-cage/runs/:id", get(routes::get_agent_run))
+        .route("/ingest/runtime-events", post(routes::ingest_runtime_event))
+        .route("/runtime/runs/:id/events", get(routes::list_run_events))
         // SOC Phase 6: Incident lifecycle — close an open incident
         .route("/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator
