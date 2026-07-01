@@ -996,6 +996,48 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Control commands (Phase 2.3)
+    async fn insert_control_command(
+        &self,
+        record: &ControlCommandRecord,
+    ) -> Result<(), AegisError> {
+        db::insert_control_command(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_control_command(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+    ) -> Result<Option<ControlCommandRecord>, AegisError> {
+        db::get_control_command(&self.pool, tenant_id, command_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn update_control_command_status(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+        status: &str,
+    ) -> Result<bool, AegisError> {
+        db::update_control_command_status(&self.pool, tenant_id, command_id, status)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_control_commands(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ControlCommandRecord>, AegisError> {
+        db::list_control_commands(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

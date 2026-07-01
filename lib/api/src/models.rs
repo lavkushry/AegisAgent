@@ -598,6 +598,32 @@ pub struct RuntimeEventRecord {
     pub received_at: DateTime<Utc>,
 }
 
+/// Phase 2.3 (runtime control plane): a signed gateway->sensor control command.
+/// The sensor verifies `signature` (over the canonical command bytes), tenant
+/// binding, `expires_at`, and `nonce` before executing idempotently and ACKing.
+/// `(tenant_id, nonce)` is unique for replay protection. No raw secrets here.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct ControlCommandRecord {
+    pub command_id: String,
+    pub tenant_id: String,
+    /// `agent` | `run` | `sandbox` | `fingerprint` | `destination` | `tool` |
+    /// `mcp_server` | `sensor` (see the Control Command Protocol doc).
+    pub target_type: String,
+    pub target_id: String,
+    pub action: String,
+    pub reason: Option<String>,
+    pub issued_by: String,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub nonce: String,
+    pub requires_ack: bool,
+    pub receipt_required: bool,
+    pub signature: String,
+    /// `issued` | `delivered` | `acked` | `nacked` | `executed` | `expired`.
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,
