@@ -1128,6 +1128,58 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Quarantine (Phase 2.5)
+    async fn insert_quarantine(&self, record: &QuarantineRecord) -> Result<(), AegisError> {
+        db::insert_quarantine(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn is_quarantined(
+        &self,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+    ) -> Result<bool, AegisError> {
+        db::is_quarantined(&self.pool, tenant_id, target_type, target_value)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<QuarantineRecord>, AegisError> {
+        db::get_quarantine(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn release_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        status: &str,
+        released_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::release_quarantine(&self.pool, tenant_id, id, status, released_by, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_quarantine(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<QuarantineRecord>, AegisError> {
+        db::list_quarantine(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
