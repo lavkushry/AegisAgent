@@ -648,6 +648,27 @@ pub struct AgentBanRecord {
     pub revoked_by: Option<String>,
 }
 
+/// Phase 2.5 (runtime control plane): a quarantine. Preserves evidence while
+/// freezing a target (agent / run / workspace / file / mcp_server / tool /
+/// credential / destination / prompt_lineage) for review; optionally linked to
+/// an incident. Lifecycle `active` -> `released` | `deleted` after review.
+/// Every quarantine/release carries `actor` + `reason`. Tenant-scoped.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct QuarantineRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub target_type: String,
+    pub target_value: String,
+    pub reason: Option<String>,
+    pub actor: String,
+    /// `active` | `released` | `deleted`.
+    pub status: String,
+    pub incident_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub released_at: Option<DateTime<Utc>>,
+    pub released_by: Option<String>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,

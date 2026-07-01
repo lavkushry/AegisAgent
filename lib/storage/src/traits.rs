@@ -673,6 +673,34 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: i64,
     ) -> Result<Vec<AgentBanRecord>, AegisError>;
 
+    // Quarantine (Phase 2.5: freeze + preserve evidence for review)
+    async fn insert_quarantine(&self, record: &QuarantineRecord) -> Result<(), AegisError>;
+    async fn is_quarantined(
+        &self,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+    ) -> Result<bool, AegisError>;
+    async fn get_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<QuarantineRecord>, AegisError>;
+    async fn release_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        status: &str,
+        released_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+    async fn list_quarantine(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<QuarantineRecord>, AegisError>;
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
