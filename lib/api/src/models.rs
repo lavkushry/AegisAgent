@@ -624,6 +624,30 @@ pub struct ControlCommandRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Phase 2.4 (runtime control plane): a first-class ban. Blocks a `target_value`
+/// of a given `target_type` (agent / fingerprint / image_digest / mcp_server /
+/// tool / destination_domain / destination_ip / prompt_hash / behavior_signature
+/// / ...) at every enforcement point. NULL `expires_at` = permanent /
+/// until-manual-review. Every ban/revoke carries `actor` + `reason` for the
+/// audit/receipt trail. Tenant-scoped.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct AgentBanRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub target_type: String,
+    pub target_value: String,
+    /// `run` | `agent` | `tenant` | `organization`.
+    pub scope: String,
+    pub reason: Option<String>,
+    pub actor: String,
+    /// `active` | `revoked`.
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_by: Option<String>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,
