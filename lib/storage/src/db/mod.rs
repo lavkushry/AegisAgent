@@ -402,14 +402,17 @@ macro_rules! fetch_optional_scalar {
 }
 
 // Submodules
+pub mod agent_bans;
 pub mod agent_runs;
 pub mod agents;
 pub mod approvals;
+pub mod control_commands;
 pub mod decisions;
 pub mod leader;
 pub mod mcp;
 pub mod playbooks;
 pub mod policies;
+pub mod quarantine;
 pub mod receipts;
 pub mod replay;
 pub mod runtime_events;
@@ -421,14 +424,17 @@ pub mod webhooks;
 pub mod test_utils;
 
 // Re-exports
+pub use agent_bans::*;
 pub use agent_runs::*;
 pub use agents::*;
 pub use approvals::*;
+pub use control_commands::*;
 pub use decisions::*;
 pub use leader::*;
 pub use mcp::*;
 pub use playbooks::*;
 pub use policies::*;
+pub use quarantine::*;
 pub use receipts::*;
 pub use replay::*;
 pub use runtime_events::*;

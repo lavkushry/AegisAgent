@@ -598,6 +598,77 @@ pub struct RuntimeEventRecord {
     pub received_at: DateTime<Utc>,
 }
 
+/// Phase 2.3 (runtime control plane): a signed gateway->sensor control command.
+/// The sensor verifies `signature` (over the canonical command bytes), tenant
+/// binding, `expires_at`, and `nonce` before executing idempotently and ACKing.
+/// `(tenant_id, nonce)` is unique for replay protection. No raw secrets here.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct ControlCommandRecord {
+    pub command_id: String,
+    pub tenant_id: String,
+    /// `agent` | `run` | `sandbox` | `fingerprint` | `destination` | `tool` |
+    /// `mcp_server` | `sensor` (see the Control Command Protocol doc).
+    pub target_type: String,
+    pub target_id: String,
+    pub action: String,
+    pub reason: Option<String>,
+    pub issued_by: String,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub nonce: String,
+    pub requires_ack: bool,
+    pub receipt_required: bool,
+    pub signature: String,
+    /// `issued` | `delivered` | `acked` | `nacked` | `executed` | `expired`.
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Phase 2.4 (runtime control plane): a first-class ban. Blocks a `target_value`
+/// of a given `target_type` (agent / fingerprint / image_digest / mcp_server /
+/// tool / destination_domain / destination_ip / prompt_hash / behavior_signature
+/// / ...) at every enforcement point. NULL `expires_at` = permanent /
+/// until-manual-review. Every ban/revoke carries `actor` + `reason` for the
+/// audit/receipt trail. Tenant-scoped.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct AgentBanRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub target_type: String,
+    pub target_value: String,
+    /// `run` | `agent` | `tenant` | `organization`.
+    pub scope: String,
+    pub reason: Option<String>,
+    pub actor: String,
+    /// `active` | `revoked`.
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_by: Option<String>,
+}
+
+/// Phase 2.5 (runtime control plane): a quarantine. Preserves evidence while
+/// freezing a target (agent / run / workspace / file / mcp_server / tool /
+/// credential / destination / prompt_lineage) for review; optionally linked to
+/// an incident. Lifecycle `active` -> `released` | `deleted` after review.
+/// Every quarantine/release carries `actor` + `reason`. Tenant-scoped.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct QuarantineRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub target_type: String,
+    pub target_value: String,
+    pub reason: Option<String>,
+    pub actor: String,
+    /// `active` | `released` | `deleted`.
+    pub status: String,
+    pub incident_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub released_at: Option<DateTime<Utc>>,
+    pub released_by: Option<String>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,
