@@ -23,6 +23,13 @@ message SocQueryFilters {
     string from = 5;
     string to = 6;
     string q = 7;
+    string action = 8;
+    string resource = 9;
+    string run_id = 10;
+    string trace_id = 11;
+    string action_hash = 12;
+    string receipt_hash = 13;
+    string tool = 14;
 }
 
 message SocQueryRequest {
@@ -33,6 +40,8 @@ message SocQueryRequest {
     string interval = 5;
     optional int64 limit = 6;
     optional int64 cursor = 7;
+    uint32 version = 8;
+    string group_by = 9;
 }
 
 message SocQueryResponse {

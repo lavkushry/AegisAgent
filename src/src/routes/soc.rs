@@ -32,7 +32,7 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 use aegis_common::errors::AegisError;
-use aegis_storage::traits::{DecisionListFilters, StorageBackend, TimeBucket};
+use aegis_storage::traits::{DecisionGroupField, DecisionListFilters, StorageBackend, TimeBucket};
 
 use super::*;
 
@@ -149,6 +149,12 @@ pub async fn list_decisions(
     let decision = parse_filter(raw_query.as_deref(), "decision");
     let source_trust = parse_filter(raw_query.as_deref(), "source_trust");
     let skill = parse_filter(raw_query.as_deref(), "skill");
+    let action = parse_filter(raw_query.as_deref(), "action");
+    let resource = parse_filter(raw_query.as_deref(), "resource");
+    let run_id = parse_filter(raw_query.as_deref(), "run_id");
+    let trace_id = parse_filter(raw_query.as_deref(), "trace_id");
+    let action_hash = parse_filter(raw_query.as_deref(), "action_hash");
+    let receipt_hash = parse_filter(raw_query.as_deref(), "receipt_hash");
     let from = parse_filter(raw_query.as_deref(), "from").and_then(|raw| to_db_timestamp(&raw));
     let to = parse_filter(raw_query.as_deref(), "to").and_then(|raw| to_db_timestamp(&raw));
     let q = parse_filter(raw_query.as_deref(), "q").and_then(|raw| sanitize_fts5_query(&raw));
@@ -165,6 +171,12 @@ pub async fn list_decisions(
                 q: q.as_deref(),
                 source_trust: source_trust.as_deref(),
                 skill: skill.as_deref(),
+                action: action.as_deref(),
+                resource: resource.as_deref(),
+                run_id: run_id.as_deref(),
+                trace_id: trace_id.as_deref(),
+                action_hash: action_hash.as_deref(),
+                receipt_hash: receipt_hash.as_deref(),
                 from: from.as_deref(),
                 to: to.as_deref(),
             },
@@ -192,6 +204,12 @@ pub async fn decision_timeseries(
     let decision = parse_filter(raw_query.as_deref(), "decision");
     let source_trust = parse_filter(raw_query.as_deref(), "source_trust");
     let skill = parse_filter(raw_query.as_deref(), "skill");
+    let action = parse_filter(raw_query.as_deref(), "action");
+    let resource = parse_filter(raw_query.as_deref(), "resource");
+    let run_id = parse_filter(raw_query.as_deref(), "run_id");
+    let trace_id = parse_filter(raw_query.as_deref(), "trace_id");
+    let action_hash = parse_filter(raw_query.as_deref(), "action_hash");
+    let receipt_hash = parse_filter(raw_query.as_deref(), "receipt_hash");
     let from = parse_filter(raw_query.as_deref(), "from").and_then(|raw| to_db_timestamp(&raw));
     let to = parse_filter(raw_query.as_deref(), "to").and_then(|raw| to_db_timestamp(&raw));
     let bucket = TimeBucket::parse(
@@ -210,6 +228,12 @@ pub async fn decision_timeseries(
                 decision: decision.as_deref(),
                 source_trust: source_trust.as_deref(),
                 skill: skill.as_deref(),
+                action: action.as_deref(),
+                resource: resource.as_deref(),
+                run_id: run_id.as_deref(),
+                trace_id: trace_id.as_deref(),
+                action_hash: action_hash.as_deref(),
+                receipt_hash: receipt_hash.as_deref(),
                 from: from.as_deref(),
                 to: to.as_deref(),
                 ..Default::default()
@@ -242,6 +266,13 @@ pub async fn soc_query(
     TenantId(tenant_id): TenantId,
     Json(req): Json<SocQueryRequest>,
 ) -> impl IntoResponse {
+    if req.version != 1 {
+        return StatusError::bad_request(format!(
+            "unsupported query version '{}' (supported: 1)",
+            req.version
+        ))
+        .into_response();
+    }
     // Entity allowlist — fail closed on anything unknown.
     if req.entity != "decision" {
         return StatusError::bad_request(format!(
@@ -250,21 +281,69 @@ pub async fn soc_query(
         ))
         .into_response();
     }
+    if matches!(
+        (&req.filters.tool, &req.filters.skill),
+        (Some(tool), Some(skill)) if tool != skill
+    ) {
+        return StatusError::bad_request(
+            "tool and skill filters must match when both are provided",
+        )
+        .into_response();
+    }
+    let aggregate = req.aggregate.as_deref().unwrap_or("none");
+    if req.group_by.is_some() && aggregate != "count_by" {
+        return StatusError::bad_request("group_by is only valid with count_by").into_response();
+    }
+    if aggregate == "count_over_time"
+        && !matches!(
+            req.interval.as_deref().unwrap_or("hour"),
+            "minute" | "hour" | "day"
+        )
+    {
+        return StatusError::bad_request("unsupported interval (supported: minute, hour, day)")
+            .into_response();
+    }
 
-    let from = req.filters.from.as_deref().and_then(to_db_timestamp);
-    let to = req.filters.to.as_deref().and_then(to_db_timestamp);
+    let from = match req.filters.from.as_deref() {
+        Some(raw) => match to_db_timestamp(raw) {
+            Some(value) => Some(value),
+            None => {
+                return StatusError::bad_request("invalid filters.from timestamp").into_response()
+            }
+        },
+        None => None,
+    };
+    let to = match req.filters.to.as_deref() {
+        Some(raw) => match to_db_timestamp(raw) {
+            Some(value) => Some(value),
+            None => {
+                return StatusError::bad_request("invalid filters.to timestamp").into_response()
+            }
+        },
+        None => None,
+    };
+    if matches!((&from, &to), (Some(from), Some(to)) if from > to) {
+        return StatusError::bad_request("filters.from must be before or equal to filters.to")
+            .into_response();
+    }
     let q = req.filters.q.as_deref().and_then(sanitize_fts5_query);
     let filters = DecisionListFilters {
         agent_id: req.filters.agent_id.as_deref(),
         decision: req.filters.decision.as_deref(),
         q: q.as_deref(),
         source_trust: req.filters.source_trust.as_deref(),
-        skill: req.filters.skill.as_deref(),
+        skill: req.filters.tool.as_deref().or(req.filters.skill.as_deref()),
+        action: req.filters.action.as_deref(),
+        resource: req.filters.resource.as_deref(),
+        run_id: req.filters.run_id.as_deref(),
+        trace_id: req.filters.trace_id.as_deref(),
+        action_hash: req.filters.action_hash.as_deref(),
+        receipt_hash: req.filters.receipt_hash.as_deref(),
         from: from.as_deref(),
         to: to.as_deref(),
     };
 
-    match req.aggregate.as_deref().unwrap_or("none") {
+    match aggregate {
         "none" => {
             let limit = req.limit.unwrap_or(50).clamp(1, 200);
             match state
@@ -272,33 +351,90 @@ pub async fn soc_query(
                 .list_decisions(&tenant_id, limit, req.cursor, filters)
                 .await
             {
-                Ok((rows, next_cursor)) => paginated_response(&rows, next_cursor),
+                Ok((rows, next_cursor)) => {
+                    let decision_ids: Vec<_> = rows.iter().map(|row| row.id.clone()).collect();
+                    let receipts = match state
+                        .storage
+                        .list_action_receipts_by_decision_ids(&tenant_id, &decision_ids)
+                        .await
+                    {
+                        Ok(receipts) => receipts,
+                        Err(e) => {
+                            error!("soc_query receipt enrichment failed: {:?}", e);
+                            return StatusError::internal("Database error").into_response();
+                        }
+                    };
+                    let safe_rows: Vec<_> = rows
+                        .iter()
+                        .map(|row| safe_soc_decision_row(row, receipts.get(&row.id)))
+                        .collect();
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "version": 1,
+                            "entity": "decision",
+                            "rows": safe_rows,
+                            "field_descriptors": soc_decision_field_descriptors(),
+                            "meta": { "cursor": next_cursor.map(encode_cursor) },
+                        })),
+                    )
+                        .into_response()
+                }
                 Err(e) => {
                     error!("soc_query list failed: {:?}", e);
                     StatusError::internal("Database error").into_response()
                 }
             }
         }
-        "count" => match state.storage.count_decisions_by_outcome(&tenant_id).await {
-            Ok((total, allow, deny, require_approval)) => (
+        "count" => {
+            let groups = match state
+                .storage
+                .count_decisions_grouped(&tenant_id, DecisionGroupField::Decision, filters, 100)
+                .await
+            {
+                Ok(groups) => groups,
+                Err(e) => {
+                    error!("soc_query count failed: {:?}", e);
+                    return StatusError::internal("Database error").into_response();
+                }
+            };
+            let mut total = 0;
+            let mut allow = 0;
+            let mut deny = 0;
+            let mut require_approval = 0;
+            for (decision, count) in groups {
+                total += count;
+                match decision.as_str() {
+                    "allow" => allow = count,
+                    "deny" => deny = count,
+                    "require_approval" => require_approval = count,
+                    _ => {}
+                }
+            }
+
+            (
                 StatusCode::OK,
                 Json(json!({
+                    "version": 1,
                     "entity": "decision",
                     "aggregate": "count",
-                    "total": total,
-                    "by_decision": {
+                    "rows": [{
+                        "total": total,
                         "allow": allow,
                         "deny": deny,
                         "require_approval": require_approval,
-                    },
+                    }],
+                    "field_descriptors": [
+                        { "name": "total", "type": "number", "facetable": false },
+                        { "name": "allow", "type": "number", "facetable": false },
+                        { "name": "deny", "type": "number", "facetable": false },
+                        { "name": "require_approval", "type": "number", "facetable": false },
+                    ],
+                    "meta": { "total": total },
                 })),
             )
-                .into_response(),
-            Err(e) => {
-                error!("soc_query count failed: {:?}", e);
-                StatusError::internal("Database error").into_response()
-            }
-        },
+                .into_response()
+        }
         "count_over_time" => {
             let bucket = TimeBucket::parse(req.interval.as_deref().unwrap_or("hour"));
             match state
@@ -314,9 +450,15 @@ pub async fn soc_query(
                     (
                         StatusCode::OK,
                         Json(json!({
+                            "version": 1,
                             "entity": "decision",
                             "aggregate": "count_over_time",
-                            "points": points,
+                            "rows": points,
+                            "field_descriptors": [
+                                { "name": "bucket", "type": "time", "facetable": false },
+                                { "name": "count", "type": "number", "facetable": false },
+                            ],
+                            "meta": {},
                         })),
                     )
                         .into_response()
@@ -327,11 +469,100 @@ pub async fn soc_query(
                 }
             }
         }
+        "count_by" => {
+            let Some(group_by) = req.group_by.as_deref() else {
+                return StatusError::bad_request("group_by is required for count_by")
+                    .into_response();
+            };
+            let Some(field) = DecisionGroupField::parse(group_by) else {
+                return StatusError::bad_request(format!(
+                    "unsupported group_by '{group_by}' (supported: agent_id, decision, source_trust, tool, action)"
+                ))
+                .into_response();
+            };
+            match state
+                .storage
+                .count_decisions_grouped(&tenant_id, field, filters, req.limit.unwrap_or(20))
+                .await
+            {
+                Ok(groups) => {
+                    let rows: Vec<_> = groups
+                        .into_iter()
+                        .map(|(value, count)| json!({ "value": value, "count": count }))
+                        .collect();
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "version": 1,
+                            "entity": "decision",
+                            "aggregate": "count_by",
+                            "group_by": group_by,
+                            "rows": rows,
+                            "field_descriptors": [
+                                { "name": "value", "type": "string", "facetable": true },
+                                { "name": "count", "type": "number", "facetable": false },
+                            ],
+                            "meta": {},
+                        })),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!("soc_query count_by failed: {:?}", e);
+                    StatusError::internal("Database error").into_response()
+                }
+            }
+        }
         other => StatusError::bad_request(format!(
-            "unsupported aggregate '{other}' (supported: none, count, count_over_time)"
+            "unsupported aggregate '{other}' (supported: none, count, count_over_time, count_by)"
         ))
         .into_response(),
     }
+}
+
+fn safe_soc_decision_row(
+    row: &DecisionRecord,
+    receipt: Option<&ActionReceiptRecord>,
+) -> serde_json::Value {
+    json!({
+        "id": row.id,
+        "agent_id": row.agent_id,
+        "user_id": row.user_id,
+        "run_id": row.run_id,
+        "trace_id": row.trace_id,
+        "tool": row.skill,
+        "action": row.action,
+        "resource": row.resource,
+        "decision": row.decision,
+        "risk_score": row.risk_score,
+        "reason": row.reason,
+        "matched_policy_ids": row.matched_policy_ids,
+        "request_id": row.request_id,
+        "latency_ms": row.latency_ms,
+        "composite_risk_score": row.composite_risk_score,
+        "source_trust": row.root_trust_level,
+        "action_hash": receipt.and_then(|receipt| receipt.action_hash.as_deref()),
+        "receipt_hash": receipt.map(|receipt| receipt.receipt_hash.as_str()),
+        "prev_receipt_hash": receipt.map(|receipt| receipt.prev_receipt_hash.as_str()),
+        "parent_run_id": row.parent_run_id,
+        "timestamp": row.created_at,
+    })
+}
+
+fn soc_decision_field_descriptors() -> serde_json::Value {
+    json!([
+        { "name": "timestamp", "type": "time", "facetable": false },
+        { "name": "agent_id", "type": "string", "facetable": true },
+        { "name": "tool", "type": "string", "facetable": true },
+        { "name": "action", "type": "string", "facetable": true },
+        { "name": "resource", "type": "string", "facetable": true },
+        { "name": "decision", "type": "decision", "facetable": true },
+        { "name": "source_trust", "type": "trust", "facetable": true },
+        { "name": "run_id", "type": "string", "facetable": true },
+        { "name": "trace_id", "type": "string", "facetable": true }
+        ,{ "name": "action_hash", "type": "hash", "facetable": false }
+        ,{ "name": "receipt_hash", "type": "hash", "facetable": false }
+    ])
 }
 
 /// GET /v1/decisions/:id — get a single decision detail for the authenticated tenant.
@@ -2840,10 +3071,12 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Json(SocQueryRequest {
+                version: 1,
                 entity: "decision".to_string(),
                 filters: SocQueryFilters::default(),
                 aggregate: None,
                 interval: None,
+                group_by: None,
                 limit: Some(10),
                 cursor: None,
             }),
@@ -2853,18 +3086,22 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        // paginated_response returns the rows array (envelope shape reused).
-        assert!(json.is_array() || json.get("data").is_some());
+        assert_eq!(json["version"], 1);
+        assert!(json["rows"].is_array());
+        assert!(json["field_descriptors"].is_array());
+        assert!(json["rows"][0].get("input_json").is_none());
 
         // aggregate=count → totals.
         let resp = soc_query(
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Json(SocQueryRequest {
+                version: 1,
                 entity: "decision".to_string(),
                 filters: SocQueryFilters::default(),
                 aggregate: Some("count".to_string()),
                 interval: None,
+                group_by: None,
                 limit: None,
                 cursor: None,
             }),
@@ -2873,18 +3110,20 @@ mod tests {
         .into_response();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["total"].as_i64().unwrap() >= 1);
-        assert!(json["by_decision"]["allow"].as_i64().unwrap() >= 1);
+        assert!(json["rows"][0]["total"].as_i64().unwrap() >= 1);
+        assert!(json["rows"][0]["allow"].as_i64().unwrap() >= 1);
 
         // aggregate=count_over_time → points array.
         let resp = soc_query(
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Json(SocQueryRequest {
+                version: 1,
                 entity: "decision".to_string(),
                 filters: SocQueryFilters::default(),
                 aggregate: Some("count_over_time".to_string()),
                 interval: Some("day".to_string()),
+                group_by: None,
                 limit: None,
                 cursor: None,
             }),
@@ -2894,7 +3133,30 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["points"].is_array());
+        assert!(json["rows"].is_array());
+
+        // aggregate=count_by → bounded allowlisted facets.
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                version: 1,
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: Some("count_by".to_string()),
+                interval: None,
+                group_by: Some("action".to_string()),
+                limit: Some(20),
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["group_by"], "action");
+        assert!(json["rows"].is_array());
     }
 
     #[tokio::test]
@@ -2905,10 +3167,12 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Json(SocQueryRequest {
+                version: 1,
                 entity: "secrets".to_string(),
                 filters: SocQueryFilters::default(),
                 aggregate: None,
                 interval: None,
+                group_by: None,
                 limit: None,
                 cursor: None,
             }),
@@ -2921,10 +3185,48 @@ mod tests {
             State(state.clone()),
             TenantId(tenant_id.clone()),
             Json(SocQueryRequest {
+                version: 1,
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: Some("count_by".to_string()),
+                interval: None,
+                group_by: Some("input_json".to_string()),
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                version: 2,
+                entity: "decision".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: None,
+                interval: None,
+                group_by: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let resp = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                version: 1,
                 entity: "decision".to_string(),
                 filters: SocQueryFilters::default(),
                 aggregate: Some("drop_table".to_string()),
                 interval: None,
+                group_by: None,
                 limit: None,
                 cursor: None,
             }),
@@ -2944,10 +3246,12 @@ mod tests {
             State(state.clone()),
             TenantId("tenant_other".to_string()),
             Json(SocQueryRequest {
+                version: 1,
                 entity: "decision".to_string(),
                 filters: SocQueryFilters::default(),
                 aggregate: Some("count".to_string()),
                 interval: None,
+                group_by: None,
                 limit: None,
                 cursor: None,
             }),
@@ -2957,7 +3261,7 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            json["total"].as_i64(),
+            json["rows"][0]["total"].as_i64(),
             Some(0),
             "soc_query must be tenant-scoped — no cross-tenant decisions"
         );

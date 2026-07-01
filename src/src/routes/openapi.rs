@@ -120,6 +120,9 @@ use utoipa::OpenApi;
             SocSummary,
             SocQueryFilters,
             SocQueryRequest,
+            SocQueryFieldDescriptor,
+            SocQueryMeta,
+            SocQueryResponse,
             ActionReceiptRecord,
             PolicyAuditLogRecord,
             CreateTenantRequest,
@@ -1206,7 +1209,7 @@ fn soc_summary_api() {}
     security(("bearer_auth" = [])),
     request_body = SocQueryRequest,
     responses(
-        (status = 200, description = "Structured SOC query result"),
+        (status = 200, description = "Structured SOC query result", body = SocQueryResponse),
         (status = 400, description = "Invalid entity, aggregate, or filter shape", body = StatusError)
     )
 )]

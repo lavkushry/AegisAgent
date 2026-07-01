@@ -138,6 +138,12 @@ pub async fn list_decisions_cursor(
         q,
         source_trust,
         skill,
+        action,
+        resource,
+        run_id,
+        trace_id,
+        action_hash,
+        receipt_hash,
         from,
         to,
     } = filters;
@@ -149,6 +155,20 @@ pub async fn list_decisions_cursor(
            AND (? IS NULL OR decision = ?)
            AND (? IS NULL OR root_trust_level = ?)
            AND (? IS NULL OR skill = ?)
+           AND (? IS NULL OR action = ?)
+           AND (? IS NULL OR resource = ?)
+           AND (? IS NULL OR run_id = ?)
+           AND (? IS NULL OR trace_id = ?)
+           AND (? IS NULL OR EXISTS (
+                 SELECT 1 FROM action_receipts r
+                 WHERE r.tenant_id = decisions.tenant_id
+                   AND r.decision_id = decisions.id AND r.action_hash = ?
+               ))
+           AND (? IS NULL OR EXISTS (
+                 SELECT 1 FROM action_receipts r
+                 WHERE r.tenant_id = decisions.tenant_id
+                   AND r.decision_id = decisions.id AND r.receipt_hash = ?
+               ))
            AND (? IS NULL OR created_at >= ?)
            AND (? IS NULL OR created_at <= ?)
            AND (? IS NULL OR rowid < ?)
@@ -170,6 +190,18 @@ pub async fn list_decisions_cursor(
                 .bind(source_trust)
                 .bind(skill)
                 .bind(skill)
+                .bind(action)
+                .bind(action)
+                .bind(resource)
+                .bind(resource)
+                .bind(run_id)
+                .bind(run_id)
+                .bind(trace_id)
+                .bind(trace_id)
+                .bind(action_hash)
+                .bind(action_hash)
+                .bind(receipt_hash)
+                .bind(receipt_hash)
                 .bind(from)
                 .bind(from)
                 .bind(to)
@@ -198,6 +230,18 @@ pub async fn list_decisions_cursor(
                 .bind(source_trust)
                 .bind(skill)
                 .bind(skill)
+                .bind(action)
+                .bind(action)
+                .bind(resource)
+                .bind(resource)
+                .bind(run_id)
+                .bind(run_id)
+                .bind(trace_id)
+                .bind(trace_id)
+                .bind(action_hash)
+                .bind(action_hash)
+                .bind(receipt_hash)
+                .bind(receipt_hash)
                 .bind(from)
                 .bind(from)
                 .bind(to)
@@ -720,8 +764,8 @@ pub async fn count_decisions_by_outcome(
 
 /// #SOC-query: decision counts bucketed over time, for timeseries panels.
 /// The time bucket is chosen server-side (allowlisted [`TimeBucket`]), never
-/// raw user input. Tenant-scoped and parameterized; `q` (FTS) is intentionally
-/// unsupported here. Returns `(bucket_label, count)` ascending.
+/// raw user input. Tenant-scoped and parameterized. Returns `(bucket_label,
+/// count)` ascending.
 pub async fn count_decisions_over_time(
     pool: &DbPool,
     tenant_id: &str,
@@ -734,9 +778,15 @@ pub async fn count_decisions_over_time(
         decision,
         source_trust,
         skill,
+        action,
+        resource,
+        run_id,
+        trace_id,
+        action_hash,
+        receipt_hash,
         from,
         to,
-        ..
+        q,
     } = filters;
     match pool {
         DbPool::Sqlite(p) => {
@@ -748,8 +798,27 @@ pub async fn count_decisions_over_time(
                    AND (? IS NULL OR decision = ?)
                    AND (? IS NULL OR root_trust_level = ?)
                    AND (? IS NULL OR skill = ?)
+                   AND (? IS NULL OR action = ?)
+                   AND (? IS NULL OR resource = ?)
+                   AND (? IS NULL OR run_id = ?)
+                   AND (? IS NULL OR trace_id = ?)
+                   AND (? IS NULL OR EXISTS (
+                         SELECT 1 FROM action_receipts r
+                         WHERE r.tenant_id = decisions.tenant_id
+                           AND r.decision_id = decisions.id AND r.action_hash = ?
+                       ))
+                   AND (? IS NULL OR EXISTS (
+                         SELECT 1 FROM action_receipts r
+                         WHERE r.tenant_id = decisions.tenant_id
+                           AND r.decision_id = decisions.id AND r.receipt_hash = ?
+                       ))
                    AND (? IS NULL OR created_at >= ?)
                    AND (? IS NULL OR created_at <= ?)
+                   AND (? IS NULL OR id IN (
+                         SELECT source_id FROM audit_search_index
+                         WHERE searchable_text MATCH ?
+                           AND source_table = 'decisions' AND tenant_id = ?
+                       ))
                  GROUP BY bucket
                  ORDER BY bucket ASC",
             )
@@ -763,10 +832,25 @@ pub async fn count_decisions_over_time(
             .bind(source_trust)
             .bind(skill)
             .bind(skill)
+            .bind(action)
+            .bind(action)
+            .bind(resource)
+            .bind(resource)
+            .bind(run_id)
+            .bind(run_id)
+            .bind(trace_id)
+            .bind(trace_id)
+            .bind(action_hash)
+            .bind(action_hash)
+            .bind(receipt_hash)
+            .bind(receipt_hash)
             .bind(from)
             .bind(from)
             .bind(to)
             .bind(to)
+            .bind(q)
+            .bind(q)
+            .bind(tenant_id)
             .fetch_all(p)
             .await?;
             Ok(rows
@@ -784,8 +868,27 @@ pub async fn count_decisions_over_time(
                    AND (? IS NULL OR decision = ?)
                    AND (? IS NULL OR root_trust_level = ?)
                    AND (? IS NULL OR skill = ?)
+                   AND (? IS NULL OR action = ?)
+                   AND (? IS NULL OR resource = ?)
+                   AND (? IS NULL OR run_id = ?)
+                   AND (? IS NULL OR trace_id = ?)
+                   AND (? IS NULL OR EXISTS (
+                         SELECT 1 FROM action_receipts r
+                         WHERE r.tenant_id = decisions.tenant_id
+                           AND r.decision_id = decisions.id AND r.action_hash = ?
+                       ))
+                   AND (? IS NULL OR EXISTS (
+                         SELECT 1 FROM action_receipts r
+                         WHERE r.tenant_id = decisions.tenant_id
+                           AND r.decision_id = decisions.id AND r.receipt_hash = ?
+                       ))
                    AND (? IS NULL OR created_at >= ?)
                    AND (? IS NULL OR created_at <= ?)
+                   AND (? IS NULL OR id IN (
+                         SELECT source_id FROM audit_search_index
+                         WHERE searchable_text @@ plainto_tsquery('simple', ?)
+                           AND source_table = 'decisions' AND tenant_id = ?
+                       ))
                  GROUP BY bucket
                  ORDER BY bucket ASC",
             );
@@ -800,10 +903,25 @@ pub async fn count_decisions_over_time(
                 .bind(source_trust)
                 .bind(skill)
                 .bind(skill)
+                .bind(action)
+                .bind(action)
+                .bind(resource)
+                .bind(resource)
+                .bind(run_id)
+                .bind(run_id)
+                .bind(trace_id)
+                .bind(trace_id)
+                .bind(action_hash)
+                .bind(action_hash)
+                .bind(receipt_hash)
+                .bind(receipt_hash)
                 .bind(from)
                 .bind(from)
                 .bind(to)
                 .bind(to)
+                .bind(q)
+                .bind(q)
+                .bind(tenant_id)
                 .fetch_all(p)
                 .await?;
             Ok(rows
@@ -812,6 +930,139 @@ pub async fn count_decisions_over_time(
                 .collect())
         }
     }
+}
+
+/// Count decisions grouped by a server-allowlisted field. Only the column name
+/// selected by [`DecisionGroupField`] is interpolated; all client values are
+/// bound parameters and the result size is capped.
+pub async fn count_decisions_grouped(
+    pool: &DbPool,
+    tenant_id: &str,
+    field: crate::traits::DecisionGroupField,
+    filters: crate::traits::DecisionListFilters<'_>,
+    limit: i64,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let crate::traits::DecisionListFilters {
+        agent_id,
+        decision,
+        q,
+        source_trust,
+        skill,
+        action,
+        resource,
+        run_id,
+        trace_id,
+        action_hash,
+        receipt_hash,
+        from,
+        to,
+    } = filters;
+    let limit = limit.clamp(1, 100);
+    let query = format!(
+        "SELECT COALESCE(CAST({} AS TEXT), 'unknown') AS group_value, COUNT(*) AS cnt
+         FROM decisions
+         WHERE tenant_id = ?
+           AND (? IS NULL OR agent_id = ?)
+           AND (? IS NULL OR decision = ?)
+           AND (? IS NULL OR root_trust_level = ?)
+           AND (? IS NULL OR skill = ?)
+           AND (? IS NULL OR action = ?)
+           AND (? IS NULL OR resource = ?)
+           AND (? IS NULL OR run_id = ?)
+           AND (? IS NULL OR trace_id = ?)
+           AND (? IS NULL OR EXISTS (
+                 SELECT 1 FROM action_receipts r
+                 WHERE r.tenant_id = decisions.tenant_id
+                   AND r.decision_id = decisions.id AND r.action_hash = ?
+               ))
+           AND (? IS NULL OR EXISTS (
+                 SELECT 1 FROM action_receipts r
+                 WHERE r.tenant_id = decisions.tenant_id
+                   AND r.decision_id = decisions.id AND r.receipt_hash = ?
+               ))
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
+           AND (? IS NULL OR id IN (
+                 SELECT source_id FROM audit_search_index
+                 WHERE searchable_text MATCH ? AND source_table = 'decisions' AND tenant_id = ?
+               ))
+         GROUP BY group_value
+         ORDER BY cnt DESC, group_value ASC
+         LIMIT ?",
+        field.sql_column()
+    );
+
+    macro_rules! bind_group_query {
+        ($query:expr) => {
+            $query
+                .bind(tenant_id)
+                .bind(agent_id)
+                .bind(agent_id)
+                .bind(decision)
+                .bind(decision)
+                .bind(source_trust)
+                .bind(source_trust)
+                .bind(skill)
+                .bind(skill)
+                .bind(action)
+                .bind(action)
+                .bind(resource)
+                .bind(resource)
+                .bind(run_id)
+                .bind(run_id)
+                .bind(trace_id)
+                .bind(trace_id)
+                .bind(action_hash)
+                .bind(action_hash)
+                .bind(receipt_hash)
+                .bind(receipt_hash)
+                .bind(from)
+                .bind(from)
+                .bind(to)
+                .bind(to)
+                .bind(q)
+                .bind(q)
+                .bind(tenant_id)
+                .bind(limit)
+        };
+    }
+
+    macro_rules! collect_group_rows {
+        ($rows:expr) => {{
+            let rows = $rows;
+            rows.iter()
+                .map(|row| {
+                    (
+                        row.get::<String, _>("group_value"),
+                        row.get::<i64, _>("cnt"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        }};
+    }
+
+    let rows = match pool {
+        DbPool::Sqlite(pool) => collect_group_rows!(
+            bind_group_query!(sqlx::query(&query))
+                .fetch_all(pool)
+                .await?
+        ),
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let query = query.replace(
+                "searchable_text MATCH ?",
+                "to_tsvector('simple', searchable_text) @@ plainto_tsquery('simple', ?)",
+            );
+            let query = crate::db::to_postgres_sql(&query);
+            collect_group_rows!(
+                bind_group_query!(sqlx::query(&query))
+                    .fetch_all(pool)
+                    .await?
+            )
+        }
+    };
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -1439,6 +1690,118 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(sum(&b), 1);
+    }
+
+    #[tokio::test]
+    async fn soc_query_filters_hashes_and_groups_without_cross_tenant_leakage() {
+        let pool = setup_pool("soc_query_complete_filters").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+        register_tenant(&pool, "tenant_b", "Tenant B", "developer")
+            .await
+            .unwrap();
+        for (tenant, agent_id) in [
+            ("tenant_a", "agent_graph_perf"),
+            ("tenant_b", "agent_graph_perf_b"),
+        ] {
+            crate::execute_query!(
+                pool,
+                "INSERT INTO agents
+                 (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+                 VALUES (?, ?, ?, ?, 'SOC Query Agent', 'dev', 'low', 'active')",
+                agent_id,
+                tenant,
+                format!("key-{tenant}"),
+                format!("token-{tenant}")
+            )
+            .unwrap();
+        }
+
+        let mut write = graph_perf_decision("dec_write", "tenant_a");
+        write.action = "write_file".to_string();
+        write.resource = Some("repo/a".to_string());
+        write.run_id = Some("run-a".to_string());
+        write.trace_id = Some("trace-a".to_string());
+        insert_decision(&pool, &write).await.unwrap();
+
+        let mut read = graph_perf_decision("dec_read", "tenant_a");
+        read.action = "read_file".to_string();
+        insert_decision(&pool, &read).await.unwrap();
+
+        let mut cross = graph_perf_decision("dec_cross", "tenant_b");
+        cross.agent_id = "agent_graph_perf_b".to_string();
+        cross.action = "write_file".to_string();
+        insert_decision(&pool, &cross).await.unwrap();
+
+        for (id, tenant, decision_id) in [
+            ("receipt_a", "tenant_a", "dec_write"),
+            ("receipt_b", "tenant_b", "dec_cross"),
+        ] {
+            crate::execute_query!(
+                pool,
+                "INSERT INTO action_receipts
+                 (id, tenant_id, decision_id, ts, source_trust, decision, action_hash,
+                  prev_receipt_hash, receipt_hash, canon_version)
+                 VALUES (?, ?, ?, '2026-01-01T00:00:00Z', 'trusted_internal_signed',
+                         'allow', 'action-shared', '', 'receipt-shared', 'aegis-jcs-1')",
+                id,
+                tenant,
+                decision_id
+            )
+            .unwrap();
+        }
+
+        let filters = DecisionListFilters {
+            action: Some("write_file"),
+            resource: Some("repo/a"),
+            run_id: Some("run-a"),
+            trace_id: Some("trace-a"),
+            action_hash: Some("action-shared"),
+            receipt_hash: Some("receipt-shared"),
+            ..Default::default()
+        };
+        let (rows, _) = list_decisions_cursor(&pool, "tenant_a", 20, 0, None, filters)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "dec_write");
+
+        let points = count_decisions_over_time(&pool, "tenant_a", TimeBucket::Day, filters)
+            .await
+            .unwrap();
+        assert_eq!(points.iter().map(|(_, count)| count).sum::<i64>(), 1);
+
+        let groups = count_decisions_grouped(
+            &pool,
+            "tenant_a",
+            crate::traits::DecisionGroupField::Action,
+            DecisionListFilters::default(),
+            20,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            groups,
+            vec![("read_file".to_string(), 1), ("write_file".to_string(), 1)]
+        );
+
+        for index in 0..105 {
+            let mut decision = graph_perf_decision(&format!("dec_group_{index}"), "tenant_a");
+            decision.action = format!("action_{index:03}");
+            insert_decision(&pool, &decision).await.unwrap();
+        }
+        let bounded = count_decisions_grouped(
+            &pool,
+            "tenant_a",
+            crate::traits::DecisionGroupField::Action,
+            DecisionListFilters::default(),
+            1_000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(bounded.len(), 100, "grouped query cost must remain capped");
+        assert!(crate::traits::DecisionGroupField::parse("input_json").is_none());
     }
 
     /// Same off-by-one regression as the decisions test above, for

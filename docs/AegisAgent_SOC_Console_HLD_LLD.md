@@ -132,7 +132,7 @@ Pointing Grafana at the gateway via the Infinity/JSON datasource (or shipping pr
 Two read surfaces (per `SOC_UI_Design.md §6`), one uniform abstraction.
 
 - **Entity API (typed REST)** — already present in `api.ts`: `/v1/incidents`, `/v1/incidents/:id`, `/v1/alerts`, `/v1/approvals`, `/v1/agents`, `/v1/mcp/servers`, `/v1/receipts`, `/v1/receipts/:id/verify`, `/v1/decisions`, `/v1/soc/summary`, `/v1/stats`, `/v1/soc/rules`, `/v1/detection_rules`. These become **`GatewayEntityDatasource` methods**, not loose functions.
-- **Event Query API (AQL)** — `POST /v1/soc/query` over the ASE/decision store. The current gateway contract is a flat, tenant-scoped JSON allowlist (`entity`, `filters`, `aggregate`, `interval`, `limit`, `cursor`) backed by parameterized SQLite queries; ClickHouse can implement the same contract later. `SocQueryDatasource` still degrades to `GET /v1/decisions?q=` only when older gateways return 404/405/501.
+- **Event Query API (AQL)** — `POST /v1/soc/query` over the ASE/decision store. Contract version 1 is a tenant-scoped JSON allowlist (`version`, `entity`, `filters`, `aggregate`, `interval`, `group_by`, `limit`, `cursor`) backed by parameterized SQLite queries; ClickHouse can implement the same contract later. Decision filters cover agent, tool, action, resource, trust, run/trace, evidence hashes, full-text terms, and time. Aggregates support filtered count, count-over-time, and bounded group-by. `SocQueryDatasource` degrades to `GET /v1/decisions?q=` only when older gateways return 404/405/501.
 - **Stream** — `GET /v1/soc/stream` (SSE). Advisory only; the query API is always the source of truth.
 
 **SQL-injection invariant carries to the UI boundary:** AQL is compiled to a **parameterized** ClickHouse/SQLite query server-side, never string-interpolated — same invariant as the gateway data layer.
@@ -224,7 +224,7 @@ export interface StreamSubscription { close(): void; }
 | File | Class | Notes |
 |---|---|---|
 | `gatewayEntity.ts` | `GatewayEntityDatasource` | Wraps the existing `fetchFromGateway` (kept as transport). Each `EntityKind` maps to a path. `query()` returns a `DataFrame` built from the JSON array. `capabilities = { query:false, stream:false, fields:true, verify:true }`. |
-| `socQuery.ts` | `SocQueryDatasource` | `POST /v1/soc/query` (AQL → flat structured filters → DataFrame). Falls back to `GET /v1/decisions?q=` only for older gateways where the endpoint is absent. `capabilities.query = true`. |
+| `socQuery.ts` | `SocQueryDatasource` | `POST /v1/soc/query` (AQL → versioned structured filters/aggregates → DataFrame with server field descriptors). Falls back to `GET /v1/decisions?q=` only for older gateways where the endpoint is absent. `capabilities.query = true`. |
 | `receipt.ts` | `ReceiptDatasource` | `verifyReceipt()` → `GET /v1/receipts/:id/verify`; normalizes the loose response (today `ExploreTab` guesses `data.verified || data.status === "verified" || !data.error` — this is centralized here once). |
 | `stream.ts` | `SocStreamDatasource` | `EventSource('/v1/soc/stream')` with reconnect/backoff; no-op `subscribe()` when the endpoint 404s (fail-soft). |
 | `registry.ts` | `datasourceRegistry` | `getDatasource(id)`; the app wires one of each, selected per panel `datasourceId`. |
@@ -489,7 +489,7 @@ Marked against what `ui/` **already has** (prototype) vs. the **gap** this bluep
 
 Newly raised by this blueprint:
 1. **`PUT /v1/approvals/:id` (Edit & re-evaluate)** — does the gateway already support editing a frozen action (re-hash + re-evaluate), or is Edit disabled until it lands? (Approval-integrity invariant: editing MUST re-hash + re-evaluate, never patch the approved hash.)
-2. **`POST /v1/soc/query` contract growth** — current gateway accepts flat structured filters rather than raw strings; future richer AQL AST support must preserve the no-interpolation invariant and remain backward-compatible with the flat contract.
+2. **`POST /v1/soc/query` entity growth** — version 1 now covers the decision entity with typed filters, bounded aggregates, and metadata; future ASE/alert/receipt entities and richer boolean AST nodes must preserve the no-interpolation invariant and use a new compatible contract version where necessary.
 3. **Saved searches / saved dashboards persistence** — server-side keyed by `tenant_id`; confirm the storage table shape before U3/U6.
 
 ---

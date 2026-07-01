@@ -20,7 +20,11 @@ describe("SocQueryDatasource", () => {
 
   it("sends structured filters instead of a raw query string", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ rows: [{ decision: "deny" }] }), {
+      new Response(JSON.stringify({
+        rows: [{ decision: "deny" }],
+        field_descriptors: [{ name: "decision", type: "decision", facetable: true }],
+        meta: { total: 1 },
+      }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -32,6 +36,7 @@ describe("SocQueryDatasource", () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     const body = JSON.parse(String(init.body));
     expect(body).toEqual({
+      version: 1,
       entity: "decision",
       filters: {
         agent_id: "agent-1",
@@ -45,6 +50,41 @@ describe("SocQueryDatasource", () => {
     expect(body).not.toHaveProperty("time_range");
     expect(body).not.toHaveProperty("pagination");
     expect(frame.length).toBe(1);
+    expect(frame.meta?.total).toBe(1);
+    expect(frame.meta?.fieldDescriptors?.[0]?.name).toBe("decision");
+  });
+
+  it("sends bounded group-by requests with complete typed investigation filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ rows: [{ value: "deny", count: 2 }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new SocQueryDatasource(options).query({
+      ...request,
+      aql: "action:write run_id:run-1 trace_id:trace-1 action_hash:ah receipt_hash:rh",
+      aggregate: "count_by",
+      groupBy: "decision",
+      limit: 20,
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(body).toMatchObject({
+      version: 1,
+      aggregate: "count_by",
+      group_by: "decision",
+      limit: 20,
+      filters: {
+        action: "write",
+        run_id: "run-1",
+        trace_id: "trace-1",
+        action_hash: "ah",
+        receipt_hash: "rh",
+      },
+    });
   });
 
   it("falls back to parameterized decisions search when the query API is absent", async () => {

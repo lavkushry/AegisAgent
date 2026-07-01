@@ -18,6 +18,12 @@ pub struct DecisionListFilters<'a> {
     pub q: Option<&'a str>,
     pub source_trust: Option<&'a str>,
     pub skill: Option<&'a str>,
+    pub action: Option<&'a str>,
+    pub resource: Option<&'a str>,
+    pub run_id: Option<&'a str>,
+    pub trace_id: Option<&'a str>,
+    pub action_hash: Option<&'a str>,
+    pub receipt_hash: Option<&'a str>,
     pub from: Option<&'a str>,
     pub to: Option<&'a str>,
 }
@@ -57,6 +63,40 @@ impl TimeBucket {
             Self::Minute => "minute",
             Self::Hour => "hour",
             Self::Day => "day",
+        }
+    }
+}
+
+/// Closed allowlist for SOC decision group-by queries. The SQL column is
+/// selected from this enum only; client-provided strings are never interpolated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionGroupField {
+    AgentId,
+    Decision,
+    SourceTrust,
+    Skill,
+    Action,
+}
+
+impl DecisionGroupField {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "agent_id" => Some(Self::AgentId),
+            "decision" => Some(Self::Decision),
+            "source_trust" => Some(Self::SourceTrust),
+            "tool" | "skill" => Some(Self::Skill),
+            "action" => Some(Self::Action),
+            _ => None,
+        }
+    }
+
+    pub fn sql_column(self) -> &'static str {
+        match self {
+            Self::AgentId => "agent_id",
+            Self::Decision => "decision",
+            Self::SourceTrust => "root_trust_level",
+            Self::Skill => "skill",
+            Self::Action => "action",
         }
     }
 }
@@ -282,6 +322,13 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         bucket: TimeBucket,
         filters: DecisionListFilters<'_>,
+    ) -> Result<Vec<(String, i64)>, AegisError>;
+    async fn count_decisions_grouped(
+        &self,
+        tenant_id: &str,
+        field: DecisionGroupField,
+        filters: DecisionListFilters<'_>,
+        limit: i64,
     ) -> Result<Vec<(String, i64)>, AegisError>;
     async fn list_decisions_by_ids(
         &self,
