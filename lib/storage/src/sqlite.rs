@@ -1076,6 +1076,58 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Bans (Phase 2.4)
+    async fn insert_ban(&self, record: &AgentBanRecord) -> Result<(), AegisError> {
+        db::insert_ban(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn is_banned(
+        &self,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::is_banned(&self.pool, tenant_id, target_type, target_value, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_ban(
+        &self,
+        tenant_id: &str,
+        ban_id: &str,
+    ) -> Result<Option<AgentBanRecord>, AegisError> {
+        db::get_ban(&self.pool, tenant_id, ban_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn revoke_ban(
+        &self,
+        tenant_id: &str,
+        ban_id: &str,
+        revoked_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::revoke_ban(&self.pool, tenant_id, ban_id, revoked_by, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_bans(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AgentBanRecord>, AegisError> {
+        db::list_bans(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

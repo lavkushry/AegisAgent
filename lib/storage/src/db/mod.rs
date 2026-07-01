@@ -402,6 +402,7 @@ macro_rules! fetch_optional_scalar {
 }
 
 // Submodules
+pub mod agent_bans;
 pub mod agent_runs;
 pub mod agents;
 pub mod approvals;
@@ -422,6 +423,7 @@ pub mod webhooks;
 pub mod test_utils;
 
 // Re-exports
+pub use agent_bans::*;
 pub use agent_runs::*;
 pub use agents::*;
 pub use approvals::*;
