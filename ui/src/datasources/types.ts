@@ -16,6 +16,7 @@ export interface TimeRange {
 export type VariableValues = Readonly<Record<string, string | string[]>>;
 
 export type EntityKind =
+  | "ase"
   | "incident"
   | "alert"
   | "approval"

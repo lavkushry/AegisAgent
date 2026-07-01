@@ -65,6 +65,9 @@ export class SocQueryDatasource implements Datasource {
   async query(req: QueryRequest): Promise<DataFrame> {
     const filters = parseAql(req.aql ?? req.search ?? "");
     const gatewayFilters = {
+      event_type: filters.eventType,
+      severity: filters.severity,
+      source_component: filters.sourceComponent,
       agent_id: filters.agentId,
       decision: filters.decision,
       source_trust: filters.sourceTrust,

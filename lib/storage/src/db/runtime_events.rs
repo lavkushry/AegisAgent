@@ -110,6 +110,238 @@ pub async fn list_runtime_events(
     )
 }
 
+const FILTER_SQL: &str = "
+   AND (? IS NULL OR event_type = ?)
+   AND (? IS NULL OR severity = ?)
+   AND (? IS NULL OR agent_id = ?)
+   AND (? IS NULL OR run_id = ?)
+   AND (? IS NULL OR trace_id = ?)
+   AND (? IS NULL OR source_component = ?)
+   AND (? IS NULL OR source_trust = ?)
+   AND (? IS NULL OR decision = ?)
+   AND (? IS NULL OR action_hash = ?)
+   AND (? IS NULL OR receipt_hash = ?)
+   AND (? IS NULL OR observed_at >= ?)
+   AND (? IS NULL OR observed_at <= ?)
+   AND (? IS NULL OR (
+        event_type LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\'
+        OR source_component LIKE ? ESCAPE '\\'
+   ))";
+
+fn like_pattern(raw: Option<&str>) -> Option<String> {
+    raw.map(|value| {
+        let escaped = value
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        format!("%{escaped}%")
+    })
+}
+
+macro_rules! bind_runtime_filters {
+    ($query:expr, $filters:expr, $q:expr) => {{
+        let filters = $filters;
+        $query
+            .bind(filters.event_type)
+            .bind(filters.event_type)
+            .bind(filters.severity)
+            .bind(filters.severity)
+            .bind(filters.agent_id)
+            .bind(filters.agent_id)
+            .bind(filters.run_id)
+            .bind(filters.run_id)
+            .bind(filters.trace_id)
+            .bind(filters.trace_id)
+            .bind(filters.source_component)
+            .bind(filters.source_component)
+            .bind(filters.source_trust)
+            .bind(filters.source_trust)
+            .bind(filters.decision)
+            .bind(filters.decision)
+            .bind(filters.action_hash)
+            .bind(filters.action_hash)
+            .bind(filters.receipt_hash)
+            .bind(filters.receipt_hash)
+            .bind(filters.from)
+            .bind(filters.from)
+            .bind(filters.to)
+            .bind(filters.to)
+            .bind($q)
+            .bind($q)
+            .bind($q)
+            .bind($q)
+    }};
+}
+
+/// Bounded, tenant-scoped ASE query. The cursor is an opaque offset for this
+/// append-only event stream; callers receive it only when another row exists.
+pub async fn query_runtime_events(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+    cursor: Option<i64>,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+) -> Result<(Vec<RuntimeEventRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let offset = cursor.unwrap_or(0).max(0);
+    let q = like_pattern(filters.q);
+    let sql = format!(
+        "SELECT {COLS} FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+         ORDER BY observed_at DESC, id DESC LIMIT ? OFFSET ?"
+    );
+
+    let mut rows = match pool {
+        DbPool::Sqlite(pool) => {
+            bind_runtime_filters!(
+                sqlx::query_as::<_, RuntimeEventRecord>(&sql).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .bind(limit + 1)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(
+                sqlx::query_as::<_, RuntimeEventRecord>(&sql).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .bind(limit + 1)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    Ok((rows, has_more.then_some(offset + limit)))
+}
+
+pub async fn count_runtime_events_over_time(
+    pool: &DbPool,
+    tenant_id: &str,
+    bucket: crate::traits::TimeBucket,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let q = like_pattern(filters.q);
+    let rows = match pool {
+        DbPool::Sqlite(pool) => {
+            let sql = format!(
+                "SELECT strftime(?, observed_at) AS bucket, COUNT(*) AS cnt
+                 FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+                 GROUP BY bucket ORDER BY bucket ASC"
+            );
+            bind_runtime_filters!(
+                sqlx::query(&sql).bind(bucket.sqlite_fmt()).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .fetch_all(pool)
+            .await?
+            .iter()
+            .map(|row| (row.get("bucket"), row.get("cnt")))
+            .collect()
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = format!(
+                "SELECT to_char(date_trunc(?, observed_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket,
+                        COUNT(*) AS cnt
+                 FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+                 GROUP BY bucket ORDER BY bucket ASC"
+            );
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(
+                sqlx::query(&sql).bind(bucket.pg_unit()).bind(tenant_id),
+                filters,
+                q.as_deref()
+            )
+            .fetch_all(pool)
+            .await?
+            .iter()
+            .map(|row| (row.get("bucket"), row.get("cnt")))
+            .collect()
+        }
+    };
+    Ok(rows)
+}
+
+pub async fn count_runtime_events(
+    pool: &DbPool,
+    tenant_id: &str,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+) -> Result<i64, sqlx::Error> {
+    use sqlx::Row;
+    let q = like_pattern(filters.q);
+    let sql =
+        format!("SELECT COUNT(*) AS cnt FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}");
+    let count = match pool {
+        DbPool::Sqlite(pool) => {
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .fetch_one(pool)
+                .await?
+                .get("cnt")
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .fetch_one(pool)
+                .await?
+                .get("cnt")
+        }
+    };
+    Ok(count)
+}
+
+pub async fn count_runtime_events_grouped(
+    pool: &DbPool,
+    tenant_id: &str,
+    field: crate::traits::RuntimeEventGroupField,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+    limit: i64,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let q = like_pattern(filters.q);
+    let limit = limit.clamp(1, 100);
+    let sql = format!(
+        "SELECT COALESCE(CAST({} AS TEXT), 'unknown') AS group_value, COUNT(*) AS cnt
+         FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+         GROUP BY group_value ORDER BY cnt DESC, group_value ASC LIMIT ?",
+        field.sql_column()
+    );
+    let rows = match pool {
+        DbPool::Sqlite(pool) => {
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .bind(limit)
+                .fetch_all(pool)
+                .await?
+                .iter()
+                .map(|row| (row.get("group_value"), row.get("cnt")))
+                .collect()
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .bind(limit)
+                .fetch_all(pool)
+                .await?
+                .iter()
+                .map(|row| (row.get("group_value"), row.get("cnt")))
+                .collect()
+        }
+    };
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +446,124 @@ mod tests {
         let a = list_runtime_events(&pool, "t_a", 50, 0).await.unwrap();
         assert_eq!(a.len(), 2);
         assert!(a.iter().all(|e| e.tenant_id == "t_a"));
+    }
+
+    #[tokio::test]
+    async fn structured_query_filters_and_paginates_runtime_events() {
+        let pool = setup_pool("rt_structured_query").await;
+        let mut matching = ev("t_a", "r1", "e1", "run-match");
+        matching.agent_id = Some("agent-7".to_string());
+        matching.severity = Some("high".to_string());
+        matching.trace_id = Some("trace-match".to_string());
+        matching.receipt_hash = Some("b".repeat(64));
+        matching.reason = Some("manifest drift detected".to_string());
+        insert_runtime_event(&pool, &matching).await.unwrap();
+        insert_runtime_event(&pool, &ev("t_a", "r2", "e2", "run-other"))
+            .await
+            .unwrap();
+        insert_runtime_event(&pool, &ev("t_b", "r3", "e3", "run-match"))
+            .await
+            .unwrap();
+
+        let filters = crate::traits::RuntimeEventListFilters {
+            event_type: Some("tool_call_requested"),
+            severity: Some("high"),
+            agent_id: Some("agent-7"),
+            run_id: Some("run-match"),
+            trace_id: Some("trace-match"),
+            source_component: Some("node-sensor"),
+            source_trust: Some("untrusted_external"),
+            decision: Some("require_approval"),
+            action_hash: matching.action_hash.as_deref(),
+            receipt_hash: matching.receipt_hash.as_deref(),
+            q: Some("manifest drift"),
+            ..Default::default()
+        };
+        let (rows, next) = query_runtime_events(&pool, "t_a", 20, None, filters)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_id, "e1");
+        assert!(next.is_none());
+
+        let (first_page, cursor) = query_runtime_events(
+            &pool,
+            "t_a",
+            1,
+            None,
+            crate::traits::RuntimeEventListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first_page.len(), 1);
+        let (second_page, next) = query_runtime_events(
+            &pool,
+            "t_a",
+            1,
+            cursor,
+            crate::traits::RuntimeEventListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second_page.len(), 1);
+        assert_ne!(first_page[0].event_id, second_page[0].event_id);
+        assert!(next.is_none());
+    }
+
+    #[tokio::test]
+    async fn runtime_event_aggregates_are_bounded_and_tenant_scoped() {
+        let pool = setup_pool("rt_aggregates").await;
+        insert_runtime_event(&pool, &ev("t_a", "r1", "e1", "run1"))
+            .await
+            .unwrap();
+        let mut denied = ev("t_a", "r2", "e2", "run2");
+        denied.event_type = "egress_denied".to_string();
+        denied.decision = Some("deny".to_string());
+        insert_runtime_event(&pool, &denied).await.unwrap();
+        insert_runtime_event(&pool, &ev("t_b", "r3", "e3", "run3"))
+            .await
+            .unwrap();
+
+        let groups = count_runtime_events_grouped(
+            &pool,
+            "t_a",
+            crate::traits::RuntimeEventGroupField::EventType,
+            crate::traits::RuntimeEventListFilters::default(),
+            500,
+        )
+        .await
+        .unwrap();
+        assert_eq!(groups.iter().map(|(_, count)| count).sum::<i64>(), 2);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            count_runtime_events(
+                &pool,
+                "t_a",
+                crate::traits::RuntimeEventListFilters::default()
+            )
+            .await
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            count_runtime_events(
+                &pool,
+                "t_b",
+                crate::traits::RuntimeEventListFilters::default()
+            )
+            .await
+            .unwrap(),
+            1
+        );
+
+        let points = count_runtime_events_over_time(
+            &pool,
+            "t_a",
+            crate::traits::TimeBucket::Hour,
+            crate::traits::RuntimeEventListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(points.iter().map(|(_, count)| count).sum::<i64>(), 2);
     }
 }

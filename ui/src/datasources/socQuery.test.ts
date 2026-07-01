@@ -105,4 +105,32 @@ describe("SocQueryDatasource", () => {
     expect(String(fetchMock.mock.calls[1][0])).toContain("decision=deny");
     expect(frame.length).toBe(1);
   });
+
+  it("sends first-class ASE filters without falling back to decisions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ rows: [{ event_type: "egress_denied" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new SocQueryDatasource(options).query({
+      ...request,
+      entity: "ase",
+      aql: "event_type:egress_denied severity:high source_component:egress-proxy",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(body).toMatchObject({
+      version: 1,
+      entity: "ase",
+      filters: {
+        event_type: "egress_denied",
+        severity: "high",
+        source_component: "egress-proxy",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
