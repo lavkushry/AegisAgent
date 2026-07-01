@@ -32,7 +32,10 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 use aegis_common::errors::AegisError;
-use aegis_storage::traits::{DecisionGroupField, DecisionListFilters, StorageBackend, TimeBucket};
+use aegis_storage::traits::{
+    DecisionGroupField, DecisionListFilters, RuntimeEventGroupField, RuntimeEventListFilters,
+    StorageBackend, TimeBucket,
+};
 
 use super::*;
 
@@ -258,9 +261,8 @@ pub async fn decision_timeseries(
 /// POST /v1/soc/query — structured, tenant-scoped query API for the SOC console
 /// (PR5). Accepts a validated entity + filter allowlist + aggregation; never raw
 /// SQL. Backed entirely by existing parameterized, tenant-scoped storage
-/// methods. This slice supports the `decision` entity; the entity allowlist is
-/// the extension point for `alert`/`incident`/`receipt`/… (each must map only to
-/// parameterized, tenant-scoped queries).
+/// methods. Version 1 supports `decision` and Agent Security Event (`ase`)
+/// entities. Each maps only to parameterized, tenant-scoped queries.
 pub async fn soc_query(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -274,17 +276,19 @@ pub async fn soc_query(
         .into_response();
     }
     // Entity allowlist — fail closed on anything unknown.
-    if req.entity != "decision" {
+    if !matches!(req.entity.as_str(), "decision" | "ase") {
         return StatusError::bad_request(format!(
-            "unsupported entity '{}' (supported: decision)",
+            "unsupported entity '{}' (supported: decision, ase)",
             req.entity
         ))
         .into_response();
     }
-    if matches!(
-        (&req.filters.tool, &req.filters.skill),
-        (Some(tool), Some(skill)) if tool != skill
-    ) {
+    if req.entity == "decision"
+        && matches!(
+            (&req.filters.tool, &req.filters.skill),
+            (Some(tool), Some(skill)) if tool != skill
+        )
+    {
         return StatusError::bad_request(
             "tool and skill filters must match when both are provided",
         )
@@ -325,6 +329,9 @@ pub async fn soc_query(
     if matches!((&from, &to), (Some(from), Some(to)) if from > to) {
         return StatusError::bad_request("filters.from must be before or equal to filters.to")
             .into_response();
+    }
+    if req.entity == "ase" {
+        return query_agent_security_events(state, tenant_id, req, from, to).await;
     }
     let q = req.filters.q.as_deref().and_then(sanitize_fts5_query);
     let filters = DecisionListFilters {
@@ -518,6 +525,226 @@ pub async fn soc_query(
         ))
         .into_response(),
     }
+}
+
+async fn query_agent_security_events(
+    state: Arc<AppState>,
+    tenant_id: String,
+    req: SocQueryRequest,
+    from: Option<String>,
+    to: Option<String>,
+) -> axum::response::Response {
+    let q = req
+        .filters
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
+    let source_component = req
+        .filters
+        .source_component
+        .as_deref()
+        .or(req.filters.tool.as_deref())
+        .or(req.filters.skill.as_deref());
+    let filters = RuntimeEventListFilters {
+        event_type: req.filters.event_type.as_deref(),
+        severity: req.filters.severity.as_deref(),
+        agent_id: req.filters.agent_id.as_deref(),
+        run_id: req.filters.run_id.as_deref(),
+        trace_id: req.filters.trace_id.as_deref(),
+        source_component,
+        source_trust: req.filters.source_trust.as_deref(),
+        decision: req.filters.decision.as_deref(),
+        action_hash: req.filters.action_hash.as_deref(),
+        receipt_hash: req.filters.receipt_hash.as_deref(),
+        from: from.as_deref(),
+        to: to.as_deref(),
+        q,
+    };
+    let aggregate = req.aggregate.as_deref().unwrap_or("none");
+
+    match aggregate {
+        "none" => match state
+            .storage
+            .query_runtime_events(
+                &tenant_id,
+                req.limit.unwrap_or(50).clamp(1, 200),
+                req.cursor,
+                filters,
+            )
+            .await
+        {
+            Ok((rows, next_cursor)) => {
+                let rows: Vec<_> = rows.iter().map(safe_soc_runtime_event_row).collect();
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "version": 1,
+                        "entity": "ase",
+                        "rows": rows,
+                        "field_descriptors": soc_runtime_event_field_descriptors(),
+                        "meta": { "cursor": next_cursor.map(encode_cursor) },
+                    })),
+                )
+                    .into_response()
+            }
+            Err(error) => {
+                error!(?error, "soc_query ASE list failed");
+                StatusError::internal("Database error").into_response()
+            }
+        },
+        "count" => match state
+            .storage
+            .count_runtime_events(&tenant_id, filters)
+            .await
+        {
+            Ok(total) => (
+                StatusCode::OK,
+                Json(json!({
+                    "version": 1,
+                    "entity": "ase",
+                    "aggregate": "count",
+                    "rows": [{ "total": total }],
+                    "field_descriptors": [
+                        { "name": "total", "type": "number", "facetable": false }
+                    ],
+                    "meta": { "total": total },
+                })),
+            )
+                .into_response(),
+            Err(error) => {
+                error!(?error, "soc_query ASE count failed");
+                StatusError::internal("Database error").into_response()
+            }
+        },
+        "count_over_time" => match state
+            .storage
+            .count_runtime_events_over_time(
+                &tenant_id,
+                TimeBucket::parse(req.interval.as_deref().unwrap_or("hour")),
+                filters,
+            )
+            .await
+        {
+            Ok(buckets) => {
+                let rows: Vec<_> = buckets
+                    .into_iter()
+                    .map(|(bucket, count)| json!({ "bucket": bucket, "count": count }))
+                    .collect();
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "version": 1,
+                        "entity": "ase",
+                        "aggregate": "count_over_time",
+                        "rows": rows,
+                        "field_descriptors": [
+                            { "name": "bucket", "type": "time", "facetable": false },
+                            { "name": "count", "type": "number", "facetable": false }
+                        ],
+                        "meta": {},
+                    })),
+                )
+                    .into_response()
+            }
+            Err(error) => {
+                error!(?error, "soc_query ASE count_over_time failed");
+                StatusError::internal("Database error").into_response()
+            }
+        },
+        "count_by" => {
+            let Some(group_by) = req.group_by.as_deref() else {
+                return StatusError::bad_request("group_by is required for count_by")
+                    .into_response();
+            };
+            let Some(field) = RuntimeEventGroupField::parse(group_by) else {
+                return StatusError::bad_request(format!(
+                    "unsupported ASE group_by '{group_by}' (supported: event_type, severity, agent_id, source_component, source_trust, decision)"
+                )).into_response();
+            };
+            match state
+                .storage
+                .count_runtime_events_grouped(&tenant_id, field, filters, req.limit.unwrap_or(20))
+                .await
+            {
+                Ok(groups) => {
+                    let rows: Vec<_> = groups
+                        .into_iter()
+                        .map(|(value, count)| json!({ "value": value, "count": count }))
+                        .collect();
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "version": 1,
+                            "entity": "ase",
+                            "aggregate": "count_by",
+                            "group_by": group_by,
+                            "rows": rows,
+                            "field_descriptors": [
+                                { "name": "value", "type": "string", "facetable": true },
+                                { "name": "count", "type": "number", "facetable": false }
+                            ],
+                            "meta": {},
+                        })),
+                    )
+                        .into_response()
+                }
+                Err(error) => {
+                    error!(?error, "soc_query ASE count_by failed");
+                    StatusError::internal("Database error").into_response()
+                }
+            }
+        }
+        other => StatusError::bad_request(format!(
+            "unsupported aggregate '{other}' (supported: none, count, count_over_time, count_by)"
+        ))
+        .into_response(),
+    }
+}
+
+fn safe_soc_runtime_event_row(row: &RuntimeEventRecord) -> serde_json::Value {
+    json!({
+        "id": row.id,
+        "event_id": row.event_id,
+        "event_type": row.event_type,
+        "severity": row.severity,
+        "agent_id": row.agent_id,
+        "run_id": row.run_id,
+        "sandbox_id": row.sandbox_id,
+        "trace_id": row.trace_id,
+        "parent_event_id": row.parent_event_id,
+        "source_component": row.source_component,
+        "source_trust": row.source_trust,
+        "decision": row.decision,
+        "reason": row.reason,
+        "action_hash": row.action_hash,
+        "prompt_hash": row.prompt_hash,
+        "request_hash": row.request_hash,
+        "response_hash": row.response_hash,
+        "receipt_id": row.receipt_id,
+        "receipt_hash": row.receipt_hash,
+        "prev_receipt_hash": row.prev_receipt_hash,
+        "canonical_version": row.canonical_version,
+        "redaction_status": row.redaction_status,
+        "timestamp": row.observed_at,
+        "received_at": row.received_at,
+    })
+}
+
+fn soc_runtime_event_field_descriptors() -> serde_json::Value {
+    json!([
+        { "name": "timestamp", "type": "time", "facetable": false },
+        { "name": "event_type", "type": "string", "facetable": true },
+        { "name": "severity", "type": "string", "facetable": true },
+        { "name": "agent_id", "type": "string", "facetable": true },
+        { "name": "source_component", "type": "string", "facetable": true },
+        { "name": "source_trust", "type": "trust", "facetable": true },
+        { "name": "decision", "type": "decision", "facetable": true },
+        { "name": "run_id", "type": "string", "facetable": true },
+        { "name": "trace_id", "type": "string", "facetable": true },
+        { "name": "action_hash", "type": "hash", "facetable": false },
+        { "name": "receipt_hash", "type": "hash", "facetable": false }
+    ])
 }
 
 fn safe_soc_decision_row(
@@ -3157,6 +3384,116 @@ mod tests {
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["group_by"], "action");
         assert!(json["rows"].is_array());
+    }
+
+    #[tokio::test]
+    async fn soc_query_ase_rows_aggregates_and_tenant_isolation() {
+        let (state, tenant_id, _) = setup_state("soc_query_ase").await;
+        let now = Utc::now();
+        state
+            .storage
+            .insert_runtime_event(&RuntimeEventRecord {
+                id: "ase-row-1".to_string(),
+                tenant_id: tenant_id.clone(),
+                event_id: "ase-event-1".to_string(),
+                event_type: "egress_denied".to_string(),
+                severity: Some("high".to_string()),
+                agent_id: Some("agent-ase".to_string()),
+                run_id: Some("run-ase".to_string()),
+                sandbox_id: None,
+                trace_id: Some("trace-ase".to_string()),
+                parent_event_id: None,
+                source_component: "egress-proxy".to_string(),
+                source_trust: Some("untrusted_external".to_string()),
+                decision: Some("deny".to_string()),
+                reason: Some("destination blocked".to_string()),
+                action_hash: Some("a".repeat(64)),
+                prompt_hash: None,
+                request_hash: None,
+                response_hash: None,
+                receipt_id: Some("receipt-ase".to_string()),
+                receipt_hash: Some("b".repeat(64)),
+                prev_receipt_hash: Some("c".repeat(64)),
+                canonical_version: Some("aegis-jcs-1".to_string()),
+                redaction_status: Some("redacted".to_string()),
+                schema_version: 1,
+                observed_at: now,
+                received_at: now,
+            })
+            .await
+            .unwrap();
+
+        let filters = SocQueryFilters {
+            event_type: Some("egress_denied".to_string()),
+            severity: Some("high".to_string()),
+            agent_id: Some("agent-ase".to_string()),
+            source_component: Some("egress-proxy".to_string()),
+            ..Default::default()
+        };
+        let response = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(SocQueryRequest {
+                version: 1,
+                entity: "ase".to_string(),
+                filters: filters.clone(),
+                aggregate: None,
+                interval: None,
+                group_by: None,
+                limit: Some(20),
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["entity"], "ase");
+        assert_eq!(json["rows"][0]["event_id"], "ase-event-1");
+        assert!(json["rows"][0].get("tenant_id").is_none());
+        assert!(json["rows"][0].get("raw_payload").is_none());
+
+        let response = soc_query(
+            State(state.clone()),
+            TenantId(tenant_id),
+            Json(SocQueryRequest {
+                version: 1,
+                entity: "ase".to_string(),
+                filters,
+                aggregate: Some("count_by".to_string()),
+                interval: None,
+                group_by: Some("event_type".to_string()),
+                limit: Some(20),
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["rows"][0]["value"], "egress_denied");
+        assert_eq!(json["rows"][0]["count"], 1);
+
+        let response = soc_query(
+            State(state),
+            TenantId("tenant-other".to_string()),
+            Json(SocQueryRequest {
+                version: 1,
+                entity: "ase".to_string(),
+                filters: SocQueryFilters::default(),
+                aggregate: Some("count".to_string()),
+                interval: None,
+                group_by: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["rows"][0]["total"], 0);
     }
 
     #[tokio::test]

@@ -273,6 +273,34 @@ pub async fn count_runtime_events_over_time(
     Ok(rows)
 }
 
+pub async fn count_runtime_events(
+    pool: &DbPool,
+    tenant_id: &str,
+    filters: crate::traits::RuntimeEventListFilters<'_>,
+) -> Result<i64, sqlx::Error> {
+    use sqlx::Row;
+    let q = like_pattern(filters.q);
+    let sql =
+        format!("SELECT COUNT(*) AS cnt FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}");
+    let count = match pool {
+        DbPool::Sqlite(pool) => {
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .fetch_one(pool)
+                .await?
+                .get("cnt")
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pool) => {
+            let sql = crate::db::to_postgres_sql(&sql);
+            bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
+                .fetch_one(pool)
+                .await?
+                .get("cnt")
+        }
+    };
+    Ok(count)
+}
+
 pub async fn count_runtime_events_grouped(
     pool: &DbPool,
     tenant_id: &str,
@@ -418,5 +446,124 @@ mod tests {
         let a = list_runtime_events(&pool, "t_a", 50, 0).await.unwrap();
         assert_eq!(a.len(), 2);
         assert!(a.iter().all(|e| e.tenant_id == "t_a"));
+    }
+
+    #[tokio::test]
+    async fn structured_query_filters_and_paginates_runtime_events() {
+        let pool = setup_pool("rt_structured_query").await;
+        let mut matching = ev("t_a", "r1", "e1", "run-match");
+        matching.agent_id = Some("agent-7".to_string());
+        matching.severity = Some("high".to_string());
+        matching.trace_id = Some("trace-match".to_string());
+        matching.receipt_hash = Some("b".repeat(64));
+        matching.reason = Some("manifest drift detected".to_string());
+        insert_runtime_event(&pool, &matching).await.unwrap();
+        insert_runtime_event(&pool, &ev("t_a", "r2", "e2", "run-other"))
+            .await
+            .unwrap();
+        insert_runtime_event(&pool, &ev("t_b", "r3", "e3", "run-match"))
+            .await
+            .unwrap();
+
+        let filters = crate::traits::RuntimeEventListFilters {
+            event_type: Some("tool_call_requested"),
+            severity: Some("high"),
+            agent_id: Some("agent-7"),
+            run_id: Some("run-match"),
+            trace_id: Some("trace-match"),
+            source_component: Some("node-sensor"),
+            source_trust: Some("untrusted_external"),
+            decision: Some("require_approval"),
+            action_hash: matching.action_hash.as_deref(),
+            receipt_hash: matching.receipt_hash.as_deref(),
+            q: Some("manifest drift"),
+            ..Default::default()
+        };
+        let (rows, next) = query_runtime_events(&pool, "t_a", 20, None, filters)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_id, "e1");
+        assert!(next.is_none());
+
+        let (first_page, cursor) = query_runtime_events(
+            &pool,
+            "t_a",
+            1,
+            None,
+            crate::traits::RuntimeEventListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first_page.len(), 1);
+        let (second_page, next) = query_runtime_events(
+            &pool,
+            "t_a",
+            1,
+            cursor,
+            crate::traits::RuntimeEventListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second_page.len(), 1);
+        assert_ne!(first_page[0].event_id, second_page[0].event_id);
+        assert!(next.is_none());
+    }
+
+    #[tokio::test]
+    async fn runtime_event_aggregates_are_bounded_and_tenant_scoped() {
+        let pool = setup_pool("rt_aggregates").await;
+        insert_runtime_event(&pool, &ev("t_a", "r1", "e1", "run1"))
+            .await
+            .unwrap();
+        let mut denied = ev("t_a", "r2", "e2", "run2");
+        denied.event_type = "egress_denied".to_string();
+        denied.decision = Some("deny".to_string());
+        insert_runtime_event(&pool, &denied).await.unwrap();
+        insert_runtime_event(&pool, &ev("t_b", "r3", "e3", "run3"))
+            .await
+            .unwrap();
+
+        let groups = count_runtime_events_grouped(
+            &pool,
+            "t_a",
+            crate::traits::RuntimeEventGroupField::EventType,
+            crate::traits::RuntimeEventListFilters::default(),
+            500,
+        )
+        .await
+        .unwrap();
+        assert_eq!(groups.iter().map(|(_, count)| count).sum::<i64>(), 2);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            count_runtime_events(
+                &pool,
+                "t_a",
+                crate::traits::RuntimeEventListFilters::default()
+            )
+            .await
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            count_runtime_events(
+                &pool,
+                "t_b",
+                crate::traits::RuntimeEventListFilters::default()
+            )
+            .await
+            .unwrap(),
+            1
+        );
+
+        let points = count_runtime_events_over_time(
+            &pool,
+            "t_a",
+            crate::traits::TimeBucket::Hour,
+            crate::traits::RuntimeEventListFilters::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(points.iter().map(|(_, count)| count).sum::<i64>(), 2);
     }
 }
