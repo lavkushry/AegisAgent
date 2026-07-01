@@ -622,6 +622,27 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
     ) -> Result<Vec<(String, i64)>, AegisError>;
 
+    // Control commands (Phase 2.3: signed gateway->sensor commands)
+    async fn insert_control_command(&self, record: &ControlCommandRecord)
+        -> Result<(), AegisError>;
+    async fn get_control_command(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+    ) -> Result<Option<ControlCommandRecord>, AegisError>;
+    async fn update_control_command_status(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+        status: &str,
+    ) -> Result<bool, AegisError>;
+    async fn list_control_commands(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ControlCommandRecord>, AegisError>;
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,
