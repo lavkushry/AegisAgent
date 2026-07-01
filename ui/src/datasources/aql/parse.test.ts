@@ -31,9 +31,12 @@ describe("AQL parser", () => {
     });
   });
 
-  it("keeps free terms and unsupported field values in the safe full-text parameter", () => {
-    expect(parseAql("event_type:approval hash mismatch")).toMatchObject({
-      q: "approval hash mismatch",
+  it("compiles ASE fields and keeps free terms in the safe full-text parameter", () => {
+    expect(parseAql("event_type:approval severity:high source_component:node-sensor hash mismatch")).toMatchObject({
+      eventType: "approval",
+      severity: "high",
+      sourceComponent: "node-sensor",
+      q: "hash mismatch",
     });
   });
 
