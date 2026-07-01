@@ -1,7 +1,10 @@
 use crate::db;
 use crate::db::DbPool;
 use crate::tenant_bloom::TenantBloomFilter;
-use crate::traits::{DecisionGroupField, DecisionListFilters, StorageBackend, TimeBucket};
+use crate::traits::{
+    DecisionGroupField, DecisionListFilters, RuntimeEventGroupField, RuntimeEventListFilters,
+    StorageBackend, TimeBucket,
+};
 use aegis_api::models::*;
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
@@ -992,6 +995,41 @@ impl StorageBackend for SqlDbStorage {
         offset: i64,
     ) -> Result<Vec<RuntimeEventRecord>, AegisError> {
         db::list_runtime_events(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn query_runtime_events(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        cursor: Option<i64>,
+        filters: RuntimeEventListFilters<'_>,
+    ) -> Result<(Vec<RuntimeEventRecord>, Option<i64>), AegisError> {
+        db::query_runtime_events(&self.pool, tenant_id, limit, cursor, filters)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn count_runtime_events_over_time(
+        &self,
+        tenant_id: &str,
+        bucket: TimeBucket,
+        filters: RuntimeEventListFilters<'_>,
+    ) -> Result<Vec<(String, i64)>, AegisError> {
+        db::count_runtime_events_over_time(&self.pool, tenant_id, bucket, filters)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn count_runtime_events_grouped(
+        &self,
+        tenant_id: &str,
+        field: RuntimeEventGroupField,
+        filters: RuntimeEventListFilters<'_>,
+        limit: i64,
+    ) -> Result<Vec<(String, i64)>, AegisError> {
+        db::count_runtime_events_grouped(&self.pool, tenant_id, field, filters, limit)
             .await
             .map_err(AegisError::Database)
     }

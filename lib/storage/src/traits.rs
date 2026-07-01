@@ -28,6 +28,59 @@ pub struct DecisionListFilters<'a> {
     pub to: Option<&'a str>,
 }
 
+/// Optional, parameterized filters for durable Agent Security Events.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeEventListFilters<'a> {
+    pub event_type: Option<&'a str>,
+    pub severity: Option<&'a str>,
+    pub agent_id: Option<&'a str>,
+    pub run_id: Option<&'a str>,
+    pub trace_id: Option<&'a str>,
+    pub source_component: Option<&'a str>,
+    pub source_trust: Option<&'a str>,
+    pub decision: Option<&'a str>,
+    pub action_hash: Option<&'a str>,
+    pub receipt_hash: Option<&'a str>,
+    pub from: Option<&'a str>,
+    pub to: Option<&'a str>,
+    pub q: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEventGroupField {
+    EventType,
+    Severity,
+    AgentId,
+    SourceComponent,
+    SourceTrust,
+    Decision,
+}
+
+impl RuntimeEventGroupField {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "event_type" => Some(Self::EventType),
+            "severity" => Some(Self::Severity),
+            "agent_id" => Some(Self::AgentId),
+            "source_component" | "tool" => Some(Self::SourceComponent),
+            "source_trust" => Some(Self::SourceTrust),
+            "decision" => Some(Self::Decision),
+            _ => None,
+        }
+    }
+
+    pub fn sql_column(self) -> &'static str {
+        match self {
+            Self::EventType => "event_type",
+            Self::Severity => "severity",
+            Self::AgentId => "agent_id",
+            Self::SourceComponent => "source_component",
+            Self::SourceTrust => "source_trust",
+            Self::Decision => "decision",
+        }
+    }
+}
+
 /// Time-bucket granularity for `count_decisions_over_time`. A closed
 /// allowlist — the bucket is chosen server-side and never interpolated from
 /// raw user input.
@@ -548,6 +601,26 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<RuntimeEventRecord>, AegisError>;
+    async fn query_runtime_events(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        cursor: Option<i64>,
+        filters: RuntimeEventListFilters<'_>,
+    ) -> Result<(Vec<RuntimeEventRecord>, Option<i64>), AegisError>;
+    async fn count_runtime_events_over_time(
+        &self,
+        tenant_id: &str,
+        bucket: TimeBucket,
+        filters: RuntimeEventListFilters<'_>,
+    ) -> Result<Vec<(String, i64)>, AegisError>;
+    async fn count_runtime_events_grouped(
+        &self,
+        tenant_id: &str,
+        field: RuntimeEventGroupField,
+        filters: RuntimeEventListFilters<'_>,
+        limit: i64,
+    ) -> Result<Vec<(String, i64)>, AegisError>;
 
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
