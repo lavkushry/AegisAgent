@@ -18,6 +18,12 @@ export interface ParsedQuery {
   sourceTrust?: string;
   /** The tool / integration name (stored as `skill` on the gateway). */
   skill?: string;
+  action?: string;
+  resource?: string;
+  runId?: string;
+  traceId?: string;
+  actionHash?: string;
+  receiptHash?: string;
   q?: string;
 }
 
@@ -34,6 +40,12 @@ export function parseAql(input: string): ParsedQuery {
   let decision: string | undefined;
   let sourceTrust: string | undefined;
   let skill: string | undefined;
+  let action: string | undefined;
+  let resource: string | undefined;
+  let runId: string | undefined;
+  let traceId: string | undefined;
+  let actionHash: string | undefined;
+  let receiptHash: string | undefined;
   const qTerms: string[] = [];
 
   for (const token of tokens) {
@@ -49,6 +61,18 @@ export function parseAql(input: string): ParsedQuery {
         sourceTrust = value;
       } else if ((field === "tool" || field === "skill") && !skill) {
         skill = value;
+      } else if (field === "action" && !action) {
+        action = value;
+      } else if (field === "resource" && !resource) {
+        resource = value;
+      } else if (field === "run_id" && !runId) {
+        runId = value;
+      } else if (field === "trace_id" && !traceId) {
+        traceId = value;
+      } else if (field === "action_hash" && !actionHash) {
+        actionHash = value;
+      } else if (field === "receipt_hash" && !receiptHash) {
+        receiptHash = value;
       } else {
         // Unknown/unsupported field filter — search its value as a keyword.
         qTerms.push(value);
@@ -63,6 +87,12 @@ export function parseAql(input: string): ParsedQuery {
     decision,
     sourceTrust,
     skill,
+    action,
+    resource,
+    runId,
+    traceId,
+    actionHash,
+    receiptHash,
     q: qTerms.length > 0 ? qTerms.join(" ") : undefined,
   };
 }

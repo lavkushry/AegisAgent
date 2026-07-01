@@ -52,9 +52,11 @@ export interface QueryRequest {
   readonly cursor?: string;
   readonly search?: string;
   /** Aggregate mode — when set, the datasource returns a bucketed series. */
-  readonly aggregate?: "count_over_time";
+  readonly aggregate?: "count" | "count_over_time" | "count_by";
   /** Bucket granularity for count_over_time ("minute" | "hour" | "day"). */
   readonly interval?: string;
+  /** Allowlisted field used only with the count_by aggregate. */
+  readonly groupBy?: "agent_id" | "decision" | "source_trust" | "tool" | "action";
   readonly signal?: AbortSignal;
 }
 
@@ -69,7 +71,12 @@ export interface Field {
 export interface DataFrame {
   readonly fields: ReadonlyArray<Field>;
   readonly length: number;
-  readonly meta?: { total?: number; cursor?: string; executedMs?: number };
+  readonly meta?: {
+    total?: number;
+    cursor?: string;
+    executedMs?: number;
+    fieldDescriptors?: ReadonlyArray<FieldDescriptor>;
+  };
 }
 
 /** Field catalog for the Explore field sidebar + AQL autocomplete. */

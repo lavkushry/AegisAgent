@@ -519,18 +519,27 @@ impl SocService for SocGrpcServiceImpl {
         let optional = |value: String| (!value.is_empty()).then_some(value);
         let filters = req.filters.unwrap_or_default();
         let rest_request = crate::models::SocQueryRequest {
+            version: if req.version == 0 { 1 } else { req.version },
             entity: req.entity,
             filters: crate::models::SocQueryFilters {
                 agent_id: optional(filters.agent_id),
                 decision: optional(filters.decision),
                 source_trust: optional(filters.source_trust),
                 skill: optional(filters.skill),
+                tool: optional(filters.tool),
+                action: optional(filters.action),
+                resource: optional(filters.resource),
+                run_id: optional(filters.run_id),
+                trace_id: optional(filters.trace_id),
+                action_hash: optional(filters.action_hash),
+                receipt_hash: optional(filters.receipt_hash),
                 from: optional(filters.from),
                 to: optional(filters.to),
                 q: optional(filters.q),
             },
             aggregate: optional(req.aggregate),
             interval: optional(req.interval),
+            group_by: optional(req.group_by),
             limit: req.limit,
             cursor: req.cursor,
         };

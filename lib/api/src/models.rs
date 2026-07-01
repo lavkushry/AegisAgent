@@ -883,6 +883,14 @@ pub struct SocQueryFilters {
     pub decision: Option<String>,
     pub source_trust: Option<String>,
     pub skill: Option<String>,
+    /// Public alias for the legacy `skill` storage field.
+    pub tool: Option<String>,
+    pub action: Option<String>,
+    pub resource: Option<String>,
+    pub run_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub action_hash: Option<String>,
+    pub receipt_hash: Option<String>,
     pub from: Option<String>,
     pub to: Option<String>,
     pub q: Option<String>,
@@ -897,6 +905,9 @@ pub struct SocQueryFilters {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SocQueryRequest {
+    /// Public query-contract version. Currently only version 1 is accepted.
+    #[serde(default = "soc_query_version_one")]
+    pub version: u32,
     pub entity: String,
     #[serde(default)]
     pub filters: SocQueryFilters,
@@ -904,8 +915,40 @@ pub struct SocQueryRequest {
     pub aggregate: Option<String>,
     /// Bucket for `count_over_time`: `minute`, `hour`, or `day`.
     pub interval: Option<String>,
+    /// Allowlisted field for the `count_by` aggregate.
+    pub group_by: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<i64>,
+}
+
+const fn soc_query_version_one() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SocQueryFieldDescriptor {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub facetable: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct SocQueryMeta {
+    pub total: Option<i64>,
+    pub cursor: Option<String>,
+}
+
+/// DataFrame-compatible response envelope used by every SOC query shape.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SocQueryResponse {
+    pub version: u32,
+    pub entity: String,
+    pub aggregate: Option<String>,
+    pub group_by: Option<String>,
+    pub rows: Vec<serde_json::Value>,
+    pub field_descriptors: Vec<SocQueryFieldDescriptor>,
+    pub meta: SocQueryMeta,
 }
 
 /// Tamper-evident, hash-chained action receipt. The hashed body is every field

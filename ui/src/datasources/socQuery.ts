@@ -31,6 +31,7 @@ interface SocQueryResponse {
   fields?: ReadonlyArray<Field>;
   length?: number;
   meta?: DataFrame["meta"];
+  field_descriptors?: ReadonlyArray<FieldDescriptor>;
 }
 
 function responseToFrame(response: SocQueryResponse | Array<Record<string, unknown>>): DataFrame {
@@ -39,7 +40,14 @@ function responseToFrame(response: SocQueryResponse | Array<Record<string, unkno
     return { fields: response.fields, length: response.length, meta: response.meta };
   }
   const frame = rowsToFrame(Array.isArray(response.rows) ? response.rows : []);
-  return { ...frame, meta: { ...frame.meta, ...response.meta } };
+  return {
+    ...frame,
+    meta: {
+      ...frame.meta,
+      ...response.meta,
+      fieldDescriptors: response.field_descriptors,
+    },
+  };
 }
 
 /** Structured SOC event query with a safe decisions fallback for older gateways. */
@@ -60,18 +68,26 @@ export class SocQueryDatasource implements Datasource {
       agent_id: filters.agentId,
       decision: filters.decision,
       source_trust: filters.sourceTrust,
-      skill: filters.skill,
+      tool: filters.skill,
+      action: filters.action,
+      resource: filters.resource,
+      run_id: filters.runId,
+      trace_id: filters.traceId,
+      action_hash: filters.actionHash,
+      receipt_hash: filters.receiptHash,
       q: filters.q,
       from: req.timeRange.from,
       to: req.timeRange.to,
     };
     const body = {
+      version: 1,
       entity: req.entity ?? "decision",
       filters: Object.fromEntries(
         Object.entries(gatewayFilters).filter(([, value]) => value !== undefined && value !== ""),
       ),
       aggregate: req.aggregate,
       interval: req.aggregate === "count_over_time" ? req.interval ?? "hour" : undefined,
+      group_by: req.aggregate === "count_by" ? req.groupBy : undefined,
       limit: req.limit ?? 50,
       cursor: req.cursor,
     };
@@ -110,6 +126,12 @@ export class SocQueryDatasource implements Datasource {
     if (filters.decision) params.set("decision", filters.decision);
     if (filters.sourceTrust) params.set("source_trust", filters.sourceTrust);
     if (filters.skill) params.set("skill", filters.skill);
+    if (filters.action) params.set("action", filters.action);
+    if (filters.resource) params.set("resource", filters.resource);
+    if (filters.runId) params.set("run_id", filters.runId);
+    if (filters.traceId) params.set("trace_id", filters.traceId);
+    if (filters.actionHash) params.set("action_hash", filters.actionHash);
+    if (filters.receiptHash) params.set("receipt_hash", filters.receiptHash);
     if (filters.q) params.set("q", filters.q);
     if (req.timeRange.from) params.set("from", req.timeRange.from);
     if (req.timeRange.to) params.set("to", req.timeRange.to);

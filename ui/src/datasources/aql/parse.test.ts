@@ -6,11 +6,27 @@ describe("AQL parser", () => {
   it("compiles supported field filters into typed gateway parameters", () => {
     expect(
       parseAql("agent_id:agent-1 AND decision:deny AND source_trust:untrusted_external AND tool:github"),
-    ).toEqual({
+    ).toMatchObject({
       agentId: "agent-1",
       decision: "deny",
       sourceTrust: "untrusted_external",
       skill: "github",
+      q: undefined,
+    });
+  });
+
+  it("compiles investigation identifiers and evidence hashes as typed filters", () => {
+    expect(
+      parseAql(
+        "action:write resource:repo run_id:run-1 trace_id:trace-1 action_hash:sha256:a receipt_hash:sha256:r",
+      ),
+    ).toMatchObject({
+      action: "write",
+      resource: "repo",
+      runId: "run-1",
+      traceId: "trace-1",
+      actionHash: "sha256:a",
+      receiptHash: "sha256:r",
       q: undefined,
     });
   });
