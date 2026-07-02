@@ -1044,6 +1044,152 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Control commands (Phase 2.3)
+    async fn insert_control_command(
+        &self,
+        record: &ControlCommandRecord,
+    ) -> Result<(), AegisError> {
+        db::insert_control_command(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_control_command(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+    ) -> Result<Option<ControlCommandRecord>, AegisError> {
+        db::get_control_command(&self.pool, tenant_id, command_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn update_control_command_status(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+        status: &str,
+    ) -> Result<bool, AegisError> {
+        db::update_control_command_status(&self.pool, tenant_id, command_id, status)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_control_commands(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ControlCommandRecord>, AegisError> {
+        db::list_control_commands(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    // Bans (Phase 2.4)
+    async fn insert_ban(&self, record: &AgentBanRecord) -> Result<(), AegisError> {
+        db::insert_ban(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn is_banned(
+        &self,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::is_banned(&self.pool, tenant_id, target_type, target_value, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_ban(
+        &self,
+        tenant_id: &str,
+        ban_id: &str,
+    ) -> Result<Option<AgentBanRecord>, AegisError> {
+        db::get_ban(&self.pool, tenant_id, ban_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn revoke_ban(
+        &self,
+        tenant_id: &str,
+        ban_id: &str,
+        revoked_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::revoke_ban(&self.pool, tenant_id, ban_id, revoked_by, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_bans(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AgentBanRecord>, AegisError> {
+        db::list_bans(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    // Quarantine (Phase 2.5)
+    async fn insert_quarantine(&self, record: &QuarantineRecord) -> Result<(), AegisError> {
+        db::insert_quarantine(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn is_quarantined(
+        &self,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+    ) -> Result<bool, AegisError> {
+        db::is_quarantined(&self.pool, tenant_id, target_type, target_value)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<QuarantineRecord>, AegisError> {
+        db::get_quarantine(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn release_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        status: &str,
+        released_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::release_quarantine(&self.pool, tenant_id, id, status, released_by, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_quarantine(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<QuarantineRecord>, AegisError> {
+        db::list_quarantine(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

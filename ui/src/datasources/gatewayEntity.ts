@@ -1,6 +1,6 @@
-import { fetchFromGateway, type FetchOptions } from "@/app/api";
+import { fetchFromGateway, type FetchOptions } from "../app/api";
 import { normalizeVerification } from "./receiptVerification";
-import { resolveTimeToken } from "@/lib/format";
+import { resolveTimeToken } from "../lib/format";
 import { rowsToFrame } from "./frame";
 import type {
   DataFrame,
@@ -12,8 +12,7 @@ import type {
   VerifyResult,
 } from "./types";
 
-const ENTITY_PATHS: Record<EntityKind, string> = {
-  ase: "/v1/runtime/events",
+const ENTITY_PATHS: Partial<Record<EntityKind, string>> = {
   incident: "/v1/incidents",
   alert: "/v1/alerts",
   approval: "/v1/approvals",
@@ -58,10 +57,14 @@ export class GatewayEntityDatasource implements Datasource {
       return this.countOverTime(req);
     }
     const entity = req.entity ?? "decision";
+    const entityPath = ENTITY_PATHS[entity];
+    if (!entityPath) {
+      throw new Error(`Entity '${entity}' requires the soc-query datasource`);
+    }
     const limit = req.limit ?? 50;
     const params = new URLSearchParams({ limit: String(limit) });
     if (req.search) params.set("q", req.search);
-    const path = `${ENTITY_PATHS[entity]}?${params.toString()}`;
+    const path = `${entityPath}?${params.toString()}`;
     const rows = await fetchFromGateway<Array<Record<string, unknown>>>(this.opts, path);
     return rowsToFrame(Array.isArray(rows) ? rows : []);
   }

@@ -627,6 +627,85 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
     ) -> Result<Vec<(String, i64)>, AegisError>;
 
+    // Control commands (Phase 2.3: signed gateway->sensor commands)
+    async fn insert_control_command(&self, record: &ControlCommandRecord)
+        -> Result<(), AegisError>;
+    async fn get_control_command(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+    ) -> Result<Option<ControlCommandRecord>, AegisError>;
+    async fn update_control_command_status(
+        &self,
+        tenant_id: &str,
+        command_id: &str,
+        status: &str,
+    ) -> Result<bool, AegisError>;
+    async fn list_control_commands(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ControlCommandRecord>, AegisError>;
+
+    // Bans (Phase 2.4: first-class ban store)
+    async fn insert_ban(&self, record: &AgentBanRecord) -> Result<(), AegisError>;
+    /// Hot enforcement lookup: is `(target_type, target_value)` under an active,
+    /// unrevoked, unexpired ban for this tenant as of `now`?
+    async fn is_banned(
+        &self,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+    async fn get_ban(
+        &self,
+        tenant_id: &str,
+        ban_id: &str,
+    ) -> Result<Option<AgentBanRecord>, AegisError>;
+    async fn revoke_ban(
+        &self,
+        tenant_id: &str,
+        ban_id: &str,
+        revoked_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+    async fn list_bans(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AgentBanRecord>, AegisError>;
+
+    // Quarantine (Phase 2.5: freeze + preserve evidence for review)
+    async fn insert_quarantine(&self, record: &QuarantineRecord) -> Result<(), AegisError>;
+    async fn is_quarantined(
+        &self,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+    ) -> Result<bool, AegisError>;
+    async fn get_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<QuarantineRecord>, AegisError>;
+    async fn release_quarantine(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        status: &str,
+        released_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+    async fn list_quarantine(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<QuarantineRecord>, AegisError>;
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

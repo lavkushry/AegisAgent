@@ -236,7 +236,7 @@ pub async fn count_runtime_events_over_time(
             let sql = format!(
                 "SELECT strftime(?, observed_at) AS bucket, COUNT(*) AS cnt
                  FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
-                 GROUP BY bucket ORDER BY bucket ASC"
+                 GROUP BY bucket ORDER BY bucket ASC LIMIT 10000"
             );
             bind_runtime_filters!(
                 sqlx::query(&sql).bind(bucket.sqlite_fmt()).bind(tenant_id),
@@ -255,7 +255,7 @@ pub async fn count_runtime_events_over_time(
                 "SELECT to_char(date_trunc(?, observed_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket,
                         COUNT(*) AS cnt
                  FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
-                 GROUP BY bucket ORDER BY bucket ASC"
+                 GROUP BY bucket ORDER BY bucket ASC LIMIT 10000"
             );
             let sql = crate::db::to_postgres_sql(&sql);
             bind_runtime_filters!(
@@ -461,7 +461,11 @@ mod tests {
         insert_runtime_event(&pool, &ev("t_a", "r2", "e2", "run-other"))
             .await
             .unwrap();
-        insert_runtime_event(&pool, &ev("t_b", "r3", "e3", "run-match"))
+        let mut cross_tenant_match = matching.clone();
+        cross_tenant_match.id = "r3".to_string();
+        cross_tenant_match.tenant_id = "t_b".to_string();
+        cross_tenant_match.event_id = "e3".to_string();
+        insert_runtime_event(&pool, &cross_tenant_match)
             .await
             .unwrap();
 
