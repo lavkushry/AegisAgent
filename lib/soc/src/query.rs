@@ -26,13 +26,17 @@ fn source_component_filter(req: &SocQueryRequest) -> Result<Option<&str>, AegisE
         req.filters.tool.as_deref(),
         req.filters.skill.as_deref(),
     ];
-    let selected = aliases.into_iter().flatten().next();
-    if selected.is_some_and(|value| aliases.into_iter().flatten().any(|alias| alias != value)) {
-        return Err(AegisError::BadRequest(
-            "source_component, tool, and skill filters must match when combined".to_string(),
-        ));
+    let mut active = aliases.into_iter().flatten();
+    if let Some(first) = active.next() {
+        if active.any(|alias| alias != first) {
+            return Err(AegisError::BadRequest(
+                "source_component, tool, and skill filters must match when combined".to_string(),
+            ));
+        }
+        Ok(Some(first))
+    } else {
+        Ok(None)
     }
-    Ok(selected)
 }
 
 /// Execute one tenant-scoped Agent Security Event query through `StorageBackend`.
@@ -114,5 +118,97 @@ pub async fn query_runtime_events(
         other => Err(AegisError::BadRequest(format!(
             "unsupported aggregate '{other}' (supported: none, count, count_over_time, count_by)"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aegis_api::models::SocQueryFilters;
+    use aegis_storage::{db, sqlite::SqlDbStorage};
+    use uuid::Uuid;
+
+    fn request() -> SocQueryRequest {
+        SocQueryRequest {
+            version: 1,
+            entity: "ase".to_string(),
+            filters: SocQueryFilters::default(),
+            aggregate: None,
+            interval: None,
+            group_by: None,
+            limit: Some(20),
+            cursor: None,
+        }
+    }
+
+    async fn storage() -> SqlDbStorage {
+        let path = std::env::temp_dir().join(format!("aegis-soc-query-{}.db", Uuid::new_v4()));
+        SqlDbStorage::new(db::init_db(path.to_string_lossy().as_ref()).await.unwrap())
+    }
+
+    #[test]
+    fn source_component_aliases_must_agree() {
+        let mut req = request();
+        req.filters.source_component = Some("node-sensor".to_string());
+        req.filters.tool = Some("node-sensor".to_string());
+        assert_eq!(source_component_filter(&req).unwrap(), Some("node-sensor"));
+        req.filters.skill = Some("egress-proxy".to_string());
+        assert!(matches!(
+            source_component_filter(&req),
+            Err(AegisError::BadRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_unsupported_filters_and_invalid_aggregates() {
+        let storage = storage().await;
+        let mut req = request();
+        req.filters.action = Some("write".to_string());
+        assert!(matches!(
+            query_runtime_events(&storage, "tenant-a", &req, None, None).await,
+            Err(AegisError::BadRequest(_))
+        ));
+
+        for (aggregate, group_by) in [
+            (Some("unknown"), None),
+            (Some("count_by"), None),
+            (Some("count_by"), Some("raw_payload")),
+        ] {
+            let mut req = request();
+            req.aggregate = aggregate.map(str::to_string);
+            req.group_by = group_by.map(str::to_string);
+            assert!(matches!(
+                query_runtime_events(&storage, "tenant-a", &req, None, None).await,
+                Err(AegisError::BadRequest(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatches_all_supported_aggregates() {
+        let storage = storage().await;
+        for (aggregate, group_by) in [
+            (None, None),
+            (Some("count"), None),
+            (Some("count_over_time"), None),
+            (Some("count_by"), Some("event_type")),
+        ] {
+            let mut req = request();
+            req.aggregate = aggregate.map(str::to_string);
+            req.group_by = group_by.map(str::to_string);
+            let result = query_runtime_events(&storage, "tenant-a", &req, None, None)
+                .await
+                .unwrap();
+            assert!(matches!(
+                (aggregate, result),
+                (None, RuntimeEventQueryResult::Rows { .. })
+                    | (Some("count"), RuntimeEventQueryResult::Count(0))
+                    | (
+                        Some("count_over_time"),
+                        RuntimeEventQueryResult::CountOverTime(_)
+                    )
+                    | (Some("count_by"), RuntimeEventQueryResult::CountBy { .. })
+            ));
+        }
     }
 }
