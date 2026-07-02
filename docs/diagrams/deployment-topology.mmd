@@ -1,0 +1,16 @@
+%% Deployment topology. Explained in: docs/deployment-guide.md
+flowchart TB
+    subgraph K8S[Kubernetes - helm/aegis-gateway]
+        POD[gateway pod<br/>REST 8080 + gRPC 6334<br/>livez/readyz/startupz probes]
+        CM[policies.cedar ConfigMap<br/>checksum + hot reload]
+        SEC[Secrets: JWT, signing keys]
+        PVC[(SQLite PVC - replicaCount 1<br/>until Postgres #1194)]
+    end
+    SDKS[SDKs / agents] -->|HTTPS + bearer/mTLS| POD
+    UI2[Console at /dashboard] --- POD
+    POD --> OTLP[OTLP collector]
+    POD --> PROM[Prometheus /metrics]
+    QDR[(Qdrant - optional)] --- POD
+    subgraph Local[Local dev]
+        DC[docker compose up] --> SEED[scripts/seed-demo.sh]
+    end

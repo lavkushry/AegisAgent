@@ -1,0 +1,8 @@
+%% Event ingestion pipeline. Explained in: docs/components/SOC_Engine.md + docs/event-schema.md
+flowchart LR
+    AZ[authorize decisions] & IG[POST /v1/ingest<br/>trust-labeled content] & RE[POST /v1/ingest/runtime-events] --> SINK[EventSink channel]
+    SINK --> DRAIN[drain task]
+    DRAIN --> ASE[normalize to ASE]
+    ASE --> DET[detections] --> COR[correlation] --> OUT[alerts/incidents]
+    ASE --> IDX[FTS5 + optional Qdrant]
+    AUD[audit rows] --> BATCH[audit batch writer] --> DB[(storage)]

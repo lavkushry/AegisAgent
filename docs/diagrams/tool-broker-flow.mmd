@@ -1,0 +1,9 @@
+%% Tool broker flow (planned, Phase 6). Explained in: docs/components/Tool_Broker.md
+flowchart LR
+    SB[Caged agent<br/>no raw secrets] -->|tool request| TB[aegis-tool-broker*]
+    TB --> GW[/v1/authorize - same Cedar/approval semantics/]
+    GW -->|deny| REF[refuse]
+    GW -->|allow/approved| INJ[broker injects credential server-side]
+    INJ --> PROV[provider API]
+    PROV --> RESP[result to agent]
+    INJ --> EVT[event + receipt - secrets redacted]

@@ -1,7 +1,7 @@
 # AegisAgent — SOC Console UI Design (Kibana + Grafana model)
 
 > **Status:** Design (2026-06-05). The L5 Presentation layer of [`AegisAgent_Agent_SOC_Design.md`](AegisAgent_Agent_SOC_Design.md) §26, planned in depth.
-> **Read first:** the SOC design doc (the data model + APIs this UI consumes). **Visual seed:** [`dashboard-mock.html`](dashboard-mock.html).
+> **Read first:** the SOC design doc (the data model + APIs this UI consumes). **Visual seed:** [`archive/dashboard-mock.html`](archive/dashboard-mock.html).
 >
 > Goal: build the **SOC Console** — the Grafana-for-dashboards + Kibana-for-investigation experience, **plus the three surfaces neither has**: the human **approval queue**, the **provable (hash-chained) incident timeline**, and the **receipt-integrity viewer**. It is a console over *verifiable agent-action evidence*, not a generic log explorer.
 
@@ -146,7 +146,7 @@ Panels are configured by JSON → **dashboards-as-code** (§9). The same panel c
 ## 8. Page-by-page
 
 ### 8.1 Overview (Grafana home)
-Stat row: protected actions · blocked · pending approvals · open incidents · detections (24h) · **receipt chain: ✓ verified** · MTTC. Time-series: decisions/min by type; denies by agent. Live feed (right rail). One open-incident callout if any. (The current [`dashboard-mock.html`](dashboard-mock.html) is the seed for this page.)
+Stat row: protected actions · blocked · pending approvals · open incidents · detections (24h) · **receipt chain: ✓ verified** · MTTC. Time-series: decisions/min by type; denies by agent. Live feed (right rail). One open-incident callout if any. (The current [`archive/dashboard-mock.html`](archive/dashboard-mock.html) is the seed for this page.)
 
 ### 8.2 Explore (Kibana Discover for agent actions)
 Query bar + **field sidebar** (clickable facets: `decision`, `source_trust`, `tool`, `agent_id`, `event_type`) + histogram over time + **document table**. Expand a row → full ASE JSON + linked `action_hash`/`receipt_hash` (one click to verify) + "open in timeline." Save as a named search; pin to a dashboard.

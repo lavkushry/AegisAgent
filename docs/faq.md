@@ -253,6 +253,83 @@ Source trust is a deterministic input that policy can enforce.
 
 ---
 
+## Can Aegis see every action an agent takes?
+
+No — and the docs never claim it can.
+
+Aegis sees what passes through Aegis control points: SDK-wrapped tool calls, gateway API calls, MCP calls, approvals, and ingested content. Actions taken entirely outside those control points are invisible to Aegis today.
+
+The roadmap answer for uncooperative agents is runtime containment (Agent Cage + Node Sensor + Egress Proxy + Tool Broker), where the control points become the agent's entire environment. See [Implementation status](Implementation_Status.md).
+
+---
+
+## What does "fail closed" mean?
+
+Simple: if Aegis is unsure, the risky action does not run.
+
+Technical: security-sensitive execution defaults to deny/error when policy, approval, receipt, or gateway state cannot be verified — unknown agent/tool, hash mismatch, expired approval, unreachable gateway (for mutating actions), unverifiable receipt write. Full catalogue: [fail-closed behavior](fail-closed-behavior.md).
+
+---
+
+## Can Aegis stop a running agent?
+
+For SDK-integrated agents, yes — immediately. Freeze, quarantine, or revoke an agent (`POST /v1/agents/:id/freeze` etc.) and its next authorization fails closed at authentication. Playbooks can do this automatically. See [Ban & quarantine flow](flows/Ban_Quarantine_Flow.md).
+
+For sandboxed unknown agents, signed kill/quarantine commands to a node sensor are designed but not yet implemented ([Control command flow](flows/Control_Command_Flow.md)).
+
+---
+
+## What is the Agent Cage?
+
+A planned disposable sandbox for unknown or untrusted agents: no host filesystem, no raw credentials, no direct internet — tools, network, and MCP work only through Aegis. Design: [Agent Cage](components/Agent_Cage.md). Status: Planned (control-plane APIs and storage exist; the sandbox runner does not).
+
+---
+
+## What is the Node Sensor?
+
+A planned host-local sensor that observes runtime activity, ships runtime events to the gateway, and enforces signed control commands (pause/kill/quarantine) near the workload. Design: [Node Sensor](components/Node_Sensor.md). Status: Planned.
+
+---
+
+## What is the Tool Broker?
+
+A planned credential-isolation service: caged agents ask the broker to perform tool calls, and credentials are injected broker-side only after authorization — the agent never holds a secret. Design: [Tool Broker](components/Tool_Broker.md). Status: Planned.
+
+---
+
+## How do I run it locally?
+
+```bash
+docker compose up --build          # gateway on 127.0.0.1:8080, console at /dashboard
+bash scripts/seed-demo.sh
+python3 examples/integrity_demo.py
+```
+
+Full guide: [Local development](Local_Development.md).
+
+---
+
+## How do I integrate the SDK?
+
+Wrap the function, set two environment variables, done:
+
+```python
+from aegisagent import protect_tool
+
+@protect_tool(tool_key="github", action_key="merge_pr")
+def merge_pr(repo: str, pr_number: int): ...
+```
+
+Ten-minute guide: [SDK developer onboarding](onboarding/For_SDK_Developer.md).
+
+---
+
+## How do I investigate an incident?
+
+Open the console at `/dashboard`, or work the API loop: summary → incident → narrative → timeline → receipts → contain → close. The ten-minute playbook: [SOC analyst onboarding](onboarding/For_SOC_Analyst.md).
+
+---
+
 ## What should I try first?
 
 Start here:

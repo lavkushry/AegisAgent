@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AegisAgent — Architecture Explorer</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#12161f; --panel2:#171c27; --line:#2a3142;
+    --text:#e6e9f0; --muted:#8b93a7; --accent:#7aa2ff;
+    --implemented:#4ade80; --partial:#fbbf24; --planned:#94a3b8;
+    --boundary:#f472b6; --failclosed:#f87171; --evidence:#34d399;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+  header{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;gap:12px;align-items:center;padding:10px 16px;background:linear-gradient(180deg,rgba(11,14,20,.95),rgba(11,14,20,.75));border-bottom:1px solid var(--line)}
+  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.02em}
+  header .sub{color:var(--muted);font-size:12px}
+  header a{color:var(--accent);text-decoration:none}
+  #stage{position:fixed;inset:0}
+  #hud{position:fixed;left:12px;top:56px;z-index:15;width:240px;max-height:calc(100vh - 80px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+  #hud h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:10px 0 6px}
+  #hud h2:first-child{margin-top:0}
+  .flowbtn,.togglebtn{display:block;width:100%;text-align:left;margin:3px 0;padding:6px 8px;border-radius:7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);cursor:pointer;font-size:12.5px}
+  .flowbtn:hover,.togglebtn:hover{border-color:var(--accent)}
+  .flowbtn.active{border-color:var(--accent);background:#1c2536;box-shadow:0 0 0 1px var(--accent) inset}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 10px;font-size:12px;color:var(--muted)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:baseline}
+  #panel{position:fixed;right:12px;top:56px;z-index:15;width:330px;max-height:calc(100vh - 80px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;display:none}
+  #panel h3{margin:0 0 2px;font-size:16px}
+  #panel .status{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+  #panel p{color:#c6ccdb;font-size:13px}
+  #panel h4{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:12px 0 4px}
+  #panel ul{margin:0;padding-left:16px;font-size:12.5px}
+  #panel code{background:var(--panel2);padding:1px 5px;border-radius:5px;font-size:11.5px}
+  #panel a{color:var(--accent);text-decoration:none}
+  #panel .close{float:right;cursor:pointer;color:var(--muted);border:0;background:none;font-size:16px}
+  #tip{position:fixed;z-index:30;pointer-events:none;background:#0f1420;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;max-width:260px;display:none}
+  #tip .t{font-weight:600}
+  #tip .d{color:var(--muted)}
+  #mode{position:fixed;right:12px;bottom:12px;z-index:15;color:var(--muted);font-size:11.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+  svg text{fill:var(--text);font-size:11px}
+  @media (max-width:820px){ #hud{width:180px} #panel{width:min(330px,86vw)} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Aegis 3D System Map</h1>
+  <span class="sub">click a component · toggle a flow · drag to orbit, wheel to zoom</span>
+  <span style="flex:1"></span>
+  <a href="../AegisAgent_Diagram_Index.md">static diagrams</a>
+  <a href="../Architecture_Overview.md">architecture doc</a>
+</header>
+
+<div id="stage" role="application" aria-label="Interactive AegisAgent architecture map. An accessible static description is available via the static diagrams link."></div>
+
+<aside id="hud">
+  <h2>Flows</h2><div id="flows"></div>
+  <h2>Highlights</h2>
+  <button class="togglebtn" data-h="security_boundary">Trust boundaries</button>
+  <button class="togglebtn" data-h="fail_closed">Fail-closed paths</button>
+  <button class="togglebtn" data-h="evidence">Evidence paths</button>
+  <h2>Status</h2>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--implemented)"></span>implemented</span>
+    <span><span class="dot" style="background:var(--partial)"></span>partial</span>
+    <span><span class="dot" style="background:var(--planned)"></span>planned</span>
+  </div>
+  <h2>Bypass reality</h2>
+  <div style="font-size:12px;color:var(--muted)">Aegis controls what passes through these choke points. Anything outside them is treated as hostile → detected, frozen, quarantined, revoked, or banned (see Ban/Quarantine Engine).</div>
+</aside>
+
+<aside id="panel" aria-live="polite">
+  <button class="close" onclick="document.getElementById('panel').style.display='none'">✕</button>
+  <div id="panel-body"></div>
+</aside>
+
+<div id="tip"></div>
+<div id="mode"></div>
+<noscript><p style="position:fixed;top:70px;left:16px;z-index:40">JavaScript is disabled — use the <a href="../AegisAgent_Diagram_Index.md">static diagrams</a> instead.</p></noscript>
+
+<script>
+(async function(){
+  const modeEl = document.getElementById('mode');
+  let data;
+  try{
+    data = await (await fetch('../architecture-map.json')).json();
+  }catch(e){
+    modeEl.textContent = 'could not load architecture-map.json — open via a web server (e.g. `mkdocs serve` or `python3 -m http.server`)';
+    return;
+  }
+  const STATUS_COLOR = {implemented:'#4ade80', partial:'#fbbf24', planned:'#94a3b8'};
+  const LAYER_NAMES = {1:'People',2:'Agents',3:'Choke Points',4:'Control Plane',5:'Infrastructure',6:'Outputs'};
+  const nodes = data.nodes, edges = data.edges;
+  const byId = Object.fromEntries(nodes.map(n=>[n.id,n]));
+
+  // ---------- shared UI ----------
+  const flowsDiv = document.getElementById('flows');
+  let activeFlow = null, activeHighlight = null;
+  Object.entries(data.flows).forEach(([key,desc])=>{
+    const b = document.createElement('button');
+    b.className='flowbtn'; b.textContent = key.replace(/_/g,' ');
+    b.title = desc;
+    b.onclick = ()=>{ activeFlow = activeFlow===key?null:key; activeHighlight=null;
+      document.querySelectorAll('.flowbtn').forEach(x=>x.classList.toggle('active', x===b && activeFlow));
+      document.querySelectorAll('.togglebtn').forEach(x=>x.classList.remove('active'));
+      refresh(); };
+    flowsDiv.appendChild(b);
+  });
+  document.querySelectorAll('.togglebtn').forEach(b=>{
+    b.onclick = ()=>{ activeHighlight = activeHighlight===b.dataset.h?null:b.dataset.h; activeFlow=null;
+      document.querySelectorAll('.togglebtn').forEach(x=>x.classList.toggle('active', x===b && activeHighlight));
+      document.querySelectorAll('.flowbtn').forEach(x=>x.classList.remove('active'));
+      refresh(); };
+  });
+  function edgeActive(e){
+    if(activeFlow) return e.flow===activeFlow;
+    if(activeHighlight) return !!e[activeHighlight];
+    return null; // no filter
+  }
+  function showPanel(n){
+    const p = document.getElementById('panel'), b = document.getElementById('panel-body');
+    const rel = (arr,fmt)=> (arr&&arr.length)?arr.map(fmt).join(''):'<li style="color:var(--muted)">—</li>';
+    b.innerHTML = `
+      <h3>${n.label}</h3>
+      <div class="status" style="color:${STATUS_COLOR[n.status]}">${n.status} · layer ${n.layer} — ${LAYER_NAMES[n.layer]} · ${n.type.replace(/_/g,' ')}</div>
+      <p>${n.description||''}</p>
+      <h4>Related docs</h4><ul>${rel(n.related_docs, d=>`<li><a href="../${d}">${d}</a></li>`)}</ul>
+      <h4>Related files</h4><ul>${rel(n.related_files, f=>`<li><code>${f}</code></li>`)}</ul>
+      ${n.related_routes?`<h4>Routes</h4><ul>${n.related_routes.map(r=>`<li><code>${r}</code></li>`).join('')}</ul>`:''}
+      ${n.related_tables?`<h4>Tables</h4><ul>${n.related_tables.map(t=>`<li><code>${t}</code></li>`).join('')}</ul>`:''}
+      <h4>Connections</h4><ul>
+        ${edges.filter(e=>e.from===n.id||e.to===n.id).map(e=>{
+          const other = e.from===n.id?byId[e.to]:byId[e.from];
+          const dir = e.from===n.id?'→':'←';
+          return `<li>${dir} <b>${other?other.label:'?'}</b> — ${e.label}${e.security_boundary?' <span style="color:var(--boundary)">▲boundary</span>':''}${e.fail_closed?' <span style="color:var(--failclosed)">⛔fail-closed</span>':''}${e.evidence?' <span style="color:var(--evidence)">✚evidence</span>':''}</li>`;
+        }).join('')}
+      </ul>`;
+    p.style.display='block';
+  }
+  const tip = document.getElementById('tip');
+  function showTip(n, x, y){
+    tip.innerHTML = `<div class="t">${n.label}</div><div class="d">${(n.description||'').slice(0,140)}</div>`;
+    tip.style.left=(x+14)+'px'; tip.style.top=(y+14)+'px'; tip.style.display='block';
+  }
+  function hideTip(){ tip.style.display='none'; }
+
+  // ---------- layout (shared by 2D & 3D) ----------
+  const byLayer = {};
+  nodes.forEach(n=>{ (byLayer[n.layer]=byLayer[n.layer]||[]).push(n); });
+  const pos = {};
+  Object.entries(byLayer).forEach(([layer,list])=>{
+    list.forEach((n,i)=>{
+      const spread = (i - (list.length-1)/2);
+      pos[n.id] = { x: spread*3.4, y: (6-layer)*3.2 - 8, z: (i%2? 1.1 : -1.1) };
+    });
+  });
+
+  // ---------- try 3D ----------
+  let refresh = ()=>{};
+  const canWebGL = (()=>{ try{ const c=document.createElement('canvas'); return !!(window.WebGLRenderingContext&&(c.getContext('webgl')||c.getContext('experimental-webgl'))); }catch(e){ return false; } })();
+  let three = null;
+  if(canWebGL){
+    try{ three = await import('https://unpkg.com/three@0.160.0/build/three.module.js'); }catch(e){ three=null; }
+  }
+
+  if(three){ init3D(three); modeEl.textContent='3D mode (WebGL) — 2D fallback available if WebGL/CDN unavailable'; }
+  else { init2D(); modeEl.textContent='2D fallback mode (WebGL or CDN unavailable)'; }
+
+  // ================= 3D =================
+  function init3D(THREE){
+    const stage = document.getElementById('stage');
+    const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0b0e14);
+    scene.fog = new THREE.Fog(0x0b0e14, 30, 80);
+    const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, .1, 200);
+    camera.position.set(0, 4, 30);
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+    stage.appendChild(renderer.domElement);
+    scene.add(new THREE.AmbientLight(0xffffff,.75));
+    const dl = new THREE.DirectionalLight(0xffffff,.9); dl.position.set(6,12,8); scene.add(dl);
+
+    // layer platforms + labels
+    Object.keys(byLayer).forEach(l=>{
+      const y = (6-l)*3.2 - 8;
+      const w = Math.max(byLayer[l].length*3.4+3, 8);
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(w,.08,6),
+        new THREE.MeshStandardMaterial({color:0x171c27, transparent:true, opacity:.55}));
+      plate.position.set(0,y-.75,0); scene.add(plate);
+      scene.add(textSprite(LAYER_NAMES[l], -w/2-1.6, y-.2, 0, '#8b93a7', 46));
+    });
+
+    // nodes
+    const meshes = [];
+    const nodeMesh = {};
+    nodes.forEach(n=>{
+      const c = new THREE.Color(STATUS_COLOR[n.status]);
+      const geo = n.type==='choke_point' ? new THREE.OctahedronGeometry(.75)
+                : n.type==='person' ? new THREE.SphereGeometry(.55,24,16)
+                : n.type==='output' ? new THREE.CylinderGeometry(.5,.5,.9,20)
+                : new THREE.BoxGeometry(1.15,1.15,1.15);
+      const mat = new THREE.MeshStandardMaterial({color:c, roughness:.45, metalness:.15,
+        transparent:true, opacity: n.status==='planned'?.45:1});
+      const m = new THREE.Mesh(geo, mat);
+      const p = pos[n.id]; m.position.set(p.x,p.y,p.z);
+      m.userData = n; scene.add(m); meshes.push(m); nodeMesh[n.id]=m;
+      scene.add(textSprite(n.label, p.x, p.y+1.15, p.z, '#e6e9f0', 40));
+    });
+
+    // edges
+    const edgeObjs = edges.map(e=>{
+      const a = pos[e.from], b = pos[e.to]; if(!a||!b) return null;
+      const mid = new THREE.Vector3((a.x+b.x)/2, (a.y+b.y)/2 + .9, (a.z+b.z)/2 + .6);
+      const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(a.x,a.y,a.z), mid, new THREE.Vector3(b.x,b.y,b.z));
+      const pts = curve.getPoints(24);
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      const baseColor = e.security_boundary? 0xf472b6 : e.fail_closed? 0xf87171 : e.evidence? 0x34d399 : 0x3b4358;
+      const mat = new THREE.LineBasicMaterial({color:baseColor, transparent:true, opacity:.5});
+      const line = new THREE.Line(geo, mat); scene.add(line);
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(.13,10,8),
+        new THREE.MeshBasicMaterial({color:0x7aa2ff})); dot.visible=false; scene.add(dot);
+      return {e, line, mat, curve, dot, t:Math.random()};
+    }).filter(Boolean);
+
+    refresh = ()=>{
+      edgeObjs.forEach(o=>{
+        const act = edgeActive(o.e);
+        o.mat.opacity = act===null ? .45 : (act ? 1 : .07);
+        o.dot.visible = act===true;
+      });
+      const activeNodeIds = new Set();
+      if(activeFlow||activeHighlight){
+        edgeObjs.forEach(o=>{ if(edgeActive(o.e)){ activeNodeIds.add(o.e.from); activeNodeIds.add(o.e.to);} });
+      }
+      meshes.forEach(m=>{
+        const dim = (activeFlow||activeHighlight) && !activeNodeIds.has(m.userData.id);
+        m.material.opacity = dim ? .15 : (m.userData.status==='planned'?.45:1);
+      });
+    };
+
+    function textSprite(text,x,y,z,color,size){
+      const pad=12, cv=document.createElement('canvas'), ctx=cv.getContext('2d');
+      ctx.font=`600 ${size}px ui-sans-serif,system-ui`;
+      cv.width=ctx.measureText(text).width+pad*2; cv.height=size+pad*2;
+      const c2=cv.getContext('2d'); c2.font=`600 ${size}px ui-sans-serif,system-ui`;
+      c2.fillStyle=color; c2.textBaseline='middle'; c2.fillText(text,pad,cv.height/2);
+      const tex=new THREE.CanvasTexture(cv); tex.anisotropy=4;
+      const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthWrite:false}));
+      sp.scale.set(cv.width/110, cv.height/110, 1); sp.position.set(x,y,z);
+      return sp;
+    }
+
+    // minimal orbit controls (drag rotate, wheel zoom) — no external module needed
+    let theta=0, phi=.25, radius=32, dragging=false, px=0, py=0;
+    function applyCam(){
+      camera.position.set(radius*Math.sin(theta)*Math.cos(phi), radius*Math.sin(phi)+2, radius*Math.cos(theta)*Math.cos(phi));
+      camera.lookAt(0,-1,0);
+    }
+    applyCam();
+    renderer.domElement.addEventListener('pointerdown',e=>{dragging=true;px=e.clientX;py=e.clientY;});
+    addEventListener('pointerup',()=>dragging=false);
+    addEventListener('pointermove',e=>{
+      if(dragging){ theta -= (e.clientX-px)*.005; phi = Math.min(1.2, Math.max(-0.5, phi + (e.clientY-py)*.004)); px=e.clientX; py=e.clientY; applyCam(); }
+      else { hover(e); }
+    });
+    renderer.domElement.addEventListener('wheel',e=>{ e.preventDefault(); radius=Math.min(70,Math.max(12,radius+e.deltaY*.02)); applyCam(); },{passive:false});
+
+    const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+    function pick(e){
+      mouse.x=(e.clientX/innerWidth)*2-1; mouse.y=-(e.clientY/innerHeight)*2+1;
+      ray.setFromCamera(mouse,camera);
+      const hit = ray.intersectObjects(meshes)[0];
+      return hit? hit.object.userData : null;
+    }
+    function hover(e){ const n=pick(e); if(n){ showTip(n,e.clientX,e.clientY); document.body.style.cursor='pointer'; } else { hideTip(); document.body.style.cursor='default'; } }
+    renderer.domElement.addEventListener('click',e=>{ const n=pick(e); if(n) showPanel(n); });
+
+    addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+
+    (function animate(){
+      requestAnimationFrame(animate);
+      edgeObjs.forEach(o=>{ if(o.dot.visible){ o.t=(o.t+.006)%1; o.dot.position.copy(o.curve.getPoint(o.t)); } });
+      renderer.render(scene,camera);
+    })();
+    refresh();
+  }
+
+  // ================= 2D fallback (SVG) =================
+  function init2D(){
+    const stage = document.getElementById('stage');
+    stage.style.overflow='auto';
+    const W = Math.max(1100, innerWidth), rowH = 130, H = rowH*6+80;
+    const sx = id => W/2 + pos[id].x*36;
+    const sy = id => 60 + (6 - byId[id].layer) * 0 + (byId[id].layer-1)*rowH + 40;
+    const svgNS='http://www.w3.org/2000/svg';
+    const svg=document.createElementNS(svgNS,'svg');
+    svg.setAttribute('width',W); svg.setAttribute('height',H);
+    svg.style.marginTop='48px';
+    // layer bands
+    for(let l=1;l<=6;l++){
+      const g=document.createElementNS(svgNS,'g');
+      const r=document.createElementNS(svgNS,'rect');
+      r.setAttribute('x',10); r.setAttribute('y',60+(l-1)*rowH); r.setAttribute('width',W-20); r.setAttribute('height',rowH-14);
+      r.setAttribute('fill','#12161f'); r.setAttribute('stroke','#2a3142'); r.setAttribute('rx',10);
+      const t=document.createElementNS(svgNS,'text');
+      t.setAttribute('x',22); t.setAttribute('y',80+(l-1)*rowH); t.textContent=LAYER_NAMES[l]; t.setAttribute('fill','#8b93a7');
+      g.append(r,t); svg.appendChild(g);
+    }
+    const edgeEls = edges.map(e=>{
+      if(!pos[e.from]||!pos[e.to]) return null;
+      const p=document.createElementNS(svgNS,'path');
+      const x1=sx(e.from),y1=sy(e.from),x2=sx(e.to),y2=sy(e.to);
+      p.setAttribute('d',`M${x1},${y1} C${x1},${(y1+y2)/2} ${x2},${(y1+y2)/2} ${x2},${y2}`);
+      p.setAttribute('fill','none');
+      p.setAttribute('stroke', e.security_boundary?'#f472b6': e.fail_closed?'#f87171': e.evidence?'#34d399':'#3b4358');
+      p.setAttribute('stroke-width','1.5'); p.setAttribute('opacity','.5');
+      const title=document.createElementNS(svgNS,'title'); title.textContent=`${byId[e.from]?.label} → ${byId[e.to]?.label}: ${e.label}`;
+      p.appendChild(title); svg.appendChild(p);
+      return {e,el:p};
+    }).filter(Boolean);
+    nodes.forEach(n=>{
+      const g=document.createElementNS(svgNS,'g'); g.style.cursor='pointer';
+      const c=document.createElementNS(svgNS,'circle');
+      c.setAttribute('cx',sx(n.id)); c.setAttribute('cy',sy(n.id)); c.setAttribute('r',13);
+      c.setAttribute('fill',STATUS_COLOR[n.status]); c.setAttribute('opacity',n.status==='planned'?.5:1);
+      c.setAttribute('stroke','#0b0e14'); c.setAttribute('stroke-width','2');
+      const t=document.createElementNS(svgNS,'text');
+      t.setAttribute('x',sx(n.id)); t.setAttribute('y',sy(n.id)+28); t.setAttribute('text-anchor','middle'); t.textContent=n.label;
+      g.append(c,t);
+      g.addEventListener('click',()=>showPanel(n));
+      g.addEventListener('mousemove',ev=>showTip(n,ev.clientX,ev.clientY));
+      g.addEventListener('mouseleave',hideTip);
+      svg.appendChild(g);
+      g.dataset.id=n.id;
+    });
+    stage.appendChild(svg);
+    refresh = ()=>{
+      const activeIds=new Set();
+      edgeEls.forEach(o=>{
+        const act=edgeActive(o.e);
+        o.el.setAttribute('opacity', act===null?'.45':(act?'1':'.06'));
+        o.el.setAttribute('stroke-width', act===true?'2.5':'1.5');
+        if(act){activeIds.add(o.e.from);activeIds.add(o.e.to);}
+      });
+      svg.querySelectorAll('g[data-id]').forEach(g=>{
+        const dim=(activeFlow||activeHighlight)&&!activeIds.has(g.dataset.id);
+        g.setAttribute('opacity', dim?'.18':'1');
+      });
+    };
+    refresh();
+  }
+})();
+</script>
+</body>
+</html>

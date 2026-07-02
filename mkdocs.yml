@@ -50,7 +50,11 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -71,10 +75,57 @@ exclude_docs: |
 
 nav:
   - Home: index.md
+  - Start here:
+      - Start here: START_HERE.md
+      - What is AegisAgent: What_Is_AegisAgent.md
+      - Why AegisAgent: Why_AegisAgent.md
+      - The one-minute tour: The_One_Minute_Tour.md
+      - How it works: How_It_Works.md
+      - Product overview: Product_Overview.md
+      - Last-mile system walkthrough: Last_Mile_System_Walkthrough.md
+      - Architecture overview: Architecture_Overview.md
+      - Implementation status: Implementation_Status.md
+      - Glossary: Glossary.md
+      - Documentation index: Documentation_Index.md
   - Mission: mission.md
   - Getting started:
       - Overview: getting-started.md
       - 10-minute quickstart: quickstart.md
+      - Local development: Local_Development.md
+  - Onboarding:
+      - New engineer: onboarding/For_New_Engineer.md
+      - Security architect: onboarding/For_Security_Architect.md
+      - SOC analyst: onboarding/For_SOC_Analyst.md
+      - SDK developer: onboarding/For_SDK_Developer.md
+      - Frontend engineer: onboarding/For_Frontend_Engineer.md
+      - DevOps engineer: onboarding/For_DevOps_Engineer.md
+  - Flows:
+      - Known agent: flows/Known_Agent_Flow.md
+      - Unknown agent (cage): flows/Unknown_Agent_Cage_Flow.md
+      - Approval: flows/Approval_Flow.md
+      - Receipt: flows/Receipt_Flow.md
+      - SOC incident: flows/SOC_Incident_Flow.md
+      - Ban & quarantine: flows/Ban_Quarantine_Flow.md
+      - MCP gateway: flows/MCP_Gateway_Flow.md
+      - Tool broker: flows/Tool_Broker_Flow.md
+      - Egress block: flows/Egress_Block_Flow.md
+      - Prompt-to-action lineage: flows/Prompt_To_Action_Lineage.md
+      - Control command: flows/Control_Command_Flow.md
+  - Components:
+      - Gateway: components/Gateway.md
+      - SDK: components/SDK.md
+      - Policy engine: components/Policy_Engine.md
+      - Approval engine: components/Approval_Engine.md
+      - Receipt engine: components/Receipt_Engine.md
+      - SOC engine: components/SOC_Engine.md
+      - MCP gateway: components/MCP_Gateway.md
+      - Storage: components/Storage.md
+      - Console UI: components/Console_UI.md
+      - Prompt & model capture: components/Prompt_Model_Capture.md
+      - Agent cage (planned): components/Agent_Cage.md
+      - Node sensor (planned): components/Node_Sensor.md
+      - Egress proxy (planned): components/Egress_Proxy.md
+      - Tool broker (planned): components/Tool_Broker.md
   - Installation: installation.md
   - Deployment guide: deployment-guide.md
   - Demos:
@@ -101,6 +152,14 @@ nav:
       - Threat model: AegisAgent_Threat_Model.md
       - Operational design: AegisAgent_Operational_Design.md
       - MCP defense architecture: mcp-defense-architecture.md
+      - Diagram index: AegisAgent_Diagram_Index.md
+      - Runtime data plane (target design):
+          - Overview: AegisAgent_Runtime_Data_Plane.md
+          - Agent cage: AegisAgent_Agent_Cage.md
+          - Control command protocol: AegisAgent_Control_Command_Protocol.md
+          - World-class HLD: AegisAgent_World_Class_HLD.md
+          - World-class LLD: AegisAgent_World_Class_LLD.md
+          - Phased PR plan: AegisAgent_Phased_PR_Plan.md
       - Decision records:
           - Overview: adr/index.md
           - "ADR-0001: Cedar policy engine": adr/0001-cedar-policy-engine.md
@@ -111,6 +170,8 @@ nav:
   - Reference:
       - API reference (OpenAPI/Redoc): api-reference.md
       - Runtime authorization API: runtime-authorization-api.md
+      - Debugging guide: AegisAgent_Debugging_Guide.md
+      - Repo knowledge map: Repo_Knowledge_Map.md
       - Fail-closed behavior guide: fail-closed-behavior.md
       - Action receipt spec: action-receipt-spec.md
       - Evidence graph: evidence-graph.md

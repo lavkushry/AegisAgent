@@ -9,6 +9,28 @@ This folder is the **single source for AegisAgent product documentation**. It re
 
 ---
 
+## 🧭 Start Here (the last-mile documentation system)
+
+**New to the repo? Begin at [START_HERE.md](START_HERE.md)** — persona-based reading paths, the full docs map, and the naming table for canonical docs.
+
+| Entry point | What it gives you |
+|---|---|
+| [START_HERE.md](START_HERE.md) | The front door: pick your path by role |
+| [Product_Overview.md](Product_Overview.md) | What/why in plain language |
+| [Last_Mile_System_Walkthrough.md](Last_Mile_System_Walkthrough.md) | The entire system as one story |
+| [Architecture_Overview.md](Architecture_Overview.md) | The 11 choke points, trust boundaries, fail-closed paths |
+| [Implementation_Status.md](Implementation_Status.md) | **Honest ledger**: implemented vs. partial vs. planned |
+| [Repo_Knowledge_Map.md](Repo_Knowledge_Map.md) | Maintainer's map: every layer → files → flows → doc gaps |
+| [onboarding/](onboarding/For_New_Engineer.md) | Six role-specific onboarding guides |
+| [flows/](flows/Known_Agent_Flow.md) | Five end-to-end flow deep-dives |
+| [AegisAgent_Diagram_Index.md](AegisAgent_Diagram_Index.md) + [diagrams/](diagrams/) | Every diagram as Mermaid source |
+| [explorer/index.html](explorer/index.html) | Interactive 3D system map (2D fallback, driven by [architecture-map.json](architecture-map.json)) |
+| [Glossary.md](Glossary.md) | Shared vocabulary |
+
+Docs hygiene: `node scripts/validate-docs.mjs` checks required docs, internal links, diagram inventory, and `architecture-map.json` references. `architecture-map.json` is the machine-readable source of truth for the explorer and layered diagrams — update it when components change.
+
+---
+
 ## 📖 Product Documentation
 *User-facing — safe to publish.*
 
@@ -53,7 +75,7 @@ This folder is the **single source for AegisAgent product documentation**. It re
 ---
 
 ## 🎨 Assets
-- [dashboard-mock.html](dashboard-mock.html) — static SOC Console mock (overview + provable incident timeline).
+- [archive/dashboard-mock.html](archive/dashboard-mock.html) — archived design-era SOC Console mock (superseded by the real console in `ui/`).
 
 ---
 

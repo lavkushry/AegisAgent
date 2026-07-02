@@ -1,0 +1,10 @@
+%% Egress proxy flow (planned, Phase 5). Explained in: docs/components/Egress_Proxy.md
+flowchart LR
+    SB[Sandboxed agent] -->|only route| EP[aegis-egress-proxy*]
+    EP --> MODE{mode}
+    MODE -->|observe| LOG[log + forward]
+    MODE -->|enforce| CHK{allowlisted?}
+    MODE -->|lockdown| DENYALL[deny all except control plane]
+    CHK -->|yes| NET[destination]
+    CHK -->|no| BLK[block]
+    LOG & BLK & DENYALL --> EVT[runtime event → SOC]

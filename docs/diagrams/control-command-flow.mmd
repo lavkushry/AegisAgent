@@ -1,0 +1,18 @@
+%% Control command protocol (designed; store implemented). Explained in: docs/flows/Control_Command_Flow.md
+sequenceDiagram
+    autonumber
+    participant A as Analyst/Playbook
+    participant GW as Gateway
+    participant NS as Node sensor*
+    A->>GW: kill run X
+    GW->>GW: canonical cmd (aegis-command-jcs-1)<br/>tenant+target+nonce+expiry → Ed25519 sign*
+    GW->>GW: persist to control_commands (idempotency)
+    NS->>GW: poll commands*
+    GW-->>NS: signed command
+    NS->>NS: verify sig/tenant/target/expiry/nonce
+    alt invalid
+        NS-->>GW: NACK (fail closed)
+    else valid
+        NS->>NS: typed handler executes
+        NS-->>GW: signed ACK → receipt + timeline
+    end

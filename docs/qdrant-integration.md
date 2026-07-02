@@ -16,7 +16,7 @@ AegisAgent uses a **hybrid database strategy** to optimize performance, reliabil
 To comply with AegisAgent's performance constraints (inline path `<75ms`), the Qdrant indexing pipeline runs entirely out-of-band:
 * The hot `/v1/authorize` path registers decisions and yields control back to the SDK.
 * The gateway emits the event onto the bounded `tokio::mpsc` channel.
-* The background drain task (`events::drain` in [`events.rs`](file:///home/ems/AegisAgent/gateway/src/events.rs)) pops the event and spawns a background worker via `tokio::spawn`.
+* The background drain task (`events::drain` in `lib/soc/src/events.rs`) pops the event and spawns a background worker via `tokio::spawn`.
 * The background worker calls the embedding generator and uploads the point with full event metadata payloads to Qdrant. Any network slowdown or service outage in the embedding provider or Qdrant never blocks gateway authorization.
 
 ```text
@@ -87,7 +87,7 @@ To run a fully private semantic audit engine locally, configure the stack as fol
    export AEGIS_EMBEDDING_MODEL="all-minilm"
    export AEGIS_EMBEDDING_DIMENSION="384"
    
-   cargo run --manifest-path gateway/Cargo.toml
+   cargo run --manifest-path src/Cargo.toml
    ```
 
 ---
