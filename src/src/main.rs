@@ -932,6 +932,25 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/agent-cage/runs/:id", get(routes::get_agent_run))
         .route("/ingest/runtime-events", post(routes::ingest_runtime_event))
         .route("/runtime/runs/:id/events", get(routes::list_run_events))
+        // Runtime control plane (Phase 2.7): bans, quarantine, control commands
+        .route("/bans", post(routes::create_ban).get(routes::list_bans))
+        .route("/bans/:id", get(routes::get_ban))
+        .route("/bans/:id/revoke", post(routes::revoke_ban))
+        .route(
+            "/quarantine",
+            post(routes::create_quarantine).get(routes::list_quarantine),
+        )
+        .route("/quarantine/:id", get(routes::get_quarantine))
+        .route("/quarantine/:id/release", post(routes::release_quarantine))
+        .route(
+            "/control/commands",
+            post(routes::issue_control_command).get(routes::list_control_commands),
+        )
+        .route("/control/commands/:id", get(routes::get_control_command))
+        .route(
+            "/control/commands/:id/status",
+            post(routes::update_control_command_status),
+        )
         // SOC Phase 6: Incident lifecycle — close an open incident
         .route("/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator
