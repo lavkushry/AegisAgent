@@ -58,6 +58,9 @@ export class GatewayEntityDatasource implements Datasource {
       throw new Error("Entity 'ase' requires the soc-query datasource");
     }
     if (req.aggregate === "count_over_time") {
+      if (entity !== "decision") {
+        throw new Error("Aggregate 'count_over_time' is only supported for the 'decision' entity");
+      }
       return this.countOverTime(req);
     }
     const entityPath = ENTITY_PATHS[entity];

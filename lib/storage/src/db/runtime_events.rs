@@ -239,7 +239,7 @@ pub async fn count_runtime_events_over_time(
                    SELECT strftime(?, observed_at) AS bucket, COUNT(*) AS cnt
                    FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
                    GROUP BY bucket ORDER BY bucket DESC LIMIT {MAX_TIME_BUCKETS}
-                 ) ORDER BY bucket ASC"
+                 ) AS time_buckets ORDER BY bucket ASC"
             );
             bind_runtime_filters!(
                 sqlx::query(&sql).bind(bucket.sqlite_fmt()).bind(tenant_id),
@@ -260,7 +260,7 @@ pub async fn count_runtime_events_over_time(
                           COUNT(*) AS cnt
                    FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
                    GROUP BY bucket ORDER BY bucket DESC LIMIT {MAX_TIME_BUCKETS}
-                 ) ORDER BY bucket ASC"
+                 ) AS time_buckets ORDER BY bucket ASC"
             );
             let sql = crate::db::to_postgres_sql(&sql);
             bind_runtime_filters!(
