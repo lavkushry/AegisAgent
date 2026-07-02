@@ -4,7 +4,7 @@
 
 **Legend — status values:** Implemented · Partial · Planned · Missing (design references inside other columns may still use ✅/🟡/📐 shorthand)
 **Production-readiness:** prod = hardened & exercised · beta = works, sharp edges · design = paper only
-**Verified against:** committed HEAD of this branch lineage (PRs #1678–#1682 era), 2026-07-02. The route layer for the runtime data plane is under active revision — re-verify `src/src/routes/runtime.rs` before deep-linking.
+**Verified against:** committed HEAD after PRs #1688–#1689, 2026-07-03. The route layer for the runtime data plane is under active revision — re-verify `src/src/routes/runtime.rs` before deep-linking.
 
 | Capability | Status | Current files | Missing pieces | Related issues | Test coverage | Prod-ready | Next PR |
 |---|---|---|---|---|---|---|---|
@@ -21,7 +21,7 @@
 | Evidence graph | Implemented | `src/src/graph.rs`, `lib/api/src/graph.rs`, `/v1/graph/*` | deeper lineage once prompt capture lands | — | unit + integration | beta | — |
 | SOC events pipeline (async) | Implemented | `lib/soc/src/events.rs`, `lib/soc/src/ingest.rs`, `detect.rs` | — | — | unit + integration | prod | — |
 | Incidents (correlate, narrate, close) | Implemented | `lib/soc/src/correlate.rs`, `narrate.rs`, `routes/soc.rs` | — | — | unit + integration | prod | — |
-| SOC query API | Implemented | `lib/soc/src/query.rs`, `POST /v1/soc/query` | — | #1674/#1680/#1682 (ASE queries + hardening) | unit (hardened on active branch) | prod | in review on `fix/1674-…` |
+| SOC query API | Implemented | `lib/api/proto/soc.proto`, `lib/api/src/models.rs`, `lib/soc/src/query.rs`, `lib/storage/src/db/runtime_events.rs`, `src/src/routes/soc.rs`, `src/src/grpc.rs`, `POST /v1/soc/query` | — | #1623, #1674/#1680/#1682/#1688 (ASE queries + hardening) | route + storage + service + UI datasource tests | prod | — |
 | Tenant isolation | Implemented | every `lib/storage/src/db/*` query binds `tenant_id`; `TenantId` extractor | — | audited recurrently | isolation tests | prod | continuous audit |
 | Auth: bearer/JWT, rotation, admin bootstrap | Implemented | `routes/mod.rs` (`validate_jwt`, `jwt_secret_candidates`) | OIDC provider integration 📐 | #1211 (rotation) | unit + integration | prod | OIDC |
 | Agent mTLS identity | Implemented | `src/src/mtls.rs`, migration `0021_agent_mtls_cn.sql` | — | #1310 | integration | beta | — |
