@@ -9,6 +9,7 @@
 //! gateway's internal model crate (`aegis-api` pulls in proto/build.rs
 //! tooling this small binary doesn't need).
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -60,6 +61,62 @@ pub struct HeartbeatRequest {
     pub last_command_watermark: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_status: Option<String>,
+}
+
+/// Mirrors the gateway's `POST /v1/ingest/runtime-events` request body
+/// (`IngestRuntimeEventRequest` in `src/src/routes/runtime.rs`, Phase 2.6).
+/// Hashes/identifiers only — never raw prompts, secrets, or payloads.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeEventPayload {
+    pub event_id: String,
+    pub event_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_event_id: Option<String>,
+    pub source_component: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_trust: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_receipt_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redaction_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<DateTime<Utc>>,
+}
+
+/// `ingested: false` means the gateway had already recorded this
+/// `event_id` (a retried/replayed delivery) — not an error, and treated as
+/// success by the shipper.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IngestResponse {
+    pub ingested: bool,
 }
 
 pub struct GatewayClient {
@@ -120,6 +177,24 @@ impl GatewayClient {
             let body = response.text().await.unwrap_or_default();
             Err(GatewayClientError::RejectedRequest { status, body })
         }
+    }
+
+    pub async fn ingest_runtime_event(
+        &self,
+        req: &RuntimeEventPayload,
+    ) -> Result<IngestResponse, GatewayClientError> {
+        let url = self
+            .base_url
+            .join("/v1/ingest/runtime-events")
+            .expect("gateway_url + fixed path is always a valid URL");
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_token)
+            .json(req)
+            .send()
+            .await?;
+        Self::parse_response(response).await
     }
 
     async fn parse_response<T: for<'de> Deserialize<'de>>(
@@ -289,5 +364,31 @@ mod tests {
             }
             other => panic!("expected RejectedRequest, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn ingest_runtime_event_reports_dedup_via_ingested_false() {
+        let app = Router::new().route(
+            "/v1/ingest/runtime-events",
+            post(|| async { Json(serde_json::json!({"ingested": false})) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = GatewayClient::new(
+            Url::parse(&format!("http://{addr}")).unwrap(),
+            "tok".to_string(),
+        );
+        let payload = RuntimeEventPayload {
+            event_id: "evt-1".to_string(),
+            event_type: "tool_call".to_string(),
+            source_component: "sensor".to_string(),
+            ..Default::default()
+        };
+        let resp = client.ingest_runtime_event(&payload).await.unwrap();
+        assert!(!resp.ingested);
     }
 }

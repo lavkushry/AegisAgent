@@ -11,4 +11,5 @@
 pub mod config;
 pub mod gateway_client;
 pub mod identity;
+pub mod shipper;
 pub mod spool;
