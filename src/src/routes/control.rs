@@ -71,7 +71,7 @@ pub async fn create_ban(
         revoked_at: None,
         revoked_by: None,
     };
-    match state.storage.insert_agent_ban(&record).await {
+    match state.storage.insert_ban(&record).await {
         Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(e) => {
             error!("Failed to create agent ban: {:?}", e);
@@ -86,7 +86,7 @@ pub async fn get_ban(
     TenantId(tenant_id): TenantId,
     Path(ban_id): Path<String>,
 ) -> impl IntoResponse {
-    match state.storage.get_agent_ban(&tenant_id, &ban_id).await {
+    match state.storage.get_ban(&tenant_id, &ban_id).await {
         Ok(Some(r)) => (StatusCode::OK, Json(r)).into_response(),
         Ok(None) => StatusError::not_found("ban not found").into_response(),
         Err(e) => {
@@ -103,11 +103,7 @@ pub async fn list_bans(
     RawQuery(raw_query): RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
-    match state
-        .storage
-        .list_agent_bans(&tenant_id, limit, offset)
-        .await
-    {
+    match state.storage.list_bans(&tenant_id, limit, offset).await {
         Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(e) => {
             error!("Failed to list agent bans: {:?}", e);
@@ -130,7 +126,7 @@ pub async fn revoke_ban(
     Path(ban_id): Path<String>,
     Json(req): Json<RevokeBanRequest>,
 ) -> impl IntoResponse {
-    let existing = match state.storage.get_agent_ban(&tenant_id, &ban_id).await {
+    let existing = match state.storage.get_ban(&tenant_id, &ban_id).await {
         Ok(Some(b)) => b,
         Ok(None) => return StatusError::not_found("ban not found").into_response(),
         Err(e) => {
@@ -145,10 +141,10 @@ pub async fn revoke_ban(
     let now = Utc::now();
     match state
         .storage
-        .revoke_agent_ban(&tenant_id, &ban_id, &req.revoked_by, now)
+        .revoke_ban(&tenant_id, &ban_id, &req.revoked_by, now)
         .await
     {
-        Ok(_) => match state.storage.get_agent_ban(&tenant_id, &ban_id).await {
+        Ok(_) => match state.storage.get_ban(&tenant_id, &ban_id).await {
             Ok(Some(r)) => (StatusCode::OK, Json(r)).into_response(),
             Ok(None) => StatusError::not_found("ban not found").into_response(),
             Err(e) => {
@@ -199,7 +195,7 @@ pub async fn create_quarantine(
         released_at: None,
         released_by: None,
     };
-    match state.storage.insert_quarantine_record(&record).await {
+    match state.storage.insert_quarantine(&record).await {
         Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(e) => {
             error!("Failed to create quarantine record: {:?}", e);
@@ -214,7 +210,7 @@ pub async fn get_quarantine(
     TenantId(tenant_id): TenantId,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match state.storage.get_quarantine_record(&tenant_id, &id).await {
+    match state.storage.get_quarantine(&tenant_id, &id).await {
         Ok(Some(r)) => (StatusCode::OK, Json(r)).into_response(),
         Ok(None) => StatusError::not_found("quarantine record not found").into_response(),
         Err(e) => {
@@ -233,7 +229,7 @@ pub async fn list_quarantine(
     let (limit, offset) = parse_pagination(raw_query.as_deref());
     match state
         .storage
-        .list_quarantine_records(&tenant_id, limit, offset)
+        .list_quarantine(&tenant_id, limit, offset)
         .await
     {
         Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
@@ -265,7 +261,7 @@ pub async fn release_quarantine(
     Path(id): Path<String>,
     Json(req): Json<ReleaseQuarantineRequest>,
 ) -> impl IntoResponse {
-    let existing = match state.storage.get_quarantine_record(&tenant_id, &id).await {
+    let existing = match state.storage.get_quarantine(&tenant_id, &id).await {
         Ok(Some(q)) => q,
         Ok(None) => return StatusError::not_found("quarantine record not found").into_response(),
         Err(e) => {
@@ -280,10 +276,10 @@ pub async fn release_quarantine(
     let now = Utc::now();
     match state
         .storage
-        .release_quarantine_record(&tenant_id, &id, &req.status, &req.released_by, now)
+        .release_quarantine(&tenant_id, &id, &req.status, &req.released_by, now)
         .await
     {
-        Ok(_) => match state.storage.get_quarantine_record(&tenant_id, &id).await {
+        Ok(_) => match state.storage.get_quarantine(&tenant_id, &id).await {
             Ok(Some(r)) => (StatusCode::OK, Json(r)).into_response(),
             Ok(None) => StatusError::not_found("quarantine record not found").into_response(),
             Err(e) => {

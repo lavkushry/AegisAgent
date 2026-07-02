@@ -1045,7 +1045,10 @@ impl StorageBackend for SqlDbStorage {
     }
 
     // Control commands (Phase 2.3)
-    async fn insert_control_command(&self, record: &ControlCommandRecord) -> Result<(), AegisError> {
+    async fn insert_control_command(
+        &self,
+        record: &ControlCommandRecord,
+    ) -> Result<(), AegisError> {
         db::insert_control_command(&self.pool, record)
             .await
             .map_err(AegisError::Database)
@@ -1083,14 +1086,14 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-    // Agent bans (Phase 2.4)
-    async fn insert_agent_ban(&self, record: &AgentBanRecord) -> Result<(), AegisError> {
+    // Bans (Phase 2.4)
+    async fn insert_ban(&self, record: &AgentBanRecord) -> Result<(), AegisError> {
         db::insert_ban(&self.pool, record)
             .await
             .map_err(AegisError::Database)
     }
 
-    async fn is_agent_banned(
+    async fn is_banned(
         &self,
         tenant_id: &str,
         target_type: &str,
@@ -1102,7 +1105,7 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn get_agent_ban(
+    async fn get_ban(
         &self,
         tenant_id: &str,
         ban_id: &str,
@@ -1112,7 +1115,7 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn revoke_agent_ban(
+    async fn revoke_ban(
         &self,
         tenant_id: &str,
         ban_id: &str,
@@ -1124,7 +1127,7 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn list_agent_bans(
+    async fn list_bans(
         &self,
         tenant_id: &str,
         limit: i64,
@@ -1136,13 +1139,13 @@ impl StorageBackend for SqlDbStorage {
     }
 
     // Quarantine (Phase 2.5)
-    async fn insert_quarantine_record(&self, record: &QuarantineRecord) -> Result<(), AegisError> {
+    async fn insert_quarantine(&self, record: &QuarantineRecord) -> Result<(), AegisError> {
         db::insert_quarantine(&self.pool, record)
             .await
             .map_err(AegisError::Database)
     }
 
-    async fn is_target_quarantined(
+    async fn is_quarantined(
         &self,
         tenant_id: &str,
         target_type: &str,
@@ -1153,7 +1156,7 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn get_quarantine_record(
+    async fn get_quarantine(
         &self,
         tenant_id: &str,
         id: &str,
@@ -1163,7 +1166,7 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn release_quarantine_record(
+    async fn release_quarantine(
         &self,
         tenant_id: &str,
         id: &str,
@@ -1176,7 +1179,7 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-    async fn list_quarantine_records(
+    async fn list_quarantine(
         &self,
         tenant_id: &str,
         limit: i64,
