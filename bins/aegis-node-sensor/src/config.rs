@@ -10,6 +10,7 @@ use url::Url;
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 30;
 const DEFAULT_IDENTITY_KEY_PATH: &str = "aegis-sensor-identity.key";
 const DEFAULT_SPOOL_DIR: &str = "aegis-sensor-spool";
+const DEFAULT_SPOOL_MAX_BYTES_PER_LANE: u64 = 100 * 1024 * 1024;
 
 /// Sensor enforcement posture. Mirrors the gateway's `agent_runs.mode` values
 /// (`observe` | `enforce` | `lockdown`) so a run's mode and its sensor's mode
@@ -60,6 +61,7 @@ pub struct RawSensorConfig {
     pub mode: Option<String>,
     pub identity_key_path: Option<PathBuf>,
     pub spool_dir: Option<PathBuf>,
+    pub spool_max_bytes_per_lane: Option<u64>,
     pub heartbeat_interval_secs: Option<u64>,
 }
 
@@ -92,6 +94,8 @@ pub enum ConfigError {
     InvalidMode(String),
     #[error("heartbeat_interval_secs must be greater than zero")]
     ZeroHeartbeatInterval,
+    #[error("spool_max_bytes_per_lane must be greater than zero")]
+    ZeroSpoolMaxBytesPerLane,
 }
 
 /// Validated sensor configuration — every field here is known-good.
@@ -103,6 +107,7 @@ pub struct SensorConfig {
     pub mode: SensorMode,
     pub identity_key_path: PathBuf,
     pub spool_dir: PathBuf,
+    pub spool_max_bytes_per_lane: u64,
     pub heartbeat_interval_secs: u64,
 }
 
@@ -151,6 +156,13 @@ impl SensorConfig {
             return Err(ConfigError::ZeroHeartbeatInterval);
         }
 
+        let spool_max_bytes_per_lane = raw
+            .spool_max_bytes_per_lane
+            .unwrap_or(DEFAULT_SPOOL_MAX_BYTES_PER_LANE);
+        if spool_max_bytes_per_lane == 0 {
+            return Err(ConfigError::ZeroSpoolMaxBytesPerLane);
+        }
+
         Ok(Self {
             gateway_url,
             tenant_id,
@@ -162,6 +174,7 @@ impl SensorConfig {
             spool_dir: raw
                 .spool_dir
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_SPOOL_DIR)),
+            spool_max_bytes_per_lane,
             heartbeat_interval_secs,
         })
     }
@@ -317,5 +330,13 @@ mod tests {
         raw.heartbeat_interval_secs = Some(0);
         let err = SensorConfig::resolve(raw, CliOverrides::default()).unwrap_err();
         assert_eq!(err, ConfigError::ZeroHeartbeatInterval);
+    }
+
+    #[test]
+    fn zero_spool_max_bytes_per_lane_fails_closed() {
+        let mut raw = raw_with(Some("https://gateway.internal"), Some("tenant_a"));
+        raw.spool_max_bytes_per_lane = Some(0);
+        let err = SensorConfig::resolve(raw, CliOverrides::default()).unwrap_err();
+        assert_eq!(err, ConfigError::ZeroSpoolMaxBytesPerLane);
     }
 }

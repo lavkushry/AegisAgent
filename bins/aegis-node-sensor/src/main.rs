@@ -1,18 +1,12 @@
-//! `aegis-node-sensor` — the local runtime sensor described in the Agent Cage
-//! architecture (`docs/AegisAgent_Agent_Cage.md`). Deliberately a separate
-//! binary from the gateway: the gateway is the brain and must never run
-//! untrusted agent code or live on the same host boundary as one.
-//!
-//! Phase 3.1 scope: config + CLI + identity key handling, enough to start,
-//! validate, and idle. Phase 3.2 (this file also covers): the sensor
-//! registers with the gateway on startup and heartbeats on an interval. The
-//! durable local queue, the event shipper, and signed command receipt are
-//! separate PRs (3.3-3.6) — this binary does not yet ship events or receive
-//! commands.
-
-mod config;
-mod gateway_client;
-mod identity;
+//! `aegis-node-sensor` CLI entry point. Thin by design — see `lib.rs` for
+//! why this is a lib+bin crate. Phase 3.1: config + CLI + identity key
+//! handling. Phase 3.2: registers with the gateway on startup and
+//! heartbeats on an interval. Phase 3.3 (this file also covers): a durable
+//! local spool is opened and its pending-byte counts are reported on every
+//! heartbeat. The event shipper and signed command receipt are separate PRs
+//! (3.4-3.6) — nothing is enqueued into the spool yet (no event sources
+//! exist before the cage runner, Phase 4), so it stays empty in practice
+//! until then.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,9 +14,10 @@ use std::time::Duration;
 
 use clap::Parser;
 
-use config::{CliOverrides, RawSensorConfig, SensorConfig};
-use gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
-use identity::SensorIdentity;
+use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
+use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
+use aegis_node_sensor::identity::SensorIdentity;
+use aegis_node_sensor::spool::{Lane, SpoolQueue};
 
 /// Registration is retried with linear backoff before giving up — the
 /// gateway may not be reachable yet on a fresh deployment (container
@@ -119,6 +114,14 @@ async fn main() -> ExitCode {
         }
     };
 
+    let spool = match SpoolQueue::open(&config.spool_dir, config.spool_max_bytes_per_lane) {
+        Ok(spool) => spool,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to open durable local spool — failing closed");
+            return ExitCode::FAILURE;
+        }
+    };
+
     tracing::info!(
         gateway_url = %config.gateway_url,
         tenant_id = %config.tenant_id,
@@ -172,6 +175,8 @@ async fn main() -> ExitCode {
                 let req = HeartbeatRequest {
                     mode: config.mode.to_string(),
                     sensor_version: env!("CARGO_PKG_VERSION").to_string(),
+                    queue_depth_critical: spool.pending_bytes(Lane::Critical).ok().map(|b| b as i64),
+                    queue_depth_normal: spool.pending_bytes(Lane::Normal).ok().map(|b| b as i64),
                     ..Default::default()
                 };
                 if let Err(e) = client.heartbeat(&sensor_id, &req).await {
@@ -195,7 +200,10 @@ async fn main() -> ExitCode {
 async fn register_with_retries(
     client: &GatewayClient,
     req: &RegisterRequest,
-) -> Result<gateway_client::RegisterResponse, gateway_client::GatewayClientError> {
+) -> Result<
+    aegis_node_sensor::gateway_client::RegisterResponse,
+    aegis_node_sensor::gateway_client::GatewayClientError,
+> {
     let mut last_err = None;
     for attempt in 1..=REGISTRATION_MAX_ATTEMPTS {
         match client.register(req).await {
