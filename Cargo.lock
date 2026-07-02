@@ -113,6 +113,7 @@ dependencies = [
  "serde_yml",
  "sha2",
  "sqlx",
+ "tempfile",
  "tokio",
  "tracing",
  "uuid",

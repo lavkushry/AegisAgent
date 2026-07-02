@@ -31,3 +31,4 @@ postgres = ["aegis-storage/postgres", "sqlx/postgres"]
 
 [dev-dependencies]
 axum = { workspace = true }
+tempfile = "3.10"

@@ -15,5 +15,27 @@ describe("GatewayEntityDatasource", () => {
       timeRange: { from: "now-24h", to: "now" },
       variables: {},
     })).rejects.toThrow("requires the soc-query datasource");
+
+    await expect(datasource.query({
+      entity: "ase",
+      aggregate: "count_over_time",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+    })).rejects.toThrow("requires the soc-query datasource");
+  });
+
+  it("rejects count_over_time for entities without a timeseries endpoint", async () => {
+    const datasource = new GatewayEntityDatasource({
+      gatewayUrl: "http://gateway.test",
+      bearerToken: "token",
+      tenantId: "tenant-a",
+    });
+
+    await expect(datasource.query({
+      entity: "incident",
+      aggregate: "count_over_time",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+    })).rejects.toThrow("only supported for the 'decision' entity");
   });
 });
