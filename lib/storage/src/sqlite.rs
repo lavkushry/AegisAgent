@@ -1190,6 +1190,90 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Sensors (Phase 3.2)
+    async fn upsert_sensor(
+        &self,
+        tenant_id: &str,
+        node_key: &str,
+        hostname: &str,
+        environment: Option<&str>,
+        sensor_version: &str,
+        public_key: &str,
+        capabilities_json: &str,
+        mode: &str,
+        now: DateTime<Utc>,
+    ) -> Result<String, AegisError> {
+        db::upsert_sensor(
+            &self.pool,
+            tenant_id,
+            node_key,
+            hostname,
+            environment,
+            sensor_version,
+            public_key,
+            capabilities_json,
+            mode,
+            now,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn get_sensor(
+        &self,
+        tenant_id: &str,
+        sensor_id: &str,
+    ) -> Result<Option<SensorRecord>, AegisError> {
+        db::get_sensor(&self.pool, tenant_id, sensor_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn heartbeat_sensor(
+        &self,
+        tenant_id: &str,
+        sensor_id: &str,
+        mode: &str,
+        sensor_version: &str,
+        queue_depth_critical: Option<i64>,
+        queue_depth_normal: Option<i64>,
+        disk_usage_bytes: Option<i64>,
+        active_cage_runs: Option<i64>,
+        last_event_watermark: Option<&str>,
+        last_command_watermark: Option<&str>,
+        health_status: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::heartbeat_sensor(
+            &self.pool,
+            tenant_id,
+            sensor_id,
+            mode,
+            sensor_version,
+            queue_depth_critical,
+            queue_depth_normal,
+            disk_usage_bytes,
+            active_cage_runs,
+            last_event_watermark,
+            last_command_watermark,
+            health_status,
+            now,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_sensors(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SensorRecord>, AegisError> {
+        db::list_sensors(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

@@ -669,6 +669,40 @@ pub struct QuarantineRecord {
     pub released_by: Option<String>,
 }
 
+/// Phase 3.2 (Agent Cage): a registered `aegis-node-sensor` instance.
+/// `node_key` is the sensor's own stable per-host identifier — re-registering
+/// with the same `(tenant_id, node_key)` updates this row instead of creating
+/// a duplicate, so a restarted sensor keeps its identity. `capabilities` is a
+/// raw JSON-array string (no enforcement logic reads it yet). `public_key` is
+/// the sensor's Ed25519 identity key (hex), used to verify signed ACK/NACK
+/// results in a later phase — never a secret. Tenant-scoped.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct SensorRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub node_key: String,
+    pub hostname: String,
+    pub environment: Option<String>,
+    pub sensor_version: String,
+    pub public_key: String,
+    pub capabilities: String,
+    /// `observe` | `enforce` | `lockdown`.
+    pub mode: String,
+    /// `registered` | `heartbeating` | `degraded` | `lockdown` | `draining`.
+    pub status: String,
+    pub config_version: i64,
+    pub queue_depth_critical: Option<i64>,
+    pub queue_depth_normal: Option<i64>,
+    pub disk_usage_bytes: Option<i64>,
+    pub active_cage_runs: Option<i64>,
+    pub last_event_watermark: Option<String>,
+    pub last_command_watermark: Option<String>,
+    pub health_status: Option<String>,
+    pub registered_at: DateTime<Utc>,
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,

@@ -951,6 +951,11 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/control/commands/:id/status",
             post(routes::update_control_command_status),
         )
+        // Runtime control plane (Phase 3.2): aegis-node-sensor register/heartbeat
+        .route("/sensors/register", post(routes::register_sensor))
+        .route("/sensors", get(routes::list_sensors))
+        .route("/sensors/:id", get(routes::get_sensor))
+        .route("/sensors/:id/heartbeat", post(routes::sensor_heartbeat))
         // SOC Phase 6: Incident lifecycle — close an open incident
         .route("/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator

@@ -3,21 +3,33 @@
 //! binary from the gateway: the gateway is the brain and must never run
 //! untrusted agent code or live on the same host boundary as one.
 //!
-//! Phase 3.1 scope (this file): config + CLI + identity key handling, enough
-//! to start, validate, and idle. Registration, heartbeat, the durable local
-//! queue, the event shipper, and signed command receipt are separate PRs
-//! (3.2-3.6) — this binary does not yet talk to the gateway.
+//! Phase 3.1 scope: config + CLI + identity key handling, enough to start,
+//! validate, and idle. Phase 3.2 (this file also covers): the sensor
+//! registers with the gateway on startup and heartbeats on an interval. The
+//! durable local queue, the event shipper, and signed command receipt are
+//! separate PRs (3.3-3.6) — this binary does not yet ship events or receive
+//! commands.
 
 mod config;
+mod gateway_client;
 mod identity;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::Parser;
 
 use config::{CliOverrides, RawSensorConfig, SensorConfig};
+use gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use identity::SensorIdentity;
+
+/// Registration is retried with linear backoff before giving up — the
+/// gateway may not be reachable yet on a fresh deployment (container
+/// ordering, DNS propagation). Indefinite retry/buffering while running is
+/// explicitly Phase 3.4 scope; this is just startup patience.
+const REGISTRATION_MAX_ATTEMPTS: u32 = 5;
+const REGISTRATION_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -36,9 +48,18 @@ struct Cli {
     #[arg(long)]
     tenant_id: Option<String>,
 
+    #[arg(long)]
+    api_token: Option<String>,
+
     /// observe | enforce | lockdown
     #[arg(long)]
     mode: Option<String>,
+
+    /// Stable per-host identifier; re-registering with the same value
+    /// updates this sensor's existing gateway record instead of creating a
+    /// duplicate. Defaults to the machine's hostname.
+    #[arg(long)]
+    node_key: Option<String>,
 }
 
 fn init_tracing() {
@@ -78,6 +99,7 @@ async fn main() -> ExitCode {
     let overrides = CliOverrides {
         gateway_url: cli.gateway_url,
         tenant_id: cli.tenant_id,
+        api_token: cli.api_token,
         mode: cli.mode,
     };
 
@@ -104,10 +126,93 @@ async fn main() -> ExitCode {
         spool_dir = %config.spool_dir.display(),
         heartbeat_interval_secs = config.heartbeat_interval_secs,
         sensor_public_key = %identity.public_key_hex(),
-        "aegis-node-sensor starting (Phase 3.1 skeleton — registration/heartbeat/queue/shipper land in later phases)"
+        "aegis-node-sensor starting"
     );
 
-    tokio::signal::ctrl_c().await.ok();
+    let node_key = cli
+        .node_key
+        .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
+        .unwrap_or_else(|| "unknown-host".to_string());
+    let hostname = node_key.clone();
+
+    let client = GatewayClient::new(config.gateway_url.clone(), config.api_token.clone());
+    let register_req = RegisterRequest {
+        node_key,
+        hostname,
+        environment: None,
+        sensor_version: env!("CARGO_PKG_VERSION").to_string(),
+        public_key: identity.public_key_hex(),
+        capabilities: Vec::new(),
+        mode: config.mode.to_string(),
+    };
+
+    let registration = match register_with_retries(&client, &register_req).await {
+        Ok(registration) => registration,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to register with gateway after retries — failing closed");
+            return ExitCode::FAILURE;
+        }
+    };
+    let sensor_id = registration.sensor_id;
+    tracing::info!(
+        sensor_id = %sensor_id,
+        confirmed_mode = %registration.mode,
+        config_version = registration.config_version,
+        heartbeat_interval_secs = registration.heartbeat_interval_secs,
+        "registered with gateway"
+    );
+
+    // The gateway's confirmed interval is authoritative — it may differ from
+    // the sensor's local default if the operator has tuned it per tenant.
+    let heartbeat_interval = Duration::from_secs(registration.heartbeat_interval_secs);
+    let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(heartbeat_interval) => {
+                let req = HeartbeatRequest {
+                    mode: config.mode.to_string(),
+                    sensor_version: env!("CARGO_PKG_VERSION").to_string(),
+                    ..Default::default()
+                };
+                if let Err(e) = client.heartbeat(&sensor_id, &req).await {
+                    // Transient heartbeat failures don't crash the sensor — the
+                    // gateway will simply see a stale last_heartbeat_at until
+                    // the next attempt succeeds. Durable buffering/backoff for
+                    // sustained gateway outages is Phase 3.4 scope.
+                    tracing::warn!(error = %e, "heartbeat failed, will retry next interval");
+                } else {
+                    tracing::debug!("heartbeat ok");
+                }
+            }
+            _ = &mut shutdown => break,
+        }
+    }
+
     tracing::info!("aegis-node-sensor shutting down");
     ExitCode::SUCCESS
+}
+
+async fn register_with_retries(
+    client: &GatewayClient,
+    req: &RegisterRequest,
+) -> Result<gateway_client::RegisterResponse, gateway_client::GatewayClientError> {
+    let mut last_err = None;
+    for attempt in 1..=REGISTRATION_MAX_ATTEMPTS {
+        match client.register(req).await {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                tracing::warn!(
+                    attempt,
+                    max_attempts = REGISTRATION_MAX_ATTEMPTS,
+                    error = %e,
+                    "registration attempt failed"
+                );
+                last_err = Some(e);
+                if attempt < REGISTRATION_MAX_ATTEMPTS {
+                    tokio::time::sleep(REGISTRATION_RETRY_DELAY).await;
+                }
+            }
+        }
+    }
+    Err(last_err.expect("loop runs at least once"))
 }
