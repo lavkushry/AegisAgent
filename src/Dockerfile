@@ -32,11 +32,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compil
 #
 # Cargo-workspace layout (post-refactor): the gateway binary crate lives at
 # src/, with sibling library crates under lib/{common,api,storage,policy,soc}
+# and standalone runtime-control-plane binaries under bins/{aegis-node-sensor,...}
 # — copy the whole workspace rather than the old single-crate `gateway/` tree.
+# `cargo build -p gateway` still needs every member's Cargo.toml on disk to
+# resolve the workspace manifest, even though only the gateway package itself
+# is compiled in this stage.
 COPY .cargo ./.cargo
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY lib ./lib
+COPY bins ./bins
 RUN cargo build --release -p gateway --bin gateway
 # Strip debug symbols (~15% smaller binary) — the builder has `strip`
 # available; the distroless final stage below does not.
