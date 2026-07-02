@@ -126,7 +126,7 @@ mod tests {
     use super::*;
     use aegis_api::models::SocQueryFilters;
     use aegis_storage::{db, sqlite::SqlDbStorage};
-    use uuid::Uuid;
+    use tempfile::TempDir;
 
     fn request() -> SocQueryRequest {
         SocQueryRequest {
@@ -141,9 +141,12 @@ mod tests {
         }
     }
 
-    async fn storage() -> SqlDbStorage {
-        let path = std::env::temp_dir().join(format!("aegis-soc-query-{}.db", Uuid::new_v4()));
-        SqlDbStorage::new(db::init_db(path.to_string_lossy().as_ref()).await.unwrap())
+    async fn storage() -> (SqlDbStorage, TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("soc-query.db");
+        let storage =
+            SqlDbStorage::new(db::init_db(path.to_string_lossy().as_ref()).await.unwrap());
+        (storage, temp_dir)
     }
 
     #[test]
@@ -161,7 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_unsupported_filters_and_invalid_aggregates() {
-        let storage = storage().await;
+        let (storage, _temp_dir) = storage().await;
         let mut req = request();
         req.filters.action = Some("write".to_string());
         assert!(matches!(
@@ -186,7 +189,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatches_all_supported_aggregates() {
-        let storage = storage().await;
+        let (storage, _temp_dir) = storage().await;
         for (aggregate, group_by) in [
             (None, None),
             (Some("count"), None),
