@@ -1,0 +1,15 @@
+%% Anonymous agent cage flow. Explained in: docs/flows/Unknown_Agent_Cage_Flow.md
+%% Steps marked * are designed (Phases 3-6), not implemented.
+flowchart TD
+    SUB[Submit unknown agent] --> RUNS[POST /v1/agent-cage/runs]
+    RUNS --> PRE[Preflight: policy, ban, quota]
+    PRE --> CMD[Signed start_run command*]
+    CMD --> NS[Node sensor* verifies sig/tenant/expiry/nonce]
+    NS --> CR[Cage runner* launches sandbox]
+    CR --> SB[Sandbox: no host FS, no raw creds, no direct net]
+    SB --> EPX[Egress proxy*] & TBK[Tool broker*] & MCPG[MCP gateway]
+    SB --> TEL[Runtime telemetry]
+    TEL --> ING[POST /v1/ingest/runtime-events]
+    ING --> SOC[SOC detect/correlate]
+    SOC --> KILL[Kill / quarantine / ban*]
+    KILL --> EVID[Receipts + timeline]

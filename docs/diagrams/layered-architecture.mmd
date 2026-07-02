@@ -1,0 +1,25 @@
+%% Full system architecture (layers). Explained in: docs/Architecture_Overview.md
+%% Derived from docs/architecture-map.json. * = planned, not implemented.
+flowchart TB
+    subgraph L1[People]
+        DEV[Developer]; ANALYST[SOC Analyst]; APPROVER[Approver]; ADMIN[Admin]
+    end
+    subgraph L2[Agents]
+        KA[Known Agent]; MA[MCP Agent]; AA[Anonymous Agent]; CIA[CI/Browser Agent*]
+    end
+    subgraph L3[Choke Points]
+        SDK[SDK]; GW[Gateway]; MCPG[MCP Gateway]; TB[Tool Broker*]; EP[Egress Proxy*]; CAGE[Cage Runner*]; NS[Node Sensor*]
+    end
+    subgraph L4[Control Plane]
+        AUTH[Auth/Tenant]; POL[Policy Cedar]; APPR[Approvals]; RCPT[Receipts]; SOC[SOC]; BAN[Ban/Quarantine]; EG[Evidence Graph]
+    end
+    subgraph L5[Infrastructure]
+        DB[(SQLite/Postgres)]; QD[(Qdrant)]; BUS[Event Sink]; OTEL[OTel]; K8S[K8s/Helm]
+    end
+    subgraph L6[Outputs]
+        R[Receipts]; AL[Alerts/Incidents]; EVP[Evidence Packs]; AUD[Audit Logs]; DASH[Dashboards]
+    end
+    L2 --> L3 --> L4 --> L5
+    L4 --> L6
+    L1 --> L3
+    L1 --> L6

@@ -1,0 +1,8 @@
+%% The 60-second system picture. Explained in: docs/The_One_Minute_Tour.md
+flowchart LR
+    A[AI agent] --> C[Aegis checks]
+    C -->|safe| RUN[Action runs]
+    C -->|risky| H[Human approves<br/>exact action] --> RUN
+    C -->|dangerous| STOP[Blocked]
+    RUN --> P[Provable receipt]
+    P --> W[SOC watches<br/>and can stop the agent]

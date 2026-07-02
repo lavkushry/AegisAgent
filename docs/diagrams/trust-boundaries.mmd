@@ -1,0 +1,18 @@
+%% Threat-model trust boundaries. Explained in: docs/Architecture_Overview.md §5 + docs/AegisAgent_Threat_Model.md
+flowchart LR
+    subgraph UNTRUSTED[Untrusted]
+        EXT[External content]
+        AG[Agent process + LLM]
+    end
+    subgraph SEMI[Semi-trusted]
+        SDKB[SDK - cooperating fail-closed]
+    end
+    subgraph TRUSTED[Trusted]
+        GWB[Gateway + policy + storage]
+        HUM[Approvers / analysts]
+    end
+    EXT -- B1 ingest: channel trust label --> GWB
+    AG -- B2 canonical action + hash --> SDKB
+    SDKB -- B3 authn authorize --> GWB
+    HUM -- B4 hash-bound approval --> GWB
+    GWB -- B5 tenant_id on every query --> GWB

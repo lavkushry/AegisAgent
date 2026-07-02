@@ -1,4 +1,14 @@
-.PHONY: setup test fmt lint check clean
+.PHONY: setup test fmt lint check clean docs-validate docs-serve docs-build
+
+# Docs system (MkDocs Material; see docs/START_HERE.md and scripts/validate-docs.mjs)
+docs-validate:
+	node scripts/validate-docs.mjs
+
+docs-serve:
+	pip install -r requirements-docs.txt && mkdocs serve
+
+docs-build:
+	node scripts/validate-docs.mjs && mkdocs build
 
 # One-shot dev environment setup: installs pre-commit and registers its git
 # hook, plus the Python SDK in editable/dev mode. Mirrors CONTRIBUTING.md.

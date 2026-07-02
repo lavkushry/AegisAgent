@@ -1,0 +1,11 @@
+%% MCP defense flow. Explained in: docs/components/MCP_Gateway.md
+flowchart TD
+    REG[register MCP server] --> DISC[discover tools]
+    DISC --> HASH[mcp-manifest-1 hash - order independent]
+    HASH --> PIN[(pin + snapshot)]
+    CALL[agent MCP call] --> KNOWN{server+tool registered?}
+    KNOWN -->|no| DENY[deny]
+    KNOWN -->|yes| POLICY[Cedar + trust + manifest pin]
+    REDISC[re-discovery] --> CMP{hash changed?}
+    CMP -->|yes| CLS[classify drift:<br/>added/removed=high, modified=medium,<br/>metadata=low]
+    CLS --> ALERT[mcp_manifest_drift alert]

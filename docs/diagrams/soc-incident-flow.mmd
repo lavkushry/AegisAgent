@@ -1,0 +1,10 @@
+%% SOC incident creation. Explained in: docs/components/SOC_Engine.md
+flowchart LR
+    D[Decisions] & I[Ingested content] & RT[Runtime events] --> SINK[EventSink async]
+    SINK --> DET[detect.rs<br/>rules + DSL + baselines]
+    DET --> AL[Alert]
+    AL --> COR[correlate.rs]
+    COR --> INC[Incident + timeline]
+    INC --> NAR[narrate.rs → narrative]
+    INC --> RESP[respond.rs playbooks]
+    RESP --> ACT[freeze / revoke / quarantine]

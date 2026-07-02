@@ -1,0 +1,12 @@
+%% Approval lifecycle state machine. Explained in: docs/components/Approval_Engine.md
+stateDiagram-v2
+    [*] --> pending: require_approval (action frozen, hash bound)
+    pending --> approved: human approves exact action
+    pending --> rejected: human rejects
+    pending --> expired: TTL elapses (AEGIS_APPROVAL_TTL_SECS)
+    pending --> pending: edit → re-hash + re-evaluate
+    approved --> consumed: POST /:id/consume (single-use, atomic)
+    approved --> expired: TTL elapses unconsumed
+    consumed --> [*]: SDK re-checks hash → execute
+    rejected --> [*]
+    expired --> [*]

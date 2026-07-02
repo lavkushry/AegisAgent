@@ -16,7 +16,7 @@ level on boot, and require a restart to change.
 | `DATABASE_URL` | `sqlite://aegis.db` | `sqlite://...` or (with the `postgres` feature) a Postgres URL. |
 
 Not configurable via env (intentional, baked-in safe defaults — see
-[`sqlite_usage.md`](../.claude/rules/sqlite_usage.md)):
+[`sqlite_usage.md`](https://github.com/lavkushry/AegisAgent/blob/main/.claude/rules/sqlite_usage.md)):
 - **WAL journal mode** — readers don't block writers.
 - **`busy_timeout` = 5s** — a writer waiting on the SQLite write lock retries
   for up to 5s before erroring, instead of failing instantly under brief
@@ -85,7 +85,7 @@ them just trades a fast `503` for a slow timeout.
 ## 5. Audit-event batching (#1315)
 
 Audit events are buffered and flushed in batches rather than one write per
-request — see [`audit_batch.rs`](../lib/storage/src/audit_batch.rs).
+request — see [`audit_batch.rs`](https://github.com/lavkushry/AegisAgent/blob/main/lib/storage/src/audit_batch.rs).
 
 | Env var | Default | Notes |
 |---|---|---|
