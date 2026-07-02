@@ -119,6 +119,31 @@ pub struct IngestResponse {
     pub ingested: bool,
 }
 
+/// Mirrors the gateway's `ControlCommandRecord` (`lib/api/src/models.rs`,
+/// Phase 2.3/2.7) — the wire shape returned by `GET /v1/control/commands`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SignedCommand {
+    pub command_id: String,
+    pub tenant_id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub action: String,
+    pub reason: Option<String>,
+    pub issued_by: String,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub nonce: String,
+    pub requires_ack: bool,
+    pub receipt_required: bool,
+    pub signature: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateCommandStatusRequest {
+    pub status: String,
+}
+
 pub struct GatewayClient {
     http: reqwest::Client,
     base_url: Url,
@@ -195,6 +220,50 @@ impl GatewayClient {
             .send()
             .await?;
         Self::parse_response(response).await
+    }
+
+    /// Fetch all control commands visible to this tenant. The endpoint has
+    /// no target-scoping filter yet, so the sensor filters client-side for
+    /// commands addressed to it with `status == "issued"`.
+    pub async fn list_control_commands(&self) -> Result<Vec<SignedCommand>, GatewayClientError> {
+        let url = self
+            .base_url
+            .join("/v1/control/commands")
+            .expect("gateway_url + fixed path is always a valid URL");
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(&self.api_token)
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    pub async fn update_command_status(
+        &self,
+        command_id: &str,
+        status: &str,
+    ) -> Result<(), GatewayClientError> {
+        let url = self
+            .base_url
+            .join(&format!("/v1/control/commands/{command_id}/status"))
+            .expect("gateway_url + fixed path is always a valid URL");
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_token)
+            .json(&UpdateCommandStatusRequest {
+                status: status.to_string(),
+            })
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            Err(GatewayClientError::RejectedRequest { status, body })
+        }
     }
 
     async fn parse_response<T: for<'de> Deserialize<'de>>(
@@ -390,5 +459,82 @@ mod tests {
         };
         let resp = client.ingest_runtime_event(&payload).await.unwrap();
         assert!(!resp.ingested);
+    }
+
+    fn sample_command_json(command_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "command_id": command_id,
+            "tenant_id": "tenant_a",
+            "target_type": "sensor",
+            "target_id": "sensor-1",
+            "action": "kill_run",
+            "reason": null,
+            "issued_by": "user:admin@example.com",
+            "issued_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-01T00:05:00Z",
+            "nonce": "n1",
+            "requires_ack": true,
+            "receipt_required": true,
+            "signature": "deadbeef",
+            "status": "issued",
+        })
+    }
+
+    #[tokio::test]
+    async fn list_control_commands_deserializes_the_gateway_response() {
+        let app = Router::new().route(
+            "/v1/control/commands",
+            axum::routing::get(|| async {
+                Json(serde_json::json!([sample_command_json("cmd-1")]))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = GatewayClient::new(
+            Url::parse(&format!("http://{addr}")).unwrap(),
+            "tok".to_string(),
+        );
+        let commands = client.list_control_commands().await.unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].command_id, "cmd-1");
+        assert_eq!(commands[0].action, "kill_run");
+    }
+
+    #[tokio::test]
+    async fn update_command_status_sends_the_expected_body() {
+        let received = Arc::new(Mutex::new(None));
+        let received_clone = received.clone();
+        let app = Router::new().route(
+            "/v1/control/commands/:id/status",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let received = received_clone.clone();
+                async move {
+                    *received.lock().unwrap() = Some(body);
+                    Json(serde_json::json!({"status": "acked"}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = GatewayClient::new(
+            Url::parse(&format!("http://{addr}")).unwrap(),
+            "tok".to_string(),
+        );
+        client
+            .update_command_status("cmd-1", "acked")
+            .await
+            .unwrap();
+        assert_eq!(
+            received.lock().unwrap().as_ref().unwrap()["status"],
+            "acked"
+        );
     }
 }

@@ -8,6 +8,7 @@
 //! split) — a binary-only crate flags not-yet-called `pub` items as dead
 //! code, since nothing outside the crate could ever call them either.
 
+pub mod command_receiver;
 pub mod config;
 pub mod gateway_client;
 pub mod identity;

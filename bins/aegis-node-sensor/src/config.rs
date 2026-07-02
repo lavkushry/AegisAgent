@@ -63,6 +63,12 @@ pub struct RawSensorConfig {
     pub spool_dir: Option<PathBuf>,
     pub spool_max_bytes_per_lane: Option<u64>,
     pub heartbeat_interval_secs: Option<u64>,
+    /// Hex-encoded Ed25519 public key the sensor pins for verifying signed
+    /// commands (Control Command Protocol doc, 3.2 — config is an
+    /// explicitly allowed alternative to fetching it at registration).
+    /// Unset means the sensor cannot verify any command and rejects them
+    /// all fail-closed, rather than trusting an unverifiable one.
+    pub gateway_public_key_hex: Option<String>,
 }
 
 /// CLI-supplied overrides, applied on top of the config file before defaults.
@@ -109,6 +115,7 @@ pub struct SensorConfig {
     pub spool_dir: PathBuf,
     pub spool_max_bytes_per_lane: u64,
     pub heartbeat_interval_secs: u64,
+    pub gateway_public_key_hex: Option<String>,
 }
 
 impl SensorConfig {
@@ -176,6 +183,7 @@ impl SensorConfig {
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_SPOOL_DIR)),
             spool_max_bytes_per_lane,
             heartbeat_interval_secs,
+            gateway_public_key_hex: raw.gateway_public_key_hex,
         })
     }
 }

@@ -2,11 +2,11 @@
 //! why this is a lib+bin crate. Phase 3.1: config + CLI + identity key
 //! handling. Phase 3.2: registers with the gateway on startup and
 //! heartbeats on an interval. Phase 3.3: a durable local spool is opened.
-//! Phase 3.4 (this file also covers): the spool is drained to the gateway's
-//! ingest endpoint on its own tick. Signed command receipt is a separate PR
-//! (3.5-3.6) — nothing enqueues into the spool yet (no event sources exist
-//! before the cage runner, Phase 4), so shipping stays a no-op in practice
-//! until then.
+//! Phase 3.4: the spool is drained to the gateway's ingest endpoint on its
+//! own tick. Phase 3.5 (this file also covers): polls for signed control
+//! commands addressed to this sensor, verifies and executes them, and
+//! ACK/NACKs the result. Sensor modes (observe/enforce/lockdown behavior
+//! beyond just tagging outgoing requests) are Phase 3.6.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use clap::Parser;
 
+use aegis_node_sensor::command_receiver::{CommandReceiver, ExecutionOutcome};
 use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
@@ -24,6 +25,9 @@ use aegis_node_sensor::spool::{Lane, SpoolQueue};
 /// much shorter than) the heartbeat interval — events shouldn't sit queued
 /// for a full heartbeat cycle just because that's the only tick available.
 const SHIP_TICK_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How often the sensor polls the gateway for commands addressed to it.
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Registration is retried with linear backoff before giving up — the
 /// gateway may not be reachable yet on a fresh deployment (container
@@ -175,8 +179,18 @@ async fn main() -> ExitCode {
     // the sensor's local default if the operator has tuned it per tenant.
     let heartbeat_interval = Duration::from_secs(registration.heartbeat_interval_secs);
     let shipper = EventShipper::new(&client);
+    let command_receiver = CommandReceiver::new(
+        config.gateway_public_key_hex.as_deref(),
+        config.tenant_id.clone(),
+    );
+    if config.gateway_public_key_hex.is_none() {
+        tracing::warn!(
+            "no gateway_public_key_hex configured — all incoming control commands will be rejected fail-closed"
+        );
+    }
     let mut heartbeat_tick = tokio::time::interval(heartbeat_interval);
     let mut ship_tick = tokio::time::interval(SHIP_TICK_INTERVAL);
+    let mut command_poll_tick = tokio::time::interval(COMMAND_POLL_INTERVAL);
     let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
     loop {
         tokio::select! {
@@ -207,12 +221,68 @@ async fn main() -> ExitCode {
                     }
                 }
             }
+            _ = command_poll_tick.tick() => {
+                poll_and_process_commands(&client, &command_receiver, &sensor_id).await;
+            }
             _ = &mut shutdown => break,
         }
     }
 
     tracing::info!("aegis-node-sensor shutting down");
     ExitCode::SUCCESS
+}
+
+/// Fetch commands, filter to the ones addressed to this sensor and still
+/// awaiting action, then verify/execute/ACK-or-NACK each. The gateway's
+/// `status` filter (only `"issued"` commands are re-fetched) is what makes
+/// this safe to call on an unbounded interval, including after a sensor
+/// restart — a command this sensor already ACKed won't come back.
+async fn poll_and_process_commands(
+    client: &GatewayClient,
+    receiver: &CommandReceiver,
+    sensor_id: &str,
+) {
+    let commands = match client.list_control_commands().await {
+        Ok(commands) => commands,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to poll control commands, will retry next tick");
+            return;
+        }
+    };
+
+    for cmd in commands
+        .into_iter()
+        .filter(|c| c.target_type == "sensor" && c.target_id == sensor_id && c.status == "issued")
+    {
+        let now = chrono::Utc::now();
+        let new_status = match receiver.verify(&cmd, now) {
+            Ok(()) => match receiver.execute(&cmd) {
+                ExecutionOutcome::Acked => {
+                    tracing::info!(command_id = %cmd.command_id, action = %cmd.action, "command executed");
+                    "acked"
+                }
+                ExecutionOutcome::Nacked(reason) => {
+                    tracing::warn!(command_id = %cmd.command_id, reason = %reason, "command execution nacked");
+                    "nacked"
+                }
+            },
+            Err(e) => {
+                tracing::warn!(command_id = %cmd.command_id, error = %e, "command verification failed, rejecting");
+                "nacked"
+            }
+        };
+
+        if let Err(e) = client
+            .update_command_status(&cmd.command_id, new_status)
+            .await
+        {
+            tracing::warn!(
+                command_id = %cmd.command_id,
+                error = %e,
+                "failed to report command status back to gateway"
+            );
+        }
+    }
 }
 
 async fn register_with_retries(
