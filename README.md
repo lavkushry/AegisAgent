@@ -67,7 +67,7 @@ Every decision flows through the **Inline Plane** to enforce permissions, while 
 ```bash
 git clone https://github.com/lavkushry/AegisAgent.git
 cd AegisAgent
-docker compose up --build
+docker compose up --build -d
 ```
 
 <!-- After the first release, pre-built images will be available:
@@ -91,7 +91,7 @@ pip install aegisagent
 
 ## ⚡ 5-Step Quickstart
 
-Experience AegisAgent's security gate preventing a simulated prompt-injection attack in under 5 minutes:
+Experience AegisAgent's security gate preventing a simulated prompt-injection attack in under 5 minutes.
 
 ### 1. Clone the Repository
 ```bash
@@ -99,34 +99,22 @@ git clone https://github.com/lavkushry/AegisAgent.git
 cd AegisAgent
 ```
 
-### 2. Start the Local Gateway (Docker)
+### 2. Run the Killer Demo
 ```bash
-docker compose up --build
-```
-Ensure the gateway is healthy in another terminal:
-```bash
-curl http://127.0.0.1:8080/health
-# {"status":"healthy","version":"0.1.0","db":"up"}
+make demo
 ```
 
-### 3. Seed Demo Environment
-Initialize configurations, mock GitHub actions, and demo keys:
-```bash
-bash scripts/seed-demo.sh
-```
+The demo starts the local gateway, seeds a coding agent and GitHub tool, blocks
+a prompt-injected merge attempt from untrusted external input, proves
+approve-then-swap fails closed on `action_hash` mismatch, blocks approval
+replay, and prints the receipt chain head plus server-side receipt verification.
 
-### 4. Run the GitHub Prompt-Injection Attack Demo
-This demo simulates a malicious external user trying to hijack a coding agent to merge a PR. AegisAgent detects the untrusted external provenance and blocks it deterministically:
-```bash
-python3 examples/github-attack-demo.py
-```
-*Output:* `AegisAgent blocked the malicious merge attempt (untrusted external provenance)`
+Expected proof points:
 
-### 5. Inspect Audit Timeline
-Retrieve the tamper-evident audit record generated for the blocked action:
-```bash
-curl -H "Authorization: Bearer tenant_123" http://127.0.0.1:8080/v1/audit/events
-```
+* `AegisAgent blocked the malicious merge attempt`
+* `Gateway rejected the swapped claimed_action_hash`
+* `Replay Blocked`
+* `"verified": true` from `/v1/receipts/verify-range`
 
 ---
 

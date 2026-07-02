@@ -202,6 +202,10 @@ class TestAsyncProtectToolApproval(unittest.IsolatedAsyncioTestCase):
         result = await deploy("staging")
         self.assertEqual(result, "deployed:staging")
         mock_sleep.assert_called()
+        consume_call = mock_post.call_args_list[1]
+        self.assertEqual(
+            consume_call.kwargs["json"], {"claimed_action_hash": expected_hash}
+        )
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
     @patch("requests.Session.get")
