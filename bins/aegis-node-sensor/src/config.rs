@@ -52,6 +52,11 @@ impl std::fmt::Display for SensorMode {
 pub struct RawSensorConfig {
     pub gateway_url: Option<String>,
     pub tenant_id: Option<String>,
+    /// Bearer credential presented as `Authorization: Bearer <api_token>` on
+    /// every gateway call (registration, heartbeat, event ingest, command
+    /// polling) — the sensor authenticates like any other API client, there
+    /// is no sensor-specific auth mechanism.
+    pub api_token: Option<String>,
     pub mode: Option<String>,
     pub identity_key_path: Option<PathBuf>,
     pub spool_dir: Option<PathBuf>,
@@ -63,6 +68,7 @@ pub struct RawSensorConfig {
 pub struct CliOverrides {
     pub gateway_url: Option<String>,
     pub tenant_id: Option<String>,
+    pub api_token: Option<String>,
     pub mode: Option<String>,
 }
 
@@ -78,6 +84,10 @@ pub enum ConfigError {
     MissingTenantId,
     #[error("tenant_id must not be empty or whitespace-only")]
     EmptyTenantId,
+    #[error("api_token is required (set it in the config file or pass --api-token)")]
+    MissingApiToken,
+    #[error("api_token must not be empty or whitespace-only")]
+    EmptyApiToken,
     #[error("mode {0:?} is invalid (expected observe, enforce, or lockdown)")]
     InvalidMode(String),
     #[error("heartbeat_interval_secs must be greater than zero")]
@@ -89,6 +99,7 @@ pub enum ConfigError {
 pub struct SensorConfig {
     pub gateway_url: Url,
     pub tenant_id: String,
+    pub api_token: String,
     pub mode: SensorMode,
     pub identity_key_path: PathBuf,
     pub spool_dir: PathBuf,
@@ -120,6 +131,14 @@ impl SensorConfig {
             return Err(ConfigError::EmptyTenantId);
         }
 
+        let api_token = overrides
+            .api_token
+            .or(raw.api_token)
+            .ok_or(ConfigError::MissingApiToken)?;
+        if api_token.trim().is_empty() {
+            return Err(ConfigError::EmptyApiToken);
+        }
+
         let mode = match overrides.mode.or(raw.mode) {
             Some(m) => SensorMode::parse(&m)?,
             None => SensorMode::default(),
@@ -135,6 +154,7 @@ impl SensorConfig {
         Ok(Self {
             gateway_url,
             tenant_id,
+            api_token,
             mode,
             identity_key_path: raw
                 .identity_key_path
@@ -155,6 +175,7 @@ mod tests {
         RawSensorConfig {
             gateway_url: gateway_url.map(str::to_string),
             tenant_id: tenant_id.map(str::to_string),
+            api_token: Some("tok_a".to_string()),
             ..Default::default()
         }
     }
@@ -164,6 +185,7 @@ mod tests {
         let toml_str = r#"
             gateway_url = "https://gateway.internal:8080"
             tenant_id = "tenant_a"
+            api_token = "tok_a"
         "#;
         let raw: RawSensorConfig = toml::from_str(toml_str).unwrap();
         let config = SensorConfig::resolve(raw, CliOverrides::default()).unwrap();
@@ -172,6 +194,7 @@ mod tests {
             "https://gateway.internal:8080/"
         );
         assert_eq!(config.tenant_id, "tenant_a");
+        assert_eq!(config.api_token, "tok_a");
         assert_eq!(config.mode, SensorMode::Observe);
         assert_eq!(
             config.heartbeat_interval_secs,
@@ -184,6 +207,7 @@ mod tests {
         let toml_str = r#"
             gateway_url = "http://127.0.0.1:8080"
             tenant_id = "tenant_b"
+            api_token = "tok_b"
             mode = "enforce"
             identity_key_path = "/etc/aegis/sensor.key"
             spool_dir = "/var/lib/aegis/spool"
@@ -216,11 +240,13 @@ mod tests {
         let overrides = CliOverrides {
             gateway_url: Some("https://from-cli.example".to_string()),
             tenant_id: Some("tenant_cli".to_string()),
+            api_token: Some("tok_cli".to_string()),
             mode: None,
         };
         let config = SensorConfig::resolve(raw, overrides).unwrap();
         assert_eq!(config.gateway_url.host_str(), Some("from-cli.example"));
         assert_eq!(config.tenant_id, "tenant_cli");
+        assert_eq!(config.api_token, "tok_cli");
     }
 
     #[test]
@@ -242,6 +268,22 @@ mod tests {
         let raw = raw_with(Some("https://gateway.internal"), Some("   "));
         let err = SensorConfig::resolve(raw, CliOverrides::default()).unwrap_err();
         assert_eq!(err, ConfigError::EmptyTenantId);
+    }
+
+    #[test]
+    fn missing_api_token_fails_closed() {
+        let mut raw = raw_with(Some("https://gateway.internal"), Some("tenant_a"));
+        raw.api_token = None;
+        let err = SensorConfig::resolve(raw, CliOverrides::default()).unwrap_err();
+        assert_eq!(err, ConfigError::MissingApiToken);
+    }
+
+    #[test]
+    fn empty_api_token_fails_closed() {
+        let mut raw = raw_with(Some("https://gateway.internal"), Some("tenant_a"));
+        raw.api_token = Some("   ".to_string());
+        let err = SensorConfig::resolve(raw, CliOverrides::default()).unwrap_err();
+        assert_eq!(err, ConfigError::EmptyApiToken);
     }
 
     #[test]
