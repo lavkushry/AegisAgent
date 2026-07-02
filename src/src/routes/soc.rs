@@ -32,10 +32,7 @@ use crate::models::*;
 use crate::policy::PolicyEngine;
 use crate::sign;
 use aegis_common::errors::AegisError;
-use aegis_storage::traits::{
-    DecisionGroupField, DecisionListFilters, RuntimeEventGroupField, RuntimeEventListFilters,
-    StorageBackend, TimeBucket,
-};
+use aegis_storage::traits::{DecisionGroupField, DecisionListFilters, StorageBackend, TimeBucket};
 
 use super::*;
 
@@ -534,171 +531,80 @@ async fn query_agent_security_events(
     from: Option<String>,
     to: Option<String>,
 ) -> axum::response::Response {
-    let q = req
-        .filters
-        .q
-        .as_deref()
-        .map(str::trim)
-        .filter(|q| !q.is_empty());
-    let source_component = req
-        .filters
-        .source_component
-        .as_deref()
-        .or(req.filters.tool.as_deref())
-        .or(req.filters.skill.as_deref());
-    let filters = RuntimeEventListFilters {
-        event_type: req.filters.event_type.as_deref(),
-        severity: req.filters.severity.as_deref(),
-        agent_id: req.filters.agent_id.as_deref(),
-        run_id: req.filters.run_id.as_deref(),
-        trace_id: req.filters.trace_id.as_deref(),
-        source_component,
-        source_trust: req.filters.source_trust.as_deref(),
-        decision: req.filters.decision.as_deref(),
-        action_hash: req.filters.action_hash.as_deref(),
-        receipt_hash: req.filters.receipt_hash.as_deref(),
-        from: from.as_deref(),
-        to: to.as_deref(),
-        q,
-    };
-    let aggregate = req.aggregate.as_deref().unwrap_or("none");
+    use aegis_soc::query::RuntimeEventQueryResult;
 
-    match aggregate {
-        "none" => match state
-            .storage
-            .query_runtime_events(
-                &tenant_id,
-                req.limit.unwrap_or(50).clamp(1, 200),
-                req.cursor,
-                filters,
-            )
-            .await
-        {
-            Ok((rows, next_cursor)) => {
-                let rows: Vec<_> = rows.iter().map(safe_soc_runtime_event_row).collect();
-                (
-                    StatusCode::OK,
-                    Json(json!({
-                        "version": 1,
-                        "entity": "ase",
-                        "rows": rows,
-                        "field_descriptors": soc_runtime_event_field_descriptors(),
-                        "meta": { "cursor": next_cursor.map(encode_cursor) },
-                    })),
-                )
-                    .into_response()
-            }
-            Err(error) => {
-                error!(?error, "soc_query ASE list failed");
-                StatusError::internal("Database error").into_response()
-            }
-        },
-        "count" => match state
-            .storage
-            .count_runtime_events(&tenant_id, filters)
-            .await
-        {
-            Ok(total) => (
+    let result = aegis_soc::query::query_runtime_events(
+        state.storage.as_ref(),
+        &tenant_id,
+        &req,
+        from.as_deref(),
+        to.as_deref(),
+    )
+    .await;
+    match result {
+        Ok(RuntimeEventQueryResult::Rows { rows, next_cursor }) => {
+            let rows: Vec<_> = rows.iter().map(safe_soc_runtime_event_row).collect();
+            (
                 StatusCode::OK,
                 Json(json!({
-                    "version": 1,
-                    "entity": "ase",
-                    "aggregate": "count",
-                    "rows": [{ "total": total }],
-                    "field_descriptors": [
-                        { "name": "total", "type": "number", "facetable": false }
-                    ],
-                    "meta": { "total": total },
+                    "version": 1, "entity": "ase", "rows": rows,
+                    "field_descriptors": soc_runtime_event_field_descriptors(),
+                    "meta": { "cursor": next_cursor.map(encode_cursor) },
                 })),
             )
-                .into_response(),
-            Err(error) => {
-                error!(?error, "soc_query ASE count failed");
-                StatusError::internal("Database error").into_response()
-            }
-        },
-        "count_over_time" => match state
-            .storage
-            .count_runtime_events_over_time(
-                &tenant_id,
-                TimeBucket::parse(req.interval.as_deref().unwrap_or("hour")),
-                filters,
-            )
-            .await
-        {
-            Ok(buckets) => {
-                let rows: Vec<_> = buckets
-                    .into_iter()
-                    .map(|(bucket, count)| json!({ "bucket": bucket, "count": count }))
-                    .collect();
-                (
-                    StatusCode::OK,
-                    Json(json!({
-                        "version": 1,
-                        "entity": "ase",
-                        "aggregate": "count_over_time",
-                        "rows": rows,
-                        "field_descriptors": [
-                            { "name": "bucket", "type": "time", "facetable": false },
-                            { "name": "count", "type": "number", "facetable": false }
-                        ],
-                        "meta": {},
-                    })),
-                )
-                    .into_response()
-            }
-            Err(error) => {
-                error!(?error, "soc_query ASE count_over_time failed");
-                StatusError::internal("Database error").into_response()
-            }
-        },
-        "count_by" => {
-            let Some(group_by) = req.group_by.as_deref() else {
-                return StatusError::bad_request("group_by is required for count_by")
-                    .into_response();
-            };
-            let Some(field) = RuntimeEventGroupField::parse(group_by) else {
-                return StatusError::bad_request(format!(
-                    "unsupported ASE group_by '{group_by}' (supported: event_type, severity, agent_id, source_component, source_trust, decision)"
-                )).into_response();
-            };
-            match state
-                .storage
-                .count_runtime_events_grouped(&tenant_id, field, filters, req.limit.unwrap_or(20))
-                .await
-            {
-                Ok(groups) => {
-                    let rows: Vec<_> = groups
-                        .into_iter()
-                        .map(|(value, count)| json!({ "value": value, "count": count }))
-                        .collect();
-                    (
-                        StatusCode::OK,
-                        Json(json!({
-                            "version": 1,
-                            "entity": "ase",
-                            "aggregate": "count_by",
-                            "group_by": group_by,
-                            "rows": rows,
-                            "field_descriptors": [
-                                { "name": "value", "type": "string", "facetable": true },
-                                { "name": "count", "type": "number", "facetable": false }
-                            ],
-                            "meta": {},
-                        })),
-                    )
-                        .into_response()
-                }
-                Err(error) => {
-                    error!(?error, "soc_query ASE count_by failed");
-                    StatusError::internal("Database error").into_response()
-                }
-            }
+                .into_response()
         }
-        other => StatusError::bad_request(format!(
-            "unsupported aggregate '{other}' (supported: none, count, count_over_time, count_by)"
-        ))
-        .into_response(),
+        Ok(RuntimeEventQueryResult::Count(total)) => (
+            StatusCode::OK,
+            Json(json!({
+                "version": 1, "entity": "ase", "aggregate": "count",
+                "rows": [{ "total": total }],
+                "field_descriptors": [{ "name": "total", "type": "number", "facetable": false }],
+                "meta": { "total": total },
+            })),
+        )
+            .into_response(),
+        Ok(RuntimeEventQueryResult::CountOverTime(buckets)) => {
+            let rows: Vec<_> = buckets
+                .into_iter()
+                .map(|(bucket, count)| json!({ "bucket": bucket, "count": count }))
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "version": 1, "entity": "ase", "aggregate": "count_over_time",
+                    "rows": rows,
+                    "field_descriptors": [
+                        { "name": "bucket", "type": "time", "facetable": false },
+                        { "name": "count", "type": "number", "facetable": false }
+                    ], "meta": {},
+                })),
+            )
+                .into_response()
+        }
+        Ok(RuntimeEventQueryResult::CountBy { group_by, rows }) => {
+            let rows: Vec<_> = rows
+                .into_iter()
+                .map(|(value, count)| json!({ "value": value, "count": count }))
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "version": 1, "entity": "ase", "aggregate": "count_by",
+                    "group_by": group_by, "rows": rows,
+                    "field_descriptors": [
+                        { "name": "value", "type": "string", "facetable": true },
+                        { "name": "count", "type": "number", "facetable": false }
+                    ], "meta": {},
+                })),
+            )
+                .into_response()
+        }
+        Err(AegisError::BadRequest(message)) => StatusError::bad_request(message).into_response(),
+        Err(error) => {
+            error!(?error, "soc_query ASE failed");
+            StatusError::internal("Database error").into_response()
+        }
     }
 }
 
@@ -3517,6 +3423,36 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        for filters in [
+            SocQueryFilters {
+                action: Some("write".to_string()),
+                ..Default::default()
+            },
+            SocQueryFilters {
+                source_component: Some("node-sensor".to_string()),
+                tool: Some("egress-proxy".to_string()),
+                ..Default::default()
+            },
+        ] {
+            let resp = soc_query(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Json(SocQueryRequest {
+                    version: 1,
+                    entity: "ase".to_string(),
+                    filters,
+                    aggregate: None,
+                    interval: None,
+                    group_by: None,
+                    limit: None,
+                    cursor: None,
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        }
 
         let resp = soc_query(
             State(state.clone()),
