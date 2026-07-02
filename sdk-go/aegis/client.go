@@ -124,6 +124,10 @@ type ConsumeResponse struct {
 	ActionHash string `json:"action_hash"`
 }
 
+type consumeApprovalRequest struct {
+	ClaimedActionHash string `json:"claimed_action_hash"`
+}
+
 // ApprovalDecisionResponse is the decoded body of a 200 from
 // POST /v1/approvals/:id/approve|reject.
 type ApprovalDecisionResponse struct {
@@ -328,12 +332,24 @@ func (c *Client) GetApproval(ctx context.Context, approvalID string) (ApprovalSt
 
 // ConsumeApproval atomically consumes an APPROVED approval via
 // POST /v1/approvals/:id/consume so it cannot be reused (replay defence).
+// When claimedActionHash is supplied, the gateway verifies it against the
+// approval's bound action_hash in the same atomic consume.
 // Returns an error — including [ErrGateway] with status 409 — if the approval
 // is already consumed, expired, or not in the approved state. ctx controls
 // cancellation/timeout of the underlying HTTP request.
-func (c *Client) ConsumeApproval(ctx context.Context, approvalID string) (ConsumeResponse, error) {
+func (c *Client) ConsumeApproval(ctx context.Context, approvalID string, claimedActionHash ...string) (ConsumeResponse, error) {
 	reqURL := c.baseURL + "/v1/approvals/" + approvalID + "/consume"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, http.NoBody)
+	var body io.Reader = http.NoBody
+	if len(claimedActionHash) > 0 {
+		payload, err := json.Marshal(consumeApprovalRequest{
+			ClaimedActionHash: claimedActionHash[0],
+		})
+		if err != nil {
+			return ConsumeResponse{}, fmt.Errorf("aegis: encode consume request: %w", err)
+		}
+		body = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
 	if err != nil {
 		return ConsumeResponse{}, fmt.Errorf("aegis: build consume request: %w", err)
 	}

@@ -148,6 +148,7 @@ test("protect — approval: pending→approved polls, verifies hash, consumes, e
   const actionHash = hashAction(tool, action, mutates, params);
 
   let pollCount = 0;
+  let consumeBody = "";
 
   const { url, close } = await startServer((req, res) => {
     if (req.method === "POST" && req.url === "/v1/authorize") {
@@ -164,7 +165,13 @@ test("protect — approval: pending→approved polls, verifies hash, consumes, e
         serveJSON(res, 200, { status: "APPROVED", action_hash: actionHash });
       }
     } else if (req.method === "POST" && req.url === `/v1/approvals/${approvalId}/consume`) {
-      serveJSON(res, 200, { action_hash: actionHash });
+      req.setEncoding("utf-8");
+      req.on("data", (chunk: string) => {
+        consumeBody += chunk;
+      });
+      req.on("end", () => {
+        serveJSON(res, 200, { action_hash: actionHash });
+      });
     } else {
       res.writeHead(404);
       res.end("unexpected");
@@ -185,6 +192,7 @@ test("protect — approval: pending→approved polls, verifies hash, consumes, e
     );
     assert.ok(called, "tool must be called after approval");
     assert.ok(pollCount >= 2, "must have polled at least twice (pending then approved)");
+    assert.equal(consumeBody, JSON.stringify({ claimed_action_hash: actionHash }));
   } finally {
     close();
   }

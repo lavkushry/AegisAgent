@@ -114,6 +114,13 @@ func TestConsumeApproval_Success(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/approvals/appr-999/consume" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if got, want := string(body), `{"claimed_action_hash":"sha256:abc123"}`; got != want {
+			t.Fatalf("unexpected consume body: got %s want %s", got, want)
+		}
 		serveJSON(w, http.StatusOK, map[string]any{
 			"action_hash": "hashxyz",
 		})
@@ -121,7 +128,7 @@ func TestConsumeApproval_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(srv.URL)
-	resp, err := client.ConsumeApproval(context.Background(), "appr-999")
+	resp, err := client.ConsumeApproval(context.Background(), "appr-999", "sha256:abc123")
 	if err != nil {
 		t.Fatalf("ConsumeApproval error: %v", err)
 	}

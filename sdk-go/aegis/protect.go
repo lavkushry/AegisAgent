@@ -129,7 +129,7 @@ func handleApproval(
 			}
 
 			// Atomically consume the approval before executing (replay defence).
-			consumed, err := client.ConsumeApproval(ctx, approvalID)
+			consumed, err := client.ConsumeApproval(ctx, approvalID, expectedHash)
 			if err != nil {
 				return fmt.Errorf(
 					"aegis: approval consume failed (already used / expired) — failing closed: %w", err,

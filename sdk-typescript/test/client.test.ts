@@ -167,16 +167,24 @@ test("AegisClient.getApproval — non-200 throws AegisGatewayError", async () =>
 // ---------------------------------------------------------------------------
 
 test("AegisClient.consumeApproval — 200 returns action_hash", async () => {
+  let capturedBody = "";
   const { url, close } = await startServer((req, res) => {
     assert.equal(req.method, "POST");
     assert.equal(req.url, "/v1/approvals/appr-99/consume");
-    serveJSON(res, 200, { action_hash: "consumed-hash" });
+    req.setEncoding("utf-8");
+    req.on("data", (chunk: string) => {
+      capturedBody += chunk;
+    });
+    req.on("end", () => {
+      serveJSON(res, 200, { action_hash: "consumed-hash" });
+    });
   });
 
   try {
     const client = newClient(url);
-    const result = await client.consumeApproval("appr-99");
+    const result = await client.consumeApproval("appr-99", "sha256:abc123");
     assert.equal(result.actionHash, "consumed-hash");
+    assert.equal(capturedBody, JSON.stringify({ claimed_action_hash: "sha256:abc123" }));
   } finally {
     close();
   }

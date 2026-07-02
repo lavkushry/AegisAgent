@@ -220,7 +220,7 @@ async function handleApproval<T>(
         // used or expired.
         let consumed: Awaited<ReturnType<AegisClient["consumeApproval"]>>;
         try {
-          consumed = await client.consumeApproval(approvalId);
+          consumed = await client.consumeApproval(approvalId, expectedHash);
         } catch (err) {
           throw new Error(
             `aegis: approval consume failed (already used / expired) — failing closed: ${err}`
