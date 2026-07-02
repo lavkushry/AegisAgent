@@ -13,6 +13,7 @@ const COLS: &str = "id, tenant_id, event_id, event_type, severity, agent_id, run
      trace_id, parent_event_id, source_component, source_trust, decision, reason, action_hash, \
      prompt_hash, request_hash, response_hash, receipt_id, receipt_hash, prev_receipt_hash, \
      canonical_version, redaction_status, schema_version, observed_at, received_at";
+const MAX_TIME_BUCKETS: i64 = 10_000;
 
 /// Idempotently append a runtime event. Returns `true` if this call inserted a
 /// new row, `false` if the `(tenant_id, event_id)` was already present (a
@@ -234,9 +235,11 @@ pub async fn count_runtime_events_over_time(
     let rows = match pool {
         DbPool::Sqlite(pool) => {
             let sql = format!(
-                "SELECT strftime(?, observed_at) AS bucket, COUNT(*) AS cnt
-                 FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
-                 GROUP BY bucket ORDER BY bucket ASC LIMIT 10000"
+                "SELECT bucket, cnt FROM (
+                   SELECT strftime(?, observed_at) AS bucket, COUNT(*) AS cnt
+                   FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+                   GROUP BY bucket ORDER BY bucket DESC LIMIT {MAX_TIME_BUCKETS}
+                 ) ORDER BY bucket ASC"
             );
             bind_runtime_filters!(
                 sqlx::query(&sql).bind(bucket.sqlite_fmt()).bind(tenant_id),
@@ -252,10 +255,12 @@ pub async fn count_runtime_events_over_time(
         #[cfg(feature = "postgres")]
         DbPool::Postgres(pool) => {
             let sql = format!(
-                "SELECT to_char(date_trunc(?, observed_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket,
-                        COUNT(*) AS cnt
-                 FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
-                 GROUP BY bucket ORDER BY bucket ASC LIMIT 10000"
+                "SELECT bucket, cnt FROM (
+                   SELECT to_char(date_trunc(?, observed_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket,
+                          COUNT(*) AS cnt
+                   FROM runtime_events WHERE tenant_id = ? {FILTER_SQL}
+                   GROUP BY bucket ORDER BY bucket DESC LIMIT {MAX_TIME_BUCKETS}
+                 ) ORDER BY bucket ASC"
             );
             let sql = crate::db::to_postgres_sql(&sql);
             bind_runtime_filters!(
