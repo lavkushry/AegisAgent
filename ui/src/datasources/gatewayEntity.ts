@@ -12,7 +12,7 @@ import type {
   VerifyResult,
 } from "./types";
 
-const ENTITY_PATHS: Partial<Record<EntityKind, string>> = {
+const ENTITY_PATHS: Record<Exclude<EntityKind, "ase">, string> = {
   incident: "/v1/incidents",
   alert: "/v1/alerts",
   approval: "/v1/approvals",
@@ -53,14 +53,14 @@ export class GatewayEntityDatasource implements Datasource {
   constructor(private readonly opts: FetchOptions) {}
 
   async query(req: QueryRequest): Promise<DataFrame> {
+    const entity = req.entity ?? "decision";
+    if (entity === "ase") {
+      throw new Error("Entity 'ase' requires the soc-query datasource");
+    }
     if (req.aggregate === "count_over_time") {
       return this.countOverTime(req);
     }
-    const entity = req.entity ?? "decision";
     const entityPath = ENTITY_PATHS[entity];
-    if (!entityPath) {
-      throw new Error(`Entity '${entity}' requires the soc-query datasource`);
-    }
     const limit = req.limit ?? 50;
     const params = new URLSearchParams({ limit: String(limit) });
     if (req.search) params.set("q", req.search);

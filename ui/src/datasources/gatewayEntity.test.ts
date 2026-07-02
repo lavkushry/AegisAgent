@@ -15,5 +15,12 @@ describe("GatewayEntityDatasource", () => {
       timeRange: { from: "now-24h", to: "now" },
       variables: {},
     })).rejects.toThrow("requires the soc-query datasource");
+
+    await expect(datasource.query({
+      entity: "ase",
+      aggregate: "count_over_time",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+    })).rejects.toThrow("requires the soc-query datasource");
   });
 });
