@@ -294,7 +294,9 @@ def protect_tool(
                         # Single-use: atomically consume the approval before
                         # executing, so it cannot be replayed/reused. Fail closed
                         # if the gateway will not hand out the consumption.
-                        consumed = client.consume_approval(approval_id)
+                        consumed = client.consume_approval(
+                            approval_id, expected_action_hash
+                        )
                         if not consumed:
                             raise PermissionError(
                                 f"Action '{tool}.{action}' approval could not be "
@@ -521,10 +523,14 @@ def async_protect_tool(
                         )
                         # Single-use: atomically consume before executing.
                         if inspect.iscoroutinefunction(client.consume_approval):
-                            consumed = await client.consume_approval(approval_id)
+                            consumed = await client.consume_approval(
+                                approval_id, expected_action_hash
+                            )
                         else:
                             consumed = await asyncio.to_thread(
-                                client.consume_approval, approval_id
+                                client.consume_approval,
+                                approval_id,
+                                expected_action_hash,
                             )
                         if not consumed:
                             raise PermissionError(

@@ -107,4 +107,4 @@ curl -fsS -X POST "$AEGIS_URL/v1/mcp/servers/github-mcp-demo/tools" \
 JSON
 
 printf '==> Default policy pack: %s\n' "${CEDAR_POLICY_PATH:-policies.cedar}"
-printf '==> Demo seed complete. Run: python3 examples/github-attack-demo.py\n'
+printf '==> Demo seed complete. Run: make demo for the full proof, or python3 examples/github-attack-demo.py for only the prompt-injection block.\n'

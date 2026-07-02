@@ -163,8 +163,14 @@ class TestAegisAsyncClientMethods(unittest.IsolatedAsyncioTestCase):
         mock_request.return_value = _make_mock_response(
             status_code=200, json_data={"consumed": True}
         )
-        res = await self.client.consume_approval("appr-123")
+        res = await self.client.consume_approval(
+            "appr-123", claimed_action_hash="sha256:abc123"
+        )
         self.assertTrue(res["consumed"])
+        self.assertEqual(
+            mock_request.call_args.kwargs["json"],
+            {"claimed_action_hash": "sha256:abc123"},
+        )
 
     @patch("httpx.AsyncClient.request", new_callable=AsyncMock)
     async def test_freeze_agent(self, mock_request):
@@ -419,6 +425,10 @@ class TestAsyncProtectToolWithAsyncClient(unittest.IsolatedAsyncioTestCase):
         res = await my_tool(5)
         self.assertEqual(res, 10)
         self.assertEqual(mock_request.call_count, 3)
+        self.assertEqual(
+            mock_request.call_args_list[2].kwargs["json"],
+            {"claimed_action_hash": expected_hash},
+        )
 
 
 class TestAsyncClientLogRedaction(unittest.IsolatedAsyncioTestCase):

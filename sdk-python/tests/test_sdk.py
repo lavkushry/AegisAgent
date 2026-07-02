@@ -168,9 +168,67 @@ class TestAegisSDK(unittest.TestCase):
             executed["ran"], "timed-out approval must not execute the tool"
         )
 
+    @patch("time.sleep", return_value=None)
     @patch("requests.Session.get")
     @patch("requests.Session.post")
-    def test_authorize_edited_approval(self, mock_post, mock_get):
+    def test_approval_consume_claims_current_action_hash(
+        self, mock_post, mock_get, _mock_sleep
+    ):
+        expected_hash = _hash_tool_call(
+            tool="test_tool",
+            action="test_action",
+            resource=None,
+            mutates_state=True,
+            parameters={"param1": "hello"},
+        )
+        approval_id = "89cf8b98-2103-4458-8210-344589cf8b98"
+
+        auth_resp = MagicMock()
+        auth_resp.status_code = 200
+        auth_resp.json.return_value = {
+            "decision": "require_approval",
+            "reason": "Approval required",
+            "approval": {
+                "approval_id": approval_id,
+                "status": "created",
+                "approver_group": "platform-leads",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "action_hash": expected_hash,
+            },
+        }
+
+        consume_resp = MagicMock()
+        consume_resp.status_code = 200
+        consume_resp.json.return_value = {
+            "status": "consumed",
+            "action_hash": expected_hash,
+        }
+        mock_post.side_effect = [auth_resp, consume_resp]
+
+        status_resp = MagicMock()
+        status_resp.status_code = 200
+        status_resp.json.return_value = {
+            "status": "APPROVED",
+            "action_hash": expected_hash,
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+        mock_get.return_value = status_resp
+
+        @protect_tool(self.client, tool="test_tool", action="test_action")
+        def my_test_func(param1):
+            return f"executed_{param1}"
+
+        self.assertEqual(my_test_func("hello"), "executed_hello")
+        self.assertEqual(mock_post.call_count, 2)
+        consume_call = mock_post.call_args_list[1]
+        self.assertEqual(
+            consume_call.kwargs["json"], {"claimed_action_hash": expected_hash}
+        )
+
+    @patch("time.sleep", return_value=None)
+    @patch("requests.Session.get")
+    @patch("requests.Session.post")
+    def test_authorize_edited_approval(self, mock_post, mock_get, _mock_sleep):
         expected_hash = _hash_tool_call(
             tool="test_tool",
             action="test_action",
@@ -214,6 +272,31 @@ class TestAegisSDK(unittest.TestCase):
         self.assertEqual(result, "executed_edited_value")
         mock_post.assert_called_once()
         mock_get.assert_called_once()
+
+    @patch("requests.Session.post")
+    def test_consume_approval_sends_claimed_action_hash(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "consumed",
+            "action_hash": "sha256:abc123",
+        }
+        mock_post.return_value = mock_response
+
+        res = self.client.consume_approval(
+            "approval-123", claimed_action_hash="sha256:abc123"
+        )
+
+        self.assertEqual(res["status"], "consumed")
+        mock_post.assert_called_once_with(
+            "http://127.0.0.1:8080/v1/approvals/approval-123/consume",
+            json={"claimed_action_hash": "sha256:abc123"},
+            headers={
+                "Authorization": "Bearer test_key",
+                "Content-Type": "application/json",
+            },
+            timeout=5,
+        )
 
     @patch("requests.Session.post")
     def test_freeze_agent(self, mock_post):

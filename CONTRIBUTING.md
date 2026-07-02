@@ -25,19 +25,19 @@ See [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassess
 make setup
 
 # Python SDK
-python3 -m pip install -e "sdk-python[dev]"
-python3 -m unittest discover -s sdk-python/tests
-python3 examples/integrity_demo.py            # no gateway needed
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e "sdk-python[dev]"
+python -m unittest discover -s sdk-python/tests
+python examples/integrity_demo.py             # no gateway needed
 
 # Rust gateway (requires a Rust toolchain ≥ 1.88)
-cargo test --workspace
-cargo fmt -- --check
+cargo test --workspace -- --test-threads=1
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Optional full local stack
-docker compose up --build
-bash scripts/seed-demo.sh
-python3 examples/github-attack-demo.py
+make demo
 ```
 
 ## Branching and commits
@@ -62,9 +62,9 @@ python3 examples/github-attack-demo.py
 Run `make check` (or everything CI checks individually, see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
-- `cargo fmt -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
-- `python3 -m black --check sdk-python/ examples/`
-- `python3 -m unittest discover -s sdk-python/tests`
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -- --test-threads=1`
+- `python -m black --check sdk-python/ examples/`
+- `python -m unittest discover -s sdk-python/tests`
 
 The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has the full
 checklist.

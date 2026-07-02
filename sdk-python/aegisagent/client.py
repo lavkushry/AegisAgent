@@ -397,17 +397,31 @@ class AegisClient(AegisBaseClient):
             logger.error(f"Failed to query approval: {e}")
             return None
 
-    def consume_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
-        """Atomically consume an APPROVED approval so it cannot be reused."""
+    def consume_approval(
+        self, approval_id: str, claimed_action_hash: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically consume an APPROVED approval so it cannot be reused.
+
+        When ``claimed_action_hash`` is supplied, the gateway verifies it
+        against the approval's bound action hash in the same atomic consume
+        operation. This lets the SDK prove the action it is about to execute is
+        exactly the action the human approved.
+        """
         url = f"{self.endpoint}/v1/approvals/{approval_id}/consume"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        json_payload = (
+            {"claimed_action_hash": claimed_action_hash}
+            if claimed_action_hash is not None
+            else None
+        )
         try:
             response = self._request(
                 "POST",
                 f"/v1/approvals/{approval_id}/consume",
+                json=json_payload,
                 headers=headers,
                 timeout=5,
             )
@@ -967,17 +981,31 @@ class AegisAsyncClient(AegisBaseClient):
             logger.error(f"Failed to query approval: {e}")
             return None
 
-    async def consume_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
-        """Atomically consume an APPROVED approval so it cannot be reused."""
+    async def consume_approval(
+        self, approval_id: str, claimed_action_hash: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically consume an APPROVED approval so it cannot be reused.
+
+        When ``claimed_action_hash`` is supplied, the gateway verifies it
+        against the approval's bound action hash in the same atomic consume
+        operation. This lets the SDK prove the action it is about to execute is
+        exactly the action the human approved.
+        """
         url = f"{self.endpoint}/v1/approvals/{approval_id}/consume"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        json_payload = (
+            {"claimed_action_hash": claimed_action_hash}
+            if claimed_action_hash is not None
+            else None
+        )
         try:
             response = await self._request(
                 "POST",
                 f"/v1/approvals/{approval_id}/consume",
+                json=json_payload,
                 headers=headers,
                 timeout=5.0,
             )

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import pathlib
 import sys
 import threading
@@ -36,9 +37,9 @@ CYAN = "\033[96m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
-GATEWAY_URL = "http://127.0.0.1:8080"
-TENANT_ID = "tenant_123"
-AGENT_ID = "coding-agent-prod"
+GATEWAY_URL = os.environ.get("AEGIS_URL", "http://127.0.0.1:8080")
+TENANT_ID = os.environ.get("TENANT_ID", "tenant_123")
+AGENT_ID = os.environ.get("AGENT_KEY", "coding-agent-prod")
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("approve-then-swap-demo")
@@ -148,6 +149,17 @@ def auto_approver_thread(stop_event: threading.Event) -> None:
         time.sleep(0.5)
 
 
+def wait_for_approval(approval_id: str, timeout_secs: float = 10.0) -> None:
+    """Wait until the demo auto-approver has approved the requested action."""
+    deadline = time.time() + timeout_secs
+    while time.time() < deadline:
+        approval = client.get_approval_status(approval_id)
+        if approval and approval.get("status") == "APPROVED":
+            return
+        time.sleep(0.25)
+    raise TimeoutError(f"Timed out waiting for approval {approval_id} to be approved")
+
+
 def aegis_jcs_1_hash(
     tool: str, action: str, resource: Optional[str], params: dict
 ) -> str:
@@ -251,8 +263,8 @@ def main() -> int:
         logger.info(f"  Approval ID:               {approval_id}")
         logger.info(f"  Original Approved Hash:    {original_approved_hash}")
 
-        # Human approves the benign action parameters
-        time.sleep(1.0)  # Wait for background approver to notice and approve
+        # Human approves the benign action parameters.
+        wait_for_approval(approval_id)
 
         # Step 2: Swap the parameters in the background (hijacked agent/attacker)
         logger.info(
@@ -266,10 +278,12 @@ def main() -> int:
         logger.info(
             "  New Swapped Parameters:   repo='payments-service', pr_number=666, base_branch='main'"
         )
+        malicious_resource = "repo/payments-service/pull/666"
+        logger.info(f"  New Swapped Resource:     {malicious_resource}")
 
         # Step 3: Compute current action hash
         current_hash = aegis_jcs_1_hash(
-            "github", "merge_pull_request", resource, malicious_params
+            "github", "merge_pull_request", malicious_resource, malicious_params
         )
         logger.info(f"  Current Action Hash:       {current_hash}")
 
@@ -285,9 +299,18 @@ def main() -> int:
                 f"\n{RED}{BOLD}🛑 BLOCKED: action_hash MISMATCH detected!{RESET}"
             )
             logger.info("   The SDK fails closed and refuses to execute.")
-            logger.info(
-                "   AegisAgent successfully blocked the approve-then-swap attack."
+            mismatch_consume = client.consume_approval(
+                approval_id, claimed_action_hash=current_hash
             )
+            if mismatch_consume is not None:
+                logger.error(
+                    f"{RED}FAIL: Gateway consumed an approval with the swapped hash!{RESET}"
+                )
+                return 2
+            logger.info(
+                "   Gateway rejected the swapped claimed_action_hash without consuming the approval."
+            )
+            logger.info("   AegisAgent blocked the approve-then-swap attack.")
         else:
             logger.error(f"{RED}FAIL: Hash check did not block swapped action!{RESET}")
             return 2
@@ -299,9 +322,12 @@ def main() -> int:
         )
 
         # The first consume was never completed because we blocked it client-side.
-        # Let's perform a valid consume first.
+        # The mismatch consume above did not burn the approval. Perform a valid
+        # consume with the original approved hash first.
         logger.info("Consuming approval legitimately first...")
-        consumed = client.consume_approval(approval_id)
+        consumed = client.consume_approval(
+            approval_id, claimed_action_hash=original_approved_hash
+        )
         if consumed:
             logger.info(
                 f"{GREEN}✓ First consumption succeeded: status={consumed.get('status')}{RESET}"

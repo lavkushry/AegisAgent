@@ -22,9 +22,15 @@ pip install -e ".[async]"   # with httpx for the async client
 ### Sync
 
 ```python
-from aegisagent import protect_tool
+from aegisagent import AegisClient, protect_tool
 
-@protect_tool(tool_key="github", action_key="merge_pull_request")
+client = AegisClient(
+    api_key="tenant_123",
+    agent_id="coding-agent-prod",
+    endpoint="http://127.0.0.1:8080",
+)
+
+@protect_tool(client=client, tool="github", action="merge_pull_request")
 def merge_pr(repo: str, number: int) -> str:
     ...
 ```
@@ -32,17 +38,25 @@ def merge_pr(repo: str, number: int) -> str:
 ### Async
 
 ```python
-from aegisagent import async_protect_tool
+from aegisagent import AegisClient, async_protect_tool
 
-@async_protect_tool(tool_key="github", action_key="merge_pull_request")
+client = AegisClient(
+    api_key="tenant_123",
+    agent_id="coding-agent-prod",
+    endpoint="http://127.0.0.1:8080",
+)
+
+@async_protect_tool(client=client, tool="github", action="merge_pull_request")
 async def merge_pr(repo: str, number: int) -> str:
     ...
 ```
 
-If the gateway denies the action, `AegisAuthorizationDenied` is raised and the
+If the gateway denies the action, `PermissionError` is raised and the
 wrapped function never runs. If a human approval is required, the call blocks
 until the approval is decided, then verifies the approved action hash matches
-the action about to execute before proceeding.
+the action about to execute before proceeding. On approval consume, the SDK also
+sends the current `claimed_action_hash` to the gateway so the single-use consume
+is atomically bound to the exact action.
 
 ## CLI tools
 
@@ -74,7 +88,7 @@ aegis-export-audit --gateway http://127.0.0.1:8080 --output audit.json
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests   # 174 tests
+python3 -m unittest discover -s tests   # 208 tests
 ```
 
 See the [main README](https://github.com/lavkushry/AegisAgent) and

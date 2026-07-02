@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pathlib
 import sys
 from typing import Any, Dict
@@ -25,9 +26,9 @@ if str(SDK_PATH) not in sys.path:
 
 from aegisagent import AegisClient, protect_tool, set_context_trust_level  # noqa: E402
 
-GATEWAY_URL = "http://127.0.0.1:8080"
-TENANT_ID = "tenant_123"
-AGENT_ID = "coding-agent-prod"
+GATEWAY_URL = os.environ.get("AEGIS_URL", "http://127.0.0.1:8080")
+TENANT_ID = os.environ.get("TENANT_ID", "tenant_123")
+AGENT_ID = os.environ.get("AGENT_KEY", "coding-agent-prod")
 AUDIT_URL = f"{GATEWAY_URL}/v1/audit/events"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
