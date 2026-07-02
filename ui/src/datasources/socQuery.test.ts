@@ -16,9 +16,14 @@ const request = {
 };
 
 describe("SocQueryDatasource", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 
-  it("sends structured filters instead of a raw query string", async () => {
+  it("sends structured filters with resolved RFC3339 time bounds instead of a raw query string", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T12:00:00.000Z"));
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
         rows: [{ decision: "deny" }],
@@ -41,8 +46,8 @@ describe("SocQueryDatasource", () => {
       filters: {
         agent_id: "agent-1",
         decision: "deny",
-        from: "now-24h",
-        to: "now",
+        from: "2026-07-01T12:00:00.000Z",
+        to: "2026-07-02T12:00:00.000Z",
       },
       limit: 50,
     });
@@ -88,6 +93,8 @@ describe("SocQueryDatasource", () => {
   });
 
   it("falls back to parameterized decisions search when the query API is absent", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T12:00:00.000Z"));
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response("{}", { status: 404, statusText: "Not Found" }))
@@ -103,6 +110,8 @@ describe("SocQueryDatasource", () => {
 
     expect(String(fetchMock.mock.calls[1][0])).toContain("agent_id=agent-1");
     expect(String(fetchMock.mock.calls[1][0])).toContain("decision=deny");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("from=2026-07-01T12%3A00%3A00.000Z");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("to=2026-07-02T12%3A00%3A00.000Z");
     expect(frame.length).toBe(1);
   });
 

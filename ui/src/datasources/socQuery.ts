@@ -1,6 +1,7 @@
 import { GatewayRequestError, fetchFromGateway, type FetchOptions } from "../app/api";
 import { parseAql } from "./aql/parse";
 import { rowsToFrame } from "./frame";
+import { resolveTimeToken } from "../lib/format";
 import type {
   DataFrame,
   Datasource,
@@ -79,8 +80,8 @@ export class SocQueryDatasource implements Datasource {
       action_hash: filters.actionHash,
       receipt_hash: filters.receiptHash,
       q: filters.q,
-      from: req.timeRange.from,
-      to: req.timeRange.to,
+      from: resolveTimeToken(req.timeRange.from),
+      to: resolveTimeToken(req.timeRange.to),
     };
     const body = {
       version: 1,
@@ -136,8 +137,10 @@ export class SocQueryDatasource implements Datasource {
     if (filters.actionHash) params.set("action_hash", filters.actionHash);
     if (filters.receiptHash) params.set("receipt_hash", filters.receiptHash);
     if (filters.q) params.set("q", filters.q);
-    if (req.timeRange.from) params.set("from", req.timeRange.from);
-    if (req.timeRange.to) params.set("to", req.timeRange.to);
+    const from = resolveTimeToken(req.timeRange.from);
+    const to = resolveTimeToken(req.timeRange.to);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
     const rows = await fetchFromGateway<Array<Record<string, unknown>>>(
       this.opts,
       `/v1/decisions?${params.toString()}`,

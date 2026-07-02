@@ -85,7 +85,10 @@ All tenant-scoped.
 `POST /v1/soc/query` — structured, tenant-scoped query for the SOC console.
 `entity` + `aggregate` are allowlists; unknown entities/aggregates/JSON fields
 are rejected; filters map only to parameterized queries (no raw SQL). Current
-entity: `decision` (aggregations: `none`, `count`, `count_over_time`).
+entities: `decision` and durable Agent Security Events (`ase`). Supported
+aggregations are `none`, `count`, `count_over_time`, and bounded `count_by`.
+All time filters must be RFC3339 timestamps; UI relative tokens such as
+`now-24h` are resolved client-side before this endpoint is called.
 
 ## 8. Production hardening checklist
 

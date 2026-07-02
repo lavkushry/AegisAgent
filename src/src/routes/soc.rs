@@ -3510,6 +3510,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn soc_query_rejects_malformed_structured_requests() {
+        let (state, tenant_id, _) = setup_state("soc_query_reject_malformed").await;
+
+        let base = || SocQueryRequest {
+            version: 1,
+            entity: "decision".to_string(),
+            filters: SocQueryFilters::default(),
+            aggregate: None,
+            interval: None,
+            group_by: None,
+            limit: None,
+            cursor: None,
+        };
+
+        let mut bad_interval = base();
+        bad_interval.aggregate = Some("count_over_time".to_string());
+        bad_interval.interval = Some("week".to_string());
+
+        let mut group_by_without_count_by = base();
+        group_by_without_count_by.group_by = Some("decision".to_string());
+
+        let mut missing_group_by = base();
+        missing_group_by.aggregate = Some("count_by".to_string());
+
+        let mut invalid_from = base();
+        invalid_from.filters.from = Some("now-24h".to_string());
+
+        let mut reversed_range = base();
+        reversed_range.filters.from = Some("2026-07-03T00:00:00Z".to_string());
+        reversed_range.filters.to = Some("2026-07-02T00:00:00Z".to_string());
+
+        let mut mismatched_decision_aliases = base();
+        mismatched_decision_aliases.filters.tool = Some("filesystem".to_string());
+        mismatched_decision_aliases.filters.skill = Some("github".to_string());
+
+        for req in [
+            bad_interval,
+            group_by_without_count_by,
+            missing_group_by,
+            invalid_from,
+            reversed_range,
+            mismatched_decision_aliases,
+        ] {
+            let resp = soc_query(State(state.clone()), TenantId(tenant_id.clone()), Json(req))
+                .await
+                .into_response();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
     async fn soc_query_is_tenant_scoped() {
         let (state, tenant_id, agent_token) = setup_state("soc_query_tenant").await;
         seed_one_decision(&state, &tenant_id, &agent_token).await;

@@ -67,7 +67,19 @@ All SOC logic lives in `lib/soc/src/`; it consumes storage through the same tena
 
 ```bash
 curl -s -X POST $AEGIS/v1/soc/query -H "Authorization: Bearer $TOKEN" \
-  -d '{"event_type":"decision","decision":"deny","last":"1h","group_by":"agent_id"}' | jq
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": 1,
+    "entity": "ase",
+    "filters": {
+      "decision": "deny",
+      "from": "2026-07-02T00:00:00Z",
+      "to": "2026-07-03T00:00:00Z"
+    },
+    "aggregate": "count_by",
+    "group_by": "agent_id",
+    "limit": 20
+  }' | jq
 curl -s $AEGIS/v1/incidents -H "Authorization: Bearer $TOKEN" | jq '.[0]'
 ```
 
