@@ -3,6 +3,7 @@ package aegis_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -126,6 +127,7 @@ func TestProtect_ApprovalPoll_PendingThenApproved_ExecutesTool(t *testing.T) {
 	actionHash := hashAction(t, req)
 
 	var pollCount int32
+	var consumeBody string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -156,6 +158,11 @@ func TestProtect_ApprovalPoll_PendingThenApproved_ExecutesTool(t *testing.T) {
 			}
 
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/approvals/"+approvalID+"/consume":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read consume body: %v", err)
+			}
+			consumeBody = string(body)
 			serveJSON(w, http.StatusOK, map[string]any{
 				"action_hash": actionHash,
 			})
@@ -182,6 +189,9 @@ func TestProtect_ApprovalPoll_PendingThenApproved_ExecutesTool(t *testing.T) {
 	}
 	if !tracker.called {
 		t.Error("tool must be called after approval")
+	}
+	if got, want := consumeBody, `{"claimed_action_hash":"`+actionHash+`"}`; got != want {
+		t.Fatalf("unexpected consume body: got %s want %s", got, want)
 	}
 }
 

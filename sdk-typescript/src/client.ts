@@ -310,13 +310,22 @@ export class AegisClient {
    * POST /v1/approvals/:id/consume
    *
    * Atomically consumes an APPROVED approval so it cannot be reused (replay
-   * defence). Throws AegisGatewayError on non-2xx (including 409 Already
-   * Consumed); propagates network errors as-is.
+   * defence). When claimedActionHash is supplied, the gateway verifies it
+   * against the approval's bound action_hash in the same atomic consume.
+   * Throws AegisGatewayError on non-2xx (including 409 Already Consumed);
+   * propagates network errors as-is.
    */
-  async consumeApproval(approvalId: string): Promise<ConsumeResponse> {
+  async consumeApproval(
+    approvalId: string,
+    claimedActionHash?: string
+  ): Promise<ConsumeResponse> {
+    const body =
+      claimedActionHash === undefined
+        ? undefined
+        : JSON.stringify({ claimed_action_hash: claimedActionHash });
     const resp = await this.fetchWithTimeout(
       `${this.baseUrl}/v1/approvals/${approvalId}/consume`,
-      { method: "POST", headers: this.headers(), body: "" }
+      { method: "POST", headers: this.headers(), body }
     );
 
     if (!resp.ok) {
