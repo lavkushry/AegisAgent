@@ -1,0 +1,3460 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/AegisAgent_World_Class_HLD/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>AegisAgent World-Class HLD - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#aegisagent-world-class-hld" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              AegisAgent World-Class HLD
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../deployment-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration & connectivity
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Technical_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration & connectivity
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../github-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub App integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slack-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Slack integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../runbooks/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8_4" id="__nav_8_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/deny-storm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deny storm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/data-exfiltration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data exfiltration pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/agent-token-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent token rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/receipt-chain-verification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receipt chain verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/secret-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Threat_Model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Operational_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-defense-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP defense architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision records
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9_6" id="__nav_9_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_9_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decision records
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-cedar-policy-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Cedar policy engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-sqlite-first-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: SQLite-first storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003-aegis-jcs-1-canonicalization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: aegis-jcs-1 canonicalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0004-ed25519-receipt-signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Ed25519 receipt signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0005-fail-closed-defaults/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Fail-closed defaults
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference (OpenAPI/Redoc)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fail-closed-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-product-vision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Product vision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-category-definition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Category definition
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-current-repository-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Current repository summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-system-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. System overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-mandatory-choke-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Mandatory choke points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-planes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Planes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Planes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-control-plane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Control Plane
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-runtime-data-plane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 Runtime Data Plane
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-developer-integration-plane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.3 Developer Integration Plane
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-evidencesoc-plane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.4 Evidence/SOC Plane
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#65-console-ui-plane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.5 Console UI Plane
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-component-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Component model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-known-agent-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Known-agent flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-anonymous-agent-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Anonymous-agent flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-promptmodel-capture-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Prompt/model capture flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-tool-broker-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Tool broker flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-mcp-gateway-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. MCP gateway flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-egress-control-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Egress control flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-runtime-control-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Runtime control flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#15-receiptevidence-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. Receipt/evidence flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#16-soc-investigation-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        16. SOC investigation flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#17-banquarantine-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        17. Ban/quarantine flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#18-deployment-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18. Deployment models
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="18. Deployment models">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#181-local-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18.1 Local development
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#182-docker-compose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18.2 Docker Compose
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#183-kubernetes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18.3 Kubernetes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#184-enterprise-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18.4 Enterprise production
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#19-trust-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        19. Trust boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#20-security-assumptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        20. Security assumptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#21-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        21. Non-goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#22-failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        22. Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#23-scale-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        23. Scale model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#24-production-hardening-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        24. Production hardening checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#25-hld-decision-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        25. HLD decision summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/AegisAgent_World_Class_HLD.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="aegisagent-world-class-hld">AegisAgent World-Class HLD<a class="headerlink" href="#aegisagent-world-class-hld" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> target architecture proposal<br />
+<strong>Date:</strong> 2026-06-28<br />
+<strong>Scope:</strong> architecture only; no runtime implementation implied<br />
+<strong>Audience:</strong> platform security, infra, backend, SDK, SOC, and product engineering</p>
+<hr />
+<h2 id="1-product-vision">1. Product vision<a class="headerlink" href="#1-product-vision" title="Permanent link">&para;</a></h2>
+<p>AegisAgent becomes the <strong>AI Agent Security Control Plane</strong> for autonomous agents.</p>
+<p>AegisAgent is <strong>not an agent</strong>. AegisAgent controls agents by forcing important agent actions through explicit, auditable choke points. It provides control, isolation, evidence, and runtime response for both:</p>
+<ul>
+<li><strong>Known agents</strong> integrated through SDKs, the gateway, MCP gateway, tool broker, policy engine, approval engine, and receipt engine.</li>
+<li><strong>Unknown or anonymous agents</strong> controlled through a node sensor, disposable cage runner, sandbox isolation, runtime telemetry, egress proxy, tool broker, credential isolation, signed control commands, and ban/quarantine systems.</li>
+</ul>
+<p>The governing principle is:</p>
+<blockquote>
+<p>Aegis can only control what passes through Aegis choke points. If an agent bypasses all choke points, it is treated as hostile and must be isolated, blocked, killed, quarantined, or banned by the runtime data plane.</p>
+</blockquote>
+<hr />
+<h2 id="2-category-definition">2. Category definition<a class="headerlink" href="#2-category-definition" title="Permanent link">&para;</a></h2>
+<p>AegisAgent defines a higher-order category than the current repository's MVP framing of <strong>Agent Action Integrity</strong>:</p>
+<blockquote>
+<p><strong>AI Agent Security Control Plane</strong> — a control plane plus runtime data plane that governs prompt/model, tool, API, MCP, network, filesystem, process, secret, approval, runtime-control, and receipt/evidence boundaries for autonomous AI agents.</p>
+</blockquote>
+<p>AegisAgent still preserves its current differentiators:</p>
+<ol>
+<li><strong>Approval integrity:</strong> exact action is canonicalized and hashed; approvals bind to <code>action_hash</code>; SDKs fail closed on mismatch, expiry, or replay.</li>
+<li><strong>Deterministic provenance gating:</strong> policy evaluates source trust and prompt/tool lineage; LLMs may summarize but never decide enforcement.</li>
+<li><strong>Receipt-backed evidence:</strong> protected actions produce tamper-evident receipts.</li>
+</ol>
+<p>The world-class version adds the missing runtime data plane:</p>
+<ul>
+<li><code>aegis-node-sensor</code></li>
+<li><code>aegis-cage-runner</code></li>
+<li><code>aegis-egress-proxy</code></li>
+<li><code>aegis-tool-broker</code></li>
+<li>signed gateway-to-sensor command protocol</li>
+<li>runtime event ingestion</li>
+<li>ban/quarantine control plane</li>
+<li>prompt/model/tool/runtime timeline</li>
+<li>receipt-backed SOC evidence graph</li>
+</ul>
+<hr />
+<h2 id="3-current-repository-summary">3. Current repository summary<a class="headerlink" href="#3-current-repository-summary" title="Permanent link">&para;</a></h2>
+<p>The active root is a <strong>Cargo workspace</strong> (the earlier single-<code>gateway/</code>-crate MVP
+has already been migrated; a stale <code>gateway/</code> directory may remain on disk but is
+<strong>not</strong> a workspace member and is not the source of truth):</p>
+<ul>
+<li><code>src/</code>: the gateway binary crate (package name <code>gateway</code>) — Axum + Tokio + SQLx,
+  <code>routes/</code> split into focused modules (<code>authorize*.rs</code>, <code>approval.rs</code>,
+  <code>receipts.rs</code>, <code>soc.rs</code>, <code>mcp.rs</code>, <code>tenant.rs</code>, …), middleware, jobs, mTLS,
+  admission webhook, dashboard serving. <code>src/canon/</code> holds the canonicalization crate.</li>
+<li><code>lib/{common,api,storage,policy,soc}</code>: extracted workspace crates — shared
+  canonicalization/errors/metrics, strongly-typed API models, the <code>StorageBackend</code>
+  trait + SQLite/Postgres implementations and SQLx migrations
+  (<code>lib/storage/migrations{,_postgres}/</code>), the Cedar policy engine, and the async
+  SOC plane (events/detect/correlate/respond/notify/backtest).</li>
+<li><code>sdk-python/</code>, <code>sdk-typescript/</code>, <code>sdk-go/</code>: all three SDKs are active, with
+  byte-identical <code>aegis-jcs-1</code> canonicalization and fail-closed approval consume.</li>
+<li><code>ui/</code>: the Next.js console (static-exported, served by the gateway).</li>
+<li><code>mcp-gateway-lite/</code>, <code>policies.cedar</code> (kept byte-identical across the root,
+  <code>src/</code>, <code>lib/policy/</code>, and Helm copies), <code>helm/</code>, <code>docs/</code>, and a substantial CI
+  matrix (<code>fmt</code>/<code>clippy</code>/tests/coverage/fuzz-smoke/benchmarks/SDK parity/Docker E2E/
+  SAST/secret-scan/container-scan).</li>
+</ul>
+<p>Recent hardening already merged: transaction-safe atomic receipt-chain append;
+<strong>fail-closed durable receipts</strong> for protected decisions; receipt
+verify-chain/verify-range/chain-head endpoints; SOC event evidence linkage;
+public-bind + admin-endpoint auth gates; structured <code>POST /v1/soc/query</code>; and a
+<strong>DB-backed, multi-instance-safe replay-nonce store</strong>. See
+<a href="../production-hardening/"><code>production-hardening.md</code></a>.</p>
+<p>What does <strong>not</strong> yet exist is the <strong>runtime data plane</strong> — there are no
+<code>aegis-node-sensor</code>, <code>aegis-cage-runner</code>, <code>aegis-egress-proxy</code>, or
+<code>aegis-tool-broker</code> binaries, no runtime-event ingestion, no signed
+gateway→sensor command protocol, and no first-class ban/quarantine or
+prompt/model/runtime capture. That is the subject of this architecture.</p>
+<hr />
+<h2 id="4-system-overview">4. System overview<a class="headerlink" href="#4-system-overview" title="Permanent link">&para;</a></h2>
+<p>AegisAgent is split into clear planes and binaries. The gateway is the central brain; it never runs untrusted agents.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart TD
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    subgraph Agents[Agent Workloads]
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        KA[Known Agent]
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        UA[Unknown or Anonymous Agent]
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    end
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    subgraph DevPlane[Developer Integration Plane]
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        SDK[SDKs and Framework Adapters]
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        LLMProxy[Prompt and Model Gateway]
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>        MCPAdapter[MCP Client Adapter]
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    end
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    subgraph RuntimePlane[Runtime Data Plane]
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        Sensor[aegis-node-sensor]
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        Cage[aegis-cage-runner]
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        Egress[aegis-egress-proxy]
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        Broker[aegis-tool-broker]
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        MCPGW[aegis-mcp-gateway]
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        LocalQueue[Durable Local Sensor Queue]
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    end
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    subgraph ControlPlane[Control Plane]
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>        Gateway[aegis-gateway]
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        Policy[Deterministic Policy Engine]
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>        Approval[Approval Engine]
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>        Commands[Signed Control Commands]
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>        Ban[Ban and Quarantine Control]
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>        Registry[Agent, Tool, Sensor, Policy Registry]
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    end
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    subgraph EvidencePlane[Evidence and SOC Plane]
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>        Ingest[Runtime Event Ingestion]
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>        Receipts[Receipt Engine]
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>        Timeline[Prompt Tool Runtime Timeline]
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>        Incidents[Incident and Evidence Graph]
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>        Export[Evidence Pack and SIEM Export]
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>    end
+<a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>
+<a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>    subgraph UIPlane[Console UI Plane]
+<a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>        Console[aegis-console]
+<a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>    end
+<a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>
+<a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>    KA --&gt; SDK --&gt; Gateway
+<a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>    KA --&gt; LLMProxy --&gt; Gateway
+<a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>    KA --&gt; MCPAdapter --&gt; MCPGW
+<a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>    UA --&gt; Cage
+<a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>    Cage --&gt; Sensor
+<a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a>    Cage --&gt; Egress
+<a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>    Cage --&gt; Broker
+<a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>    Cage --&gt; MCPGW
+<a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>    Sensor --&gt; LocalQueue --&gt; Ingest --&gt; Gateway
+<a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>    Egress --&gt; Gateway
+<a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>    Broker --&gt; Gateway
+<a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>    MCPGW --&gt; Gateway
+<a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>    Gateway --&gt; Policy
+<a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>    Gateway --&gt; Approval
+<a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>    Gateway --&gt; Commands --&gt; Sensor
+<a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a>    Gateway --&gt; Ban
+<a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a>    Gateway --&gt; Receipts
+<a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a>    Gateway --&gt; Timeline
+<a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a>    Timeline --&gt; Incidents
+<a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>    Receipts --&gt; Export
+<a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a>    Incidents --&gt; Console
+<a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a>    Timeline --&gt; Console
+<a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a>    Approval --&gt; Console
+<a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a>    Ban --&gt; Console
+</code></pre></div>
+<hr />
+<h2 id="5-mandatory-choke-points">5. Mandatory choke points<a class="headerlink" href="#5-mandatory-choke-points" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Choke point</th>
+<th>Known-agent enforcement</th>
+<th>Unknown-agent enforcement</th>
+<th>Fail-closed behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prompt/model call</td>
+<td>SDK, LLM proxy, framework adapter</td>
+<td>cage-forced LLM gateway/proxy where possible</td>
+<td>no raw sensitive prompt storage; capture hashes/metadata</td>
+</tr>
+<tr>
+<td>Tool call</td>
+<td>SDK and gateway authorize</td>
+<td>tool broker owns credentials and executes</td>
+<td>anonymous agent never receives raw credentials</td>
+</tr>
+<tr>
+<td>API call</td>
+<td>SDK, API proxy, tool broker</td>
+<td>tool broker / egress proxy</td>
+<td>direct privileged API bypass is incident</td>
+</tr>
+<tr>
+<td>MCP call</td>
+<td>MCP gateway + manifest trust</td>
+<td>cage routes MCP only through MCP gateway</td>
+<td>unknown MCP/tool denied or quarantined</td>
+</tr>
+<tr>
+<td>Network egress</td>
+<td>egress proxy opt-in</td>
+<td>egress forced through proxy by network namespace</td>
+<td>deny unknown destination in enforce/lockdown</td>
+</tr>
+<tr>
+<td>Filesystem/workspace</td>
+<td>SDK hooks where possible</td>
+<td>cage isolated workspace, sensor telemetry</td>
+<td>block host FS; quarantine workspace on incident</td>
+</tr>
+<tr>
+<td>Process execution</td>
+<td>SDK/tool wrapper where possible</td>
+<td>cage runner + sensor</td>
+<td>enforce CPU/mem/proc/time limits; kill if hostile</td>
+</tr>
+<tr>
+<td>Secret access</td>
+<td>tool broker, vault proxy</td>
+<td>no raw secrets in cage; sensor detects access attempts</td>
+<td>deny raw secret access; emit event</td>
+</tr>
+<tr>
+<td>Approval</td>
+<td>approval engine + SDK hash verification</td>
+<td>broker/gateway approval before broker execution</td>
+<td>approval mismatch/expiry/replay blocks execution</td>
+</tr>
+<tr>
+<td>Runtime control</td>
+<td>signed commands to sensor</td>
+<td>sensor enforces pause/kill/quarantine/ban</td>
+<td>unsigned/expired/replayed command rejected</td>
+</tr>
+<tr>
+<td>Receipt/evidence</td>
+<td>receipt engine on protected action</td>
+<td>receipt engine on protected/control action</td>
+<td>receipt write failure blocks protected action</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6-planes">6. Planes<a class="headerlink" href="#6-planes" title="Permanent link">&para;</a></h2>
+<h3 id="61-control-plane">6.1 Control Plane<a class="headerlink" href="#61-control-plane" title="Permanent link">&para;</a></h3>
+<p><strong>Binary:</strong> <code>aegis-gateway</code></p>
+<p>Responsibilities:</p>
+<ul>
+<li>Tenant, agent, run, sensor, sandbox, tool, MCP, policy, approval, ban, and quarantine registries.</li>
+<li>Deterministic policy evaluation using Cedar or a versioned deterministic policy bundle.</li>
+<li>Approval creation, edit, approve, reject, consume, expiry, and evidence.</li>
+<li>Runtime event ingestion APIs.</li>
+<li>Signed control command creation and delivery tracking.</li>
+<li>Receipt append, verification, checkpoints, and evidence packs.</li>
+<li>SOC incident correlation and evidence graph APIs.</li>
+</ul>
+<p>Non-responsibilities:</p>
+<ul>
+<li>It must <strong>not</strong> execute untrusted agents.</li>
+<li>It must <strong>not</strong> hold long-running sandbox workloads.</li>
+<li>It must <strong>not</strong> make enforcement decisions using an LLM.</li>
+</ul>
+<h3 id="62-runtime-data-plane">6.2 Runtime Data Plane<a class="headerlink" href="#62-runtime-data-plane" title="Permanent link">&para;</a></h3>
+<p>Binaries:</p>
+<ul>
+<li><code>aegis-node-sensor</code>: EDR/Filebeat/Wazuh-like daemon near workloads.</li>
+<li><code>aegis-cage-runner</code>: disposable sandbox executor for unknown agents.</li>
+<li><code>aegis-egress-proxy</code>: network choke point.</li>
+<li><code>aegis-tool-broker</code>: credential/API/tool execution choke point.</li>
+<li><code>aegis-mcp-gateway</code>: MCP choke point.</li>
+</ul>
+<p>Responsibilities:</p>
+<ul>
+<li>Runtime telemetry collection.</li>
+<li>Local durable queueing and shipping to gateway.</li>
+<li>Local enforcement under observe/enforce/lockdown modes.</li>
+<li>Signed command verification and idempotent execution.</li>
+<li>Sandbox isolation and resource limiting.</li>
+<li>Network, tool, MCP, filesystem, secret, and process control.</li>
+</ul>
+<h3 id="63-developer-integration-plane">6.3 Developer Integration Plane<a class="headerlink" href="#63-developer-integration-plane" title="Permanent link">&para;</a></h3>
+<p>Components:</p>
+<ul>
+<li>Python SDK (active today).</li>
+<li>TypeScript and Go SDKs (target; hidden worktree has prototypes).</li>
+<li>LLM gateway/proxy and framework adapters.</li>
+<li>Browser automation adapter where feasible.</li>
+</ul>
+<p>Responsibilities:</p>
+<ul>
+<li>Known-agent registration and tool wrapping.</li>
+<li>Prompt/model metadata capture where a choke point exists.</li>
+<li>Canonical action hashing and fail-closed approval verification.</li>
+<li>Trace/run propagation.</li>
+<li>Redaction before event emission.</li>
+</ul>
+<h3 id="64-evidencesoc-plane">6.4 Evidence/SOC Plane<a class="headerlink" href="#64-evidencesoc-plane" title="Permanent link">&para;</a></h3>
+<p>Responsibilities:</p>
+<ul>
+<li>Runtime event normalization.</li>
+<li>Prompt/model/tool/runtime DAG timeline.</li>
+<li>Receipt chain, checkpoints, range verification, and proof export.</li>
+<li>Incident correlation and evidence graph.</li>
+<li>SOC events for blocked egress, bans, quarantine, receipt failures, command execution, and suspicious lineage.</li>
+</ul>
+<h3 id="65-console-ui-plane">6.5 Console UI Plane<a class="headerlink" href="#65-console-ui-plane" title="Permanent link">&para;</a></h3>
+<p><strong>Binary/app:</strong> <code>aegis-console</code></p>
+<p>Aegis Console should feel like Grafana + Kibana + CrowdStrike for AI agents.</p>
+<p>Required pages:</p>
+<ul>
+<li>Overview</li>
+<li>Explore</li>
+<li>Approvals</li>
+<li>Incidents</li>
+<li>Receipts</li>
+<li>Agents</li>
+<li>Agent Cage Runs</li>
+<li>Runtime Timeline</li>
+<li>Prompt Timeline</li>
+<li>Model Calls</li>
+<li>Tool Calls</li>
+<li>Egress Events</li>
+<li>Ban Center</li>
+<li>Quarantine Center</li>
+<li>MCP Security</li>
+<li>Policy Center</li>
+<li>Evidence Graph</li>
+<li>Settings</li>
+</ul>
+<hr />
+<h2 id="7-component-model">7. Component model<a class="headerlink" href="#7-component-model" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Purpose</th>
+<th>Critical boundaries</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>aegis-gateway</code></td>
+<td>Central control plane and evidence API</td>
+<td>no untrusted execution; tenant isolation; policy determinism</td>
+</tr>
+<tr>
+<td><code>aegis-node-sensor</code></td>
+<td>Runtime sensor and local enforcer near workloads</td>
+<td>durable queue; signed command verification; local fail-closed modes</td>
+</tr>
+<tr>
+<td><code>aegis-cage-runner</code></td>
+<td>Disposable sandbox for unknown agents</td>
+<td>no host FS, no Docker socket, no raw creds, proxy-forced egress</td>
+</tr>
+<tr>
+<td><code>aegis-egress-proxy</code></td>
+<td>Network egress decision point</td>
+<td>deny unknown destination; DNS/HTTP/SNI metadata; exfil hooks</td>
+</tr>
+<tr>
+<td><code>aegis-tool-broker</code></td>
+<td>Credential/API/tool choke point</td>
+<td>owns credentials; canonicalize, authorize, approve, execute, receipt</td>
+</tr>
+<tr>
+<td><code>aegis-mcp-gateway</code></td>
+<td>MCP server and tool gate</td>
+<td>manifest pinning, drift quarantine, per-tool authorization</td>
+</tr>
+<tr>
+<td><code>aegis-console</code></td>
+<td>SOC/approval/control UI</td>
+<td>read-only views unless explicit admin auth; command actions are signed/audited</td>
+</tr>
+<tr>
+<td>SDKs/adapters</td>
+<td>Known-agent integration</td>
+<td>final approval hash check before execution; fail closed on mismatch</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-known-agent-flow">8. Known-agent flow<a class="headerlink" href="#8-known-agent-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sequenceDiagram
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    participant Agent as Known Agent
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    participant SDK as Aegis SDK
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    participant GW as aegis-gateway
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    participant Policy as Policy Engine
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    participant Approval as Approval Engine
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    participant Tool as Tool or Broker
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    participant Receipt as Receipt Engine
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    Agent-&gt;&gt;SDK: call protected tool
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    SDK-&gt;&gt;SDK: canonicalize action and compute action_hash
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    SDK-&gt;&gt;GW: POST /v1/authorize
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    GW-&gt;&gt;Policy: evaluate tenant, agent, source_trust, tool, risk, bans, quarantine
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    Policy--&gt;&gt;GW: allow/deny/require_approval
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    alt require approval
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>        GW-&gt;&gt;Approval: create approval bound to action_hash
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        GW--&gt;&gt;SDK: require_approval + approval_id + action_hash
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>        SDK-&gt;&gt;GW: poll approval status
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>        SDK-&gt;&gt;GW: consume approval
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>        SDK-&gt;&gt;SDK: verify consumed action_hash == local action_hash
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>    end
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    alt allow or consumed approval
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>        SDK-&gt;&gt;Tool: execute protected function or brokered action
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        GW-&gt;&gt;Receipt: emit receipt for decision/action
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    else deny or mismatch
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>        SDK--&gt;&gt;Agent: fail closed
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>        GW-&gt;&gt;Receipt: emit denial or tamper receipt where applicable
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    end
+</code></pre></div>
+<hr />
+<h2 id="9-anonymous-agent-flow">9. Anonymous-agent flow<a class="headerlink" href="#9-anonymous-agent-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sequenceDiagram
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    participant User as User/CI/System
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    participant GW as aegis-gateway
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    participant Sensor as aegis-node-sensor
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    participant Cage as aegis-cage-runner
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    participant Egress as aegis-egress-proxy
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    participant Broker as aegis-tool-broker
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    participant SOC as SOC/Evidence
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    User-&gt;&gt;GW: request unknown-agent run
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    GW-&gt;&gt;GW: preflight ban/quarantine/policy checks
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    GW-&gt;&gt;Sensor: signed start_run command
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>    Sensor-&gt;&gt;Sensor: verify signature, tenant, expiry, nonce
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    Sensor-&gt;&gt;Cage: launch sandbox with resource limits
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>    Cage-&gt;&gt;Sensor: runtime events
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    Cage-&gt;&gt;Egress: forced network egress
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    Cage-&gt;&gt;Broker: forced tool/API requests
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    Egress-&gt;&gt;GW: egress check and event
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>    Broker-&gt;&gt;GW: authorize/approval/receipt flow
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>    Sensor-&gt;&gt;GW: batched runtime events from durable queue
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>    GW-&gt;&gt;SOC: timeline, incident, receipts
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>    alt hostile behavior
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>        GW-&gt;&gt;Sensor: signed kill/quarantine/ban command
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>        Sensor-&gt;&gt;Cage: kill/pause/quarantine
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a>        Sensor-&gt;&gt;GW: ACK + control_action_executed event
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>    end
+</code></pre></div>
+<hr />
+<h2 id="10-promptmodel-capture-flow">10. Prompt/model capture flow<a class="headerlink" href="#10-promptmodel-capture-flow" title="Permanent link">&para;</a></h2>
+<p>Aegis captures prompt/model activity only where it owns a choke point:</p>
+<ul>
+<li>SDK capture.</li>
+<li>LLM gateway/proxy capture.</li>
+<li>Framework adapters.</li>
+<li>Browser automation adapter where possible.</li>
+</ul>
+<p>Default storage avoids raw sensitive prompts. Persist:</p>
+<ul>
+<li><code>prompt_hash</code></li>
+<li><code>redacted_prompt_preview</code></li>
+<li>model/provider</li>
+<li>role</li>
+<li><code>source_trust</code></li>
+<li><code>run_id</code></li>
+<li><code>trace_id</code></li>
+<li><code>parent_event_id</code></li>
+<li><code>action_hash</code> linkage</li>
+<li><code>receipt_hash</code> linkage</li>
+<li>retention policy</li>
+<li>redaction status</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>flowchart TD
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    Prompt[Prompt Observed] --&gt; Redact[Redact and classify]
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    Redact --&gt; Hash[Compute prompt_hash]
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    Hash --&gt; ModelCall[Model call started/finished]
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    ModelCall --&gt; ToolProposal[Tool proposal or action request]
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    ToolProposal --&gt; Authorize[Authorize and receipt]
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    Authorize --&gt; Timeline[Prompt-to-action timeline]
+</code></pre></div>
+<hr />
+<h2 id="11-tool-broker-flow">11. Tool broker flow<a class="headerlink" href="#11-tool-broker-flow" title="Permanent link">&para;</a></h2>
+<p>Anonymous agents must never receive raw credentials.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>sequenceDiagram
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    participant Agent as Agent or Cage
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    participant Broker as aegis-tool-broker
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    participant GW as aegis-gateway
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    participant Approval as Approval Engine
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    participant Tool as External Tool/API
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    participant SOC as SOC/Receipts
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>    Agent-&gt;&gt;Broker: request action with parameters
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    Broker-&gt;&gt;Broker: canonicalize action and compute action_hash
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    Broker-&gt;&gt;GW: POST /v1/authorize
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    GW--&gt;&gt;Broker: allow/deny/require_approval
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    alt require approval
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>        Broker-&gt;&gt;Approval: wait/consume approval
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>    end
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>    alt allowed
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>        Broker-&gt;&gt;Tool: execute with broker-held credential
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>        Broker-&gt;&gt;SOC: emit tool_call_allowed/api_executed + receipt
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>        Broker--&gt;&gt;Agent: sanitized result
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>    else denied
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>        Broker-&gt;&gt;SOC: emit tool_call_denied + receipt
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>        Broker--&gt;&gt;Agent: deny
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>    end
+</code></pre></div>
+<p>Initial tool categories:</p>
+<ul>
+<li>GitHub</li>
+<li>Slack</li>
+<li>Gmail</li>
+<li>Jira</li>
+<li>HTTP</li>
+<li>filesystem</li>
+<li>shell</li>
+<li>MCP</li>
+</ul>
+<hr />
+<h2 id="12-mcp-gateway-flow">12. MCP gateway flow<a class="headerlink" href="#12-mcp-gateway-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sequenceDiagram
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    participant Agent as Agent/Cage
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    participant MCPGW as aegis-mcp-gateway
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    participant GW as aegis-gateway
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    participant MCP as MCP Server
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    participant SOC as SOC/Receipts
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    Agent-&gt;&gt;MCPGW: call MCP tool
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    MCPGW-&gt;&gt;GW: resolve server/tool status and manifest trust
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    alt unknown or quarantined
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        GW--&gt;&gt;MCPGW: deny
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>        MCPGW-&gt;&gt;SOC: mcp_tool_call denied + receipt
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>    else approved
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>        MCPGW-&gt;&gt;GW: authorize MCP action
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>        GW--&gt;&gt;MCPGW: allow/deny/require_approval
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>        alt allowed
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>            MCPGW-&gt;&gt;MCP: proxy tool call
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>            MCPGW-&gt;&gt;SOC: receipt and event
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>        end
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>    end
+</code></pre></div>
+<p>MCP manifest drift is a high-signal tool poisoning indicator. Drift should downgrade trust and can auto-quarantine the MCP server until reviewed.</p>
+<hr />
+<h2 id="13-egress-control-flow">13. Egress control flow<a class="headerlink" href="#13-egress-control-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>sequenceDiagram
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    participant Cage as Cage/Workload
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    participant Proxy as aegis-egress-proxy
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    participant GW as aegis-gateway
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    participant SOC as SOC/Receipts
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    participant Internet as Destination
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    Cage-&gt;&gt;Proxy: DNS/HTTP/TCP connect
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    Proxy-&gt;&gt;Proxy: extract metadata: domain, CIDR, DNS, HTTP, SNI
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    Proxy-&gt;&gt;GW: POST /v1/egress/check
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    GW-&gt;&gt;GW: ban, quarantine, per-run, per-tenant policy
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    GW--&gt;&gt;Proxy: allow or block
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>    alt allow
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>        Proxy-&gt;&gt;Internet: forward
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>        Proxy-&gt;&gt;SOC: egress_allowed event; receipt if high risk
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>    else block
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>        Proxy--&gt;&gt;Cage: block
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>        Proxy-&gt;&gt;SOC: egress_blocked event + receipt
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>    end
+</code></pre></div>
+<p>Deny-by-default is mandatory for unknown agents in enforce/lockdown mode.</p>
+<hr />
+<h2 id="14-runtime-control-flow">14. Runtime control flow<a class="headerlink" href="#14-runtime-control-flow" title="Permanent link">&para;</a></h2>
+<p>All control commands from gateway to sensor are signed and replay-protected.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>sequenceDiagram
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    participant Admin as Admin/Policy Automation
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    participant GW as aegis-gateway
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    participant Sensor as aegis-node-sensor
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    participant Cage as Local Workload
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    participant Receipt as Receipt Engine
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    Admin-&gt;&gt;GW: issue kill_run/quarantine/ban command
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    GW-&gt;&gt;GW: authorize actor and create command
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    GW-&gt;&gt;GW: sign canonical command
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>    GW-&gt;&gt;Sensor: deliver command
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>    Sensor-&gt;&gt;Sensor: verify signature, tenant, expiry, nonce
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>    Sensor-&gt;&gt;Cage: execute idempotently
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>    Sensor-&gt;&gt;GW: ACK/NACK with result
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    GW-&gt;&gt;Receipt: receipt for command executed
+</code></pre></div>
+<hr />
+<h2 id="15-receiptevidence-flow">15. Receipt/evidence flow<a class="headerlink" href="#15-receiptevidence-flow" title="Permanent link">&para;</a></h2>
+<p>Protected actions cannot succeed without durable receipt.</p>
+<p>Receipt-required events:</p>
+<ul>
+<li>approval created/edited/approved/rejected/consumed</li>
+<li>tool allowed/denied</li>
+<li>API executed</li>
+<li>egress blocked and high-risk egress allowed</li>
+<li>prompt-to-tool risky chain</li>
+<li>run killed</li>
+<li>agent frozen/banned</li>
+<li>workspace quarantined</li>
+<li>MCP quarantined</li>
+<li>control command executed</li>
+<li>incident created/closed</li>
+<li>evidence pack exported</li>
+</ul>
+<p>Receipts are append-only per tenant and hash-chained. Enterprise mode signs chain heads and checkpoints with KMS/HSM-backed keys.</p>
+<hr />
+<h2 id="16-soc-investigation-flow">16. SOC investigation flow<a class="headerlink" href="#16-soc-investigation-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>flowchart TD
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    Event[Runtime event or receipt] --&gt; Normalize[Normalize and redact]
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    Normalize --&gt; Timeline[Run timeline DAG]
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    Timeline --&gt; Detect[Detection and correlation rules]
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    Detect --&gt; Incident[Incident created]
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    Incident --&gt; Graph[Evidence graph]
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    Graph --&gt; Console[Console investigation]
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    Console --&gt; Action[Control action: kill, ban, quarantine]
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    Action --&gt; Receipt[Receipt and audit]
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    Graph --&gt; Export[Evidence pack export]
+</code></pre></div>
+<p>Critical UI demo flow:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Unknown agent starts
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>→ prompt captured
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>→ model call captured
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>→ tool proposal captured
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>→ file secret access detected
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>→ network exfil blocked
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>→ run killed
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>→ fingerprint banned
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>→ workspace quarantined
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>→ receipt chain visible
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>→ incident generated
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>→ evidence graph exportable
+</code></pre></div>
+<hr />
+<h2 id="17-banquarantine-flow">17. Ban/quarantine flow<a class="headerlink" href="#17-banquarantine-flow" title="Permanent link">&para;</a></h2>
+<p>Bans are first-class policy inputs and enforcement artifacts.</p>
+<p>Ban targets include:</p>
+<ul>
+<li><code>agent_id</code>, <code>run_id</code>, <code>sandbox_id</code></li>
+<li><code>agent_fingerprint</code>, <code>image_digest</code>, <code>repo_hash</code>, <code>binary_hash</code>, <code>package_lock_hash</code></li>
+<li><code>mcp_server_id</code>, <code>mcp_tool_id</code>, <code>tool_name</code></li>
+<li><code>destination_domain</code>, <code>destination_ip</code>, <code>credential_scope</code></li>
+<li><code>prompt_hash</code>, <code>behavior_signature</code></li>
+</ul>
+<p>Ban scopes:</p>
+<ul>
+<li>run</li>
+<li>agent</li>
+<li>tenant</li>
+<li>organization</li>
+<li>global admin</li>
+</ul>
+<p>Ban enforcement happens before:</p>
+<ul>
+<li>sandbox start</li>
+<li>authorization</li>
+<li>tool call</li>
+<li>MCP call</li>
+<li>egress</li>
+<li>credential issuance</li>
+<li>approval consumption</li>
+</ul>
+<p>Quarantine prevents new execution, preserves evidence, blocks external access, prevents deletion, attaches to incidents, and supports admin review/release/delete.</p>
+<p>Every ban/unban/quarantine/release requires actor, reason, authorization, audit event, receipt, and SOC event.</p>
+<hr />
+<h2 id="18-deployment-models">18. Deployment models<a class="headerlink" href="#18-deployment-models" title="Permanent link">&para;</a></h2>
+<h3 id="181-local-development">18.1 Local development<a class="headerlink" href="#181-local-development" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Single <code>aegis-gateway</code> on <code>127.0.0.1</code>.</li>
+<li>SQLite WAL.</li>
+<li>Default Cedar policies.</li>
+<li>Python SDK demo.</li>
+<li>Optional local mock egress proxy/tool broker/cage stubs.</li>
+</ul>
+<h3 id="182-docker-compose">18.2 Docker Compose<a class="headerlink" href="#182-docker-compose" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Gateway.</li>
+<li>SQLite or local Postgres.</li>
+<li>Node sensor sidecar.</li>
+<li>Cage runner using Docker with strict no-Docker-socket-in-cage rule.</li>
+<li>Egress proxy.</li>
+<li>Tool broker.</li>
+<li>Console.</li>
+</ul>
+<h3 id="183-kubernetes">18.3 Kubernetes<a class="headerlink" href="#183-kubernetes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>aegis-gateway</code> Deployment with HPA.</li>
+<li>Postgres production storage.</li>
+<li><code>aegis-node-sensor</code> DaemonSet.</li>
+<li><code>aegis-cage-runner</code> as Job/Deployment or per-run Job controller.</li>
+<li><code>aegis-egress-proxy</code> as sidecar/daemonset/service mesh egress path.</li>
+<li><code>aegis-tool-broker</code> Deployment.</li>
+<li><code>aegis-mcp-gateway</code> Deployment.</li>
+<li><code>aegis-console</code> Deployment.</li>
+<li>NetworkPolicies force cage traffic through egress proxy/tool broker/MCP gateway.</li>
+</ul>
+<h3 id="184-enterprise-production">18.4 Enterprise production<a class="headerlink" href="#184-enterprise-production" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Multi-region control plane option.</li>
+<li>Postgres with PITR and backups.</li>
+<li>OIDC/JWT/admin auth.</li>
+<li>TLS/mTLS for all service-to-service paths.</li>
+<li>KMS/HSM signing for receipts and command keys.</li>
+<li>SIEM export.</li>
+<li>Helm chart.</li>
+<li>Air-gapped support.</li>
+<li>Immutable evidence storage option.</li>
+</ul>
+<hr />
+<h2 id="19-trust-boundaries">19. Trust boundaries<a class="headerlink" href="#19-trust-boundaries" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Boundary</th>
+<th>Risk</th>
+<th>Control</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent runtime to SDK</td>
+<td>agent may be hijacked</td>
+<td>SDK final hash check, fail closed</td>
+</tr>
+<tr>
+<td>Unknown agent to cage</td>
+<td>untrusted code</td>
+<td>sandbox, no host FS, no direct creds/network</td>
+</tr>
+<tr>
+<td>Cage to network</td>
+<td>exfiltration</td>
+<td>egress proxy deny-by-default</td>
+</tr>
+<tr>
+<td>Cage to tools/APIs</td>
+<td>credential theft</td>
+<td>tool broker owns credentials</td>
+</tr>
+<tr>
+<td>MCP client/server</td>
+<td>tool poisoning, manifest drift</td>
+<td>MCP gateway, manifest pinning, quarantine</td>
+</tr>
+<tr>
+<td>Sensor to gateway</td>
+<td>forged telemetry/control</td>
+<td>mutual auth, signed commands, ACKs</td>
+</tr>
+<tr>
+<td>Gateway to DB</td>
+<td>tenant leakage</td>
+<td><code>tenant_id</code> on every table/query, parameterized SQL</td>
+</tr>
+<tr>
+<td>Gateway to approval channel</td>
+<td>callback forgery</td>
+<td>signed callbacks, approver authz</td>
+</tr>
+<tr>
+<td>Receipt store</td>
+<td>tampering/drop</td>
+<td>append-only chain, checkpoints, signatures</td>
+</tr>
+<tr>
+<td>Console/admin</td>
+<td>destructive control actions</td>
+<td>JWT/OIDC, RBAC, receipts, command signing</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="20-security-assumptions">20. Security assumptions<a class="headerlink" href="#20-security-assumptions" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A compromised or unknown agent is hostile until proven otherwise.</li>
+<li>LLM output is untrusted and cannot decide enforcement.</li>
+<li>Source provenance can only be tightened by classifiers, never loosened.</li>
+<li>Gateway, sensor, broker, proxy, and MCP gateway are trusted computing base components and must be hardened accordingly.</li>
+<li>Tenants are mutually hostile in SaaS mode.</li>
+<li>Raw secrets must not enter logs, runtime events, prompt events, or receipts.</li>
+<li>Receipt loss for protected actions is a security failure, not merely observability loss.</li>
+</ul>
+<hr />
+<h2 id="21-non-goals">21. Non-goals<a class="headerlink" href="#21-non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>AegisAgent is not itself an autonomous agent.</li>
+<li>AegisAgent does not claim to catch actions that bypass every Aegis choke point.</li>
+<li>AegisAgent is not a generic SIEM, CNAPP, GRC suite, DLP platform, model-scanning system, or identity lifecycle manager.</li>
+<li>AegisAgent does not let LLMs make allow/deny/control decisions.</li>
+<li>AegisAgent does not run untrusted agents inside <code>aegis-gateway</code>.</li>
+</ul>
+<hr />
+<h2 id="22-failure-modes">22. Failure modes<a class="headerlink" href="#22-failure-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Observe mode</th>
+<th>Enforce mode</th>
+<th>Lockdown mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gateway unavailable</td>
+<td>buffer events locally</td>
+<td>block risky privileged actions and unknown egress</td>
+<td>pause/kill unknown agents; deny unknown egress/tools</td>
+</tr>
+<tr>
+<td>DB unavailable</td>
+<td>ingest may buffer when safe</td>
+<td>protected action fails closed</td>
+<td>protected action fails closed; command issuance disabled except local emergency</td>
+</tr>
+<tr>
+<td>Receipt write failure</td>
+<td>low-risk can buffer if policy allows</td>
+<td>protected action fails closed</td>
+<td>protected action fails closed</td>
+</tr>
+<tr>
+<td>Sensor queue full</td>
+<td>drop only non-critical after policy; alert</td>
+<td>backpressure workload; preserve critical</td>
+<td>pause workload until drained or killed</td>
+</tr>
+<tr>
+<td>Command signature invalid</td>
+<td>reject and emit event</td>
+<td>reject and emit event</td>
+<td>reject and emit event</td>
+</tr>
+<tr>
+<td>Egress proxy down</td>
+<td>no enforcement if not inline</td>
+<td>fail closed for unknown destinations</td>
+<td>deny all unknown egress</td>
+</tr>
+<tr>
+<td>Tool broker down</td>
+<td>known SDK can deny</td>
+<td>tool/API action fails closed</td>
+<td>tool/API action fails closed</td>
+</tr>
+<tr>
+<td>MCP gateway down</td>
+<td>MCP action fails closed</td>
+<td>MCP action fails closed</td>
+<td>MCP action fails closed</td>
+</tr>
+<tr>
+<td>Console down</td>
+<td>API remains available</td>
+<td>API remains available</td>
+<td>API remains available</td>
+</tr>
+<tr>
+<td>Policy bundle invalid</td>
+<td>keep previous valid bundle</td>
+<td>deny if no valid bundle</td>
+<td>deny and lockdown affected workloads</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="23-scale-model">23. Scale model<a class="headerlink" href="#23-scale-model" title="Permanent link">&para;</a></h2>
+<p>Design targets:</p>
+<ul>
+<li>Authorization p95 under 50 ms for cached policy.</li>
+<li>Egress check fast path under 5 ms.</li>
+<li>Event ingest target 10k events/sec per gateway node.</li>
+<li>No unbounded queues.</li>
+<li>UI handles 100k events with virtualization and cursor pagination.</li>
+<li>Ban lookup O(1) or O(log n).</li>
+<li>Receipt verification supports streaming/ranges.</li>
+<li>Local sensor queue supports backpressure and replay.</li>
+</ul>
+<p>Scale strategy:</p>
+<ul>
+<li>Stateless gateway replicas behind a load balancer.</li>
+<li>Postgres production with partitions by <code>tenant_id</code> and time for high-volume tables.</li>
+<li>Tenant-scoped policy and ban caches with invalidation.</li>
+<li>Runtime event ingest uses bounded Tokio queues and batch writes.</li>
+<li>Receipt append uses transaction-safe per-tenant chain head locking.</li>
+<li>Evidence graph materialization can be asynchronous; protected receipts are synchronous.</li>
+</ul>
+<hr />
+<h2 id="24-production-hardening-checklist">24. Production hardening checklist<a class="headerlink" href="#24-production-hardening-checklist" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[ ] Postgres production mode; SQLite local/dev mode only.</li>
+<li>[ ] TLS/mTLS for service-to-service traffic.</li>
+<li>[ ] JWT/OIDC and admin RBAC for console/control APIs.</li>
+<li>[ ] Bootstrap lock after initial admin/key creation.</li>
+<li>[ ] Signed gateway-to-sensor control commands.</li>
+<li>[ ] Replay protection for commands and signed agent requests.</li>
+<li>[ ] Receipt write failure blocks protected actions.</li>
+<li>[ ] Receipt checkpoints and range verification.</li>
+<li>[ ] Tenant isolation tests for every API and table.</li>
+<li>[ ] No raw secrets in logs/events/receipts.</li>
+<li>[ ] Bounded queues and backpressure everywhere.</li>
+<li>[ ] Durable node-sensor spool.</li>
+<li>[ ] Egress deny-by-default option.</li>
+<li>[ ] Tool broker credential isolation.</li>
+<li>[ ] No Docker socket in cages.</li>
+<li>[ ] Health, liveness, readiness, and startup probes.</li>
+<li>[ ] Structured logs and OpenTelemetry traces.</li>
+<li>[ ] Prometheus metrics.</li>
+<li>[ ] Helm chart and Docker Compose.</li>
+<li>[ ] Backup/restore and retention policy.</li>
+<li>[ ] Prompt retention/redaction policy.</li>
+<li>[ ] SBOM, image signing, dependency scans, secret scans.</li>
+</ul>
+<hr />
+<h2 id="25-hld-decision-summary">25. HLD decision summary<a class="headerlink" href="#25-hld-decision-summary" title="Permanent link">&para;</a></h2>
+<p>AegisAgent should evolve from an action-integrity gateway MVP into a <strong>control plane plus runtime data plane</strong>. The central architectural rule is strict separation:</p>
+<ul>
+<li><code>aegis-gateway</code> decides, records, signs, correlates, and commands.</li>
+<li><code>aegis-node-sensor</code>, <code>aegis-cage-runner</code>, <code>aegis-egress-proxy</code>, <code>aegis-tool-broker</code>, and <code>aegis-mcp-gateway</code> enforce near the workload.</li>
+<li><code>aegis-console</code> investigates, approves, and controls through authenticated APIs.</li>
+</ul>
+<p>This creates real choke points. Without those choke points, Aegis cannot honestly claim control.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3574 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/AegisAgent_SOC_Console_Design_System/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>AegisAgent — SOC Console Design System & Frontend Architecture - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#aegisagent-soc-console-design-system-frontend-architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              AegisAgent — SOC Console Design System &amp; Frontend Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../deployment-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration & connectivity
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Technical_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration & connectivity
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../github-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub App integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slack-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Slack integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../runbooks/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8_4" id="__nav_8_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/deny-storm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deny storm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/data-exfiltration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data exfiltration pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/agent-token-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent token rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/receipt-chain-verification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receipt chain verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/secret-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Threat_Model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Operational_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-defense-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP defense architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision records
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9_6" id="__nav_9_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_9_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decision records
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-cedar-policy-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Cedar policy engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-sqlite-first-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: SQLite-first storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003-aegis-jcs-1-canonicalization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: aegis-jcs-1 canonicalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0004-ed25519-receipt-signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Ed25519 receipt signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0005-fail-closed-defaults/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Fail-closed defaults
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference (OpenAPI/Redoc)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fail-closed-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Executive summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-design-language" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Design language
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Design language">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-the-operating-principle-evidence-over-ornament" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 The operating principle — evidence over ornament
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-information-density" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Information density
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-visual-hierarchy-four-scales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Visual hierarchy (four scales)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-motion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Motion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-visual-identity-the-aegis-brand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Visual identity — the Aegis brand
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Visual identity — the Aegis brand">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-brand-personality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Brand personality
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-the-aegis-mark-logo-direction-not-a-generic-shield" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 The Aegis Mark (logo direction — not a generic shield)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-typography" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Typography
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-color-system-themes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Color system &amp; themes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-application-shell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Application shell
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Application shell">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-left-navigation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Left navigation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-top-control-bar-chromecontrolsbartsx-chrometimerangepickertsx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Top control bar (chrome/ControlsBar.tsx + chrome/TimeRangePicker.tsx)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-component-library-hld" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Component library — HLD
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Component library — HLD">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-folder-structure-uisrc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Folder structure (ui/src/)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-component-hld-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Component HLD table
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-component-library-lld-representative-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Component library — LLD (representative contracts)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Component library — LLD (representative contracts)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-button" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Button
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-hashchip-the-most-used-security-primitive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 HashChip (the most-used security primitive)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-datagrid-high-row-count-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.3 DataGrid (high-row-count tables)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-canonicalactionview-approval-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.4 CanonicalActionView (approval safety)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#65-verifybutton-verification-states" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.5 VerifyButton + verification states
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-frontend-architecture-hld" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Frontend architecture (HLD)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Frontend architecture (HLD)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-event-rendering-flow-lld" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Event &amp; rendering flow (LLD)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-investigation-approval-timeline-experiences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Investigation, approval &amp; timeline experiences
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Investigation, approval &amp; timeline experiences">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-the-investigation-spine-navigation-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.1 The investigation spine (navigation model)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-approval-experience-the-products-trust-story-made-visible" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.2 Approval experience (the product's trust story, made visible)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-provable-timeline-experience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.3 Provable Timeline experience
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#84-explore-page-kibana-discover-equivalent-pagesexploretsx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.4 Explore page (Kibana Discover equivalent) — pages/Explore.tsx
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-panel-architecture-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Panel architecture catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Panel architecture catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-standard-panels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 Standard panels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-aegisagent-panels-the-differentiators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 AegisAgent panels (the differentiators)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-accessibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Accessibility
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-implementation-roadmap-reconciled-with-hldlld-u0u6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Implementation roadmap (reconciled with HLD/LLD U0–U6)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-anti-template-acceptance-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Anti-template acceptance checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/AegisAgent_SOC_Console_Design_System.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="aegisagent-soc-console-design-system-frontend-architecture">AegisAgent — SOC Console Design System &amp; Frontend Architecture<a class="headerlink" href="#aegisagent-soc-console-design-system-frontend-architecture" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Status:</strong> Design (2026-06-24). <strong>Document type:</strong> Product Design System + Frontend Architecture.
+<strong>Companion to</strong> <a href="../AegisAgent_SOC_Console_HLD_LLD/"><code>AegisAgent_SOC_Console_HLD_LLD.md</code></a> (the engineering HLD/LLD: datasource, panel framework, dashboard schema, AQL, drilldown, performance) and <a href="../AegisAgent_SOC_UI_Design/"><code>AegisAgent_SOC_UI_Design.md</code></a> (the product/UX design).
+<strong>This doc owns</strong> the layers those two do not: <strong>brand identity, theme tokens, design language, application shell, the component library, and the investigation/approval/timeline experiences</strong>. Where architecture is already specified (panels do not fetch; <code>PanelRuntime</code> fetches; dashboard JSON controls composition), this doc references it and does not re-derive it.</p>
+</blockquote>
+<hr />
+<h2 id="1-executive-summary">1. Executive summary<a class="headerlink" href="#1-executive-summary" title="Permanent link">&para;</a></h2>
+<p>The AegisAgent SOC Console is <strong>not a monitoring dashboard</strong>. It is a <strong>mission-control surface for AI agent governance</strong> — where a human operator watches autonomous agents act, approves the dangerous ones against cryptographically frozen evidence, and <em>proves</em> after the fact exactly what happened. Three things on this screen exist nowhere in Grafana, Kibana, Datadog, or Splunk: the <strong>Approval Card</strong> (a human binding their sign-off to exact bytes), the <strong>Provable Timeline</strong> (a hash-chained incident you can verify in one click), and the <strong>Receipt Integrity</strong> viewer (tamper detection as a first-class view).</p>
+<p>The design system therefore optimizes for a specific operator: a security analyst scanning many low-signal streams for the few high-stakes moments, who must act fast and be <em>right</em>. That dictates everything downstream — <strong>high information density, evidence-forward visual hierarchy, restrained motion, and a dark-first palette</strong> where one accent color carries trust and severity carries meaning, never decoration.</p>
+<p>This document specifies: the <strong>Aegis visual identity</strong> (§3), a three-theme token system (Light / Dark SOC / OLED, §3.4), the <strong>design language</strong> (density, hierarchy, motion, §2), the <strong>application shell</strong> (collapsible nav + Grafana-style control bar, §4), the <strong>component library</strong> with per-component HLD/LLD (§5–§6), the <strong>frontend folder structure</strong> (§7), the <strong>panel catalog</strong> including two new AegisAgent panels — <em>Agent Risk Map</em> and <em>Decision Graph</em> (§9), the <strong>investigation / approval / timeline UX</strong> (§8), <strong>accessibility</strong> (§10), and a <strong>Phase 0→5 roadmap</strong> reconciled with the HLD/LLD's U0–U6 (§11).</p>
+<p><strong>Anti-template mandate:</strong> every surface here must read as a deliberate security product, not a shadcn starter. The checklist in §12 enforces it.</p>
+<hr />
+<h2 id="2-design-language">2. Design language<a class="headerlink" href="#2-design-language" title="Permanent link">&para;</a></h2>
+<h3 id="21-the-operating-principle-evidence-over-ornament">2.1 The operating principle — <em>evidence over ornament</em><a class="headerlink" href="#21-the-operating-principle-evidence-over-ornament" title="Permanent link">&para;</a></h3>
+<p>Each pixel earns its place by helping an operator make or prove a decision. A panel that looks impressive but doesn't change what the analyst does next is removed. This is the inverse of a marketing dashboard.</p>
+<h3 id="22-information-density">2.2 Information density<a class="headerlink" href="#22-information-density" title="Permanent link">&para;</a></h3>
+<p>SOC operators monitor many signals at once. The console uses a <strong>compact density baseline</strong>, denser than a typical SaaS app:</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>Value</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--row-height-compact</code></td>
+<td><code>28px</code></td>
+<td>table/feed rows (default)</td>
+</tr>
+<tr>
+<td><code>--row-height-cozy</code></td>
+<td><code>36px</code></td>
+<td>investigation tables where payloads matter</td>
+</tr>
+<tr>
+<td><code>--space-panel-pad</code></td>
+<td><code>12px</code></td>
+<td>inside panels (not 24px SaaS default)</td>
+</tr>
+<tr>
+<td><code>--space-grid-gap</code></td>
+<td><code>12px</code></td>
+<td>between panels</td>
+</tr>
+<tr>
+<td><code>--font-size-data</code></td>
+<td><code>12.5px</code></td>
+<td>tabular data, log lines</td>
+</tr>
+<tr>
+<td><code>--font-size-label</code></td>
+<td><code>10.5px</code> / uppercase / <code>0.04em</code> tracking</td>
+<td>panel titles, field labels</td>
+</tr>
+</tbody>
+</table>
+<p>A <strong>density toggle</strong> (Compact / Cozy) lives in the user menu and rewrites the <code>--row-height-*</code> and <code>--space-*</code> custom properties at the <code>:root</code> scope — no component re-render, pure CSS variable swap.</p>
+<h3 id="23-visual-hierarchy-four-scales">2.3 Visual hierarchy (four scales)<a class="headerlink" href="#23-visual-hierarchy-four-scales" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Scale</th>
+<th>Carries hierarchy through</th>
+<th>Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Page</strong></td>
+<td>left-nav active state + breadcrumb + a single H1-equivalent (<code>--font-size-page</code>, 18px)</td>
+<td>one page = one job; no competing titles</td>
+</tr>
+<tr>
+<td><strong>Dashboard</strong></td>
+<td>rows/tabs; a <strong>stat row</strong> always leads (the "vital signs"), detail panels below</td>
+<td>the most decision-relevant number is top-left</td>
+</tr>
+<tr>
+<td><strong>Panel</strong></td>
+<td>a 10.5px uppercase title + a dominant value or chart; chrome recedes (<code>--text-muted</code>)</td>
+<td>the data is the brightest thing in the panel</td>
+</tr>
+<tr>
+<td><strong>Alert / severity</strong></td>
+<td>color + icon + weight, never color alone</td>
+<td>critical = <code>rose</code>, filled; lower severities = outline</td>
+</tr>
+</tbody>
+</table>
+<p>Hierarchy is built from <strong>scale contrast and weight</strong>, not boxes-within-boxes. Elevation (surface layering, §3.4) separates concerns; borders are hairline and recede.</p>
+<h3 id="24-motion">2.4 Motion<a class="headerlink" href="#24-motion" title="Permanent link">&para;</a></h3>
+<p>Motion is <strong>functional only</strong>. It communicates state change or progress; it never decorates.</p>
+<table>
+<thead>
+<tr>
+<th>Allowed</th>
+<th>Duration / easing</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Live event arrival (feed row slides in + brief highlight fade)</td>
+<td><code>--duration-fast 120ms</code>, <code>ease-out</code></td>
+<td>draws the eye to <em>new</em> evidence</td>
+</tr>
+<tr>
+<td>State transition (decision badge allow→deny, agent active→frozen)</td>
+<td><code>150ms</code> cross-fade</td>
+<td>confirms the system changed</td>
+</tr>
+<tr>
+<td>Verification progress (chain walk, indeterminate → resolved)</td>
+<td>stepped, <code>--duration-normal 240ms</code> per link</td>
+<td>makes proof feel earned, not instant-magic</td>
+</tr>
+<tr>
+<td>Drawer / command palette open</td>
+<td><code>180ms</code> transform+opacity</td>
+<td>spatial continuity</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Forbidden:</strong> parallax, decorative gradients-in-motion, looping ambient animation, springy bounce on data, skeleton shimmer longer than 400ms. All motion respects <code>prefers-reduced-motion</code> (collapses to instant state swaps; progress becomes a static stepped indicator). Animate <strong>only</strong> compositor-friendly properties (<code>transform</code>, <code>opacity</code>) — never layout-bound ones.</p>
+<hr />
+<h2 id="3-visual-identity-the-aegis-brand">3. Visual identity — the Aegis brand<a class="headerlink" href="#3-visual-identity-the-aegis-brand" title="Permanent link">&para;</a></h2>
+<h3 id="31-brand-personality">3.1 Brand personality<a class="headerlink" href="#31-brand-personality" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Trait</th>
+<th>What it means on screen</th>
+<th>Why it fits AegisAgent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Secure</strong></td>
+<td>locked-down chrome, no playful affordances, fail-closed empty states</td>
+<td>the product <em>is</em> a security control</td>
+</tr>
+<tr>
+<td><strong>Evidence-driven</strong></td>
+<td>hashes, receipts, and provenance are visible first-class data, not metadata</td>
+<td>the moat is <em>provability</em> (Gap Reassessment §3)</td>
+</tr>
+<tr>
+<td><strong>Autonomous</strong></td>
+<td>the UI watches machines acting on their own; agents are first-class "citizens" with status/risk</td>
+<td>the subject is autonomous agents, not human users</td>
+</tr>
+<tr>
+<td><strong>Defensive</strong></td>
+<td>severity and trust drive color; the resting state is calm, alarms are loud</td>
+<td>a SOC is calm until it isn't</td>
+</tr>
+<tr>
+<td><strong>Enterprise / technical</strong></td>
+<td>dense, keyboard-first, monospace for all identifiers</td>
+<td>the buyer is a security engineer, not a consumer</td>
+</tr>
+</tbody>
+</table>
+<p>The personality resolves a tension: the product must feel <strong>trustworthy and calm</strong> (you stake production agent actions on it) while making <strong>threats unmistakable</strong> (an injection attempt must scream). The answer: a low-chroma, high-contrast resting palette where a single saturated accent and the severity ramp are the <em>only</em> loud colors — so when they appear, they mean something.</p>
+<h3 id="32-the-aegis-mark-logo-direction-not-a-generic-shield">3.2 The Aegis Mark (logo direction — not a generic shield)<a class="headerlink" href="#32-the-aegis-mark-logo-direction-not-a-generic-shield" title="Permanent link">&para;</a></h3>
+<p>The mark encodes the three things that make AegisAgent unique — the <strong>gate</strong> (authorization boundary), the <strong>chain</strong> (receipt provenance), and <strong>oversight</strong> (the human watching) — in one glyph.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>        ╭───────────╮              Concept: &quot;The Verified Aperture&quot;
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>       ╱  ◜─────◝   ╲
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>      │  ╱   ▲   ╲   │   ◀ outer hexagon = the gate (the authorization boundary)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>      │ │   ╱ ╲   │  │   ◀ inner aperture = oversight (an eye / a lens, watching)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>      │  ╲  ▼  ╱   ╱     ◀ the aperture&#39;s lower notch resolves into a ✓ when state = verified
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>       ╲  ◟─────◞ ╱
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>        ╰────●────╯       ◀ the single anchor node = the genesis link of the receipt chain
+</code></pre></div>
+<ul>
+<li><strong>Primary logo:</strong> the Mark + <code>AegisAgent</code> wordmark (geometric grotesque, see §3.3), the word "Agent" set in <code>--text-secondary</code> so "Aegis" leads.</li>
+<li><strong>Icon / app favicon:</strong> the Mark alone — a hexagonal aperture. At 16px it reads as a faceted ring with a center dot (the chain's genesis node).</li>
+<li><strong>Collapsed sidebar icon:</strong> the Mark at 24px, monochrome <code>--brand</code>; the aperture's notch animates to a ✓ for ~600ms on a successful global verify (the only place the logo ever animates — a deliberate, rare "all clear" signal).</li>
+<li><strong>Symbol meaning:</strong> hexagon = a sealed boundary (six sides nod to the <strong>six trust levels</strong>); aperture = human oversight (Article 14); the anchor node + implied links = the hash chain; the notch-to-check = verifiability. <strong>No sword, no padlock, no generic shield silhouette.</strong></li>
+<li><strong>Motion signature:</strong> on receipt-chain verification anywhere in the app, the Mark briefly draws its chain links left-to-right (stepped, reduced-motion-safe) — the brand <em>is</em> the verification gesture.</li>
+</ul>
+<h3 id="33-typography">3.3 Typography<a class="headerlink" href="#33-typography" title="Permanent link">&para;</a></h3>
+<p>Two families, deliberately paired:</p>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Family</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Display / UI</strong></td>
+<td><strong>Geist</strong> (or Inter Tight as fallback) — geometric grotesque</td>
+<td>technical, neutral, excellent at small sizes &amp; dense tables</td>
+</tr>
+<tr>
+<td><strong>Mono / evidence</strong></td>
+<td><strong>Geist Mono</strong> (or JetBrains Mono)</td>
+<td><strong>every identifier</strong> — <code>action_hash</code>, <code>receipt_hash</code>, agent IDs, payloads, AQL — is monospace; evidence must be unambiguous and copy-exact</td>
+</tr>
+</tbody>
+</table>
+<p>Type scale (<code>clamp()</code> for the few responsive sizes; fixed px for dense data):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">--font-size-page</span><span class="o">:</span><span class="w">   </span><span class="nt">18px</span><span class="o">;</span><span class="w">  </span><span class="c">/* page H1 */</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">--font-size-section</span><span class="p">:</span><span class="nd">14px</span><span class="o">;</span><span class="w">  </span><span class="c">/* row/section titles */</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">--font-size-body</span><span class="o">:</span><span class="w">   </span><span class="nt">13px</span><span class="o">;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="nt">--font-size-data</span><span class="o">:</span><span class="w">   </span><span class="nt">12</span><span class="p">.</span><span class="nc">5px</span><span class="o">;</span><span class="c">/* tables, logs */</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">--font-size-label</span><span class="o">:</span><span class="w">  </span><span class="nt">10</span><span class="p">.</span><span class="nc">5px</span><span class="o">;</span><span class="c">/* uppercase field labels, 0.04em tracking */</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">--font-size-hero-stat</span><span class="o">:</span><span class="w"> </span><span class="nt">clamp</span><span class="o">(</span><span class="nt">28px</span><span class="o">,</span><span class="w"> </span><span class="nt">2vw</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nt">1rem</span><span class="o">,</span><span class="w"> </span><span class="nt">40px</span><span class="o">);</span><span class="w"> </span><span class="c">/* the big stat number */</span>
+</code></pre></div>
+<p>Rule: <strong>max two families</strong>, <code>font-display: swap</code>, subset to Latin + the box-drawing/symbol glyphs the timeline uses, preload only the one critical weight (UI Medium 500).</p>
+<h3 id="34-color-system-themes">3.4 Color system &amp; themes<a class="headerlink" href="#34-color-system-themes" title="Permanent link">&para;</a></h3>
+<p>Tokens are defined in <strong>OKLCH</strong> (perceptually uniform — severity ramps stay legible across themes) and exposed as CSS custom properties. Three themes share one token <em>contract</em>; only values change.</p>
+<p><strong>Semantic token contract (theme-independent names):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c">/* Brand */</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">--brand</span><span class="w">            </span><span class="c">/* AegisAgent indigo — the ONE saturated accent */</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">--brand-emphasis</span><span class="w">   </span><span class="c">/* hover/active brand */</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nt">--brand-subtle</span><span class="w">     </span><span class="c">/* brand at low alpha for fills/selection */</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c">/* Interactive */</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nt">--interactive-fg</span><span class="o">,</span><span class="w"> </span><span class="nt">--interactive-bg</span><span class="o">,</span><span class="w"> </span><span class="nt">--interactive-bg-hover</span><span class="o">,</span><span class="w"> </span><span class="nt">--focus-ring</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c">/* SOC severity &amp; decision ramp (meaning, never decoration) */</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nt">--sev-critical</span><span class="w">  </span><span class="c">/* rose  */</span><span class="w">   </span><span class="nt">--decision-deny</span><span class="w">      </span><span class="c">/* red    */</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="nt">--sev-high</span><span class="w">      </span><span class="c">/* red   */</span><span class="w">   </span><span class="nt">--decision-approval</span><span class="w">  </span><span class="c">/* amber  */</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="nt">--sev-medium</span><span class="w">    </span><span class="c">/* amber */</span><span class="w">   </span><span class="nt">--decision-allow</span><span class="w">     </span><span class="c">/* green  */</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="nt">--sev-low</span><span class="w">       </span><span class="c">/* sky   */</span><span class="w">   </span><span class="nt">--state-verified</span><span class="w">     </span><span class="c">/* emerald*/</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="nt">--sev-info</span><span class="w">      </span><span class="c">/* slate */</span><span class="w">   </span><span class="nt">--state-failed</span><span class="w">       </span><span class="c">/* rose   */</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">                              </span><span class="nt">--state-pending</span><span class="w">      </span><span class="c">/* amber, pulsing dot */</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="c">/* Trust-provenance ramp (the 6 levels — a dedicated, ordered scale) */</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="nt">--trust-internal-signed</span><span class="w">   </span><span class="c">/* emerald */</span><span class="w">   </span><span class="nt">--trust-external</span><span class="w">      </span><span class="c">/* red   */</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="nt">--trust-internal-unsigned</span><span class="w"> </span><span class="c">/* sky     */</span><span class="w">   </span><span class="nt">--trust-malicious</span><span class="w">     </span><span class="c">/* rose, bold */</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="nt">--trust-customer</span><span class="w">          </span><span class="c">/* amber   */</span><span class="w">   </span><span class="nt">--trust-unknown</span><span class="w">       </span><span class="c">/* slate */</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="c">/* Surface elevation (4 layers — depth via surface, not shadow) */</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="nt">--surface-app</span><span class="w">      </span><span class="c">/* deepest — page background */</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="nt">--surface-panel</span><span class="w">    </span><span class="c">/* panel background */</span>
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="nt">--surface-elevated</span><span class="w"> </span><span class="c">/* popover/drawer/hover-row */</span>
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="nt">--surface-modal</span><span class="w">    </span><span class="c">/* modal/dialog */</span>
+<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a><span class="nt">--surface-overlay</span><span class="w">  </span><span class="c">/* scrim */</span>
+<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a>
+<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a><span class="c">/* Text */</span>
+<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a><span class="nt">--text-primary</span><span class="o">,</span><span class="w"> </span><span class="nt">--text-secondary</span><span class="o">,</span><span class="w"> </span><span class="nt">--text-muted</span><span class="o">,</span><span class="w"> </span><span class="nt">--text-on-brand</span>
+<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a>
+<a id="__codelineno-2-32" name="__codelineno-2-32" href="#__codelineno-2-32"></a><span class="c">/* Borders (hairline; recede) */</span>
+<a id="__codelineno-2-33" name="__codelineno-2-33" href="#__codelineno-2-33"></a><span class="nt">--border-default</span><span class="o">,</span><span class="w"> </span><span class="nt">--border-hover</span><span class="o">,</span><span class="w"> </span><span class="nt">--border-active</span><span class="o">,</span><span class="w"> </span><span class="nt">--border-focus</span>
+</code></pre></div>
+<p><strong>Theme value tables</strong> (representative anchors; full ramp generated from these):</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>Light</th>
+<th><strong>Dark SOC (default)</strong></th>
+<th>OLED</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--surface-app</code></td>
+<td><code>oklch(98.5% 0 0)</code></td>
+<td><code>oklch(20% 0.02 255)</code> ≈ <code>#0f172a</code></td>
+<td><code>oklch(0% 0 0)</code> <code>#000000</code></td>
+</tr>
+<tr>
+<td><code>--surface-panel</code></td>
+<td><code>oklch(100% 0 0)</code></td>
+<td><code>oklch(24% 0.02 255)</code> ≈ <code>#111827</code></td>
+<td><code>oklch(8% 0.01 255)</code></td>
+</tr>
+<tr>
+<td><code>--surface-elevated</code></td>
+<td><code>oklch(97% 0 0)</code></td>
+<td><code>oklch(28% 0.02 255)</code></td>
+<td><code>oklch(13% 0.01 255)</code></td>
+</tr>
+<tr>
+<td><code>--text-primary</code></td>
+<td><code>oklch(22% 0.02 255)</code></td>
+<td><code>oklch(92% 0.01 255)</code> ≈ <code>#e2e8f0</code></td>
+<td><code>oklch(96% 0 0)</code></td>
+</tr>
+<tr>
+<td><code>--text-muted</code></td>
+<td><code>oklch(55% 0.02 255)</code></td>
+<td><code>oklch(60% 0.02 255)</code> ≈ <code>#64748b</code></td>
+<td><code>oklch(58% 0.02 255)</code></td>
+</tr>
+<tr>
+<td><code>--border-default</code></td>
+<td><code>oklch(90% 0.01 255)</code></td>
+<td><code>oklch(34% 0.02 255)</code> ≈ <code>#334155</code></td>
+<td><code>oklch(18% 0.01 255)</code></td>
+</tr>
+<tr>
+<td><code>--brand</code></td>
+<td><code>oklch(55% 0.20 270)</code></td>
+<td><code>oklch(62% 0.20 270)</code> (indigo-500/600)</td>
+<td><code>oklch(64% 0.21 270)</code></td>
+</tr>
+<tr>
+<td><code>--decision-deny</code></td>
+<td><code>oklch(58% 0.20 25)</code></td>
+<td><code>oklch(64% 0.21 25)</code></td>
+<td><code>oklch(66% 0.22 25)</code></td>
+</tr>
+<tr>
+<td><code>--decision-allow</code></td>
+<td><code>oklch(60% 0.16 150)</code></td>
+<td><code>oklch(70% 0.17 150)</code></td>
+<td><code>oklch(72% 0.18 150)</code></td>
+</tr>
+<tr>
+<td><code>--state-verified</code></td>
+<td><code>oklch(60% 0.15 160)</code></td>
+<td><code>oklch(72% 0.16 160)</code></td>
+<td><code>oklch(74% 0.17 160)</code></td>
+</tr>
+<tr>
+<td><code>--trust-malicious</code></td>
+<td><code>oklch(55% 0.22 15)</code></td>
+<td><code>oklch(62% 0.24 15)</code></td>
+<td><code>oklch(64% 0.25 15)</code></td>
+</tr>
+</tbody>
+</table>
+<p>Notes:
+- The <strong>Dark SOC</strong> theme is the default and matches the existing <code>ui/</code> palette (<code>#0f172a</code> / <code>#e2e8f0</code> / <code>#334155</code>) — adopting it means <strong>zero visual regression</strong> on the current console while formalizing the tokens.
+- <strong>OLED</strong> is true-black for 24/7 wall displays and battery; it <em>raises</em> panel surfaces slightly so panels read as objects floating on black, and slightly boosts severity chroma to survive the higher contrast.
+- <strong>Light</strong> exists for daytime/print/evidence-export readability; it is held to the same WCAG AA contrast (§10) and is <strong>not</strong> an afterthought (Design-Quality rule: both themes must feel intentional).
+- Depth comes from the <strong>four surface layers</strong>, not heavy shadows. Shadows are a single hairline <code>--border-default</code> + at most one soft elevation shadow on <code>--surface-elevated</code>/<code>modal</code>.
+- <strong>Severity and trust are reserved palettes.</strong> No UI chrome may use the severity ramp decoratively. This is what makes a red row <em>mean</em> something.</p>
+<hr />
+<h2 id="4-application-shell">4. Application shell<a class="headerlink" href="#4-application-shell" title="Permanent link">&para;</a></h2>
+<p>The shell is the persistent frame around every page: <strong>left navigation</strong> + <strong>top control bar</strong> + the routed content region. Implemented as <code>ui/src/chrome/AppShell.tsx</code>; replaces today's monolithic <code>page.tsx</code> switch.</p>
+<h3 id="41-left-navigation">4.1 Left navigation<a class="headerlink" href="#41-left-navigation" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>┌──────────────┐        Expanded (240px)         Collapsed (56px)
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>│ ◈ AegisAgent │  ◀ Mark + wordmark              ◈  ◀ Mark only
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>│ ──────────── │
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>│ ▦ Overview   │  active: --brand-subtle bg,     ▦  ◀ icon only; tooltip on hover
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>│ ⌕ Explore    │          left 2px --brand bar,   ⌕      (Radix tooltip, 400ms delay)
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>│ ◭ Incidents  │          --text-primary           ◭
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>│ ◮ Detections │  badge:  count chip (deny/      ◮•  ◀ badge becomes a dot
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>│ �ស Approvals  3│         pending) right-aligned   ⏸③
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>│ ⬡ Agents     │                                  ⬡
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>│ ⛁ MCP        │                                  ⛁
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>│ ⛓ Receipts   │                                  ⛓
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>│ ▤ Dashboards │                                  ▤
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>│ ──────────── │
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>│ ⚙ Settings   │                                  ⚙
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>│ « collapse   │  ◀ pin/collapse toggle           »
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>└──────────────┘
+</code></pre></div>
+<ul>
+<li><strong>State ownership:</strong> <code>consoleStore.navCollapsed</code> (Zustand, persisted to <code>localStorage</code>); collapse is a CSS-grid column-width change, not a remount.</li>
+<li><strong>Active state:</strong> route-derived (<code>usePathname</code>), never local state — deep links light the correct item.</li>
+<li><strong>Badges:</strong> live counts from the SSE stream (<code>Approvals</code> pending, <code>Detections</code> firing). Collapsed → badge degrades to a colored dot. Badge color = the relevant severity/state token.</li>
+<li><strong>Keyboard shortcuts:</strong> <code>g</code> then a letter (Gmail-style chord) — <code>g o</code> Overview, <code>g e</code> Explore, <code>g i</code> Incidents, <code>g a</code> Approvals, etc.; <code>[</code> toggles collapse; <code>?</code> opens the shortcut cheatsheet. Registered centrally in <code>useGlobalHotkeys()</code> so they're discoverable and conflict-free.</li>
+<li><strong>Icons:</strong> <code>lucide-react</code> (already a dependency), one consistent stroke weight; the nav never mixes filled/outline.</li>
+</ul>
+<h3 id="42-top-control-bar-chromecontrolsbartsx-chrometimerangepickertsx">4.2 Top control bar (<code>chrome/ControlsBar.tsx</code> + <code>chrome/TimeRangePicker.tsx</code>)<a class="headerlink" href="#42-top-control-bar-chromecontrolsbartsx-chrometimerangepickertsx" title="Permanent link">&para;</a></h3>
+<p>Grafana/Kibana-style global controls. <strong>The single most important shell decision: these controls own global query context, and changing any of them invalidates every <code>PanelRuntime</code> query key</strong> (see HLD/LLD §7.4).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>┌────────────────────────────────────────────────────────────────────────────────────────┐
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>│ [tenant ▾] │ $agent ▾  $env ▾ │  ⌕ search… (⌘K)  │  [◷ Last 24h ▾] [⟳ 10s ▾] [● Live] │ 🔔③ │ ◐ │ 𝗨 ▾ │
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>└────────────────────────────────────────────────────────────────────────────────────────┘
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>   tenant     template vars        command palette        time range / refresh / live   notif theme user
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Component API (props)</th>
+<th>State owner</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tenant selector</td>
+<td><code>&lt;TenantSelect value onChange options&gt;</code></td>
+<td><code>consoleStore.tenant</code></td>
+<td>lists only entitled tenants; switching clears all caches (no cross-tenant bleed)</td>
+</tr>
+<tr>
+<td>Template variables</td>
+<td><code>&lt;VariableControl def value onChange&gt;</code></td>
+<td><code>consoleStore.variables[name]</code></td>
+<td>chained vars re-query when their parent changes; URL-synced</td>
+</tr>
+<tr>
+<td>Global search / palette</td>
+<td><code>&lt;CommandPalette&gt;</code> (⌘K/Ctrl K)</td>
+<td>local + <code>consoleStore</code></td>
+<td>fuzzy: pages, agents, incidents, "verify receipt …", "freeze agent …" — actions, not just nav</td>
+</tr>
+<tr>
+<td>Time range</td>
+<td><code>&lt;TimeRangePicker value onChange&gt;</code></td>
+<td><code>consoleStore.timeRange</code></td>
+<td>relative tokens (<code>now-24h</code>) + absolute; quick presets; URL-synced</td>
+</tr>
+<tr>
+<td>Refresh interval</td>
+<td><code>&lt;RefreshSelect&gt;</code></td>
+<td><code>consoleStore.refreshSec</code></td>
+<td>off/5s/10s/30s/1m; drives <code>refetchInterval</code></td>
+</tr>
+<tr>
+<td>Live toggle</td>
+<td><code>&lt;LiveToggle&gt;</code></td>
+<td><code>consoleStore.live</code></td>
+<td>turns on SSE subscriptions (<code>feed</code> panels, badges); pulsing <code>--state-pending</code> dot when active</td>
+</tr>
+<tr>
+<td>Notifications</td>
+<td><code>&lt;NotificationsBell count&gt;</code></td>
+<td>SSE</td>
+<td>opens a drawer of recent alerts/approvals</td>
+</tr>
+<tr>
+<td>Theme</td>
+<td><code>&lt;ThemeToggle&gt;</code></td>
+<td><code>consoleStore.theme</code></td>
+<td>Light / Dark SOC / OLED; writes <code>data-theme</code> on <code>&lt;html&gt;</code></td>
+</tr>
+<tr>
+<td>User menu</td>
+<td><code>&lt;UserMenu role&gt;</code></td>
+<td>session</td>
+<td>role, density toggle, sign-out, shortcut cheatsheet</td>
+</tr>
+</tbody>
+</table>
+<p>All control-bar state is <strong>URL-synced</strong> (search params) so any view is a shareable link — the Grafana/Kibana "state in the URL" pattern and the repo's "URL as state" web rule.</p>
+<hr />
+<h2 id="5-component-library-hld">5. Component library — HLD<a class="headerlink" href="#5-component-library-hld" title="Permanent link">&para;</a></h2>
+<h3 id="51-folder-structure-uisrc">5.1 Folder structure (<code>ui/src/</code>)<a class="headerlink" href="#51-folder-structure-uisrc" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>ui/src/
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>├── app/                      # Next.js App Router ent
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>│   ├── layout.tsx            # providers + AppShell mount
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>│   ├── (console)/…/page.tsx  # one route per nav item → renders a Dashboard or a Page
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>│   └── providers.tsx         # TanStack Query, theme, hotkeys
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>├── chrome/                   # the shell
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>│   ├── AppShell.tsx  LeftNav.tsx  ControlsBar.tsx  TimeRangePicker.tsx
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>│   ├── CommandPalette.tsx  NotificationsDrawer.tsx  UserMenu.tsx
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>├── design-system/            # tokens + primitives (the &quot;ui/&quot; layer)
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>│   ├── tokens.css            # all CSS custom properties, per-theme blocks
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>│   ├── Button.tsx Badge.tsx Card.tsx Input.tsx Select.tsx
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>│   ├── Drawer.tsx Modal.tsx Tooltip.tsx Toast.tsx Tabs.tsx Skeleton.tsx
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>│   └── primitives/           # Radix wrappers (a11y baked in)
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>├── components/
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>│   ├── security/             # AegisAgent-specific shared UI
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>│   │   ├── HashChip.tsx TrustBadge.tsx DecisionBadge.tsx SeverityTag.tsx
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>│   │   ├── CanonicalActionView.tsx VerifyButton.tsx ExpiryCountdown.tsx
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>│   ├── tables/               # DataGrid (TanStack Table + virtual) + cell renderers
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   ├── charts/               # chart adapters (Recharts now; uPlot/ECharts later)
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   └── filters/              # FilterBuilder, AqlInput, FieldSidebar
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>├── panels/                   # PANEL FRAMEWORK — see HLD/LLD §7
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── PanelRuntime.tsx PanelContainer.tsx registry.ts types.ts
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   ├── standard/             # Stat TimeSeries Table Heatmap Status Feed
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>│   └── differentiators/      # ApprovalCard ProvableTimeline ReceiptIntegrity
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>│       │                     #   AgentRiskMap DecisionGraph
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>├── dashboards/               # DASHBOARD MODEL — see HLD/LLD §7.3
+<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>│   ├── DashboardLoader.tsx schema.ts drilldown.ts
+<a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>│   └── system/               # curated dashboards-as-code (overview.ts, fleet.ts, …)
+<a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>├── datasources/              # DATASOURCE LAYER — see HLD/LLD §5
+<a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>│   ├── types.ts gatewayEntity.ts socQuery.ts receipt.ts stream.ts registry.ts
+<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>│   └── aql/                  # parser, autocomplete, AST→params
+<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>├── pages/                    # non-dashboard pages (Explore, Rules, Settings)
+<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>├── state/                    # consoleStore.ts (Zustand) + url-sync.ts
+<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>├── hooks/                    # useSocStream useDrilldownRouter useGlobalHotkeys useTheme
+<a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>└── lib/                      # format.ts (hash/time/bytes) color.ts validate.ts (zod)
+</code></pre></div>
+<p>Folder responsibilities: <strong><code>design-system/</code></strong> = brand primitives, zero domain knowledge (a <code>Button</code> knows nothing about receipts). <strong><code>components/security/</code></strong> = the reusable AegisAgent vocabulary (<code>HashChip</code>, <code>TrustBadge</code>) shared by panels and pages. <strong><code>panels/</code>, <code>dashboards/</code>, <code>datasources/</code></strong> = the framework (specified in the HLD/LLD doc). <strong><code>pages/</code></strong> = the few surfaces that are <em>not</em> dashboards (Explore, Rules, Settings). This is feature/surface organization, not file-type organization (repo web coding-style rule).</p>
+<h3 id="52-component-hld-table">5.2 Component HLD table<a class="headerlink" href="#52-component-hld-table" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Layer</th>
+<th>Purpose</th>
+<th>Built on</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Button</code></td>
+<td>design-system</td>
+<td>all actions; variants encode intent</td>
+<td>Radix Slot</td>
+</tr>
+<tr>
+<td><code>Badge</code> / <code>SeverityTag</code></td>
+<td>design-system / security</td>
+<td>status &amp; severity, <strong>icon + label always</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>Card</code> / <code>PanelContainer</code></td>
+<td>design-system / panels</td>
+<td>the panel frame: title, toolbar, state slots</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>MetricCard</code> (Stat)</td>
+<td>panels/standard</td>
+<td>a single decision-relevant number</td>
+<td>Recharts spark</td>
+</tr>
+<tr>
+<td><code>DataGrid</code></td>
+<td>tables</td>
+<td>virtualized high-row-count tables</td>
+<td>TanStack Table + react-virtual</td>
+</tr>
+<tr>
+<td><code>Timeline</code> / <code>ProvableTimeline</code></td>
+<td>security / panels</td>
+<td>ordered events; provable variant adds receipt+verify</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>SearchBar</code> / <code>AqlInput</code></td>
+<td>filters</td>
+<td>AQL query entry + autocomplete</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>FilterBuilder</code></td>
+<td>filters</td>
+<td>click-to-build field:value filters</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>FieldSidebar</code></td>
+<td>filters</td>
+<td>Discover-style facet sidebar</td>
+<td>datasource <code>fields()</code></td>
+</tr>
+<tr>
+<td><code>CommandPalette</code></td>
+<td>chrome</td>
+<td>⌘K nav + actions</td>
+<td>Radix Dialog + cmdk</td>
+</tr>
+<tr>
+<td><code>Drawer</code> / <code>Modal</code></td>
+<td>design-system</td>
+<td>side context / blocking confirm</td>
+<td>Radix Dialog</td>
+</tr>
+<tr>
+<td><code>Toast</code></td>
+<td>design-system</td>
+<td>non-blocking action feedback</td>
+<td>Radix Toast</td>
+</tr>
+<tr>
+<td><code>Tooltip</code></td>
+<td>design-system</td>
+<td>dense-mode disclosure</td>
+<td>Radix Tooltip</td>
+</tr>
+<tr>
+<td><code>HashChip</code></td>
+<td>security</td>
+<td>truncated mono hash + copy + drilldown</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>TrustBadge</code> / <code>DecisionBadge</code></td>
+<td>security</td>
+<td>the 6 trust levels / decision ramp</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>CanonicalActionView</code></td>
+<td>security</td>
+<td>the exact bytes an approval covers</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>VerifyButton</code></td>
+<td>security</td>
+<td>trigger + render chain verification</td>
+<td>datasource <code>verifyReceipt()</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6-component-library-lld-representative-contracts">6. Component library — LLD (representative contracts)<a class="headerlink" href="#6-component-library-lld-representative-contracts" title="Permanent link">&para;</a></h2>
+<p>Every component obeys the repo TypeScript/React rules: named <code>type Props</code>, destructured params, explicit public types, no <code>any</code>, presentational components are pure (data in, JSX out). Each defines its <strong>states</strong> (loading / empty / error / success where applicable) and <strong>variants</strong>.</p>
+<h3 id="61-button">6.1 <code>Button</code><a class="headerlink" href="#61-button" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kr">type</span><span class="w"> </span><span class="nx">ButtonProps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nx">variant</span><span class="o">?:</span><span class="w"> </span><span class="s2">&quot;primary&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;secondary&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;ghost&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;danger&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;verify&quot;</span><span class="p">;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nx">size</span><span class="o">?:</span><span class="w"> </span><span class="s2">&quot;sm&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;md&quot;</span><span class="p">;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nx">isLoading?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nx">disabled?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nx">disabledReason?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">     </span><span class="c1">// renders as a tooltip — never silently disable a security action</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nx">leftIcon?</span><span class="o">:</span><span class="w"> </span><span class="kt">React.ReactNode</span><span class="p">;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="nx">onClick</span><span class="o">?:</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="p">;</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span><span class="nx">children</span><span class="o">:</span><span class="w"> </span><span class="kt">React.ReactNode</span><span class="p">;</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="p">};</span>
+</code></pre></div>
+- <strong>Variants:</strong> <code>primary</code> = <code>--brand</code>; <code>danger</code> = <code>--decision-deny</code> (freeze/revoke/reject); <code>verify</code> = <code>--state-verified</code> outline (the receipt-verify gesture has its own visual identity). 
+- <strong>States:</strong> <code>isLoading</code> shows an inline spinner and blocks re-click; <code>disabled</code> <strong>must</strong> pair with <code>disabledReason</code> for any security action (RBAC gating shows <em>why</em>, per §8.4 / HLD §9).
+- <strong>A11y:</strong> real <code>&lt;button&gt;</code>, focus ring <code>--border-focus</code>, <code>aria-busy</code> when loading.</p>
+<h3 id="62-hashchip-the-most-used-security-primitive">6.2 <code>HashChip</code> (the most-used security primitive)<a class="headerlink" href="#62-hashchip-the-most-used-security-primitive" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kr">type</span><span class="w"> </span><span class="nx">HashChipProps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nx">hash</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">                 </span><span class="c1">// full sha256 (e.g. &quot;sha256:9af1…&quot;)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;action&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;receipt&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;manifest&quot;</span><span class="p">;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nx">truncate?</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w">            </span><span class="c1">// default 8 head + 4 tail</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nx">onDrilldown</span><span class="o">?:</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="p">;</span><span class="w">     </span><span class="c1">// e.g. open Receipt Integrity at this hash</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">};</span>
+</code></pre></div>
+- Renders mono, <code>--text-secondary</code>, with a copy affordance on hover (copies the <strong>full</strong> hash, not the truncated display — evidence integrity). <code>kind</code> sets a 1px left accent (action=brand, receipt=verified, manifest=sky). Click → <code>onDrilldown</code>. Never wraps; never shows raw secrets.</p>
+<h3 id="63-datagrid-high-row-count-tables">6.3 <code>DataGrid</code> (high-row-count tables)<a class="headerlink" href="#63-datagrid-high-row-count-tables" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kr">type</span><span class="w"> </span><span class="nx">DataGridProps</span><span class="o">&lt;</span><span class="nx">TRow</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="kt">DataFrame</span><span class="p">;</span><span class="w">                          </span><span class="c1">// columnar — from PanelRuntime, never fetched here</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nx">columns</span><span class="o">:</span><span class="w"> </span><span class="kt">ColumnDef</span><span class="o">&lt;</span><span class="nx">TRow</span><span class="o">&gt;</span><span class="p">[];</span><span class="w">               </span><span class="c1">// TanStack Table defs</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nx">rowKey</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">row</span><span class="o">:</span><span class="w"> </span><span class="kt">TRow</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">            </span><span class="c1">// stable key — never index</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nx">onRowClick</span><span class="o">?:</span><span class="w"> </span><span class="p">(</span><span class="nx">row</span><span class="o">:</span><span class="w"> </span><span class="kt">TRow</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="p">;</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nx">density</span><span class="o">?:</span><span class="w"> </span><span class="s2">&quot;compact&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;cozy&quot;</span><span class="p">;</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nx">emptyLabel?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nx">isLoading?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nx">error?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="p">};</span>
+</code></pre></div>
+- <strong>Virtualized</strong> (<code>@tanstack/react-virtual</code>) — renders only visible rows; handles 1,000+ rows at 60fps. Cell renderers map <code>Field.format</code> → <code>HashChip</code> / <code>TrustBadge</code> / <code>DecisionBadge</code> / relative-time. <strong>States:</strong> loading = 8 skeleton rows; empty = <code>emptyLabel</code> + a hint; error = inline <code>--state-failed</code> banner with the message (never a blank grid). Column sort is client-side for the loaded page, server-side for full-dataset sort (cursor).</p>
+<h3 id="64-canonicalactionview-approval-safety">6.4 <code>CanonicalActionView</code> (approval safety)<a class="headerlink" href="#64-canonicalactionview-approval-safety" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kr">type</span><span class="w"> </span><span class="nx">CanonicalActionViewProps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="kt">CanonicalAction</span><span class="p">;</span><span class="w">     </span><span class="c1">// the exact, frozen, hashed bytes</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nx">actionHash</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nx">edited</span><span class="o">?:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">diff</span><span class="o">:</span><span class="w"> </span><span class="kt">ActionDiff</span><span class="w"> </span><span class="p">};</span><span class="w"> </span><span class="c1">// when an approver edited; shows a before/after diff</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="p">};</span>
+</code></pre></div>
+- Renders the canonical action <strong>exactly as hashed</strong>, monospace, with the <code>action_hash</code> shown adjacent via <code>HashChip</code>. If <code>edited</code>, shows a <strong>diff</strong> and a banner: <em>"Editing re-hashes and re-evaluates — you are approving the new bytes."</em> This component is the literal embodiment of the approval-integrity moat; it must never render a "friendly" summary that diverges from the bytes (the render-vs-bytes attack).</p>
+<h3 id="65-verifybutton-verification-states">6.5 <code>VerifyButton</code> + verification states<a class="headerlink" href="#65-verifybutton-verification-states" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kr">type</span><span class="w"> </span><span class="nx">VerifyButtonProps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nx">receiptId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nx">range</span><span class="o">?:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">fromId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">toId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">};</span><span class="w">   </span><span class="c1">// verify a chain segment</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nx">onResult</span><span class="o">?:</span><span class="w"> </span><span class="p">(</span><span class="nx">r</span><span class="o">:</span><span class="w"> </span><span class="kt">VerifyResult</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="p">;</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="p">};</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="c1">// VerifyResult from HLD/LLD §5.1: { ok, brokenAtRow?, message, chainHead? }</span>
+</code></pre></div>
+- <strong>States:</strong> idle (<code>verify</code> variant) → walking (stepped progress, one tick per link, reduced-motion = static "verifying N links") → <code>ok</code> (<code>--state-verified</code> "tamper-free <code>…a1b2 → …c3d4</code>") → <code>failed</code> (<code>--state-failed</code> "broken at event 42", with a jump-to-row action). The button's result is also surfaced on the row(s) it covers.</p>
+<hr />
+<h2 id="7-frontend-architecture-hld">7. Frontend architecture (HLD)<a class="headerlink" href="#7-frontend-architecture-hld" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>                      Browser (Next.js App Router)
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>                               │
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>        ┌──────────────────────▼───────────────────────┐
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>        │  AppShell  (LeftNav · ControlsBar · routes)   │  owns global query context
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>        └──────────────────────┬───────────────────────┘
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>                               │ consoleStore (tenant, timeRange, variables, live, theme, role)
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>            ┌──────────────────┼─────────────────────────┐
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>            ▼                  ▼                          ▼
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>   DashboardLoader        Page (Explore/Rules/Settings)   CommandPalette
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>   (schema → grid)             │                          (nav + actions)
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>            │                  │
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>            ▼                  ▼
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>       PanelRuntime  ◀── the ONLY data-fetching layer (TanStack Query) ──▶
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>            │   builds QueryRequest from (panel.query + timeRange + variables)
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>            ▼
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>        Panel component  ◀── pure: (DataFrame, state) → JSX; never fetches
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>            │   emits onDrilldown → useDrilldownRouter
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>            ▼
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>       Datasource layer  (GatewayEntity · SocQuery/AQL · Receipt · Stream)
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a>            │   tenant context attached; AQL sent as structured AST (no interpolation)
+<a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a>            ▼
+<a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a>       AegisAgent Gateway (Rust/Axum) — tenant-scoped, fail-closed, parameterized SQL
+</code></pre></div>
+<p><strong>Responsibility boundaries (the load-bearing rule):</strong>
+- <strong>AppShell / consoleStore</strong> own <em>global query context</em>. Nothing else writes time/tenant/vars.
+- <strong>DashboardLoader</strong> owns <em>composition</em> — it reads a <code>DashboardSchema</code> and lays out <code>PanelRuntime</code>s. It knows nothing about data.
+- <strong>PanelRuntime</strong> owns <em>fetching</em> — the single place TanStack Query is called for panels. Cache key = <code>[panelId, query, timeRange, variables, tenant]</code>.
+- <strong>Panels</strong> own <em>rendering only</em>. A panel that calls <code>fetch</code> is a bug.
+- <strong>Datasources</strong> own <em>transport + shape</em> — they turn requests into gateway calls and responses into <code>DataFrame</code>s. The only layer that knows REST paths.</p>
+<p>This is the invariant the user emphasized and it is enforced by the folder boundaries (<code>panels/standard/*</code> may not import from <code>datasources/</code> except types; only <code>PanelRuntime</code> imports the registry).</p>
+<h3 id="71-event-rendering-flow-lld">7.1 Event &amp; rendering flow (LLD)<a class="headerlink" href="#71-event-rendering-flow-lld" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>1. User changes time range  → consoleStore.timeRange updates → URL syncs
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>2. consoleStore change       → every PanelRuntime&#39;s TanStack Query key changes
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>3. PanelRuntime              → builds QueryRequest, calls datasource.query(req) (deduped/cached)
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>4. Datasource                → gateway call → DataFrame
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>5. PanelRuntime              → passes DataFrame + {isLoading,error} to Panel component
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>6. Panel                     → renders; user clicks a row
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>7. Panel                     → onDrilldown(link, row) → useDrilldownRouter
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>8. Drilldown router          → maps vars, navigates (e.g. Explore filtered to agent_id) — context preserved
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>9. SSE (if live)             → useSocStream pushes deltas → feed panels + nav badges update (advisory)
+</code></pre></div>
+<p>State models: <strong>server state</strong> = TanStack Query (never copied into Zustand); <strong>global UI state</strong> = Zustand (<code>consoleStore</code>); <strong>URL state</strong> = search params (filters, time, tab, selected entity); <strong>local component state</strong> = <code>useState</code>. No server data is duplicated into the store (repo state rule).</p>
+<hr />
+<h2 id="8-investigation-approval-timeline-experiences">8. Investigation, approval &amp; timeline experiences<a class="headerlink" href="#8-investigation-approval-timeline-experiences" title="Permanent link">&para;</a></h2>
+<h3 id="81-the-investigation-spine-navigation-model">8.1 The investigation spine (navigation model)<a class="headerlink" href="#81-the-investigation-spine-navigation-model" title="Permanent link">&para;</a></h3>
+<p>The console's superpower is that every object links to its evidence. The canonical path:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>Detection ──▶ Incident ──▶ Agent ──▶ Decision ──▶ Action ──▶ Receipt ──▶ Verification
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>   (alert)     (case)     (entity)   (allow/deny) (bytes)   (hash)    (proof / break)
+</code></pre></div>
+<ul>
+<li><strong>Drilldown system:</strong> every arrow is a <code>DrilldownLink</code> (HLD/LLD §7.5). Clicking a detection opens the incident; the incident's timeline rows drill to the agent or to the receipt; an agent drills to its decisions in Explore.</li>
+<li><strong>Breadcrumbs:</strong> the shell renders a context breadcrumb (<code>Incidents / inc_01J / read_issue #391 / receipt …a1b2</code>) so the analyst never loses the trail. Breadcrumb segments are themselves links (back up the spine).</li>
+<li><strong>Context preservation:</strong> drilldowns carry the time range and relevant variables; opening a side <code>Drawer</code> (e.g. agent detail) keeps the underlying list in place. Back navigation restores scroll + expansion state (URL state, not remount).</li>
+</ul>
+<h3 id="82-approval-experience-the-products-trust-story-made-visible">8.2 Approval experience (the product's trust story, made visible)<a class="headerlink" href="#82-approval-experience-the-products-trust-story-made-visible" title="Permanent link">&para;</a></h3>
+<p>The <code>ApprovalCard</code> panel (HLD/LLD §7.2) is the most carefully designed surface in the product.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>┌ Approval required ────────────────────────── ⏱ expires 04:52 ┐
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>│ ⬡ coding-agent-prod   ▸ run r_8f2…   group platform-leads     │
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>│ trust  ⬤ untrusted_external     risk  ███████░░ 78  composite │
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>│ ───────────────────────────────────────────────────────────── │
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>│ action  github.merge_pull_request → payments-service/main      │
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>│ ┌ canonical payload (exact bytes you approve) ──────────────┐  │
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>│ │ { &quot;base_branch&quot;: &quot;main&quot;, &quot;pr_number&quot;: 482, &quot;merge_method&quot;  │  │
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>│ │   : &quot;squash&quot; }                                             │  │
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>│ └────────────────────────────────────────────────────────────┘ │
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>│ action_hash  sha256:9af1c8…b3   📋    reason  PR merge after CI │
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>│ ───────────────────────────────────────────────────────────── │
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>│ [ Approve ]   [ Reject ]   [ Edit &amp; re-evaluate ]   [ Escalate ]│
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>└────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<p><strong>UX safety rules (non-negotiable):</strong>
+1. <strong>Bytes, not a summary.</strong> The payload shown is the canonical hashed action, verbatim. No prettified divergence (defeats render-vs-bytes).
+2. <strong>Edit re-hashes + re-evaluates.</strong> Editing shows a diff and a warning; it produces a <em>new</em> <code>action_hash</code> and re-runs policy — it never patches the approved hash. If the gateway lacks <code>PUT /v1/approvals/:id</code>, <strong>Edit is disabled with a tooltip</strong>, never faked (fail-closed UX).
+3. <strong>Expiry is loud.</strong> The countdown turns <code>--state-pending</code> → <code>--decision-deny</code> under 60s; an expired card cannot be approved (the button disables with reason).
+4. <strong>Separation of duties.</strong> Approve/Reject are enabled only for <code>role === "approver"</code> (and never the agent's owner); others see them disabled-with-reason. Server enforces too.
+5. <strong>Trust is front-and-center.</strong> The <code>TrustBadge</code> for <code>untrusted_external</code> / <code>malicious_suspected</code> is the brightest non-action element — the analyst sees <em>why</em> approval was required before they see the action.
+6. <strong>Every approval action emits its own receipt</strong> (the console is inside the evidence boundary).</p>
+<h3 id="83-provable-timeline-experience">8.3 Provable Timeline experience<a class="headerlink" href="#83-provable-timeline-experience" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>┌ inc_01J  Prompt injection → high-risk action   [critical] [contained]  [⛓ Verify chain] ┐
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>│ ● 10:02  read_issue #391 (public)            trust ⬤ untrusted_external      rcpt …a1b2 ✓ │
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>│ │ 10:03  ⛨ AEG-1002 confused-deputy (L12)    ATLAS AML.T0051                            │
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>│ │ 10:05  ⛔ merge → main  forbid-untrusted    decision deny                  rcpt …c3d4 ✓ │
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>│ │ 10:05  ⛔ approve-then-swap → SDK fail-closed (T-A1)                        rcpt …c3d4 ✓ │
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>│ ● 10:05  🛡 Active Response: agent FROZEN · Slack #agent-security              contained   │
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>│ ───────────────────────────────────────────────────────────────────────────────────────── │
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>│ Chain  …a1b2 → …c3d4   ✓ tamper-free (5/5 links)     [Freeze ▾] [Revoke] [Export pack]     │
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>└──────────────────────────────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<ul>
+<li>Each row carries its <code>receipt_hash</code> (<code>HashChip</code>) and a per-row verify tick. <strong>Verify chain</strong> walks the segment (<code>VerifyButton</code>, §6.5): success = green "tamper-free (N/N links)"; failure = red "<strong>broken at event 42</strong>" with the offending link rendered in <code>--state-failed</code> and a jump-to-row. A break also exists as a <code>receipt-chain-broken</code> P1 detection.</li>
+<li>Rows are virtualized (incidents can be long); the verify walk is stepped + reduced-motion-safe.</li>
+</ul>
+<h3 id="84-explore-page-kibana-discover-equivalent-pagesexploretsx">8.4 Explore page (Kibana Discover equivalent) — <code>pages/Explore.tsx</code><a class="headerlink" href="#84-explore-page-kibana-discover-equivalent-pagesexploretsx" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>┌ ⌕ agent_id:coding-agent-prod AND decision:deny AND @time:[now-24h TO now]   [Search] [Save] ┐
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>├──────────────┬──────────────────────────────────────────────────────────────────────────────┤
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>│ FIELDS       │  ▁▂▅▇▅▃▂▁  histogram (count over time, click-drag to zoom the range)          │
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>│ ◔ decision   │ ─────────────────────────────────────────────────────────────────────────────│
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>│   deny    52 │  time      decision  tool            agent              trust         receipt  │
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>│   allow  311 │  10:05:12  ⛔ deny    github.merge    coding-agent-prod  ⬤ untrusted   …c3d4 ▸ │
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>│ ◔ source_trust│  10:04:58  ⛔ deny    db.write        coding-agent-prod  ⬤ untrusted   …b8e1 ▸ │
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>│   untrusted 7│  …  (virtualized doc table; click a row → expand)                              │
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>│ ◔ tool       │  ┌ expanded row ───────────────────────────────────────────────────────────┐ │
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>│ ◔ agent_id   │  │ full ASE JSON · action_hash …9af1 · [Verify receipt] · [Open in timeline] │ │
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>│ ◔ event_type │  └──────────────────────────────────────────────────────────────────────────┘ │
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>└──────────────┴──────────────────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<ul>
+<li><strong><code>AqlInput</code></strong> with field-aware autocomplete (from <code>datasource.fields()</code>), error squiggles (client-side parse), and structured-AST submission (no string interpolation).</li>
+<li><strong><code>FieldSidebar</code></strong> facets are clickable → append to the query (KQL-style). Counts come from the aggregate query.</li>
+<li><strong>Histogram</strong> = a <code>timeseries</code> panel bound to <code>count_over_time</code>; drag-to-zoom writes <code>consoleStore.timeRange</code>.</li>
+<li><strong>Doc table</strong> = <code>DataGrid</code>, virtualized; row-expand reuses today's <code>ExploreTab</code> inspector JSX; the row's <code>action_hash</code>/<code>receipt_hash</code> are one-click verifiable; "Open in timeline" drills to the incident.</li>
+<li><strong>Save</strong> persists a named search (server-side, <code>tenant_id</code>-keyed); saved searches can be pinned as a <code>feed</code>/<code>table</code> panel.</li>
+</ul>
+<hr />
+<h2 id="9-panel-architecture-catalog">9. Panel architecture catalog<a class="headerlink" href="#9-panel-architecture-catalog" title="Permanent link">&para;</a></h2>
+<p>All panels implement <code>PanelProps</code> (HLD/LLD §7.1), declare the four states, and never fetch. Standard panels first, then the AegisAgent-unique panels (including two new ones).</p>
+<h3 id="91-standard-panels">9.1 Standard panels<a class="headerlink" href="#91-standard-panels" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Panel</th>
+<th>Purpose / UX</th>
+<th>Data contract (<code>DataFrame</code> fields)</th>
+<th>States</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stat</strong></td>
+<td>one decision number + spark + threshold color</td>
+<td><code>[time, value]</code> or scalar + optional series</td>
+<td>loading=number skeleton; empty="no data"; error=inline; success=value + sparkline</td>
+</tr>
+<tr>
+<td><strong>Time series</strong></td>
+<td>decisions/min, denies/agent</td>
+<td><code>time</code> + ≥1 <code>number</code> series</td>
+<td>same; empty=flat baseline with hint</td>
+</tr>
+<tr>
+<td><strong>Table</strong></td>
+<td>top risky agents, recent denies</td>
+<td>N typed fields (uses <code>DataGrid</code>)</td>
+<td>per §6.3</td>
+</tr>
+<tr>
+<td><strong>Heatmap</strong></td>
+<td>provenance × hour, detection density</td>
+<td><code>x</code> (time) × <code>y</code> (category) × <code>number</code></td>
+<td>success=ECharts heatmap; empty=grid ghost</td>
+</tr>
+<tr>
+<td><strong>Status</strong></td>
+<td>receipt-chain ✓/✗, agent statuses</td>
+<td><code>label</code> + <code>state</code> enum</td>
+<td>success=status pills; error=<code>--state-failed</code></td>
+</tr>
+<tr>
+<td><strong>Feed</strong></td>
+<td>live ASE stream (Discover-lite)</td>
+<td>streamed rows (virtualized)</td>
+<td>live dot when streaming; empty="awaiting events"</td>
+</tr>
+</tbody>
+</table>
+<h3 id="92-aegisagent-panels-the-differentiators">9.2 AegisAgent panels (the differentiators)<a class="headerlink" href="#92-aegisagent-panels-the-differentiators" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Panel</th>
+<th>Purpose / UX</th>
+<th>Data contract</th>
+<th>States</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Approval Card</strong></td>
+<td>frozen action + Approve/Reject/Edit/Escalate (§8.2)</td>
+<td>one <code>approval</code> (action, hash, trust, expiry, params, risk)</td>
+<td>loading=card skeleton; empty="no pending approvals" (a <em>good</em> empty state); error; success=card</td>
+</tr>
+<tr>
+<td><strong>Provable Timeline</strong></td>
+<td>hash-chained incident, one-click verify (§8.3)</td>
+<td>ordered events each w/ <code>receipt_hash</code></td>
+<td>verify sub-states (§6.5); empty="no events"; error</td>
+</tr>
+<tr>
+<td><strong>Receipt Integrity</strong></td>
+<td>browse chain, verify range, visualize break</td>
+<td>paginated receipts (cursor) + chain links</td>
+<td>success=chain; break=red connector; error</td>
+</tr>
+<tr>
+<td><strong>Agent Risk Map</strong> <em>(new)</em></td>
+<td>the fleet at a glance: agents positioned by <strong>risk tier × trust exposure</strong>, sized by recent action volume, colored by status (active/frozen/quarantined). A spatial "mission control" of the fleet</td>
+<td><code>agent</code> rows: <code>risk_score</code>, <code>status</code>, <code>trust_exposure</code>, <code>action_count</code>, <code>open_alerts</code></td>
+<td>loading=ghost nodes; empty="no agents"; success=interactive map; click→agent drilldown</td>
+</tr>
+<tr>
+<td><strong>Decision Graph</strong> <em>(new)</em></td>
+<td>the <strong>confused-deputy view</strong>: a directed graph of <em>untrusted source → agent → attempted action</em>, edges colored by decision (deny/approval/allow). Makes provenance attacks legible at a glance</td>
+<td>nodes (<code>source</code>, <code>agent</code>, <code>action</code>) + edges (<code>decision</code>, <code>count</code>)</td>
+<td>loading=graph skeleton; empty="no flows"; success=force/sankey graph (ECharts); edge click→Explore</td>
+</tr>
+</tbody>
+</table>
+<p>The two new panels are <strong>defensible by construction</strong>: <em>Agent Risk Map</em> visualizes the fleet's risk posture; <em>Decision Graph</em> visualizes trust-provenance gating — both ride the moat (Gap B) rather than being generic charts. They are registry entries like any other panel, composable into dashboards.</p>
+<hr />
+<h2 id="10-accessibility">10. Accessibility<a class="headerlink" href="#10-accessibility" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Keyboard:</strong> every action reachable without a mouse. Global chords (§4.1); <code>Tab</code>/<code>Shift+Tab</code> order follows visual order; tables support arrow-key row nav + <code>Enter</code> to expand; <code>Esc</code> closes drawers/modals/palette. Focus is never trapped except in modals (where it's intentionally trapped + restored on close).</li>
+<li><strong>ARIA:</strong> Radix primitives provide correct roles/<code>aria-*</code> for menus, dialogs, tabs, tooltips. Live regions: new critical detections announce via <code>aria-live="assertive"</code>; the approval queue badge via <code>aria-live="polite"</code>. The verify result is announced (<code>role="status"</code>).</li>
+<li><strong>Color independence (color-blind safe):</strong> <strong>status is never color-only</strong> — every severity/decision/trust token pairs with an icon and a text label (the existing badges already do this). The severity ramp is chosen to remain distinguishable under deuteranopia/protanopia (rose vs red separated by lightness + icon; allow/deny carry ✓/⛔ glyphs).</li>
+<li><strong>Contrast:</strong> all themes meet <strong>WCAG 2.2 AA</strong> for text (≥4.5:1 body, ≥3:1 large/UI) — OKLCH lightness anchors in §3.4 are chosen to satisfy this; Light theme is held to the same bar as Dark.</li>
+<li><strong>Screen reader:</strong> the <code>CanonicalActionView</code> exposes the payload as readable text (not an image); <code>HashChip</code> has an <code>aria-label</code> with the full hash + kind; charts provide a visually-hidden data table fallback.</li>
+<li><strong>Reduced motion:</strong> <code>prefers-reduced-motion</code> collapses all §2.4 motion to instant state changes; verification becomes a static stepped count.</li>
+</ul>
+<hr />
+<h2 id="11-implementation-roadmap-reconciled-with-hldlld-u0u6">11. Implementation roadmap (reconciled with HLD/LLD U0–U6)<a class="headerlink" href="#11-implementation-roadmap-reconciled-with-hldlld-u0u6" title="Permanent link">&para;</a></h2>
+<p>The design-system phases map onto — and front-load — the HLD/LLD's build phases. Each phase ships something usable.</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Design-system deliverable</th>
+<th>HLD/LLD phase</th>
+<th>Exit criteria</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>P0 — Foundation</strong></td>
+<td><code>tokens.css</code> (3 themes), <code>design-system/</code> primitives, typography, the Aegis Mark, density system</td>
+<td>U0</td>
+<td>a themed <code>Button/Badge/Card/HashChip/TrustBadge</code> set renders; Storybook (or a <code>/kitchen-sink</code> route) green</td>
+</tr>
+<tr>
+<td><strong>P1 — SOC shell</strong></td>
+<td><code>AppShell</code>, <code>LeftNav</code> (collapse + badges + hotkeys), <code>ControlsBar</code>, <code>TimeRangePicker</code>, <code>CommandPalette</code>, theme/density toggles, URL-sync</td>
+<td>U0–U1</td>
+<td>navigate all pages; global query context drives a single live panel</td>
+</tr>
+<tr>
+<td><strong>P2 — Panel framework</strong></td>
+<td><code>PanelRuntime</code>, registry, <code>PanelContainer</code> states, standard panels (Stat/TimeSeries/Table/Status/Feed) on Recharts + <code>DataGrid</code></td>
+<td>U1</td>
+<td>a <code>DashboardSchema</code> renders a real Overview from JSON; panels don't fetch</td>
+</tr>
+<tr>
+<td><strong>P3 — Dashboards + differentiator panels</strong></td>
+<td><code>DashboardLoader</code>, curated <code>system/</code> dashboards, <strong>ApprovalCard</strong>, <strong>ProvableTimeline</strong>, <strong>ReceiptIntegrity</strong>, SSE live</td>
+<td>U1–U2 (MVP)</td>
+<td>Overview + Live feed + <strong>Approval queue</strong> + <strong>Provable timeline w/ verify</strong> working end-to-end</td>
+</tr>
+<tr>
+<td><strong>P4 — Investigation</strong></td>
+<td>Explore (AqlInput, FieldSidebar, histogram, doc table), drilldown router, breadcrumbs, Detections/Rules, Incidents</td>
+<td>U3–U4</td>
+<td>the full Detection→…→Verification spine is click-navigable; saved searches</td>
+</tr>
+<tr>
+<td><strong>P5 — Advanced</strong></td>
+<td><strong>Agent Risk Map</strong>, <strong>Decision Graph</strong>, Analytics dashboards, uPlot/ECharts swap for hot panels, OffscreenCanvas/Wasm perf (HLD/LLD §12), in-app dashboard editor, RBAC settings</td>
+<td>U5–U6</td>
+<td>fleet/MCP/active-response; editor writes <code>DashboardSchema</code>; perf targets met</td>
+</tr>
+</tbody>
+</table>
+<p><strong>MVP = P0–P3</strong> (= U0–U2): the shell, the panel framework, the Overview, the live feed, and the two surfaces neither Grafana nor Kibana can show — the <strong>Approval Queue</strong> and the <strong>Provable Timeline</strong>. Everything before P3 is scaffolding to make those two feel inevitable.</p>
+<hr />
+<h2 id="12-anti-template-acceptance-checklist">12. Anti-template acceptance checklist<a class="headerlink" href="#12-anti-template-acceptance-checklist" title="Permanent link">&para;</a></h2>
+<p>Before any surface ships, it must satisfy the design-quality bar (no shadcn-default look):</p>
+<ul>
+<li>[ ] Uses the <strong>four surface layers</strong> for depth, not uniform cards-on-gray.</li>
+<li>[ ] Severity/trust palette used <strong>only</strong> semantically; chrome stays low-chroma.</li>
+<li>[ ] Hierarchy from <strong>scale + weight</strong>, not nested boxes; one clear focal point per panel.</li>
+<li>[ ] Every identifier is <strong>monospace + copyable</strong>; hashes never wrap or truncate the copied value.</li>
+<li>[ ] Hover/focus/active states are <strong>designed</strong> (the verify gesture, the approval expiry ramp), not browser defaults.</li>
+<li>[ ] Both Light and Dark SOC themes feel <strong>intentional</strong>; OLED is a real wall-display mode, not inverted dark.</li>
+<li>[ ] No decorative motion; all motion is functional and reduced-motion-safe.</li>
+<li>[ ] The screen would be <strong>believable in a real SOC product screenshot</strong> — it reads as AegisAgent, not "a dashboard template."</li>
+</ul>
+<hr />
+<h2 id="13-summary">13. Summary<a class="headerlink" href="#13-summary" title="Permanent link">&para;</a></h2>
+<p>This design system turns the AegisAgent SOC Console into a product that looks and behaves like the <em>next-generation</em> of Grafana + Kibana + Elastic Security — but is unmistakably AegisAgent because its center of gravity is <strong>provable AI-agent governance</strong>, not metrics. It specifies a deliberate <strong>visual identity</strong> (the Verified Aperture mark, a reserved severity/trust palette, three real themes), a <strong>dense, evidence-forward design language</strong>, a <strong>keyboard-first mission-control shell</strong>, a <strong>layered component library</strong> with the framework boundary the architecture demands (<em>panels render, <code>PanelRuntime</code> fetches, dashboard JSON composes</em>), and the <strong>investigation, approval, and provable-timeline experiences</strong> that are the product's reason to exist. The roadmap front-loads the foundation and the shell so the two irreplaceable surfaces — the <strong>Approval Queue</strong> and the <strong>Provable Timeline</strong> — ship as the MVP, exactly where the moat lives.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3403 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/AegisAgent_SOC_Console_HLD_LLD/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>AegisAgent — SOC Console HLD & LLD (Grafana + Kibana, engineering blueprint) - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#aegisagent-soc-console-hld-lld-grafana-kibana-engineering-blueprint" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              AegisAgent — SOC Console HLD &amp; LLD (Grafana + Kibana, engineering blueprint)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../deployment-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration & connectivity
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Technical_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration & connectivity
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../github-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub App integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slack-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Slack integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../runbooks/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8_4" id="__nav_8_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/deny-storm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deny storm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/data-exfiltration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data exfiltration pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/agent-token-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent token rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/receipt-chain-verification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receipt chain verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/secret-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Threat_Model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Operational_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-defense-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP defense architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision records
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9_6" id="__nav_9_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_9_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decision records
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-cedar-policy-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Cedar policy engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-sqlite-first-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: SQLite-first storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003-aegis-jcs-1-canonicalization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: aegis-jcs-1 canonicalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0004-ed25519-receipt-signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Ed25519 receipt signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0005-fail-closed-defaults/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Fail-closed defaults
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference (OpenAPI/Redoc)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fail-closed-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Executive summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-grafana-kibana-changelog-catalog-adopt-adapt-skip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Grafana + Kibana changelog catalog (adopt / adapt / skip)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Grafana + Kibana changelog catalog (adopt / adapt / skip)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-grafana-v110-v122" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 Grafana (v11.0 → v12.2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-kibana-8x-9x" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2 Kibana (8.x → 9.x)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-the-three-surfaces-neither-product-has-the-reason-this-is-not-grafana-with-an-agents-datasource" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3 The three surfaces neither product has (the reason this is not "Grafana with an agents datasource")
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-rejected-alternative-embed-real-grafanakibana-option-c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Rejected alternative: embed real Grafana/Kibana (Option C)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-hld-system-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. HLD — system context
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. HLD — system context">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-the-five-subsystems-hld" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 The five subsystems (HLD)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-hld-data-query-layer-s1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. HLD — data &amp; query layer (S1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-lld-datasource-layer-s1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. LLD — Datasource layer (S1)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. LLD — Datasource layer (S1)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-core-contracts-uisrcdatasourcestypests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Core contracts — ui/src/datasources/types.ts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-concrete-datasources-uisrcdatasources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Concrete datasources — ui/src/datasources/
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-aql-the-typed-query-dsl-adapts-esqlkql-uisrcdatasourcesaql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 AQL — the typed query DSL (adapts ES|QL/KQL) — ui/src/datasources/aql/
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-the-dashboard-model-decision-phased-hybrid-answers-your-scoping-question" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. The dashboard model decision (phased hybrid) — answers your scoping question
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-lld-panel-framework-dashboards-variables-drilldown-s2s4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. LLD — Panel framework, dashboards, variables, drilldown (S2–S4)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. LLD — Panel framework, dashboards, variables, drilldown (S2–S4)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-panel-framework-uisrcpanels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Panel framework — ui/src/panels/
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-the-three-differentiator-panels-lld-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 The three differentiator panels (LLD detail)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-dashboard-schema-uisrcdashboardsschemats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 Dashboard schema — ui/src/dashboards/schema.ts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74-variables-time-range-controls-uisrcstate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.4 Variables, time-range, controls — ui/src/state/
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#75-drilldown-router-uisrcdashboardsdrilldownts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.5 Drilldown router — ui/src/dashboards/drilldown.ts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-lld-page-by-page-as-dashboards-file-change-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. LLD — page-by-page, as dashboards (file change-map)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-rbac-real-time-performance-a11y-cross-cutting-lld" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. RBAC, real-time, performance, a11y (cross-cutting LLD)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-phasing-reconciled-with-soc_ui_designmd-14-u0u6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Phasing — reconciled with SOC_UI_Design.md §14 (U0–U6)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-open-questions-inherited-resolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Open questions inherited / resolved
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-worlds-fastest-observability-ui-ultra-performance-blueprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. World's Fastest Observability UI (Ultra-Performance Blueprint)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. World&#39;s Fastest Observability UI (Ultra-Performance Blueprint)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#121-binary-protocol-buffers-protobuf-over-websockets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1 Binary Protocol Buffers (Protobuf) over WebSockets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#122-rust-compiled-webassembly-wasm-query-transformation-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.2 Rust-Compiled WebAssembly (Wasm) Query &amp; Transformation Engine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#123-offscreencanvas-rendering-on-web-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.3 OffscreenCanvas rendering on Web Workers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#124-pre-compressed-brotli-asset-delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.4 Pre-Compressed Brotli Asset Delivery
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/AegisAgent_SOC_Console_HLD_LLD.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="aegisagent-soc-console-hld-lld-grafana-kibana-engineering-blueprint">AegisAgent — SOC Console HLD &amp; LLD (Grafana + Kibana, engineering blueprint)<a class="headerlink" href="#aegisagent-soc-console-hld-lld-grafana-kibana-engineering-blueprint" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Status:</strong> Design (2026-06-24). <strong>Document type:</strong> Engineering HLD/LLD.
+<strong>This is the engineering blueprint for</strong> <a href="../AegisAgent_SOC_UI_Design/"><code>AegisAgent_SOC_UI_Design.md</code></a> — that doc is the <em>product/UX</em> design (the "what"); this doc is the <em>architecture + component</em> design (the "how"), grounded in the actual <code>ui/</code> codebase and backed by a Grafana/Kibana changelog catalog.
+<strong>Read first:</strong> <a href="../AegisAgent_SOC_UI_Design/"><code>AegisAgent_SOC_UI_Design.md</code></a> (panel system §7, dashboards-as-code §9, datasource layer §6, phasing §14) and <a href="../AegisAgent_Gap_Reassessment_2026-06/"><code>AegisAgent_Gap_Reassessment_2026-06.md</code></a> (the moat the console must ride).
+<strong>Supersedes nothing.</strong> It operationalizes <code>SOC_UI_Design.md</code> and answers its Open Questions §15.2 (charting) and §15.4 (dashboards-as-code format).</p>
+</blockquote>
+<hr />
+<h2 id="0-executive-summary">0. Executive summary<a class="headerlink" href="#0-executive-summary" title="Permanent link">&para;</a></h2>
+<p>The current console (<code>ui/</code>) is a <strong>fixed-tabs prototype</strong>: nine hardcoded React tabs (<code>OverviewTab</code>, <code>ExploreTab</code>, … <code>SettingsTab</code>) calling the gateway through one-function-per-endpoint helpers in <code>ui/src/app/api.ts</code>. It renders the right <em>pages</em> but has <strong>none of the framework</strong> that makes Grafana and Kibana what they are.</p>
+<p>The five architectural moves that define modern Grafana (v11→v12.2) and Kibana (8.x→9.x) — and that the console lacks — are:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Capability</th>
+<th>Grafana</th>
+<th>Kibana</th>
+<th><code>ui/</code> today</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>Panel framework</strong> (state-managed, reusable render units)</td>
+<td>Scenes (GA 11.3, default v12)</td>
+<td>Embeddable panel system</td>
+<td>❌ bespoke JSX per tab</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>Dashboards-as-data</strong> (versioned JSON, provisionable)</td>
+<td>Dashboard Schema v2 + Git Sync</td>
+<td>Saved Objects</td>
+<td>❌ layout hardcoded in <code>page.tsx</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>Datasource abstraction</strong> (uniform query of a source)</td>
+<td>Datasource plugins + SQL Expressions</td>
+<td>Data Views + connectors</td>
+<td>❌ one <code>fetch</code> fn per endpoint</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>A real query language</strong></td>
+<td>Drilldown + Explore</td>
+<td>ES|QL + KQL + Discover</td>
+<td>⚠️ substring <code>q=</code> only</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>Drilldowns · controls · time-range · variables</strong></td>
+<td>conditional logic, tabs, variable controls</td>
+<td>controls, chained variables, drilldowns</td>
+<td>❌ none</td>
+</tr>
+</tbody>
+</table>
+<p>This blueprint introduces all five <strong>as a swappable framework layer under the existing pages</strong>, so the app keeps working at every step. The <strong>dashboard model decision is a phased hybrid</strong> (§6): curated dashboards-as-code from the start (every system page becomes JSON rendered by one panel framework); the in-app drag-drop editor ships <strong>last</strong> (phase U6). The MVP value stays the two surfaces neither Grafana nor Kibana can show — the <strong>Approval Queue</strong> and the <strong>Provable Timeline</strong>.</p>
+<p><strong>Library decision (answers <code>SOC_UI_Design.md §15.2</code>):</strong> the panel framework is <strong>rendering-library-agnostic behind the <code>Panel</code> interface</strong>. The already-installed <strong>Recharts</strong> bootstraps v1 panels with zero new dependencies; the documented north-star — <strong>uPlot</strong> (dense time-series) + <strong>ECharts</strong> (heatmap/sankey/treemap) + <strong>TanStack Table + <code>@tanstack/react-virtual</code></strong> (high-row-count tables) — is adopted <strong>per panel type as a swap</strong>, with no change to dashboard JSON or consumers.</p>
+<hr />
+<h2 id="1-grafana-kibana-changelog-catalog-adopt-adapt-skip">1. Grafana + Kibana changelog catalog (adopt / adapt / skip)<a class="headerlink" href="#1-grafana-kibana-changelog-catalog-adopt-adapt-skip" title="Permanent link">&para;</a></h2>
+<p>Scored for <em>a SOC over verifiable agent-action evidence</em> — single-tenant-per-deploy, one datasource family (the gateway), differentiator-first. <strong>Adopt</strong> = build as designed. <strong>Adapt</strong> = take the idea, bend it to AegisAgent. <strong>Skip</strong> = out of scope for this product.</p>
+<h3 id="11-grafana-v110-v122">1.1 Grafana (v11.0 → v12.2)<a class="headerlink" href="#11-grafana-v110-v122" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Feature (release)</th>
+<th>What it is</th>
+<th>Verdict</th>
+<th>AegisAgent treatment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scenes panel framework</strong> (11.3 GA, v12 default)</td>
+<td>State-managed, composable panels with their own query/time/variable scope</td>
+<td><strong>Adopt</strong></td>
+<td>The model for our <code>Panel</code> + <code>PanelRuntime</code> (§7.1). We do not import Grafana Scenes; we build the same shape in our stack.</td>
+</tr>
+<tr>
+<td><strong>Dashboard Schema v2</strong> (v12)</td>
+<td>Dashboards as a versioned, layout-agnostic JSON model</td>
+<td><strong>Adopt</strong></td>
+<td>Our <code>DashboardSchema</code> (§7.3) — a lean, AegisAgent-native JSON, not Grafana-compatible (answers §15.4).</td>
+</tr>
+<tr>
+<td><strong>Dynamic dashboards: tabs, rows, conditional logic, auto-layout</strong> (v12)</td>
+<td>Panels show/hide and arrange on conditions</td>
+<td><strong>Adapt</strong></td>
+<td><code>rows</code>/<code>tabs</code> + a minimal <code>showWhen</code> variable predicate (§7.3). No full expression engine.</td>
+</tr>
+<tr>
+<td><strong>Drilldown suite</strong> (GA v12)</td>
+<td>Queryless click-through across metrics/logs/traces</td>
+<td><strong>Adopt (reframed)</strong></td>
+<td>Our <code>DrilldownLink</code> router (§7.5): decision → receipt verify, alert → triggering events, agent → its decisions.</td>
+</tr>
+<tr>
+<td><strong>SQL Expressions / cross-source joins</strong> (v12)</td>
+<td>Join data across datasources with SQL</td>
+<td><strong>Skip</strong></td>
+<td>One datasource family; joins happen server-side in the gateway's SOC query API.</td>
+</tr>
+<tr>
+<td><strong>Variables / templating</strong></td>
+<td><code>$var</code> referenced across panels &amp; queries</td>
+<td><strong>Adopt</strong></td>
+<td><code>$tenant $agent $env $timeRange</code> (§7.4), URL-synced.</td>
+</tr>
+<tr>
+<td><strong>Blazing-fast table panel</strong> (react-data-grid refactor, v12)</td>
+<td>Virtualized, fast sort/filter on large tables</td>
+<td><strong>Adopt (as TanStack Table)</strong></td>
+<td>Our virtualized <code>table</code> panel uses TanStack Table + virtual (§7.1).</td>
+</tr>
+<tr>
+<td><strong>Unified Alerting → notification policies → contact points + silences</strong></td>
+<td>Rules route to Slack/PagerDuty/webhook; mute windows</td>
+<td><strong>Adapt</strong></td>
+<td>Alerting UI over the <strong>deterministic</strong> rule engine; reuses existing webhook subscriptions + Slack sink. Rules never score-gate (Design Law 1).</td>
+</tr>
+<tr>
+<td><strong>Git Sync / dashboards-as-code via GitHub PRs</strong> (v12)</td>
+<td>Edit dashboards through Git</td>
+<td><strong>Skip (v1) → optional</strong></td>
+<td>Curated dashboards live in-repo as JSON, but no in-app Git integration. Provisioning is a file load, not a GitHub app.</td>
+</tr>
+<tr>
+<td><strong>Explore / queryless metrics</strong></td>
+<td>Ad-hoc exploration</td>
+<td><strong>Adapt</strong></td>
+<td>Our <strong>Explore</strong> = Kibana-Discover-style (§1.2), not Grafana Explore.</td>
+</tr>
+<tr>
+<td><strong>Canvas / geomaps / SCIM / SAML</strong></td>
+<td>Custom viz, geo, identity sync</td>
+<td><strong>Skip</strong></td>
+<td>No geo dimension; identity is the gateway session (OIDC/SAML upstream).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="12-kibana-8x-9x">1.2 Kibana (8.x → 9.x)<a class="headerlink" href="#12-kibana-8x-9x" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>What it is</th>
+<th>Verdict</th>
+<th>AegisAgent treatment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Discover</strong> (multi-tab, field sidebar, doc table, expandable rows)</td>
+<td>Exploratory search over indexed events</td>
+<td><strong>Adopt</strong></td>
+<td>The model for the <strong>Explore</strong> page (§8.2): query bar + field sidebar facets + virtualized doc table + row-expand → ASE JSON + one-click receipt verify.</td>
+</tr>
+<tr>
+<td><strong>ES|QL</strong> (<code>STATS</code>, <code>WHERE</code>, time-series aware)</td>
+<td>Typed pipe query language</td>
+<td><strong>Adapt</strong></td>
+<td><strong>AQL</strong> — a small, <em>typed, parameterized</em> filter+aggregate DSL (§5.3) over the FTS5/ASE store. We do <strong>not</strong> ship a Turing-complete language; we ship a safe, URL-shareable filter.</td>
+</tr>
+<tr>
+<td><strong>KQL filters + autocomplete + DSL conversion</strong></td>
+<td>Field:value query builder</td>
+<td><strong>Adopt (as AQL builder)</strong></td>
+<td>Field-aware autocomplete from the datasource <code>fields()</code> capability (§5.2).</td>
+</tr>
+<tr>
+<td><strong>Data Views</strong> (index-pattern abstraction, field formatters)</td>
+<td>Named field schema over an index</td>
+<td><strong>Adapt</strong></td>
+<td><code>Datasource.fields()</code> returns the typed field catalog; formatters map to panel cell renderers.</td>
+</tr>
+<tr>
+<td><strong>Embeddable panels</strong> (≤100/dashboard, sections, pinned controls, library panels)</td>
+<td>Reusable panels embedded anywhere</td>
+<td><strong>Adopt</strong></td>
+<td>Our panel registry + "save panel to library" (phase U6).</td>
+</tr>
+<tr>
+<td><strong>Controls</strong> (query-based selectors, chaining, conditional deps)</td>
+<td>Dashboard-level input widgets</td>
+<td><strong>Adopt</strong></td>
+<td>Variable controls bar (§7.4); chaining = a variable's query references another <code>$var</code>.</td>
+</tr>
+<tr>
+<td><strong>Drilldowns</strong> (dashboard + URL, from chart interactions)</td>
+<td>Click a series → navigate with context</td>
+<td><strong>Adopt</strong></td>
+<td>Same <code>DrilldownLink</code> router (§7.5).</td>
+</tr>
+<tr>
+<td><strong>Saved Objects + Spaces</strong> (multi-tenant isolation, portability)</td>
+<td>Portable objects, per-space RBAC</td>
+<td><strong>Adapt / Skip</strong></td>
+<td>Saved searches/dashboards persist server-side keyed by <code>tenant_id</code> (already a hard invariant). <strong>No Spaces</strong> — tenancy is enforced in the gateway, not a UI construct.</td>
+</tr>
+<tr>
+<td><strong>Security app: Detections / Cases / Timelines / Entities</strong></td>
+<td>SIEM investigation surfaces</td>
+<td><strong>Adopt (reframed)</strong></td>
+<td>Detections, Incidents(=Cases), Provable Timeline, Agents(=Entities/"hosts for agents"). <strong>Timeline is provable</strong> — the differentiator.</td>
+</tr>
+<tr>
+<td><strong>Alerting: maintenance windows, flapping, case auto-push</strong></td>
+<td>Rule lifecycle controls</td>
+<td><strong>Adapt</strong></td>
+<td>Silences + dedup over deterministic rules.</td>
+</tr>
+<tr>
+<td><strong>AI Assistant / Agent Builder (NL → ES|QL, NL → dashboards)</strong></td>
+<td>LLM authors queries/dashboards</td>
+<td><strong>Skip</strong></td>
+<td>Design Law 2: the LLM narrates closed incidents only; it never authors detection logic or reads attacker-controlled content. An NL query box would reintroduce the exact injection surface the product sells against.</td>
+</tr>
+<tr>
+<td><strong>28+ SaaS connectors, scheduled PDF/PNG reports, workflows (Liquid YAML)</strong></td>
+<td>Integrations &amp; reporting</td>
+<td><strong>Skip (v1)</strong></td>
+<td>Evidence-pack export (SOC 2 / Article 14) is the one report that matters and is AegisAgent-specific (§8.8).</td>
+</tr>
+<tr>
+<td><strong>Anomaly detection / swim lanes</strong></td>
+<td>ML jobs</td>
+<td><strong>Skip</strong></td>
+<td>Detection is deterministic by Design Law 1.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="13-the-three-surfaces-neither-product-has-the-reason-this-is-not-grafana-with-an-agents-datasource">1.3 The three surfaces neither product has (the reason this is not "Grafana with an agents datasource")<a class="headerlink" href="#13-the-three-surfaces-neither-product-has-the-reason-this-is-not-grafana-with-an-agents-datasource" title="Permanent link">&para;</a></h3>
+<p>Carried verbatim from <code>SOC_UI_Design.md §3</code>, restated as architecture targets:</p>
+<ol>
+<li><strong>Approval Card panel</strong> — renders the <em>frozen canonical action</em> (the exact bytes that will run), <code>action_hash</code>, <code>source_trust</code>, expiry; Approve / Reject / <strong>Edit (re-hash + re-evaluate)</strong> / Escalate. The human-in-the-loop control made visible.</li>
+<li><strong>Provable Timeline panel</strong> — every row carries its <code>receipt_hash</code>; a <strong>Verify chain</strong> action walks the hash chain → green "tamper-free" / red "broken at row N".</li>
+<li><strong>Receipt Integrity panel</strong> — browse the per-tenant chain, verify a range, visualize a break (also a <code>receipt-chain-broken</code> P1 detection).</li>
+</ol>
+<p>These three are panel <em>types</em> in the same registry (§7.1) — not special-cased pages. That is the core architectural insight: <strong>the differentiators are panels, so they compose into dashboards like everything else.</strong></p>
+<hr />
+<h2 id="2-rejected-alternative-embed-real-grafanakibana-option-c">2. Rejected alternative: embed real Grafana/Kibana (Option C)<a class="headerlink" href="#2-rejected-alternative-embed-real-grafanakibana-option-c" title="Permanent link">&para;</a></h2>
+<p>Pointing Grafana at the gateway via the Infinity/JSON datasource (or shipping provisioned Grafana dashboards) is the cheapest path to "Grafana-grade charts." <strong>Rejected as the primary UI</strong>, kept as an <em>optional export interop</em>:</p>
+<ul>
+<li><strong>It throws away the entire differentiator.</strong> Grafana/Kibana cannot render an Approval Card, cannot Verify a receipt chain, cannot bind an approval to <code>action_hash</code>. Those are the product (Gap Reassessment §3). A console that can't do them is a worse AegisAgent.</li>
+<li><strong>It adds a heavyweight runtime dependency</strong> that breaks the "self-hostable single binary" wedge (Gap Reassessment §3 Gap C).</li>
+<li><strong>Tenancy mismatch:</strong> Grafana orgs/Kibana Spaces are not our <code>tenant_id</code> invariant; mapping them is friction and a cross-tenant-leak risk surface.</li>
+<li><strong>Optional export we <em>do</em> keep:</strong> a read-only <code>GET /v1/soc/query</code> shape compatible with Grafana's Infinity datasource, so a customer's existing Grafana can pull AegisAgent metrics into <em>their</em> board. This is interop, not our console.</li>
+</ul>
+<hr />
+<h2 id="3-hld-system-context">3. HLD — system context<a class="headerlink" href="#3-hld-system-context" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌──────────────────────────────── Browser (Next.js App Router, ui/) ───────────────────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│                                                                                                   │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│  App Shell (chrome)            Dashboard Runtime                  Differentiator panels           │
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>│  ┌───────────────────┐         ┌──────────────────────┐          ┌───────────────────────────┐    │
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>│  │ tenant ▾ time ▾    │         │ DashboardSchema(JSON) │          │ ApprovalCard              │    │
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>│  │ $vars ● live search│────────▶│  → PanelRuntime[]     │─────────▶│ ProvableTimeline (verify) │    │
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>│  │ role menu          │         │  → layout/rows/tabs   │          │ ReceiptIntegrity          │    │
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│  └─────────┬─────────┘         └──────────┬───────────┘          └────────────┬──────────────┘    │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>│            │ Zustand (filters, time, tenant)        │ TanStack Query (cache/poll/dedup)           │
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>│            ▼                                          ▼                         ▼                  │
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>│  ┌─────────────────────────── Datasource layer (uniform) ─────────────────────────────────────┐   │
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>│  │  GatewayEntityDatasource   │  SocQueryDatasource (AQL)  │  ReceiptDatasource  │  StreamDS    │   │
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>│  │  REST entity reads         │  POST /v1/soc/query        │  verify chain       │  SSE deltas  │   │
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>│  └────────────────────────────┴──────────────┬────────────┴─────────┬───────────┴──────┬──────┘   │
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>└──────────────────────────────────────────────┼──────────────────────┼──────────────────┼──────────┘
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                                                ▼                      ▼                  ▼
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                        AegisAgent Gateway (Rust/Axum) — tenant-scoped, fail-closed, parameterized SQL
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                        Entity API (/v1/incidents,/agents,/approvals,/receipts/:id/verify, …)
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>                        Event Query API (/v1/soc/query over ASE: SQLite now, ClickHouse at scale)
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                        Stream (/v1/soc/stream SSE)
+</code></pre></div>
+<p><strong>Invariant inheritance.</strong> The UI never queries tools or the DB directly; it only calls the gateway, which enforces <code>tenant_id</code> server-side (the UI cannot request cross-tenant data — <code>SOC_UI_Design.md §11</code>). The UI shows <strong>hashes, never raw secret payloads</strong> (redaction invariant), so screenshots/exports are safe.</p>
+<h3 id="31-the-five-subsystems-hld">3.1 The five subsystems (HLD)<a class="headerlink" href="#31-the-five-subsystems-hld" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Subsystem</th>
+<th>Responsibility</th>
+<th>Key types</th>
+<th>Maps to existing <code>ui/</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>S1 Datasource layer</strong></td>
+<td>Uniformly fetch entities, run AQL queries, verify receipts, subscribe to the stream</td>
+<td><code>Datasource</code>, <code>DatasourceCapabilities</code>, <code>QueryRequest/Result</code></td>
+<td>replaces ad-hoc <code>api.ts</code> fns (kept as the transport beneath)</td>
+</tr>
+<tr>
+<td><strong>S2 Panel framework</strong></td>
+<td>A registry of typed, self-contained panels bound to (query + timeRange + vars)</td>
+<td><code>PanelDefinition</code>, <code>PanelRuntime</code>, <code>PanelProps</code>, <code>PanelRegistry</code></td>
+<td>extracts the repeated <code>panel-card</code> JSX into real components</td>
+</tr>
+<tr>
+<td><strong>S3 Dashboard model</strong></td>
+<td>JSON schema → laid-out panels; curated boards in-repo; (later) user-editable</td>
+<td><code>DashboardSchema</code>, <code>Row</code>, <code>LayoutItem</code>, <code>DashboardLoader</code></td>
+<td>turns <code>page.tsx</code>'s fixed tabs into dashboard renders</td>
+</tr>
+<tr>
+<td><strong>S4 Variables / time / drilldown</strong></td>
+<td>Global chrome state, URL-synced; click-through navigation</td>
+<td><code>Variable</code>, <code>TimeRange</code>, <code>DrilldownLink</code>, <code>useDrilldownRouter</code></td>
+<td>new <code>ConfigBar</code> superset</td>
+</tr>
+<tr>
+<td><strong>S5 Real-time</strong></td>
+<td>SSE deltas feeding live panels + the Approvals badge</td>
+<td><code>StreamSubscription</code>, <code>useSocStream</code></td>
+<td>new; today everything polls on intervals</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-hld-data-query-layer-s1">4. HLD — data &amp; query layer (S1)<a class="headerlink" href="#4-hld-data-query-layer-s1" title="Permanent link">&para;</a></h2>
+<p>Two read surfaces (per <code>SOC_UI_Design.md §6</code>), one uniform abstraction.</p>
+<ul>
+<li><strong>Entity API (typed REST)</strong> — already present in <code>api.ts</code>: <code>/v1/incidents</code>, <code>/v1/incidents/:id</code>, <code>/v1/alerts</code>, <code>/v1/approvals</code>, <code>/v1/agents</code>, <code>/v1/mcp/servers</code>, <code>/v1/receipts</code>, <code>/v1/receipts/:id/verify</code>, <code>/v1/decisions</code>, <code>/v1/soc/summary</code>, <code>/v1/stats</code>, <code>/v1/soc/rules</code>, <code>/v1/detection_rules</code>. These become <strong><code>GatewayEntityDatasource</code> methods</strong>, not loose functions.</li>
+<li><strong>Event Query API (AQL)</strong> — <code>POST /v1/soc/query</code> over the ASE/decision store. Contract version 1 is a tenant-scoped JSON allowlist (<code>version</code>, <code>entity</code>, <code>filters</code>, <code>aggregate</code>, <code>interval</code>, <code>group_by</code>, <code>limit</code>, <code>cursor</code>) backed by parameterized SQLite/PostgreSQL queries; ClickHouse can implement the same contract later. Decision filters cover agent, tool, action, resource, trust, run/trace, evidence hashes, full-text terms, and time. The <code>ase</code> entity queries durable <code>runtime_events</code> by event type, severity, agent, run/trace, source component/trust, decision, evidence hashes, terms, and time without returning raw payloads. Both entities support filtered count, count-over-time, and bounded group-by. <code>SocQueryDatasource</code> degrades to <code>GET /v1/decisions?q=</code> only for decision queries when older gateways return 404/405/501.</li>
+<li><strong>Stream</strong> — <code>GET /v1/soc/stream</code> (SSE). Advisory only; the query API is always the source of truth.</li>
+</ul>
+<p><strong>SQL-injection invariant carries to the UI boundary:</strong> AQL is compiled to a <strong>parameterized</strong> ClickHouse/SQLite query server-side, never string-interpolated — same invariant as the gateway data layer.</p>
+<hr />
+<h2 id="5-lld-datasource-layer-s1">5. LLD — Datasource layer (S1)<a class="headerlink" href="#5-lld-datasource-layer-s1" title="Permanent link">&para;</a></h2>
+<p>New file group: <code>ui/src/datasources/</code>.</p>
+<h3 id="51-core-contracts-uisrcdatasourcestypests">5.1 Core contracts — <code>ui/src/datasources/types.ts</code><a class="headerlink" href="#51-core-contracts-uisrcdatasourcestypests" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="cm">/** A point in (or span of) time. Relative tokens resolve client-side at query build. */</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">TimeRange</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nx">from</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="c1">// ISO 8601 or relative token e.g. &quot;now-24h&quot;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nx">to</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">   </span><span class="c1">// ISO 8601 or &quot;now&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="cm">/** Resolved variable bag passed into every query. */</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="k">export</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="nx">VariableValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Readonly</span><span class="o">&lt;</span><span class="nx">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="cm">/** What a query needs to run. Datasources translate this to a transport call. */</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">QueryRequest</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">aql?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">          </span><span class="c1">// AQL filter/aggregate string (S1.3), optional</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">entity?</span><span class="o">:</span><span class="w"> </span><span class="kt">EntityKind</span><span class="p">;</span><span class="w">   </span><span class="c1">// for entity reads: &quot;incident&quot; | &quot;agent&quot; | ...</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">timeRange</span><span class="o">:</span><span class="w"> </span><span class="kt">TimeRange</span><span class="p">;</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">variables</span><span class="o">:</span><span class="w"> </span><span class="kt">VariableValues</span><span class="p">;</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">limit?</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">cursor?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">       </span><span class="c1">// opaque pagination cursor</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">signal?</span><span class="o">:</span><span class="w"> </span><span class="kt">AbortSignal</span><span class="p">;</span><span class="w">  </span><span class="c1">// wired to TanStack Query cancellation</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="p">}</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="cm">/** Columnar result — panels read frames, not bespoke shapes (Grafana DataFrame idea). */</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">DataFrame</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">fields</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">Field</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">length</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w">        </span><span class="c1">// row count</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">meta</span><span class="o">?:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">total?</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w"> </span><span class="nx">cursor?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">executedMs?</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">};</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="p">}</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">Field</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="nx">FieldType</span><span class="p">;</span><span class="w">       </span><span class="c1">// &quot;time&quot; | &quot;number&quot; | &quot;string&quot; | &quot;trust&quot; | &quot;decision&quot; | &quot;hash&quot;</span>
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">values</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">unknown</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">format?</span><span class="o">:</span><span class="w"> </span><span class="kt">FieldFormat</span><span class="p">;</span><span class="w">  </span><span class="c1">// cell renderer hint (badge/mono-hash/link/relative-time)</span>
+<a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a><span class="p">}</span>
+<a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a><span class="k">export</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="nx">FieldType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;time&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;number&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;trust&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;decision&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;hash&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;json&quot;</span><span class="p">;</span>
+<a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="k">export</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="nx">FieldFormat</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;badge&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;hash&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;link&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;relative-time&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;bytes&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;raw&quot;</span><span class="p">;</span>
+<a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a><span class="k">export</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="nx">EntityKind</span><span class="w"> </span><span class="o">=</span>
+<a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;incident&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;approval&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;agent&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;mcp_server&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;receipt&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;decision&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;rule&quot;</span><span class="p">;</span>
+<a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>
+<a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a><span class="cm">/** Field catalog for the Explore field sidebar + AQL autocomplete (Kibana Data View idea). */</span>
+<a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">FieldDescriptor</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="nx">FieldType</span><span class="p">;</span>
+<a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">facetable</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">    </span><span class="c1">// show as a clickable facet in the sidebar</span>
+<a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">examples?</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="kt">string</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a><span class="p">}</span>
+<a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>
+<a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">DatasourceCapabilities</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">query</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">        </span><span class="c1">// supports AQL aggregate/search</span>
+<a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">stream</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">       </span><span class="c1">// supports SSE deltas</span>
+<a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">fields</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">       </span><span class="c1">// exposes a field catalog</span>
+<a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">verify</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span><span class="w">       </span><span class="c1">// supports receipt-chain verify</span>
+<a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a><span class="p">}</span>
+<a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a>
+<a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a><span class="cm">/** The uniform datasource interface. Every read in the console goes through one of these. */</span>
+<a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">Datasource</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">capabilities</span><span class="o">:</span><span class="w"> </span><span class="kt">DatasourceCapabilities</span><span class="p">;</span>
+<a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a><span class="w">  </span><span class="nx">query</span><span class="p">(</span><span class="nx">req</span><span class="o">:</span><span class="w"> </span><span class="kt">QueryRequest</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">DataFrame</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a><span class="w">  </span><span class="nx">fields</span><span class="o">?</span><span class="p">(</span><span class="nx">entity</span><span class="o">:</span><span class="w"> </span><span class="kt">EntityKind</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">FieldDescriptor</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+<a id="__codelineno-1-59" name="__codelineno-1-59" href="#__codelineno-1-59"></a><span class="w">  </span><span class="nx">verifyReceipt</span><span class="o">?</span><span class="p">(</span><span class="nx">receiptId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">signal?</span><span class="o">:</span><span class="w"> </span><span class="kt">AbortSignal</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">VerifyResult</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-1-60" name="__codelineno-1-60" href="#__codelineno-1-60"></a><span class="w">  </span><span class="nx">subscribe</span><span class="o">?</span><span class="p">(</span><span class="nx">sub</span><span class="o">:</span><span class="w"> </span><span class="kt">StreamRequest</span><span class="p">,</span><span class="w"> </span><span class="nx">onEvent</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="o">:</span><span class="w"> </span><span class="kt">StreamEvent</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">StreamSubscription</span><span class="p">;</span>
+<a id="__codelineno-1-61" name="__codelineno-1-61" href="#__codelineno-1-61"></a><span class="p">}</span>
+<a id="__codelineno-1-62" name="__codelineno-1-62" href="#__codelineno-1-62"></a>
+<a id="__codelineno-1-63" name="__codelineno-1-63" href="#__codelineno-1-63"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">VerifyResult</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-64" name="__codelineno-1-64" href="#__codelineno-1-64"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">ok</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<a id="__codelineno-1-65" name="__codelineno-1-65" href="#__codelineno-1-65"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">brokenAtRow?</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w">    </span><span class="c1">// 1-based index of the first broken link, if any</span>
+<a id="__codelineno-1-66" name="__codelineno-1-66" href="#__codelineno-1-66"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-1-67" name="__codelineno-1-67" href="#__codelineno-1-67"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">chainHead?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">      </span><span class="c1">// receipt_hash of the verified head</span>
+<a id="__codelineno-1-68" name="__codelineno-1-68" href="#__codelineno-1-68"></a><span class="p">}</span>
+<a id="__codelineno-1-69" name="__codelineno-1-69" href="#__codelineno-1-69"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">StreamRequest</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">topics</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="s2">&quot;ase&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;approval&quot;</span><span class="o">&gt;</span><span class="p">;</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">variables</span><span class="o">:</span><span class="w"> </span><span class="kt">VariableValues</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-1-70" name="__codelineno-1-70" href="#__codelineno-1-70"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">StreamEvent</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">topic</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;ase&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;approval&quot;</span><span class="p">;</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">payload</span><span class="o">:</span><span class="w"> </span><span class="kt">unknown</span><span class="p">;</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">ts</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-1-71" name="__codelineno-1-71" href="#__codelineno-1-71"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">StreamSubscription</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">close</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<h3 id="52-concrete-datasources-uisrcdatasources">5.2 Concrete datasources — <code>ui/src/datasources/</code><a class="headerlink" href="#52-concrete-datasources-uisrcdatasources" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Class</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gatewayEntity.ts</code></td>
+<td><code>GatewayEntityDatasource</code></td>
+<td>Wraps the existing <code>fetchFromGateway</code> (kept as transport). Each <code>EntityKind</code> maps to a path. <code>query()</code> returns a <code>DataFrame</code> built from the JSON array. <code>capabilities = { query:false, stream:false, fields:true, verify:true }</code>.</td>
+</tr>
+<tr>
+<td><code>socQuery.ts</code></td>
+<td><code>SocQueryDatasource</code></td>
+<td><code>POST /v1/soc/query</code> (AQL → versioned structured filters/aggregates → DataFrame with server field descriptors). Falls back to <code>GET /v1/decisions?q=</code> only for older gateways where the endpoint is absent. <code>capabilities.query = true</code>.</td>
+</tr>
+<tr>
+<td><code>receipt.ts</code></td>
+<td><code>ReceiptDatasource</code></td>
+<td><code>verifyReceipt()</code> → <code>GET /v1/receipts/:id/verify</code>; normalizes the loose response (today <code>ExploreTab</code> guesses <code>data.verified || data.status === "verified" || !data.error</code> — this is centralized here once).</td>
+</tr>
+<tr>
+<td><code>stream.ts</code></td>
+<td><code>SocStreamDatasource</code></td>
+<td><code>EventSource('/v1/soc/stream')</code> with reconnect/backoff; no-op <code>subscribe()</code> when the endpoint 404s (fail-soft).</td>
+</tr>
+<tr>
+<td><code>registry.ts</code></td>
+<td><code>datasourceRegistry</code></td>
+<td><code>getDatasource(id)</code>; the app wires one of each, selected per panel <code>datasourceId</code>.</td>
+</tr>
+</tbody>
+</table>
+<p><code>fetchFromGateway</code> in <code>ui/src/app/api.ts</code> is <strong>retained</strong> as the low-level transport; the per-endpoint helper functions are <strong>migrated into <code>GatewayEntityDatasource</code></strong> and the old exports kept as thin shims during the phased refactor so existing tabs don't break.</p>
+<h3 id="53-aql-the-typed-query-dsl-adapts-esqlkql-uisrcdatasourcesaql">5.3 AQL — the typed query DSL (adapts ES|QL/KQL) — <code>ui/src/datasources/aql/</code><a class="headerlink" href="#53-aql-the-typed-query-dsl-adapts-esqlkql-uisrcdatasourcesaql" title="Permanent link">&para;</a></h3>
+<p>A <strong>deliberately small, safe</strong> language. URL-shareable, saved-searchable, compiled server-side to parameterized SQL.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a># grammar (informal)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>filter   := term ((&quot;AND&quot; | &quot;OR&quot;) term)*
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>term     := field &quot;:&quot; value | field &quot;:[&quot; value &quot;TO&quot; value &quot;]&quot; | &quot;(&quot; filter &quot;)&quot;
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>field    := &quot;agent_id&quot; | &quot;tool&quot; | &quot;decision&quot; | &quot;source_trust&quot; | &quot;event_type&quot;
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>          | &quot;action_hash&quot; | &quot;receipt_hash&quot; | &quot;@time&quot;
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>aggregate := &quot;| stats&quot; func &quot;by&quot; field          # optional, single stage
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>func      := &quot;count()&quot; | &quot;count_over_time(&quot; interval &quot;)&quot;
+</code></pre></div>
+<p>Example (carried from <code>SOC_UI_Design.md §6.3</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>agent_id:coding-agent-prod AND decision:deny AND source_trust:untrusted_external AND @time:[now-24h TO now]
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1">// ui/src/datasources/aql/types.ts</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">AqlQuery</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">filter</span><span class="o">:</span><span class="w"> </span><span class="kt">AqlNode</span><span class="p">;</span><span class="w">            </span><span class="c1">// parsed AST</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">aggregate?</span><span class="o">:</span><span class="w"> </span><span class="kt">AqlAggregate</span><span class="p">;</span><span class="w">   </span><span class="c1">// optional single stats stage</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="k">export</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="nx">AqlNode</span><span class="w"> </span><span class="o">=</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;term&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">op</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;eq&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;range&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">to?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;bool&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">op</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;and&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;or&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">children</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">AqlNode</span><span class="o">&gt;</span><span class="w"> </span><span class="p">};</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">AqlAggregate</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">func</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;count&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;count_over_time&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">interval?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">by?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">parseAql</span><span class="p">(</span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">AqlQuery</span><span class="p">;</span><span class="w">          </span><span class="c1">// pure, throws AqlParseError with position</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">aqlToParams</span><span class="p">(</span><span class="nx">q</span><span class="o">:</span><span class="w"> </span><span class="kt">AqlQuery</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">QueryRequest</span><span class="p">;</span><span class="w">     </span><span class="c1">// never string-interpolates SQL</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">aqlAutocomplete</span><span class="p">(</span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">fields</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">FieldDescriptor</span><span class="o">&gt;</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">Suggestion</span><span class="p">[];</span>
+</code></pre></div>
+<p><strong>Parsing is client-side for UX (autocomplete, error squiggles); execution is server-side and parameterized.</strong> The client AST is sent as structured JSON in <code>POST /v1/soc/query</code> — the gateway never receives a raw string to interpolate.</p>
+<hr />
+<h2 id="6-the-dashboard-model-decision-phased-hybrid-answers-your-scoping-question">6. The dashboard model decision (phased hybrid) — answers your scoping question<a class="headerlink" href="#6-the-dashboard-model-decision-phased-hybrid-answers-your-scoping-question" title="Permanent link">&para;</a></h2>
+<p><strong>Decision: curated dashboards-as-code now; in-app editor as the capstone (U6).</strong> Rationale, grounded in AegisAgent's own docs:</p>
+<ul>
+<li><code>SOC_UI_Design.md §9</code> already commits to dashboards as <strong>JSON/YAML artifacts in the repo</strong> <em>and</em> "users can still build dashboards in-app (saved as the same JSON)."</li>
+<li><code>SOC_UI_Design.md §14</code> phases the <strong>user-editable Dashboards page into U6 (last)</strong>, while the <strong>MVP (U0–U2) is Overview + Live feed + Approvals + Provable Timeline</strong> — none of which need an editor.</li>
+<li><strong>Differentiator-first (Gap Reassessment §3, §9):</strong> an in-app dashboard editor is generic observability parity. Building the <em>panel framework</em> first (so every system page is config-as-code) yields the entire abstraction with <strong>zero editor UI</strong>; the editor later just serializes the same <code>DashboardSchema</code>.</li>
+<li><strong>Design Law 3:</strong> the console is value-add; we ship the highest-leverage, AegisAgent-only surfaces first and the commodity editor last.</li>
+</ul>
+<p>So: <strong>not</strong> "fixed tabs forever" (we get the panel/datasource framework and drilldowns immediately) and <strong>not</strong> "editor first" (it's the final phase). Every system page is a <code>DashboardSchema</code> JSON from day one.</p>
+<hr />
+<h2 id="7-lld-panel-framework-dashboards-variables-drilldown-s2s4">7. LLD — Panel framework, dashboards, variables, drilldown (S2–S4)<a class="headerlink" href="#7-lld-panel-framework-dashboards-variables-drilldown-s2s4" title="Permanent link">&para;</a></h2>
+<h3 id="71-panel-framework-uisrcpanels">7.1 Panel framework — <code>ui/src/panels/</code><a class="headerlink" href="#71-panel-framework-uisrcpanels" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// ui/src/panels/types.ts</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">export</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="nx">PanelType</span><span class="w"> </span><span class="o">=</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;stat&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;timeseries&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;table&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;heatmap&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;status&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;feed&quot;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;provable-timeline&quot;</span><span class="w">   </span><span class="c1">// ★ differentiator</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;approval-card&quot;</span><span class="w">       </span><span class="c1">// ★ differentiator</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;receipt-integrity&quot;</span><span class="p">;</span><span class="w">  </span><span class="c1">// ★ differentiator</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="cm">/** Declarative panel config — this is what lives in DashboardSchema JSON. */</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">PanelDefinition</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="nx">PanelType</span><span class="p">;</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">title</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">datasourceId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">query?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">                 </span><span class="c1">// AQL or entity selector</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">entity?</span><span class="o">:</span><span class="w"> </span><span class="kt">EntityKind</span><span class="p">;</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">options?</span><span class="o">:</span><span class="w"> </span><span class="kt">Readonly</span><span class="o">&lt;</span><span class="nx">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">unknown</span><span class="o">&gt;&gt;</span><span class="p">;</span><span class="w"> </span><span class="c1">// per-type options (thresholds, columns…)</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">drilldowns?</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">DrilldownLink</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">showWhen?</span><span class="o">:</span><span class="w"> </span><span class="kt">VariablePredicate</span><span class="p">;</span><span class="w">   </span><span class="c1">// conditional display (Grafana v12 idea, minimal)</span>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="p">}</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="cm">/** Props every panel component receives. Panels are pure: data in, JSX out. */</span>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">PanelProps</span><span class="o">&lt;</span><span class="nx">TOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">unknown</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">definition</span><span class="o">:</span><span class="w"> </span><span class="kt">PanelDefinition</span><span class="p">;</span>
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="kt">DataFrame</span><span class="p">;</span><span class="w">                </span><span class="c1">// already fetched by PanelRuntime</span>
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">isLoading</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">error?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">timeRange</span><span class="o">:</span><span class="w"> </span><span class="kt">TimeRange</span><span class="p">;</span>
+<a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">variables</span><span class="o">:</span><span class="w"> </span><span class="kt">VariableValues</span><span class="p">;</span>
+<a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">onDrilldown</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">link</span><span class="o">:</span><span class="w"> </span><span class="kt">DrilldownLink</span><span class="p">,</span><span class="w"> </span><span class="nx">row?</span><span class="o">:</span><span class="w"> </span><span class="kt">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">unknown</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="p">;</span>
+<a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a><span class="p">}</span>
+<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>
+<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a><span class="cm">/** Registry: maps a PanelType to its renderer + its (optional) options schema. */</span>
+<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">PanelRegistryEntry</span><span class="o">&lt;</span><span class="nx">TOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">unknown</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="kr">type</span><span class="o">:</span><span class="w"> </span><span class="nx">PanelType</span><span class="p">;</span>
+<a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">Component</span><span class="o">:</span><span class="w"> </span><span class="kt">React.ComponentType</span><span class="o">&lt;</span><span class="nx">PanelProps</span><span class="o">&lt;</span><span class="nx">TOptions</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+<a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">defaultOptions</span><span class="o">:</span><span class="w"> </span><span class="kt">TOptions</span><span class="p">;</span>
+<a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">chartLib</span><span class="o">?:</span><span class="w"> </span><span class="s2">&quot;recharts&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;uplot&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;echarts&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;tanstack-table&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;none&quot;</span><span class="p">;</span>
+<a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a><span class="p">}</span>
+<a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a><span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">panelRegistry</span><span class="o">:</span><span class="w"> </span><span class="kt">Map</span><span class="o">&lt;</span><span class="nx">PanelType</span><span class="p">,</span><span class="w"> </span><span class="nx">PanelRegistryEntry</span><span class="o">&gt;</span><span class="p">;</span>
+</code></pre></div>
+<p><strong><code>PanelRuntime</code></strong> (<code>ui/src/panels/PanelRuntime.tsx</code>) is the container that turns a <code>PanelDefinition</code> into a live panel: it resolves the datasource, builds the <code>QueryRequest</code> from the panel's <code>query</code> + the global <code>timeRange</code>/<code>variables</code>, runs it through <strong>TanStack Query</strong> (cache key = <code>[panelId, query, timeRange, variables]</code>, with <code>refetchInterval</code> when live mode is on), handles loading/error, and renders the registered component. <strong>Panels never fetch; <code>PanelRuntime</code> fetches and panels render.</strong> (Container/presentational split — matches the repo's React rules.)</p>
+<p><strong>Library-agnostic rendering (your "keep the best as future goal" decision):</strong> the <code>chartLib</code> field is advisory; the panel <em>component</em> owns its rendering. v1 ships <code>stat</code>/<code>timeseries</code> on <strong>Recharts</strong> (already installed). The north-star swap — <code>timeseries</code>→<strong>uPlot</strong>, <code>heatmap</code>→<strong>ECharts</strong>, <code>table</code>/<code>feed</code>/<code>provable-timeline</code>→<strong>TanStack Table + react-virtual</strong> — changes only the component internals, never <code>PanelDefinition</code>, <code>DashboardSchema</code>, or any consumer. That is the entire point of the abstraction.</p>
+<p>Panel inventory (from <code>SOC_UI_Design.md §7</code>):</p>
+<table>
+<thead>
+<tr>
+<th><code>PanelType</code></th>
+<th>Renders</th>
+<th>v1 lib</th>
+<th>North-star lib</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>stat</code></td>
+<td>single number + spark + threshold color</td>
+<td>Recharts</td>
+<td>Recharts/uPlot</td>
+</tr>
+<tr>
+<td><code>timeseries</code></td>
+<td>decisions/min, denies/agent</td>
+<td>Recharts</td>
+<td><strong>uPlot</strong></td>
+</tr>
+<tr>
+<td><code>table</code></td>
+<td>top risky agents, recent denies</td>
+<td>plain <code>&lt;table&gt;</code></td>
+<td><strong>TanStack Table + virtual</strong></td>
+</tr>
+<tr>
+<td><code>heatmap</code></td>
+<td>provenance × hour</td>
+<td>—</td>
+<td><strong>ECharts</strong></td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>receipt-chain ✓/✗, agent status</td>
+<td>CSS</td>
+<td>CSS</td>
+</tr>
+<tr>
+<td><code>feed</code></td>
+<td>live ASE stream</td>
+<td>list</td>
+<td><strong>virtualized list</strong></td>
+</tr>
+<tr>
+<td><code>provable-timeline</code> ★</td>
+<td>rows + <code>receipt_hash</code> + Verify chain</td>
+<td>custom</td>
+<td>custom + virtual</td>
+</tr>
+<tr>
+<td><code>approval-card</code> ★</td>
+<td>frozen action + Approve/Reject/Edit</td>
+<td>custom</td>
+<td>custom</td>
+</tr>
+<tr>
+<td><code>receipt-integrity</code> ★</td>
+<td>chain browse + verify-range</td>
+<td>custom</td>
+<td>custom</td>
+</tr>
+</tbody>
+</table>
+<h3 id="72-the-three-differentiator-panels-lld-detail">7.2 The three differentiator panels (LLD detail)<a class="headerlink" href="#72-the-three-differentiator-panels-lld-detail" title="Permanent link">&para;</a></h3>
+<p><strong><code>ApprovalCard</code></strong> (<code>ui/src/panels/differentiators/ApprovalCard.tsx</code>) — supersedes today's <code>ApprovalsTab</code> row UI.
+- Data: one <code>approval</code> row (<code>action</code>, <code>action_hash</code>, <code>source_trust</code>, <code>agent_id</code>, <code>run_id</code>, <code>expires_at</code>, <code>approver_group</code>, canonical <code>params</code>).
+- Renders the <strong>canonical action exactly as hashed</strong> (the bytes, mono font) + a copyable <code>action_hash</code> + an expiry countdown.
+- Actions call <code>GatewayEntityDatasource</code>: <code>approve</code>/<code>reject</code> (existing <code>/v1/approvals/:id/approve|reject</code>), <code>edit</code> → re-submit edited action → server <strong>re-hashes + re-evaluates</strong> (new endpoint <code>PUT /v1/approvals/:id</code> if absent; until then Edit is disabled with a tooltip — fail-closed UX), <code>escalate</code>.
+- Approver-role gate (§9): the Approve/Reject buttons are disabled (not just hidden) for non-<code>approver</code> roles, with reason text.</p>
+<p><strong><code>ProvableTimeline</code></strong> (<code>ui/src/panels/differentiators/ProvableTimeline.tsx</code>) — the killer panel.
+- Data: ordered events, each with <code>receipt_hash</code>; reuses the incident detail shape from <code>/v1/incidents/:id</code> + <code>/v1/graph/incident/:id</code>.
+- A <strong>Verify chain</strong> button → <code>ReceiptDatasource.verifyReceipt</code> walked across the range → renders green "tamper-free <code>…a1b2 → …c3d4</code>" or red "broken at row N" (the <code>VerifyResult.brokenAtRow</code>).
+- Each row's <code>receipt_hash</code> is a <code>hash</code>-format field → click drills to the Receipt Integrity panel (§7.5).</p>
+<p><strong><code>ReceiptIntegrity</code></strong> (<code>ui/src/panels/differentiators/ReceiptIntegrity.tsx</code>) — supersedes today's <code>ReceiptsTab</code>.
+- Paginated chain browse (cursor from <code>DataFrame.meta.cursor</code>); "verify range" control; a broken link renders a red connector and links to the <code>receipt-chain-broken</code> detection; "Export evidence pack" button (SOC 2 / Article 14).</p>
+<h3 id="73-dashboard-schema-uisrcdashboardsschemats">7.3 Dashboard schema — <code>ui/src/dashboards/schema.ts</code><a class="headerlink" href="#73-dashboard-schema-uisrcdashboardsschemats" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">DashboardSchema</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">uid</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">title</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">schemaVersion</span><span class="o">:</span><span class="w"> </span><span class="kt">1</span><span class="p">;</span><span class="w">                 </span><span class="c1">// bump on breaking changes (Grafana lesson)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">variables</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">VariableDefinition</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">time</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">defaultRange</span><span class="o">:</span><span class="w"> </span><span class="kt">TimeRange</span><span class="p">;</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">refreshSec?</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">};</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">layout</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">Row</span><span class="o">&gt;</span><span class="p">;</span><span class="w">       </span><span class="c1">// rows of panels; tabs are rows with a `tab` group</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">Row</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">tab?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">                     </span><span class="c1">// optional tab grouping (dynamic-dashboard idea)</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">title?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">panels</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="nx">LayoutItem</span><span class="o">&gt;</span><span class="p">;</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="p">}</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">LayoutItem</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">panel</span><span class="o">:</span><span class="w"> </span><span class="kt">PanelDefinition</span><span class="p">;</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">w</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w">  </span><span class="c1">// 1–12 grid columns</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">h</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">;</span><span class="w">  </span><span class="c1">// row-height units</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="p">}</span>
+</code></pre></div>
+<p>Curated system dashboards live as TypeScript-typed JSON in <code>ui/src/dashboards/system/</code> (<code>overview.ts</code>, <code>fleet.ts</code>, <code>detections.ts</code>, …) and validate against the schema at module load. <code>DashboardLoader</code> (<code>ui/src/dashboards/DashboardLoader.tsx</code>) renders a <code>DashboardSchema</code> into a CSS-grid of <code>PanelRuntime</code>s, applying <code>showWhen</code> predicates and tab grouping. The in-app editor (U6) writes the <em>same</em> shape to <code>POST /v1/soc/dashboards</code>.</p>
+<h3 id="74-variables-time-range-controls-uisrcstate">7.4 Variables, time-range, controls — <code>ui/src/state/</code><a class="headerlink" href="#74-variables-time-range-controls-uisrcstate" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">VariableDefinition</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">                        </span><span class="c1">// &quot;tenant&quot; | &quot;agent&quot; | &quot;env&quot; | custom</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;constant&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;query&quot;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="s2">&quot;interval&quot;</span><span class="p">;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">query?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w">                      </span><span class="c1">// for kind:&quot;query&quot; — may reference another $var (chaining)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">multi?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">includeAll?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="p">}</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="k">export</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="nx">VariablePredicate</span><span class="w"> </span><span class="o">=</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">var</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">equals</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">var</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="nx">in</span><span class="o">:</span><span class="w"> </span><span class="kt">ReadonlyArray</span><span class="o">&lt;</span><span class="kt">string</span><span class="o">&gt;</span><span class="w"> </span><span class="p">};</span>
+</code></pre></div>
+<p>The global chrome state (replacing/extending today's <code>ui/src/app/store.ts</code> Zustand store and <code>ConfigBar</code>) holds <code>{ tenant, timeRange, variables, live }</code>, <strong>URL-synced</strong> so a view is shareable (the Kibana/Grafana "state in the URL" pattern; also satisfies the repo's "URL as state" web rule). A <code>ControlsBar</code> renders variable selectors; a <code>TimeRangePicker</code> renders relative/absolute ranges + the <code>live</code> toggle; both write to the store, which invalidates every <code>PanelRuntime</code> query key.</p>
+<h3 id="75-drilldown-router-uisrcdashboardsdrilldownts">7.5 Drilldown router — <code>ui/src/dashboards/drilldown.ts</code><a class="headerlink" href="#75-drilldown-router-uisrcdashboardsdrilldownts" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">DrilldownLink</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="k">readonly</span><span class="w"> </span><span class="nx">target</span><span class="o">:</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;verify-receipt&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">receiptIdField</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span><span class="w">      </span><span class="c1">// row → receipt verify</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;dashboard&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">uid</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span><span class="w"> </span><span class="nx">mapVars</span><span class="o">:</span><span class="w"> </span><span class="kt">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="o">&gt;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;explore&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">aqlTemplate</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span><span class="w">                </span><span class="c1">// &quot;agent_id:${agent_id}&quot;</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">kind</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;incident&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">incidentIdField</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">};</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">}</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">useDrilldownRouter</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">link</span><span class="o">:</span><span class="w"> </span><span class="kt">DrilldownLink</span><span class="p">,</span><span class="w"> </span><span class="nx">row?</span><span class="o">:</span><span class="w"> </span><span class="kt">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">unknown</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="p">;</span>
+</code></pre></div>
+<p>Drilldowns turn the console from "pages" into a connected investigation graph: a <code>deny</code> in a table → Explore filtered to that agent; an alert → its triggering events; a timeline row → verify its receipt; an agent → its decisions. All client-side navigation with variable mapping; no new endpoints.</p>
+<hr />
+<h2 id="8-lld-page-by-page-as-dashboards-file-change-map">8. LLD — page-by-page, as dashboards (file change-map)<a class="headerlink" href="#8-lld-page-by-page-as-dashboards-file-change-map" title="Permanent link">&para;</a></h2>
+<p>Each current tab becomes a <strong><code>DashboardSchema</code></strong> rendered by <code>DashboardLoader</code>, composed of registry panels. The tab's bespoke logic moves into panel components.</p>
+<table>
+<thead>
+<tr>
+<th>Current file (<code>ui/src/components/</code>)</th>
+<th>Becomes</th>
+<th>New artifacts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OverviewTab.tsx</code> (267 LOC)</td>
+<td><code>dashboards/system/overview.ts</code></td>
+<td>stat row + <code>timeseries</code> + <code>feed</code> panels; drilldowns to Explore/Incidents</td>
+</tr>
+<tr>
+<td><code>ExploreTab.tsx</code> (244 LOC)</td>
+<td><code>pages/Explore.tsx</code> (Discover-style, not a dashboard)</td>
+<td>query bar (AQL) + <strong>field sidebar</strong> (<code>FieldSidebar.tsx</code>) + histogram panel + virtualized <code>table</code>; row-expand reuses today's inspector; receipt verify centralized in <code>ReceiptDatasource</code></td>
+</tr>
+<tr>
+<td><code>IncidentsTab.tsx</code> (307)</td>
+<td><code>pages/Incidents.tsx</code> + <code>dashboards/system/incident-detail.ts</code></td>
+<td>list table + <code>provable-timeline</code> panel + response-action buttons</td>
+</tr>
+<tr>
+<td><code>DetectionsTab.tsx</code> (843 — too large)</td>
+<td><code>pages/Detections.tsx</code> + <code>pages/Rules.tsx</code> (split)</td>
+<td>detections <code>table</code> dashboard; rules catalog/dry-run/canary as its own page; <strong>split the 843-LOC file</strong> (repo rule: &lt;800 LOC)</td>
+</tr>
+<tr>
+<td><code>ApprovalsTab.tsx</code> (270)</td>
+<td><code>dashboards/system/approvals.ts</code></td>
+<td><code>approval-card</code> panel (×N) + SLA timers + bulk view</td>
+</tr>
+<tr>
+<td><code>AgentsTab.tsx</code> (133)</td>
+<td><code>dashboards/system/fleet.ts</code></td>
+<td>inventory <code>table</code> + per-agent risk <code>stat</code>/<code>timeseries</code>; freeze/revoke actions</td>
+</tr>
+<tr>
+<td><code>McpTab.tsx</code> (180)</td>
+<td><code>dashboards/system/mcp.ts</code></td>
+<td>registry <code>table</code> + manifest-drift <code>status</code> panel</td>
+</tr>
+<tr>
+<td><code>ReceiptsTab.tsx</code> (178)</td>
+<td><code>receipt-integrity</code> panel + <code>pages/Receipts.tsx</code></td>
+<td>chain browse + verify-range + evidence-pack export</td>
+</tr>
+<tr>
+<td><code>SettingsTab.tsx</code> (79)</td>
+<td><code>pages/Settings.tsx</code></td>
+<td>tenants, RBAC, contact points, notification policies, silences</td>
+</tr>
+<tr>
+<td><code>ConfigBar.tsx</code> (130)</td>
+<td><code>chrome/ControlsBar.tsx</code> + <code>chrome/TimeRangePicker.tsx</code></td>
+<td>+ <code>$var</code> selectors, live toggle, URL sync</td>
+</tr>
+<tr>
+<td><code>page.tsx</code> (fixed switch)</td>
+<td><code>chrome/AppShell.tsx</code> + route-per-page</td>
+<td>nav drives <code>DashboardLoader</code> for dashboard pages, dedicated components for Explore/Rules/Settings</td>
+</tr>
+<tr>
+<td><code>app/api.ts</code> (loose fns)</td>
+<td><code>datasources/gatewayEntity.ts</code></td>
+<td>transport <code>fetchFromGateway</code> retained; helpers migrated to datasource methods + shims</td>
+</tr>
+<tr>
+<td><code>app/store.ts</code></td>
+<td><code>state/consoleStore.ts</code></td>
+<td>adds timeRange/variables/live; URL-synced</td>
+</tr>
+</tbody>
+</table>
+<p>New directories: <code>ui/src/datasources/</code>, <code>ui/src/panels/</code> (+ <code>panels/differentiators/</code>), <code>ui/src/dashboards/</code> (+ <code>dashboards/system/</code>), <code>ui/src/chrome/</code>, <code>ui/src/state/</code>, <code>ui/src/pages/</code>.</p>
+<hr />
+<h2 id="9-rbac-real-time-performance-a11y-cross-cutting-lld">9. RBAC, real-time, performance, a11y (cross-cutting LLD)<a class="headerlink" href="#9-rbac-real-time-performance-a11y-cross-cutting-lld" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>RBAC</strong> (<code>SOC_UI_Design.md §11</code>): role comes from the gateway session; the store exposes <code>role: "viewer"|"analyst"|"approver"|"admin"</code>. Action buttons are <strong>disabled with reason</strong> (not merely hidden) when the role lacks permission — and the gateway still enforces server-side (UI gating is UX, never the control). Every console action emits its own receipt (the console is inside the evidence boundary).</li>
+<li><strong>Real-time (S5):</strong> <code>useSocStream</code> subscribes via <code>SocStreamDatasource</code>; panels of type <code>feed</code> and the Approvals badge consume deltas; everything else stays on TanStack Query polling. SSE is advisory — a dropped stream degrades to polling, never to stale-without-notice.</li>
+<li><strong>Performance:</strong> virtualized tables (TanStack virtual); server-side time-series downsampling (ASE rollups); route-level code-splitting; per-panel query dedup via shared cache keys. Targets inherit the web performance rule (LCP &lt; 2.5s, INP &lt; 200ms).</li>
+<li><strong>A11y:</strong> never color-only status (icon + label — the existing badges already pair them); keyboard nav on the controls bar and tables; honor reduced-motion; severity palette is consistent (allow=green, deny=red, approval=amber, critical=rose).</li>
+<li><strong>Redaction:</strong> panels render <code>hash</code>-typed fields as truncated mono with copy; <strong>never</strong> raw secret payloads — exports/screenshots stay safe.</li>
+</ul>
+<hr />
+<h2 id="10-phasing-reconciled-with-soc_ui_designmd-14-u0u6">10. Phasing — reconciled with <code>SOC_UI_Design.md §14</code> (U0–U6)<a class="headerlink" href="#10-phasing-reconciled-with-soc_ui_designmd-14-u0u6" title="Permanent link">&para;</a></h2>
+<p>Marked against what <code>ui/</code> <strong>already has</strong> (prototype) vs. the <strong>gap</strong> this blueprint adds.</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Goal</th>
+<th><code>ui/</code> today</th>
+<th>This blueprint adds</th>
+<th>New gateway dep</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>U0</strong></td>
+<td>App shell + framework foundation</td>
+<td>partial (shell, nav, Zustand)</td>
+<td><strong>S1 datasource layer, S2 panel registry + <code>PanelRuntime</code>, S3 <code>DashboardLoader</code>, S4 controls/time/URL-sync</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>U1 (MVP)</strong></td>
+<td>Overview + Live feed + <strong>Approvals</strong></td>
+<td>Overview + Approvals tabs (no framework)</td>
+<td>render both as dashboards; <code>approval-card</code> panel; <strong>S5 SSE</strong></td>
+<td><code>/v1/soc/stream</code></td>
+</tr>
+<tr>
+<td><strong>U2</strong></td>
+<td><strong>Incidents + Provable Timeline + Verify</strong></td>
+<td>Incidents tab (no verify panel)</td>
+<td><code>provable-timeline</code> panel; centralized chain verify</td>
+<td>(verify exists)</td>
+</tr>
+<tr>
+<td><strong>U3</strong></td>
+<td><strong>Explore (Discover) + saved searches</strong></td>
+<td>substring Explore</td>
+<td>AQL parser/autocomplete, field sidebar, histogram, virtualized table</td>
+<td><strong><code>POST /v1/soc/query</code></strong></td>
+</tr>
+<tr>
+<td><strong>U4</strong></td>
+<td><strong>Detections + Rules + Alerting UI</strong></td>
+<td>Detections tab (843 LOC)</td>
+<td>split file; rules dry-run/canary; alerting over deterministic rules</td>
+<td>(rules APIs exist)</td>
+</tr>
+<tr>
+<td><strong>U5</strong></td>
+<td><strong>Fleet + MCP + Active Response</strong></td>
+<td>Agents + MCP tabs</td>
+<td>dashboards + role-gated freeze/revoke/quarantine</td>
+<td>(control endpoints exist)</td>
+</tr>
+<tr>
+<td><strong>U6</strong></td>
+<td><strong>Receipts viewer + Analytics + in-app dashboard editor + RBAC settings</strong></td>
+<td>Receipts + Settings tabs</td>
+<td><code>receipt-integrity</code> panel; analytics dashboards; <strong>the editor (capstone)</strong></td>
+<td><code>POST /v1/soc/dashboards</code>, ClickHouse tier</td>
+</tr>
+</tbody>
+</table>
+<p><strong>MVP = U0–U2</strong>: the framework, the Overview, the live feed, the <strong>Approval Queue</strong>, and the <strong>Provable Timeline</strong>. Two of those are things Grafana and Kibana fundamentally cannot show — which is the whole point.</p>
+<hr />
+<h2 id="11-open-questions-inherited-resolved">11. Open questions inherited / resolved<a class="headerlink" href="#11-open-questions-inherited-resolved" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th><code>SOC_UI_Design.md §15</code></th>
+<th>Resolution in this blueprint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>§15.1 ClickHouse from U1 or SQLite first?</td>
+<td><strong>SQLite first</strong>; <code>SocQueryDatasource</code> interface is storage-agnostic, ClickHouse swaps in at U6 with zero UI change.</td>
+</tr>
+<tr>
+<td>§15.2 uPlot+ECharts vs Recharts?</td>
+<td><strong>Recharts bootstraps v1; uPlot+ECharts+TanStack Table are the north-star, swapped per panel behind the <code>Panel</code> interface.</strong> (Your "keep the best as future goal" decision.)</td>
+</tr>
+<tr>
+<td>§15.3 Embed in single binary vs separate Node service?</td>
+<td>Out of scope here (deployment); the static-export path is compatible with both.</td>
+</tr>
+<tr>
+<td>§15.4 Dashboards-as-code format?</td>
+<td><strong>Lean AegisAgent-native <code>DashboardSchema</code> (§7.3)</strong>, not Grafana-compatible — but a read-only Grafana-Infinity-compatible <code>/v1/soc/query</code> shape is kept for export interop (§2).</td>
+</tr>
+<tr>
+<td>§15.5 SSE vs WebSocket?</td>
+<td><strong>SSE through U5</strong>; advisory-only, so no bidirectional need until collaborative cases (post-U6).</td>
+</tr>
+</tbody>
+</table>
+<p>Newly raised by this blueprint:
+1. <strong><code>PUT /v1/approvals/:id</code> (Edit &amp; re-evaluate)</strong> — does the gateway already support editing a frozen action (re-hash + re-evaluate), or is Edit disabled until it lands? (Approval-integrity invariant: editing MUST re-hash + re-evaluate, never patch the approved hash.)
+2. <strong><code>POST /v1/soc/query</code> entity growth</strong> — version 1 now covers decision and durable Agent Security Event (<code>ase</code>) entities with typed filters, bounded aggregates, and metadata; future alert/receipt entities and richer boolean AST nodes must preserve the no-interpolation invariant and use a new compatible contract version where necessary.
+3. <strong>Saved searches / saved dashboards persistence</strong> — server-side keyed by <code>tenant_id</code>; confirm the storage table shape before U3/U6.</p>
+<hr />
+<h2 id="12-worlds-fastest-observability-ui-ultra-performance-blueprint">12. World's Fastest Observability UI (Ultra-Performance Blueprint)<a class="headerlink" href="#12-worlds-fastest-observability-ui-ultra-performance-blueprint" title="Permanent link">&para;</a></h2>
+<p>To deliver an observability console matching native desktop speed, we bypass standard Web runtime limitations. The following architectural protocols are enforced to achieve the fastest possible load times and sub-millisecond interaction frames:</p>
+<h3 id="121-binary-protocol-buffers-protobuf-over-websockets">12.1 Binary Protocol Buffers (Protobuf) over WebSockets<a class="headerlink" href="#121-binary-protocol-buffers-protobuf-over-websockets" title="Permanent link">&para;</a></h3>
+<p>Rather than parsing heavy JSON text strings—which blocks the JavaScript main thread on large payloads—real-time event streaming and dashboard query payloads utilize binary serialization.
+*   <strong>Gateway</strong>: Serializes datasets to Protobuf/FlatBuffers.
+*   <strong>Client</strong>: Decodes the binary buffers directly into JavaScript TypedArrays (e.g. <code>Float64Array</code>, <code>Int32Array</code>).
+*   <strong>Result</strong>: Eliminates CPU-bound <code>JSON.parse</code> execution entirely, cutting deserialization time for large tables from 100ms+ to &lt; 1ms.</p>
+<h3 id="122-rust-compiled-webassembly-wasm-query-transformation-engine">12.2 Rust-Compiled WebAssembly (Wasm) Query &amp; Transformation Engine<a class="headerlink" href="#122-rust-compiled-webassembly-wasm-query-transformation-engine" title="Permanent link">&para;</a></h3>
+<p>Client-side processing (AQL query parsing, auto-complete indexing, and data transformations like Group By, Pivot, and Joins) is handled by a WebAssembly core written in Rust.
+*   <strong>Pipeline</strong>: The raw binary frames from the network are fed directly into the Wasm memory space.
+*   <strong>Performance</strong>: Avoids V8 JavaScript garbage collection pauses. Computes aggregation transforms on 100,000 records in sub-millisecond timelines.</p>
+<h3 id="123-offscreencanvas-rendering-on-web-workers">12.3 OffscreenCanvas rendering on Web Workers<a class="headerlink" href="#123-offscreencanvas-rendering-on-web-workers" title="Permanent link">&para;</a></h3>
+<p>To guarantee that the UI main thread remains responsive at 120fps (zero mouse lag during heavy operations), dashboard visualizations are rendered off-thread.
+*   <strong>Worker Thread</strong>: Charting engines (uPlot/ECharts) are initialized in Web Workers using <code>OffscreenCanvas</code>.
+*   <strong>Execution</strong>: Data transfer, canvas rendering, and hover collision detection are handled in the background worker. The main UI thread only manages input dispatching and layout grid resizing.</p>
+<h3 id="124-pre-compressed-brotli-asset-delivery">12.4 Pre-Compressed Brotli Asset Delivery<a class="headerlink" href="#124-pre-compressed-brotli-asset-delivery" title="Permanent link">&para;</a></h3>
+<p>Static dashboard bundle assets are pre-compressed during build time at the maximum compression level:
+*   <strong>Compression</strong>: Assets are compiled into <code>.br</code> binaries (Brotli Level 11).
+*   <strong>Gateway Delivery</strong>: The Rust server reads pre-compressed files directly from memory and serves them instantly with <code>Content-Encoding: br</code> headers.
+*   <strong>Result</strong>: Reduces bundle transfer size to under 50KB, ensuring the entire console loads in under 150ms over standard connections.</p>
+<hr />
+<h2 id="13-summary">13. Summary<a class="headerlink" href="#13-summary" title="Permanent link">&para;</a></h2>
+<p>This blueprint turns the fixed-tabs prototype into a true Grafana/Kibana-grade console by introducing <strong>one panel framework, one datasource abstraction, one dashboard JSON model, one variables/time/drilldown layer, and one real-time stream</strong> — adopting the <em>best</em> mechanics from each product (Scenes panels, Discover, drilldowns, controls, dashboards-as-data) and <strong>skipping</strong> what doesn't fit a single-tenant integrity SOC (Git Sync, Spaces, NL query builders, SaaS connectors). The three surfaces that are uniquely AegisAgent — <strong>Approval Card, Provable Timeline, Receipt Integrity</strong> — are first-class panel types in the same registry, so the differentiators compose like everything else. The dashboard model is a <strong>phased hybrid</strong>: curated config-as-code now, the in-app editor as the capstone — shipping the AegisAgent-only value first and the commodity editor last, exactly as the product's own design and moat thesis demand.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

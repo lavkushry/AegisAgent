@@ -1,0 +1,4812 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AegisAgent Control Plane API",
+    "description": "AegisAgent control plane integrity gateway API — fail-closed approval integrity, deterministic trust-provenance gating, and verifiable action receipts.",
+    "license": {
+      "name": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "health_api",
+        "responses": {
+          "200": {
+            "description": "System is healthy"
+          }
+        }
+      }
+    },
+    "/livez": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "livez_api",
+        "responses": {
+          "200": {
+            "description": "System is live"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "readyz_api",
+        "responses": {
+          "200": {
+            "description": "System is ready"
+          }
+        }
+      }
+    },
+    "/startupz": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "startupz_api",
+        "responses": {
+          "200": {
+            "description": "System is started"
+          }
+        }
+      }
+    },
+    "/v1/admin/backup": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "create_db_backup_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBackupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Backup created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateBackupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filename",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Backup file already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/db-stats": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_db_stats_api",
+        "responses": {
+          "200": {
+            "description": "Database stats summary details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DbStats"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_agents_api",
+        "responses": {
+          "200": {
+            "description": "List of agents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/register": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "register_agent_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterAgentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Agent registered successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterAgentResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_agent_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "delete_agent_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent deleted"
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "patch_agent_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchAgentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Agent updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/freeze": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "freeze_agent_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional operator reason/comment recorded in the audit trail",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveResponseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Agent frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveResponseStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/permissions": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_agent_tool_permissions_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentToolPermission"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "grant_agent_tool_permission_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantToolPermissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Permission granted"
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/permissions/{tool_key}": {
+      "delete": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "revoke_agent_tool_permission_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tool_key",
+            "in": "path",
+            "description": "Tool Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Permission revoked"
+          },
+          "404": {
+            "description": "Agent or permission not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/report-leaked-token": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "report_leaked_agent_token_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token leak reported"
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/restore": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "restore_agent_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional operator reason/comment recorded in the audit trail",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveResponseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Agent restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveResponseStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/revoke": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "revoke_agent_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional operator reason/comment recorded in the audit trail",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveResponseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Agent revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveResponseStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/rotate-token": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "rotate_agent_token_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent token rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterAgentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/unfreeze": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "unfreeze_agent_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional operator reason/comment recorded in the audit trail",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveResponseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Agent unfrozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveResponseStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/alerts": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_alerts_api",
+        "responses": {
+          "200": {
+            "description": "List of SOC alerts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SocAlertRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/api_keys": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_api_keys_api",
+        "responses": {
+          "200": {
+            "description": "List of API keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "create_api_key_api",
+        "responses": {
+          "201": {
+            "description": "API key created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRecord"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/api_keys/{id}/revoke": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "revoke_api_key_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "API key ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API key revoked successfully"
+          },
+          "404": {
+            "description": "API key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/approvals": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_approvals_api",
+        "responses": {
+          "200": {
+            "description": "List of pending approvals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/approvals/{id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_approval_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Approval ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Approval not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/approvals/{id}/approve": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "approve_approval_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Approval ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Approved successfully"
+          },
+          "404": {
+            "description": "Approval not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/approvals/{id}/consume": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "consume_approval_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Approval ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval consumed successfully"
+          },
+          "404": {
+            "description": "Approval not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/approvals/{id}/edit": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "edit_approval_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Approval ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Approval parameters updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Approval not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/approvals/{id}/reject": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "reject_approval_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Approval ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rejected successfully"
+          },
+          "404": {
+            "description": "Approval not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/authorize": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "authorize_action_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authorization decision response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/detection_rules": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_detection_rules_api",
+        "responses": {
+          "200": {
+            "description": "List of detection rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DetectionRuleRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "upsert_detection_rule_api",
+        "responses": {
+          "201": {
+            "description": "Detection rule created or updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionRuleRecord"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/detection_rules/{id}": {
+      "delete": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "delete_detection_rule_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Detection rule ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Detection rule deleted successfully"
+          },
+          "404": {
+            "description": "Detection rule not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/graph/agent/{agent_id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_graph_for_agent_api",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent-centric evidence graph details"
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/graph/incident/{incident_id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_graph_for_incident_api",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "description": "Incident ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Incident evidence graph details"
+          },
+          "404": {
+            "description": "Incident not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/graph/run/{run_id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_graph_for_run_api",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run evidence graph details"
+          },
+          "404": {
+            "description": "Run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/incidents": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_incidents_api",
+        "responses": {
+          "200": {
+            "description": "List of SOC incidents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SocIncidentRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/incidents/{id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_incident_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Incident ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Incident details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocIncidentRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Incident not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/incidents/{id}/close": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "close_incident_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Incident ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Incident closed successfully"
+          },
+          "404": {
+            "description": "Incident not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/incidents/{id}/evidence-pack": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_incident_evidence_pack_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Incident ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ZIP archive of incident evidence pack"
+          },
+          "404": {
+            "description": "Incident not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/incidents/{id}/narrate": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "narrate_incident_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Incident ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Incident narrative text"
+          },
+          "404": {
+            "description": "Incident not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/receipts": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_receipts_api",
+        "responses": {
+          "200": {
+            "description": "List of action receipts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActionReceiptRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/receipts/verify-chain": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "verify_receipt_chain_api",
+        "responses": {
+          "200": {
+            "description": "Chain verification result"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/receipts/{id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_receipt_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Receipt ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Receipt details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionReceiptRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Receipt not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/receipts/{id}/verify": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "verify_receipt_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Receipt ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Receipt verification status"
+          },
+          "404": {
+            "description": "Receipt not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/soc/query": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "soc_query_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SocQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Structured SOC query result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocQueryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid entity, aggregate, or filter shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/soc/rules": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_soc_rules_api",
+        "responses": {
+          "200": {
+            "description": "List of effective SOC rules"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "create_soc_rule_api",
+        "responses": {
+          "201": {
+            "description": "Custom rule created or updated successfully"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/soc/rules/reload": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "reload_soc_rules_api",
+        "responses": {
+          "200": {
+            "description": "Detection rules reloaded successfully"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/soc/rules/{rule_key}/backtest": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "backtest_soc_rule_api",
+        "parameters": [
+          {
+            "name": "rule_key",
+            "in": "path",
+            "description": "SOC rule key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backtest run completed successfully"
+          },
+          "404": {
+            "description": "Rule not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/soc/semantic-search": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "semantic_search_api",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "description": "Semantic search query string",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Limit on returned results",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of semantically similar alerts/incidents"
+          },
+          "400": {
+            "description": "Empty query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Semantic search not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/soc/summary": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "soc_summary_api",
+        "responses": {
+          "200": {
+            "description": "SOC statistics summary details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocSummary"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/stats": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_tenant_stats_api",
+        "responses": {
+          "200": {
+            "description": "Tenant stats summary details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantStats"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "create_tenant_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Tenant created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantRecord"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/risk-escalation": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_tenant_risk_escalation_config_api",
+        "responses": {
+          "200": {
+            "description": "Risk escalation thresholds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskEscalationConfig"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "put_tenant_risk_escalation_config_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RiskEscalationConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Risk escalation thresholds updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskEscalationConfig"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/risk-weights": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_tenant_risk_weights_api",
+        "responses": {
+          "200": {
+            "description": "Effective risk weights",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskWeights"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "put_tenant_risk_weights_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RiskWeights"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Risk weights updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskWeights"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/{id}": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "get_tenant_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "delete_tenant_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Tenant deleted successfully"
+          },
+          "404": {
+            "description": "Tenant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/tenants/{id}/export": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "export_tenant_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant data portability export details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantExport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/tools": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "register_tool_api",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterToolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Tool registered successfully"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/version": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "version_api",
+        "responses": {
+          "200": {
+            "description": "Version details"
+          }
+        }
+      }
+    },
+    "/v1/webhook_subscriptions": {
+      "get": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "list_webhook_subscriptions_api",
+        "responses": {
+          "200": {
+            "description": "List of webhook subscriptions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookSubscriptionRecord"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "create_webhook_subscription_api",
+        "responses": {
+          "201": {
+            "description": "Webhook subscription created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionRecord"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/webhook_subscriptions/{id}": {
+      "delete": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "delete_webhook_subscription_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Webhook subscription ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook subscription deleted successfully"
+          },
+          "404": {
+            "description": "Subscription not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/v1/webhook_subscriptions/{id}/reactivate": {
+      "post": {
+        "tags": [
+          "crate"
+        ],
+        "operationId": "reactivate_webhook_subscription_api",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Webhook subscription ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook subscription reactivated successfully"
+          },
+          "404": {
+            "description": "Subscription not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActionReceiptRecord": {
+        "type": "object",
+        "description": "Tamper-evident, hash-chained action receipt. The hashed body is every field\nhere EXCEPT `receipt_hash` and `created_at` (see routes::receipt_body_value),\nwith the previous link (`prev_receipt_hash`) inside the body. Scheme aegis-jcs-1.",
+        "required": [
+          "id",
+          "tenant_id",
+          "ts",
+          "source_trust",
+          "decision",
+          "prev_receipt_hash",
+          "receipt_hash",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "nullable": true
+          },
+          "action_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "agent_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "approver": {
+            "type": "string",
+            "nullable": true
+          },
+          "canon_version": {
+            "type": "string",
+            "description": "Canonicalization scheme that produced `action_hash` / `receipt_hash` (e.g.\n`aegis-jcs-1`). Additive metadata so each receipt is self-describing and a\nfuture scheme bump stays migratable — NOT part of the canonical body or\n`receipt_hash` (the byte-parity-locked chain is untouched)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "decision_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "prev_receipt_hash": {
+            "type": "string"
+          },
+          "receipt_hash": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string",
+            "nullable": true
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "signature": {
+            "type": "string",
+            "description": "Optional Ed25519 signature (lowercase hex) computed OVER `receipt_hash`.\nAdditive metadata — NOT part of the canonical body or `receipt_hash`.\nNULL when receipt signing is not configured (hermetic default = unsigned).",
+            "nullable": true
+          },
+          "signer_key_id": {
+            "type": "string",
+            "description": "Optional human-readable identifier for the key that produced `signature`\n(#1211, parsed from an optional `\"key_id:\"` prefix on\n`AEGIS_RECEIPT_SIGNING_KEY`) — audit/operator convenience only.\nVerification never depends on this: `signer_public_key` is embedded\nper-receipt, so receipts stay verifiable after the active key rotates.",
+            "nullable": true
+          },
+          "signer_public_key": {
+            "type": "string",
+            "description": "Lowercase-hex Ed25519 public key of the signer, so a third party can verify\nthe `signature` without contacting the gateway. NULL when unsigned.",
+            "nullable": true
+          },
+          "source_trust": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string",
+            "nullable": true
+          },
+          "trace_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "ts": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ActiveResponseRequest": {
+        "type": "object",
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Optional alias accepted for UI clients that label the field as a comment.",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "description": "Operator-supplied audit reason for a containment/control action.",
+            "nullable": true
+          }
+        }
+      },
+      "ActiveResponseStatusResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "action",
+          "reason_recorded"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason_recorded": {
+            "type": "boolean"
+          },
+          "server_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "agent_key",
+          "name",
+          "environment",
+          "risk_tier",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "agent_key": {
+            "type": "string"
+          },
+          "allowed_environments": {
+            "type": "string",
+            "description": "JSON-encoded list of environments this agent may call from (#1391), e.g.\n`[\"production\",\"staging\"]`. `None` = unrestricted (backwards-compatible).",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "force_approval": {
+            "type": "boolean",
+            "description": "Set by the SOC Response Engine (Phase 4, #1184) when a `trust_escalation`\nincident is detected: forces every subsequent `allow` decision for this\nagent into `require_approval` until an operator clears it. Additive."
+          },
+          "framework": {
+            "type": "string",
+            "nullable": true
+          },
+          "frozen_reason": {
+            "type": "string",
+            "description": "Operator-supplied reason for the most recent freeze, surfaced in the SOC UI\nand audit trail. Cleared on unfreeze. Additive (#0079).",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the most recent successful `/v1/authorize` call by this agent\n(heartbeat). NULL if the agent has never made a request. Additive (#0080).",
+            "nullable": true
+          },
+          "model_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "model_provider": {
+            "type": "string",
+            "nullable": true
+          },
+          "mtls_cn": {
+            "type": "string",
+            "description": "Client certificate Subject CN bound to this agent for mTLS\nauthentication (#1310). `None` = mTLS not bound; bearer-token auth via\n`agent_token` is the only path (backwards-compatible).",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_email": {
+            "type": "string",
+            "nullable": true
+          },
+          "owner_team": {
+            "type": "string",
+            "nullable": true
+          },
+          "purpose": {
+            "type": "string",
+            "nullable": true
+          },
+          "quarantined_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp the agent was placed into `quarantined` status. NULL while not\nquarantined; cleared when the status changes away from `quarantined`.\nAdditive (#0078).",
+            "nullable": true
+          },
+          "risk_tier": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AgentToolPermission": {
+        "type": "object",
+        "description": "A single agent-to-tool permission binding (#1390).",
+        "required": [
+          "id",
+          "tenant_id",
+          "agent_id",
+          "tool_key",
+          "created_at"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "tool_key": {
+            "type": "string"
+          }
+        }
+      },
+      "ApiKeyRecord": {
+        "type": "object",
+        "description": "TASK-0093 (#939): a tenant-managed API key. `key_hash` is `sha256(key)` —\nthe plaintext key is returned exactly once at creation and never persisted.",
+        "required": [
+          "id",
+          "tenant_id",
+          "key_hash",
+          "name",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "key_hash": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ApprovalCallback": {
+        "type": "object",
+        "description": "Optional webhook callback (#1187/TASK-0082-0083) requested by the caller\nfor a `require_approval` decision. If set, the resulting approval row\nstores `callback_url` verbatim and `sha256(secret)` as\n`callback_secret_hash` — the plaintext secret is never persisted\n(redaction invariant). A future dispatcher can sign callback payloads with\n`sha256(secret)` as the HMAC key, which the receiver can re-derive from\nthe secret it already holds.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "nullable": true
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "ApprovalRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "decision_id",
+          "status",
+          "original_skill_call",
+          "original_call_hash",
+          "created_at"
+        ],
+        "properties": {
+          "approver_group": {
+            "type": "string",
+            "nullable": true
+          },
+          "approver_user_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "callback_secret_hash": {
+            "type": "string",
+            "description": "`sha256(secret)` for the callback above — the plaintext secret is\nnever stored (#1187/TASK-0083).",
+            "nullable": true
+          },
+          "callback_url": {
+            "type": "string",
+            "description": "Optional webhook URL to notify when this approval is decided\n(#1187/TASK-0082). `#[sqlx(default)]` so existing `SELECT` column\nlists that predate this column still deserialize.",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "decision_id": {
+            "type": "string"
+          },
+          "edited_skill_call": {
+            "type": "string",
+            "nullable": true
+          },
+          "effective_call_hash": {
+            "type": "string",
+            "description": "Set when the approval has been edited (#approval-edit-lifecycle): the\nhash of the edited tool call. `original_call_hash` is preserved as the\nagent's original action; the *effective* hash an approve/consume binds to\nis `effective_call_hash` when present, else `original_call_hash`. NULL =\nnot edited. `#[sqlx(default)]` so SELECTs predating this column still\ndeserialize.",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "original_call_hash": {
+            "type": "string"
+          },
+          "original_skill_call": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ApprovalResponseInfo": {
+        "type": "object",
+        "required": [
+          "approval_id",
+          "status",
+          "expires_at",
+          "action_hash"
+        ],
+        "properties": {
+          "action_hash": {
+            "type": "string"
+          },
+          "approval_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "approver_group": {
+            "type": "string",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "ApproveRequest": {
+        "type": "object",
+        "required": [
+          "approver_user_id"
+        ],
+        "properties": {
+          "approver_user_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "AuditEventRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "event_type",
+          "event_json",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "nullable": true
+          },
+          "agent_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "approval_id": {
+            "type": "string",
+            "description": "#1301: for approval-lifecycle events (`approval_created`,\n`approval_decided`, etc.), the approval this event relates to.",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision_id": {
+            "type": "string",
+            "description": "#1301: links this audit event back to the authorization decision that\nproduced it, so operators/compliance can correlate the full trail for\na single decision.",
+            "nullable": true
+          },
+          "event_json": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "output_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "resource": {
+            "type": "string",
+            "nullable": true
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "skill": {
+            "type": "string",
+            "nullable": true
+          },
+          "span_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "user_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "AuthorizeAgentContext": {
+        "type": "object",
+        "required": [
+          "id",
+          "environment"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthorizeDynamicContext": {
+        "type": "object",
+        "required": [
+          "source_trust",
+          "contains_sensitive_data"
+        ],
+        "properties": {
+          "contains_sensitive_data": {
+            "type": "boolean"
+          },
+          "source_trust": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthorizeRequest": {
+        "type": "object",
+        "required": [
+          "agent",
+          "tool_call",
+          "context"
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AuthorizeAgentContext"
+          },
+          "callback": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalCallback"
+              }
+            ],
+            "nullable": true
+          },
+          "context": {
+            "$ref": "#/components/schemas/AuthorizeDynamicContext"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Dry-run / simulation mode (#1281): evaluate the decision (Cedar +\nrisk scoring) but skip every persistence and side-effecting path —\nno `decisions`/`audit_events`/`approvals`/`action_receipts` rows, no\nSOC event, no agent quarantine, no GitHub PR comment/check update.\n`None`/`Some(false)` is the normal persisted path.",
+            "nullable": true
+          },
+          "nonce": {
+            "type": "string",
+            "description": "Opt-in replay-protection nonce (#1306). When present, the gateway\nrejects a repeat of the same `(tenant, agent, nonce)` with 409\n`replay_nonce_reused`. `None` skips all replay checks (backwards\ncompatible). This is a distinct mechanism from `request_id`\nidempotency above: `request_id` *replays the original decision*,\nwhile `nonce` *rejects* the repeat outright.",
+            "nullable": true
+          },
+          "request_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional client-supplied timestamp paired with `nonce` (#1306). If\nolder than the replay window (5 minutes), the gateway rejects with\n409 `replay_timestamp_expired`. Ignored if `nonce` is `None`.",
+            "nullable": true
+          },
+          "tool_call": {
+            "$ref": "#/components/schemas/AuthorizeToolCall"
+          },
+          "trace": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthorizeTraceContext"
+              }
+            ],
+            "nullable": true
+          },
+          "user": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthorizeUserContext"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "AuthorizeResponse": {
+        "type": "object",
+        "required": [
+          "decision_id",
+          "decision",
+          "risk_score",
+          "risk_level",
+          "composite_risk_score",
+          "reason",
+          "matched_policies",
+          "root_trust_level"
+        ],
+        "properties": {
+          "approval": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalResponseInfo"
+              }
+            ],
+            "nullable": true
+          },
+          "composite_risk_score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Advisory composite risk score (#1289), `0..=100`. Display metadata\nonly — never gates `decision` (Law 1)."
+          },
+          "decision": {
+            "type": "string"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "#1281: true if this response was produced by a dry-run request\n(`AuthorizeRequest.dry_run == Some(true)`) — nothing was persisted."
+          },
+          "matched_policies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "receipt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptIdentity"
+              }
+            ],
+            "nullable": true
+          },
+          "redacted_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields to strip from the tool-call parameters before execution (#1385).\nNon-empty only when `decision == \"redact\"`."
+          },
+          "risk_level": {
+            "type": "string"
+          },
+          "risk_score": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "root_trust_level": {
+            "type": "string",
+            "description": "#1293: the effective (tighten-only) trust level used to gate this\ndecision — the most restrictive of this hop's own `context.source_trust`\nand any inherited `trace.root_trust_level`. The caller should forward\nthis value as `trace.root_trust_level` if it triggers a downstream\nagent, so trust propagates correctly through multi-hop chains."
+          }
+        }
+      },
+      "AuthorizeToolCall": {
+        "type": "object",
+        "required": [
+          "tool",
+          "action",
+          "mutates_state",
+          "parameters"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "mutates_state": {
+            "type": "boolean"
+          },
+          "parameters": {},
+          "resource": {
+            "type": "string",
+            "nullable": true
+          },
+          "tool": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthorizeTraceContext": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "trace_id"
+        ],
+        "properties": {
+          "parent_run_id": {
+            "type": "string",
+            "description": "#1293: the run_id of the upstream agent that triggered this call, if\nthis is a hop in a multi-agent chain (A -> B -> C). `None` for a\nchain's first hop. Recorded on the decision for audit/evidence-graph\nreconstruction; not itself used in trust computation.",
+            "nullable": true
+          },
+          "root_trust_level": {
+            "type": "string",
+            "description": "#1293: the most-restrictive (tighten-only) trust level accumulated by\nthe upstream caller's chain so far, e.g. returned to Agent A in its\nown `/v1/authorize` response and forwarded here by Agent A when it\ntriggers Agent B. `None` for a chain's first hop, in which case this\nhop's effective trust is simply its own `context.source_trust`.",
+            "nullable": true
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthorizeUserContext": {
+        "type": "object",
+        "required": [
+          "id",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTenantRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "plan"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "agent_id",
+          "skill",
+          "action",
+          "input_json",
+          "decision",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "composite_risk_score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Advisory composite risk score (#1289), `0..=100`. Computed by\n`risk::compute_composite_risk_score` and never used to gate the\n`decision` itself (Law 1). NULL on rows written before this column\nexisted and on idempotent replays that predate it.",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input_json": {
+            "type": "string"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Wall-clock time in milliseconds spent evaluating this `/v1/authorize`\ncall, from agent resolution through the final decision (excludes the\nHTTP framing itself). NULL on rows written before this column existed,\nand on idempotent replays (#0072), which intentionally skip\nre-evaluation. Additive (#0081) — surfaced for SOC/perf dashboards.",
+            "nullable": true
+          },
+          "matched_policy_ids": {
+            "type": "string",
+            "nullable": true
+          },
+          "parent_run_id": {
+            "type": "string",
+            "description": "#1293: the upstream run_id that triggered this hop, if part of a\nmulti-agent chain. NULL for a chain's first hop or rows written\nbefore this column existed.",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Caller-supplied idempotency key (#0072), copied from\n`AuthorizeRequest.request_id`. NULL if the caller didn't supply one. A\nrepeat `/v1/authorize` call with the same `(tenant_id, agent_id,\nrequest_id)` returns this decision unchanged instead of re-evaluating.",
+            "nullable": true
+          },
+          "resource": {
+            "type": "string",
+            "nullable": true
+          },
+          "risk_score": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "root_trust_level": {
+            "type": "string",
+            "description": "#1293: the effective (tighten-only) trust level this decision was\ngated on. NULL on rows written before this column existed.",
+            "nullable": true
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "skill": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "user_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "DetectionRuleRecord": {
+        "type": "object",
+        "description": "TASK-0088 (#934): a tenant-managed detection rule. First step toward\nSOC-003 (#1186) — `condition` and `summary_template` hold a YAML rule\nbody that will eventually be loaded by `detect.rs` to replace the\nhardcoded Rust detection functions. `enabled` lets operators turn a rule\noff without deleting it.",
+        "required": [
+          "id",
+          "tenant_id",
+          "rule_key",
+          "name",
+          "severity",
+          "condition",
+          "summary_template",
+          "enabled",
+          "created_at"
+        ],
+        "properties": {
+          "condition": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rule_key": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "summary_template": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "DiscoverMcpToolsRequest": {
+        "type": "object",
+        "required": [
+          "tools"
+        ],
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/McpToolManifestItem"
+            }
+          }
+        }
+      },
+      "EditApprovalRequest": {
+        "type": "object",
+        "required": [
+          "approver_user_id",
+          "edited_tool_call"
+        ],
+        "properties": {
+          "approver_user_id": {
+            "type": "string"
+          },
+          "edited_tool_call": {
+            "$ref": "#/components/schemas/AuthorizeToolCall"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ErrorReason": {
+        "type": "string",
+        "description": "A defined, finite set of machine-readable error reasons.\n\nMirrors the precedent set by Kubernetes' own `StatusReason` enum: each\nreason maps to exactly one HTTP status code, so a `reason` always implies\nthe same `code` (see [`ErrorReason::status_code`]).",
+        "enum": [
+          "BadRequest",
+          "Unauthorized",
+          "Forbidden",
+          "NotFound",
+          "Conflict",
+          "AlreadyExists",
+          "Invalid",
+          "Timeout",
+          "TooManyRequests",
+          "NotImplemented",
+          "UnsupportedMediaType",
+          "InternalError",
+          "ServiceUnavailable",
+          "Unknown"
+        ]
+      },
+      "GrantToolPermissionRequest": {
+        "type": "object",
+        "description": "Request body for `POST /v1/agents/:id/permissions` (#1390).",
+        "required": [
+          "tool_key"
+        ],
+        "properties": {
+          "tool_key": {
+            "type": "string"
+          }
+        }
+      },
+      "InspectMcpResponseRequest": {
+        "type": "object",
+        "description": "`POST /v1/mcp/servers/:server_key/inspect` (#1333) request body. The SDK\nsubmits this *after* executing an MCP-routed tool call — the gateway\nitself never observes tool responses on the `/v1/authorize` path.",
+        "required": [
+          "agent_id",
+          "tool_key",
+          "response_text"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "decision_id": {
+            "type": "string",
+            "description": "Optional correlation ids, if the caller has them.",
+            "nullable": true
+          },
+          "response_text": {
+            "type": "string",
+            "description": "The raw tool response to scan. Never persisted — only the resulting\nfinding categories/counts are stored (redaction invariant)."
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "tool_key": {
+            "type": "string"
+          }
+        }
+      },
+      "McpServerRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "server_key",
+          "name",
+          "transport",
+          "trust_level",
+          "endpoint",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "inspection_enabled": {
+            "type": "boolean",
+            "description": "#1333: per-server opt-in toggle for MCP response inspection. Defaults\nto `false` — inspection only runs once explicitly enabled."
+          },
+          "last_discovery_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the most recent `POST /v1/mcp/servers/:server_key/tools`\ndiscovery call. `None` if the server has never had a discovery run.",
+            "nullable": true
+          },
+          "manifest_hash": {
+            "type": "string",
+            "description": "Pinned MCP tool-manifest hash (scheme `mcp-manifest-1`). Empty until the\nfirst discovery pins it; re-pinned on drift. Surfaced so operators can see\nthe current manifest fingerprint alongside the server's status."
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_team": {
+            "type": "string",
+            "nullable": true
+          },
+          "server_key": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "trust_level": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "McpToolManifestItem": {
+        "type": "object",
+        "required": [
+          "tool_key",
+          "name",
+          "risk",
+          "mutates_state",
+          "approval_required"
+        ],
+        "properties": {
+          "approval_required": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "input_schema": {
+            "nullable": true
+          },
+          "mutates_state": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "risk": {
+            "type": "string"
+          },
+          "tool_key": {
+            "type": "string"
+          }
+        }
+      },
+      "McpToolRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "server_id",
+          "tool_key",
+          "name",
+          "risk",
+          "mutates_state",
+          "approval_required",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "approval_required": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "input_schema": {
+            "type": "string",
+            "nullable": true
+          },
+          "mutates_state": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "risk": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "tool_key": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "McpToolStatusResponse": {
+        "type": "object",
+        "required": [
+          "server_key",
+          "tool_key",
+          "status"
+        ],
+        "properties": {
+          "server_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tool_key": {
+            "type": "string"
+          }
+        }
+      },
+      "PatchAgentRequest": {
+        "type": "object",
+        "properties": {
+          "environment": {
+            "type": "string",
+            "nullable": true
+          },
+          "framework": {
+            "type": "string",
+            "nullable": true
+          },
+          "model_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "model_provider": {
+            "type": "string",
+            "nullable": true
+          },
+          "mtls_cn": {
+            "type": "string",
+            "description": "Bind this agent to a client certificate Subject CN for mTLS\nauthentication (#1310). `Some` sets/rebinds; omit the field to leave\nthe current binding unchanged. Revoke access for a compromised\ncertificate via the CA's CRL (`AEGIS_MTLS_CRL_PATH`), not by clearing\nthis field.",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "owner_email": {
+            "type": "string",
+            "nullable": true
+          },
+          "owner_team": {
+            "type": "string",
+            "nullable": true
+          },
+          "purpose": {
+            "type": "string",
+            "nullable": true
+          },
+          "risk_tier": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "PolicyAuditLogRecord": {
+        "type": "object",
+        "description": "#1312: tamper-evident, append-only transparency-log entry for a policy\nchange (create/update/delete/rollback). Hash-chained like\n[`ActionReceiptRecord`] — `entry_hash` covers `prev_hash`, so the chain can\nbe re-verified end-to-end (see `routes::policy_audit_log_entry_value`).\nThe `policy_audit_log` table additionally has SQLite triggers that abort\nany `UPDATE`/`DELETE`, making it append-only at the database level.",
+        "required": [
+          "id",
+          "tenant_id",
+          "policy_id",
+          "policy_key",
+          "action",
+          "body_hash",
+          "diff_summary",
+          "prev_hash",
+          "entry_hash",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "One of `created` | `updated` | `deleted` | `rolled_back`."
+          },
+          "body_hash": {
+            "type": "string",
+            "description": "`sha256:<hex>` of the resulting policy body (the body being deleted,\nfor `deleted`)."
+          },
+          "changed_by": {
+            "type": "string",
+            "description": "Identity of the actor that made the change, if known.",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "diff_summary": {
+            "type": "string",
+            "description": "Short human-readable description of what changed."
+          },
+          "entry_hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "policy_key": {
+            "type": "string"
+          },
+          "prev_hash": {
+            "type": "string",
+            "description": "`entry_hash` of the previous entry in this tenant's chain, or `\"\"` for\nthe chain's genesis entry."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PolicyRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "policy_key",
+          "name",
+          "language",
+          "body",
+          "version",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "policy_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "PolicyVersionRecord": {
+        "type": "object",
+        "description": "TASK-0091 (#937): an archived prior version of a [`PolicyRecord`], written\nby `routes::update_policy` before the `policies` row is overwritten in\nplace — gives operators an audit trail of every prior policy version.",
+        "required": [
+          "id",
+          "tenant_id",
+          "policy_id",
+          "policy_key",
+          "name",
+          "language",
+          "body",
+          "version",
+          "status",
+          "created_at",
+          "archived_at"
+        ],
+        "properties": {
+          "archived_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "policy_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "RegisterAgentRequest": {
+        "type": "object",
+        "required": [
+          "agent_key",
+          "name",
+          "environment",
+          "risk_tier"
+        ],
+        "properties": {
+          "agent_key": {
+            "type": "string"
+          },
+          "allowed_environments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Environments this agent is permitted to call from (#1391).\n`None` or empty = unrestricted. Stored as JSON in the DB.",
+            "nullable": true
+          },
+          "environment": {
+            "type": "string"
+          },
+          "framework": {
+            "type": "string",
+            "nullable": true
+          },
+          "model_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "model_provider": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_team": {
+            "type": "string",
+            "nullable": true
+          },
+          "purpose": {
+            "type": "string",
+            "nullable": true
+          },
+          "risk_tier": {
+            "type": "string"
+          },
+          "signing_key": {
+            "type": "string",
+            "description": "Optional HMAC-SHA256 signing key (#1403). When set, every\n`/v1/authorize` call must carry `X-Aegis-Request-Signature: sha256=<hmac-hex>`.",
+            "nullable": true
+          }
+        }
+      },
+      "RegisterAgentResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "agent_key",
+          "agent_token"
+        ],
+        "properties": {
+          "agent_key": {
+            "type": "string"
+          },
+          "agent_token": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "RegisterMcpServerRequest": {
+        "type": "object",
+        "required": [
+          "server_key",
+          "name",
+          "transport",
+          "trust_level",
+          "endpoint"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_team": {
+            "type": "string",
+            "nullable": true
+          },
+          "server_key": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
+          },
+          "transport": {
+            "type": "string"
+          },
+          "trust_level": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterMcpServerResponse": {
+        "type": "object",
+        "required": [
+          "server_id",
+          "server_key",
+          "status"
+        ],
+        "properties": {
+          "server_id": {
+            "type": "string"
+          },
+          "server_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterToolAction": {
+        "type": "object",
+        "required": [
+          "action_key",
+          "risk",
+          "mutates_state",
+          "approval_required",
+          "default_decision"
+        ],
+        "properties": {
+          "action_key": {
+            "type": "string"
+          },
+          "approval_required": {
+            "type": "boolean"
+          },
+          "data_access": {
+            "type": "string",
+            "nullable": true
+          },
+          "default_decision": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "mutates_state": {
+            "type": "boolean"
+          },
+          "risk": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterToolRequest": {
+        "type": "object",
+        "required": [
+          "skill_key",
+          "name",
+          "type",
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegisterToolAction"
+            }
+          },
+          "auth_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "default_risk": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_team": {
+            "type": "string",
+            "nullable": true
+          },
+          "skill_key": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "RiskEscalationConfig": {
+        "type": "object",
+        "description": "Per-tenant configuration for [`maybe_escalate_agent_risk_tier`]. Falls\nback to [`Default`] when a tenant has no override row.",
+        "required": [
+          "denial_threshold",
+          "window_minutes"
+        ],
+        "properties": {
+          "denial_threshold": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Escalate once more than this many `deny` decisions land within the window."
+          },
+          "window_minutes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RiskWeights": {
+        "type": "object",
+        "description": "Per-tenant configurable weights. Defaults come from `AEGIS_RISK_*` env vars\n(see [`RiskWeights::from_env`]) and may be overridden per-tenant via\n`tenant_risk_weights` (see `db::get_risk_weights`).",
+        "required": [
+          "environment_weight_mutating",
+          "context_trust_penalty_trusted_internal_signed",
+          "context_trust_penalty_trusted_internal_unsigned",
+          "context_trust_penalty_semi_trusted_customer",
+          "context_trust_penalty_untrusted_external",
+          "context_trust_penalty_malicious_suspected",
+          "context_trust_penalty_unknown",
+          "mcp_trust_penalty",
+          "anomaly_weight_pct",
+          "approval_credit"
+        ],
+        "properties": {
+          "anomaly_weight_pct": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Percentage (0-100+) applied to `RiskInputs::anomaly_score` before adding it."
+          },
+          "approval_credit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Subtracted when `RiskInputs::had_prior_approval` is true."
+          },
+          "context_trust_penalty_malicious_suspected": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "context_trust_penalty_semi_trusted_customer": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "context_trust_penalty_trusted_internal_signed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "context_trust_penalty_trusted_internal_unsigned": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "context_trust_penalty_unknown": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "context_trust_penalty_untrusted_external": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "environment_weight_mutating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Added when `RiskInputs::mutates_state` is true."
+          },
+          "mcp_trust_penalty": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Added when `RiskInputs::is_mcp_call` is true."
+          }
+        }
+      },
+      "SocAlertRecord": {
+        "type": "object",
+        "description": "SOC Phase 5 — persisted detection alert (one rule fired on one event).\nStores identifiers, summary and severity only — never raw payloads or secrets\n(redaction invariant). Tenant-scoped; `source_event_id` links back to the ASE\nevent that triggered the alert.",
+        "required": [
+          "id",
+          "tenant_id",
+          "rule",
+          "severity",
+          "agent_id",
+          "source_event_id",
+          "summary",
+          "created_at"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "source_event_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SocIncidentRecord": {
+        "type": "object",
+        "description": "SOC Phase 5 — persisted correlation incident (multi-event pattern detected).\n`source_event_ids` is a JSON array of contributing event IDs. Stores identifiers\nand summary only — never payloads or secrets (redaction invariant). Tenant-scoped.\n\nPhase 6 lifecycle: `status` is `\"open\"` on creation and flips to `\"closed\"` via\n`POST /v1/incidents/:id/close`. `closed_at` is set to the RFC-3339 close timestamp\nat that point (NULL while open). The RCA narrator is gated on closed incidents.",
+        "required": [
+          "id",
+          "tenant_id",
+          "kind",
+          "severity",
+          "agent_id",
+          "summary",
+          "source_event_ids",
+          "opened_at",
+          "status"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "closed_at": {
+            "type": "string",
+            "description": "RFC-3339 timestamp when the incident was closed; NULL while open.",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "opened_at": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "source_event_ids": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Lifecycle status: `\"open\"` (default) or `\"closed\"`."
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SocQueryFieldDescriptor": {
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "facetable"
+        ],
+        "properties": {
+          "facetable": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "SocQueryFilters": {
+        "type": "object",
+        "description": "Structured filter for `POST /v1/soc/query`.\n\nThe gateway accepts a fixed allowlist only. Unknown fields are rejected\nbefore execution so clients cannot smuggle raw SQL/operators into the query\nbuilder.",
+        "properties": {
+          "action": {
+            "type": "string",
+            "nullable": true
+          },
+          "action_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "agent_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "decision": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "from": {
+            "type": "string",
+            "nullable": true
+          },
+          "q": {
+            "type": "string",
+            "nullable": true
+          },
+          "receipt_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "resource": {
+            "type": "string",
+            "nullable": true
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "severity": {
+            "type": "string",
+            "nullable": true
+          },
+          "skill": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_component": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_trust": {
+            "type": "string",
+            "nullable": true
+          },
+          "to": {
+            "type": "string",
+            "nullable": true
+          },
+          "tool": {
+            "type": "string",
+            "description": "Public alias for the legacy `skill` storage field.",
+            "nullable": true
+          },
+          "trace_id": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SocQueryMeta": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "SocQueryRequest": {
+        "type": "object",
+        "description": "Request body for `POST /v1/soc/query`.\n\n`entity` and `aggregate` are validated by the gateway against fixed\nallowlists. This REST contract is intentionally flat and storage-neutral so\nthe same datasource can back Explore tables, dashboard stats, and\ncount-over-time panels.",
+        "required": [
+          "entity"
+        ],
+        "properties": {
+          "aggregate": {
+            "type": "string",
+            "description": "`none`/omitted for paginated rows, `count`, or `count_over_time`.",
+            "nullable": true
+          },
+          "cursor": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "entity": {
+            "type": "string"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/SocQueryFilters"
+          },
+          "group_by": {
+            "type": "string",
+            "description": "Allowlisted field for the `count_by` aggregate.",
+            "nullable": true
+          },
+          "interval": {
+            "type": "string",
+            "description": "Bucket for `count_over_time`: `minute`, `hour`, or `day`.",
+            "nullable": true
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Public query-contract version. Currently only version 1 is accepted.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SocQueryResponse": {
+        "type": "object",
+        "description": "DataFrame-compatible response envelope used by every SOC query shape.",
+        "required": [
+          "version",
+          "entity",
+          "rows",
+          "field_descriptors",
+          "meta"
+        ],
+        "properties": {
+          "aggregate": {
+            "type": "string",
+            "nullable": true
+          },
+          "entity": {
+            "type": "string"
+          },
+          "field_descriptors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SocQueryFieldDescriptor"
+            }
+          },
+          "group_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SocQueryMeta"
+          },
+          "rows": {
+            "type": "array",
+            "items": {}
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SocSummary": {
+        "type": "object",
+        "description": "SOC query layer — tenant-scoped aggregate counts for `GET /v1/soc/summary`.\nAll counts are derived from parameterized COUNT queries bound to `tenant_id` —\nno cross-tenant leakage (CWE-284). `alerts_high` = severity='high';\n`incidents_open` / `incidents_closed` split on the lifecycle `status` column.",
+        "required": [
+          "alerts_total",
+          "alerts_high",
+          "incidents_total",
+          "incidents_open",
+          "incidents_closed",
+          "agents_total",
+          "approvals_pending",
+          "decisions_today",
+          "denies_today",
+          "deny_rate_today",
+          "risk_posture",
+          "hourly_decisions_24h"
+        ],
+        "properties": {
+          "agents_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "alerts_high": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "alerts_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "approvals_pending": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "decisions_today": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "denies_today": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "deny_rate_today": {
+            "type": "number",
+            "format": "double"
+          },
+          "hourly_decisions_24h": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "incidents_closed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "incidents_open": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "incidents_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "risk_posture": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusError": {
+        "type": "object",
+        "description": "A structured, Kubernetes `Status`-style error response.\n\n```json\n{\n\"kind\": \"Status\",\n\"apiVersion\": \"v1\",\n\"status\": \"Failure\",\n\"message\": \"agent not found\",\n\"reason\": \"NotFound\",\n\"details\": {\"name\": \"agent-123\"},\n\"code\": 404\n}\n```",
+        "required": [
+          "kind",
+          "apiVersion",
+          "status",
+          "message",
+          "reason",
+          "code"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "details": {
+            "nullable": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ErrorReason"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "TenantExport": {
+        "type": "object",
+        "description": "GDPR data-portability bundle (#946): the complete set of a single tenant's\nrecords, assembled tenant-scoped for `GET /v1/tenants/:id/export`. Serialized\nto JSON; every list is filtered by `tenant_id`, so it never crosses tenants.",
+        "required": [
+          "schema",
+          "tenant_id",
+          "exported_at",
+          "agents",
+          "decisions",
+          "approvals",
+          "action_receipts",
+          "audit_events",
+          "mcp_servers"
+        ],
+        "properties": {
+          "action_receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionReceiptRecord"
+            }
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentRecord"
+            }
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRecord"
+            }
+          },
+          "audit_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEventRecord"
+            }
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionRecord"
+            }
+          },
+          "exported_at": {
+            "type": "string",
+            "description": "RFC 3339 UTC time the export was produced."
+          },
+          "mcp_servers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/McpServerRecord"
+            }
+          },
+          "schema": {
+            "type": "string",
+            "description": "Format tag so consumers can version the export shape."
+          },
+          "tenant": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TenantRecord"
+              }
+            ],
+            "nullable": true
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TenantRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "plan",
+          "created_at"
+        ],
+        "properties": {
+          "auto_respond_enabled": {
+            "type": "boolean",
+            "description": "Whether the SOC Response Engine (Phase 4, #1184) may automatically\ntake containment actions (freeze agents, force approval) for this\ntenant's incidents. Defaults to `true` (additive migration)."
+          },
+          "auto_rotate_token_on_leak_enabled": {
+            "type": "boolean",
+            "description": "#1295: whether `POST /v1/agents/:id/report-leaked-token` may actually\nrotate the agent's token when a leak is reported. `false` still\nrecords the leak detection (audit + SOC event) but leaves the\nexisting token valid. Defaults to `true` (additive migration)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string"
+          }
+        }
+      },
+      "TenantStats": {
+        "type": "object",
+        "required": [
+          "total_decisions",
+          "decisions_allow",
+          "decisions_deny",
+          "decisions_require_approval",
+          "total_agents",
+          "total_receipts"
+        ],
+        "properties": {
+          "decisions_allow": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "decisions_deny": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "decisions_require_approval": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_agents": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_decisions": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_receipts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trust_level_breakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrustLevelCount"
+            },
+            "description": "#1294: per-`root_trust_level` decision counts, for the dashboard's\nTrust Level Distribution chart and \"% from untrusted sources\" stat.\nRows predating the #1293 trust-chain migration have a `NULL`\n`root_trust_level`, grouped here under `\"unknown\"`."
+          }
+        }
+      },
+      "TrustLevelCount": {
+        "type": "object",
+        "required": [
+          "trust_level",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trust_level": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateMcpServerRequest": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "nullable": true
+          },
+          "inspection_enabled": {
+            "type": "boolean",
+            "description": "#1333: opt-in toggle for MCP response inspection.",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "owner_team": {
+            "type": "string",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "transport": {
+            "type": "string",
+            "nullable": true
+          },
+          "trust_level": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "WebhookSubscriptionRecord": {
+        "type": "object",
+        "description": "TASK-0092 (#938): a tenant-managed webhook subscription, registered via\n`/v1/webhook_subscriptions` to receive SOC notifications (alerts/incidents)\nat an operator-supplied endpoint. `secret_hash` is `sha256(secret)` — the\nplaintext secret is never persisted, mirroring `ApprovalRecord::callback_secret_hash`.\n\n#1285 adds real delivery on top of this CRUD scaffold. `delivery_secret`\nis a separate, server-generated plaintext secret (returned once at\ncreation, like `agent_token`) used to HMAC-sign outbound deliveries —\n`secret_hash` above is a one-way hash and cannot be used for that.",
+        "required": [
+          "id",
+          "tenant_id",
+          "url",
+          "event_types",
+          "status",
+          "created_at",
+          "min_severity",
+          "format",
+          "delivery_status",
+          "consecutive_failures"
+        ],
+        "properties": {
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "delivery_status": {
+            "type": "string",
+            "description": "#1285: `\"healthy\"` | `\"degraded\"` | `\"dead\"`, derived from\n`consecutive_failures` after each delivery attempt. Distinct from the\nlegacy `status` column above, which TASK-0092 always set to `\"active\"`\nand nothing else ever read or wrote."
+          },
+          "event_types": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "description": "#1285: `\"json\"` or `\"cef\"`."
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_delivery_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "last_success_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "min_severity": {
+            "type": "string",
+            "description": "#1285: `\"info\"` or `\"high\"` — events below this severity are not\ndelivered to this subscription."
+          },
+          "secret_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer_auth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

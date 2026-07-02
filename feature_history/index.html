@@ -1,0 +1,2281 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/feature_history/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>AegisAgent Feature & Implementation History - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#aegisagent-feature-implementation-history" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              AegisAgent Feature &amp; Implementation History
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../deployment-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration & connectivity
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Technical_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration & connectivity
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../github-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub App integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slack-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Slack integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../runbooks/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8_4" id="__nav_8_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/deny-storm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deny storm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/data-exfiltration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data exfiltration pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/agent-token-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent token rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/receipt-chain-verification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receipt chain verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/secret-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Threat_Model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Operational_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-defense-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP defense architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision records
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9_6" id="__nav_9_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_9_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decision records
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-cedar-policy-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Cedar policy engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-sqlite-first-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: SQLite-first storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003-aegis-jcs-1-canonicalization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: aegis-jcs-1 canonicalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0004-ed25519-receipt-signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Ed25519 receipt signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0005-fail-closed-defaults/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Fail-closed defaults
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference (OpenAPI/Redoc)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fail-closed-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#sdk-gateway-status-june-2026-baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SDK &amp; Gateway Status (June 2026 Baseline)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/feature_history.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="aegisagent-feature-implementation-history">AegisAgent Feature &amp; Implementation History<a class="headerlink" href="#aegisagent-feature-implementation-history" title="Permanent link">&para;</a></h1>
+<p>This document contains the historical status, feature releases, and ticket verification details for the Rust gateway and SDKs of AegisAgent. It is preserved here for developer reference and on-demand agent lookup, keeping the global <code>CLAUDE.md</code> context clean.</p>
+<hr />
+<h2 id="sdk-gateway-status-june-2026-baseline">SDK &amp; Gateway Status (June 2026 Baseline)<a class="headerlink" href="#sdk-gateway-status-june-2026-baseline" title="Permanent link">&para;</a></h2>
+<p><strong>Python SDK — 187 tests, fully verified on <code>main</code>:</strong>
+- <code>action_hash</code> canonicalization unified as scheme <strong><code>aegis-jcs-1</code></strong> in <code>sdk-python/aegisagent/canon.py</code>; SDK fails closed on hash mismatch, on approval expiry, <strong>and if it cannot atomically consume a single-use approval</strong> (replay defense).
+- Verifiable receipts: format + reference verifier (<code>aegisagent/receipts.py</code>), CLI (<code>aegis-verify-receipts</code>), shared corpus (<code>tests/receipt_chain_vectors.json</code>).
+- Async client (<code>AegisAsyncClient</code>) + <code>async_protect_tool</code> decorator.
+- <code>report_mcp_response</code> (sync + async, #1333) — fire-and-forget helper that POSTs an MCP tool's response text to the gateway's <code>POST /v1/mcp/servers/:server_key/inspect</code> for server-side sensitive-data/injection scanning; the response text is never logged client-side (added to the client's debug-log redaction key list) and a gateway/network failure here is swallowed (logged, returns <code>None</code>) since the tool call has already completed by the time this is called.
+- CLI tools: <code>aegis-status</code>, <code>aegis-freeze-agent</code>, <code>aegis-export-audit</code>.
+- Evidence packs, webhook handler, structured JSON logging.
+- End-to-end demo <code>examples/integrity_demo.py</code>.</p>
+<p><strong>Go SDK — full parity, verified on <code>main</code>:</strong>
+- <code>aegis-jcs-1</code> canonicalizer (<code>canon/canon.go</code>), <code>aegis.Client</code>, <code>aegis.Protect</code>, receipt verifier.
+- <strong>Context-based cancellation + management/SOC methods</strong> (#1183): every <code>Client</code> method (<code>Authorize</code>, <code>GetApproval</code>, <code>ConsumeApproval</code>, and all new methods below) now takes <code>ctx context.Context</code> as its first parameter (idiomatic Go cancellation/timeout), threaded through <code>Protect</code>/<code>ProtectWithOptions</code>/<code>handleApproval</code> too — a breaking signature change, but there were no callers outside <code>sdk-go/aegis/</code> itself. New methods: <code>Approve</code>/<code>Reject</code> (<code>POST /v1/approvals/:id/approve|reject</code>), <code>FreezeAgent</code>/<code>UnfreezeAgent</code>/<code>RevokeAgent</code> (<code>POST /v1/agents/:id/freeze|unfreeze|revoke</code>), <code>ListAlerts</code>/<code>ListIncidents</code>/<code>GetSocSummary</code> (<code>GET /v1/alerts</code>, <code>/v1/incidents</code>, <code>/v1/soc/summary</code>, with typed <code>ListAlertsOptions</code>/<code>ListIncidentsOptions</code> query filters).
+- Cross-language byte-parity CI gate.</p>
+<p><strong>TypeScript SDK — full parity, verified on <code>main</code>:</strong>
+- <code>aegis-jcs-1</code> canonicalizer (<code>src/canon.ts</code>), <code>AegisClient</code>, <code>protect()</code>.
+- <code>approve()</code>/<code>reject()</code> (#1182): <code>POST /v1/approvals/:id/approve|reject</code>, mirroring the gateway's <code>ApproveRequest</code> body (<code>approverUserId</code>, optional <code>reason</code>); returns <code>{status, approvalId}</code>. <code>listAlerts()</code>/<code>listIncidents()</code> (#1182): <code>GET /v1/alerts</code>/<code>GET /v1/incidents</code> with typed query-param options (<code>limit</code>/<code>offset</code>/<code>severity</code>/<code>agentId</code>, plus <code>status</code> for incidents), snake_case → camelCase field mapping. <code>getSocSummary()</code> (#1182): <code>GET /v1/soc/summary</code>.
+- <code>tsc --noEmit</code> build + <code>node --test</code> suite (29 tests) + cross-language corpus CI gate.</p>
+<p><strong>Rust gateway — 637 tests, verified on <code>main</code>:</strong>
+- <strong>SOC MTTD/MTTR Prometheus gauges</strong> (<code>metrics.rs</code>/<code>events.rs</code>/<code>routes.rs</code>, #1158): <code>aegis_soc_mttd_seconds</code>/<code>aegis_soc_mttr_seconds</code> (rolling cumulative average, atomics-backed, no extra crate) on <code>GET /metrics</code>. MTTD is sampled in <code>events::handle_alert</code> from the real gap between the triggering event's <code>occurred_at</code> and the moment the alert is raised — deliberately <em>not</em> derived from <code>SocAlertRecord.created_at</code>, which intentionally mirrors <code>occurred_at</code> as an evidence timestamp rather than wall-clock alert-creation time. MTTR is sampled in <code>routes::close_incident</code> from the real gap between <code>opened_at</code> and <code>closed_at</code>. Unparseable timestamps or a negative duration (clock skew) are skipped silently — observability never panics the drain loop or the request path.
+- <strong>MCP response inspection</strong> (<code>mcp_inspect.rs</code>, #1333): the gateway's <code>/v1/authorize</code> only ever sees the <em>request</em> side of a tool call — the SDK executes the tool itself and the gateway never observes the return value. <code>POST /v1/mcp/servers/:server_key/inspect</code> closes that gap: the SDK forwards a tool's raw response text after executing it (fire-and-forget — never blocks the already-returned tool result), and the gateway scans it server-side (single Rust implementation, no per-SDK triplication) for SSN shapes, Luhn-valid credit card numbers, known API-key prefixes (GitHub/AWS/Google/Slack/Stripe/GitLab), and a small list of prompt-injection phrases — all hand-rolled, no new <code>regex</code> dependency. <code>404</code> for an unknown server; <code>200 {"inspected": false, ...}</code> without scanning when the server's opt-in <code>inspection_enabled</code> flag (default <code>false</code>, toggle via <code>PATCH /v1/mcp/servers/:server_key</code>) is off. Findings carry only a <code>FindingCategory</code> + <code>count</code> — <strong>never the matched substring</strong> (redaction invariant) — and a flagged scan inserts one <code>soc_alerts</code> row per matched category (<code>rule: "mcp_response_sensitive_data"</code>/<code>"mcp_response_injection_attempt"</code>), visible via <code>GET /v1/alerts</code>/<code>GET /v1/soc/summary</code>. Scope limitation (v1): unlike <code>events::drain</code>-sourced alerts, these don't flow through the live notify sink/webhook export/<code>GET /v1/ws/events</code> — polling only.
+- Cross-language <code>action_hash</code> corpus test (<code>canonical_action_matches_shared_corpus</code>).
+- Gateway-side approval expiry (<code>get_approval</code> → <code>EXPIRED</code>; <code>approve_approval</code> → 409).
+- Receipt-hash parity lock (<code>receipt_chain_matches_shared_corpus</code>).
+- <strong>Receipt emission</strong>: <code>action_receipts</code> table + <code>emit_action_receipt</code> on every decision + <code>GET /v1/receipts/:id/verify</code> + optional Ed25519 signing (<code>sign.rs</code>).
+- <strong>Single-use approvals (replay T-A3)</strong>: <code>consumed_at</code> column + atomic <code>db::consume_approval</code> + <code>POST /v1/approvals/:id/consume</code>.
+- <strong>Agent SOC (Phases 0-3, 5, 6)</strong>: async event stream (<code>events.rs</code>), detection rules (<code>detect.rs</code>), correlation engine + incidents (<code>correlate.rs</code>), notify sink with HMAC-SHA256 signing + circuit breaker (<code>notify.rs</code>), RCA narrator (<code>narrate.rs</code>), SQLite event indexer + <code>/v1/ws/events</code> live feed + <code>/v1/soc/summary</code>.
+- <strong>YAML detection rule DSL</strong> (<code>rule_dsl.rs</code>, #1282): <code>Detector</code> is now YAML-driven — the original hardcoded rules (<code>confused_deputy_block</code>, <code>approval_required_surface</code>, <code>critical_deny</code>, <code>replay_attempt</code>, <code>mcp_manifest_drift</code>) are an embedded default <code>YamlRule</code> set (<code>rule_dsl::default_rules()</code>). <code>events::drain</code> loads each tenant's enabled custom rules fresh from <code>detection_rules</code> per event (out-of-band, Law 3) and evaluates them alongside the defaults, deduping alerts by rule name. <code>GET /v1/soc/rules</code> (effective rules, tagged <code>source: "default"|"custom"</code>), <code>POST /v1/soc/rules</code> (validated create/update, 400 on invalid condition/severity), <code>POST /v1/soc/rules/reload</code> (documented no-op — rules are always fresh).
+- <strong>Phase 4 — Response Engine</strong> (<code>respond.rs</code>): <code>freeze</code>/<code>revoke</code>/<code>quarantine</code> APIs + auto-dispatch responder with configurable autonomy levels (<code>L0</code>-<code>L4</code>).
+- <strong>Agentless ingestion</strong> (<code>ingest.rs</code>): <code>POST /v1/ingest</code> for GitHub webhooks, OpenAI traces.
+- <strong>Behavioral baselining</strong> (<code>baseline.rs</code>): per-agent action frequency baselines with anomaly detection.
+- <strong>Kubernetes probes</strong>: <code>/livez</code>, <code>/readyz</code>, <code>/startupz</code>. <code>/readyz</code> additionally tracks the liveness of fire-and-forget background tasks (#1152) — see below.
+- <strong>Composite risk score</strong> (<code>risk.rs</code>, #1289): advisory <code>composite_risk_score</code> (0-100) on every <code>/v1/authorize</code> response and <code>decisions</code> row — base risk + environment/context-trust/MCP penalties + anomaly score - approval credit; per-tenant weight overrides via <code>GET|PUT /v1/tenants/risk-weights</code> (env-configured defaults otherwise). Display/audit metadata only — never gates <code>decision</code> (Law 1).
+- <strong>Evidence graph schema</strong> (<code>graph.rs</code>, #1271): <code>EvidenceGraph { nodes: Vec&lt;GraphNode&gt;, edges: Vec&lt;GraphEdge&gt; }</code> — <code>GraphNode</code> (<code>id</code>/<code>group: NodeType</code>/<code>label</code>/<code>timestamp</code>/<code>metadata</code>) and <code>GraphEdge</code> (<code>from</code>/<code>to</code>/<code>label: EdgeType</code>/<code>timestamp</code>) serialize directly to vis.js Network's expected field names. <code>NodeType</code> covers <code>agent|run|tool_call|decision|approval|receipt|incident|mcp_server|policy</code>; <code>EdgeType</code> covers <code>triggered_by|executed|decided|approved|produced|linked_to</code>.
+- <strong>Evidence graph query API</strong> (<code>routes.rs</code>, #1272): <code>GET /v1/graph/run/:run_id</code>, <code>GET /v1/graph/incident/:incident_id</code>, <code>GET /v1/graph/agent/:agent_id?depth=N</code> build an <code>EvidenceGraph</code> at query time via the shared <code>add_decision_subgraph</code> helper (tool_call -[decided]-&gt; decision, plus run/agent linkage, and at <code>depth&gt;=2</code> approval/receipt and <code>depth&gt;=3</code> matched-policy nodes; <code>depth</code> clamped <code>[1,5]</code>, default 3). All three are tenant-scoped, read-only, and 404 (not 500) for missing/cross-tenant root entities — Law 1 unaffected.
+- <strong>Audit-writer chaos hardening</strong> (#1399): <code>write_decision_and_audit</code> retries <code>db::insert_decision</code> via <code>db::retry_on_busy</code> on transient <code>SQLITE_BUSY</code>/<code>SQLITE_LOCKED</code> before treating the audit write as failed. <code>db::init_db_with_busy_timeout</code> (parameterised variant for tests) lets a chaos test hold a real SQLite writer lock and verify: high-risk action denied with <code>audit_writer_unavailable</code> + <code>audit_writer_unhealthy=true</code> while locked; <code>audit_writer_unhealthy</code> resets to <code>false</code> and normal decisions resume once the lock clears (AC3 + AC5 of #1299/#1399).
+- <strong>Tenant isolation stress tests</strong> (#1402): <code>tenant_isolation_audit_events_alerts_incidents_and_decision_by_id</code> seeds two independent tenants and asserts <code>GET /v1/audit/events</code>, <code>GET /v1/alerts</code>, <code>GET /v1/incidents</code>, and <code>GET /v1/decisions/:id</code> all respect tenant boundaries — no cross-tenant row leakage and a cross-tenant decision ID yields 404.
+- <strong>GitHub App webhook receiver</strong> (#1381): <code>POST /v1/webhooks/github</code> — dedicated endpoint accepting native GitHub event payloads (<code>pull_request</code>, <code>issues</code>, <code>issue_comment</code>) with mandatory HMAC-SHA256 <code>X-Hub-Signature-256</code> verification (fail-closed: 401 when <code>AEGIS_GITHUB_WEBHOOK_SECRET</code> is not set), tenant scoping via <code>X-Aegis-Tenant-ID</code>, and SOC pipeline integration. Unsupported event types return <code>202 ignored</code>. 21 new unit + integration tests.
+- <strong>Event schema versioning</strong> (<code>events.rs</code>, #1387): <code>AseEvent</code> gains <code>schema_version: u32</code> (default 1, <code>#[serde(default)]</code>). Old serialized events without the field deserialize to v1 (forward-compatible). All ~17 construction sites updated. 5 new tests covering new/legacy/round-trip/future-version paths.
+- <strong>HMAC-SHA256 request signing</strong> (#1403): optional <code>signing_key</code> on agents — when set, every <code>POST /v1/authorize</code> must carry <code>X-Aegis-Request-Signature: sha256=&lt;hmac-hex&gt;</code>; gateway verifies with constant-time <code>Mac::verify_slice</code> (401 on missing/invalid). <code>authorize_action</code> switched from <code>Json&lt;&gt;</code> to <code>Bytes</code> extractor. Migration <code>0011_agent_signing_key.sql</code>. 9 new gateway tests + 5 Python + 3 Go + 3 TypeScript tests.
+- <strong>Agent environment restrictions</strong> (#1391): optional <code>allowed_environments</code> list on agents — when set, any <code>/v1/authorize</code> call from an environment not in the list is denied 403 FORBIDDEN before Cedar evaluation (confused-deputy / cross-env exploitation defense). <code>None</code> / empty = unrestricted (backwards-compatible). Migration <code>0012_agent_allowed_environments.sql</code>. 3 new gateway tests.
+- <strong>Agent-to-tool permission bindings</strong> (#1390): optional explicit tool allow-list per agent — if any bindings exist, tools not in the list are denied 403 FORBIDDEN before Cedar evaluation (fail-closed). No bindings = unrestricted (backwards-compatible). <code>GET|POST /v1/agents/:id/permissions</code>, <code>DELETE /v1/agents/:id/permissions/:tool_key</code>. Migration <code>0013_agent_tool_permissions.sql</code>. 5 new gateway tests.
+- <strong>Cedar <code>@decision("quarantine")</code> annotation</strong> (#1386): Cedar policies can emit <code>@decision("quarantine")</code> on any permit rule to immediately quarantine the agent after the call is recorded. <code>authorize_action</code> runs <code>set_agent_status → quarantined</code> and fires an <code>agent_quarantined</code> SOC event (Law 3, out-of-band). Subsequent calls auto-denied via <code>get_agent_by_token</code> filter. Canary-endpoint example policy in both <code>policies.cedar</code> and <code>gateway/policies.cedar</code>. <code>POST /v1/agents/:id/restore</code> reactivates quarantined agents. 5 new gateway tests (2 policy, 3 routes).
+- <strong>Action normalization layer</strong> (#1384): <code>normalize_policy_identifier</code> added to <code>policy.rs</code> applies percent-decode → NFC → trim → lowercase before building Cedar entity UIDs, closing a bypass where <code>GitHub</code>/<code>Merge_Pull_Request</code> built a UID that didn't match Cedar policies targeting the canonical lowercase form. <code>normalize_tool_identifier</code> in <code>routes.rs</code> updated to also trim surrounding whitespace. 10 new tests (4 policy unit + 1 policy Cedar integration, 4 routes unit + 1 routes Cedar integration).
+- <strong><code>redact</code> decision type</strong> (#1385): Cedar policies can emit <code>@decision("redact") @redact_fields("field1,field2")</code> to allow a tool call but return a <code>redacted_fields</code> list; <code>authorize_action</code> passes the list through <code>AuthorizeResponse</code>; <code>AseEvent</code> records it for audit. <code>protect_tool</code> decorator (sync + async) strips listed kwargs before executing the tool (sets value to <code>"[REDACTED]"</code>). Severity: <code>quarantine &gt; require_approval &gt; redact &gt; allow</code>. Example canary policy in both <code>policies.cedar</code> files. 4 new gateway tests (2 policy, 2 routes) + 3 Python SDK tests.
+- <strong>GitHub Checks API integration</strong> (<code>gh_checks.rs</code>, #1383): every <code>/v1/authorize</code> decision on a <code>github</code>-tool call whose <code>resource</code> parses as a PR ref (<code>org/repo#42</code>, via the shared <code>gh_comment::extract_pr_ref</code>) updates an "Aegis Security Gate" check run on the PR's head commit — created on first decision, updated thereafter (fire-and-forget, Law 3 out-of-band, never blocks <code>/v1/authorize</code>). Tally buckets: <code>allow</code>/<code>redact</code> → allowed, <code>require_approval</code> → pending, <code>deny</code>/<code>quarantine</code>/unknown → denied (fail-closed). Conclusion: <code>failure</code> if any denied, else <code>action_required</code> if any pending, else <code>success</code>. Summary includes the N-allowed/N-denied/N-pending breakdown; risky actions (non-allowed) surface as check-run annotations (capped at 20) against a synthetic <code>.aegisagent/decisions</code> path, since Aegis tool calls aren't tied to a real diff line. Reuses the <code>AEGIS_GITHUB_APP_TOKEN</code> installation token from <code>gh_comment.rs</code> (#1382); in-memory per-PR tally, resets on gateway restart. 17 new gateway tests (pure tally/conclusion/formatting helpers).
+- <strong>Trust propagation across agent chains</strong> (<code>trust_chain.rs</code>, #1293): when Agent A triggers Agent B (which may trigger Agent C…), trust propagates tighten-only — a downstream hop can never end up <em>more</em> trusted than the most restrictive level seen anywhere upstream, closing a confused-deputy gap where B could claim its own trigger looks internal despite being invoked by A acting on untrusted content. <code>AuthorizeRequest.trace</code> gains optional <code>root_trust_level</code>/<code>parent_run_id</code>; <code>policy::PolicyEngine::authorize</code> gates Cedar's <code>context.trust_level</code>/<code>context.root_trust_level</code> on <code>trust_chain::propagate(trace.root_trust_level, context.source_trust)</code> instead of the raw self-declared trust. <code>AuthorizeResponse.root_trust_level</code> always returns the effective tightened value — the caller forwards it as the next hop's <code>trace.root_trust_level</code> to propagate correctly through multi-hop chains. Persisted on <code>decisions.root_trust_level</code>/<code>decisions.parent_run_id</code> (migration <code>0014_decisions_trust_chain.sql</code>) for audit/evidence-graph reconstruction. 14 new gateway tests (9 pure trust-chain unit tests, 3 policy.rs Cedar-gating tests, 2 routes.rs end-to-end tests including a 3-hop chain scenario).
+- <strong>Policy dry-run / simulation mode</strong> (#1281): <code>AuthorizeRequest.dry_run: Option&lt;bool&gt;</code> (body field, not a query param) evaluates Cedar + risk scoring exactly like a normal call but skips every persistence/side-effecting path inside <code>authorize_action</code> — no <code>decisions</code>/<code>audit_events</code>/<code>approvals</code>/<code>action_receipts</code> row, no idempotency read/write, no SOC <code>agent_quarantined</code> event or actual agent quarantine, no GitHub PR comment or check-run update. <code>write_decision_and_audit</code> returns the computed <code>composite_risk_score</code> early when <code>dry_run</code> is set, before any DB write. <code>AuthorizeResponse.dry_run: bool</code> echoes whether the response was simulated. 4 new gateway tests (allow/require_approval/quarantine/default-unset paths, each asserting zero rows written where applicable).
+- <strong>Auto-rotate leaked agent token</strong> (#1295): <code>POST /v1/agents/:id/rotate-token</code> (operator-triggered, always allowed) and <code>POST /v1/agents/:id/report-leaked-token</code> (leak-signal entrypoint) both call the shared <code>rotate_and_audit_agent_token</code> helper, which generates a fresh plaintext token, hashes + stores it via the existing <code>db::rotate_agent_token</code> (already used by <code>register_agent</code> re-registration, #1366), and writes an <code>agent_token_rotated</code> audit event with <code>reason</code>. The old token's hash no longer matches any row, so it is rejected on the very next <code>/v1/authorize</code> call — no grace period. The leak-report path is gated on the new per-tenant <code>tenants.auto_rotate_token_on_leak_enabled</code> (migration <code>0016_tenant_auto_rotate_token.sql</code>, default enabled): when disabled, no rotation happens but the report is still recorded (<code>agent_token_leak_detected_no_rotation</code> audit event) and a <code>agent_token_leak_detected</code> SOC event is emitted either way (Law 3, out-of-band). The new plaintext token is returned once in the API response only — never pushed over a webhook or persisted, since that would just relocate the secret-handling risk. 5 new gateway tests.
+- <strong>Configurable webhook export, generic SIEM</strong> (<code>webhook_export.rs</code>, #1285): adds real delivery on top of the TASK-0092 (#938) <code>webhook_subscriptions</code> CRUD scaffold, which registered subscriptions but never delivered anything to them. Each subscription now gets a server-generated <code>delivery_secret</code> (returned once at creation, like <code>agent_token</code>) used to HMAC-SHA256-sign outbound deliveries on <code>X-Aegis-Signature</code> — distinct from the legacy operator-supplied <code>secret</code>/<code>secret_hash</code> pair, which is a one-way hash the gateway can't itself sign with. Subscriptions add <code>min_severity</code> (<code>info</code>/<code>high</code>) and <code>format</code> (<code>json</code>/minimal CEF) filters. <code>events::drain</code> calls <code>webhook_export::dispatch</code> at the same three high-signal points <code>notify.rs</code> already uses — <code>deny</code>/<code>require_approval</code> decisions, HIGH alerts, HIGH incidents — spawning one fire-and-forget delivery task per matching subscription (up to 3 attempts, exponential backoff, 5s per-attempt timeout). <code>db::record_webhook_delivery_result</code> tracks <code>consecutive_failures</code> and derives <code>delivery_status</code> (<code>healthy</code>→<code>degraded</code>→<code>dead</code>), separate from the legacy <code>status</code> column. Migration <code>0017_webhook_export_delivery.sql</code> (additive <code>ALTER TABLE</code>). 9 new gateway tests.
+- <strong>Auto-escalate agent risk tier on repeated denials</strong> (<code>risk_escalation.rs</code>, #1296): unlike the advisory <code>composite_risk_score</code> (Law 1 — never gates a decision), <code>agents.risk_tier</code> is real authorization state that Cedar now reads via <code>context.agent_risk_tier</code> (always the trusted server-side value passed explicitly into <code>PolicyEngine::authorize</code>, never the client-supplied request body) to require approval for ANY mutating action once an agent is tier <code>"high"</code> — even one a trusted-internal context would otherwise auto-allow. Escalation (<code>"low"</code>→<code>"medium"</code>→<code>"high"</code>, one step at a time) runs inline on <code>/v1/authorize</code> immediately after a <code>deny</code> decision is recorded — fast, local-SQLite-only, no network I/O, so the very next call from that agent already sees the tightened tier — once more than a per-tenant <code>denial_threshold</code> of that agent's <code>deny</code> decisions land within a rolling <code>window_minutes</code> (default 5 / 60, configurable via <code>GET|PUT /v1/tenants/risk-escalation</code>). Writes an <code>agent_risk_escalated</code> audit event and SOC event (Law 3, out-of-band emit). Manual de-escalation already worked via the existing <code>PATCH /v1/agents/:id</code> <code>risk_tier</code> field. 16 new gateway tests (10 in <code>risk_escalation.rs</code>, 3 Cedar-gating tests in <code>policy.rs</code>, 3 route/end-to-end tests in <code>routes.rs</code>).
+- <strong>Detection rule backtesting</strong> (<code>backtest.rs</code>, #1283): <code>POST /v1/soc/rules/:rule_key/backtest</code> (optional body <code>{"from": "...", "to": "..."}</code>, default trailing 7 days) reconstructs the <code>AseEvent</code> shape each historical <code>decisions</code> row would have produced and runs the looked-up rule's existing <code>YamlRule::matches</code> against it — the exact same predicate <code>events::drain</code> evaluates live — entirely in memory. 404 if <code>rule_key</code> doesn't match any effective rule (default or enabled tenant-custom). Returns <code>match_count</code>, <code>matched_decision_ids</code>, <code>decisions_scanned</code>, and <code>estimated_daily_alert_volume</code> (<code>match_count</code> projected over <code>[from, to]</code>). Pure read + in-memory evaluation — never writes <code>soc_alerts</code>/<code>soc_incidents</code>, so a backtest can never affect the live SOC pipeline (Law 1). <code>db::list_decisions_in_range</code> (capped at 50k rows) formats its date-range bind explicitly to match SQLite's <code>DEFAULT CURRENT_TIMESTAMP</code> format on <code>decisions.created_at</code> (a plain <code>DateTime&lt;Utc&gt;</code> bind serializes with a <code>T</code> separator, which sorts incorrectly against the column's space-separated format in a string comparison). 9 new gateway tests.
+- <strong>Config-change audit event for policy reload</strong> (#1159): <code>POST /v1/policies/reload</code> now requires <code>TenantId</code> and, on a successful Cedar file reload, writes a <code>config_change</code> audit event (<code>action: "policy_file_reload"</code>, <code>event_json</code> carries the reloaded <code>policy_path</code>) — previously silent. Distinct from the existing hash-chained <code>policy_audit_log</code> trail (<code>record_policy_audit_log</code>) that already covered tenant-scoped Cedar policy CRUD (<code>create</code>/<code>update</code>/<code>delete</code>). 1 new gateway test.
+- <strong>Dependency license compliance gate</strong> (<code>gateway/deny.toml</code>, CI <code>license-check</code> job, #1174): <code>cargo deny check licenses</code> blocks GPL/AGPL (or any other newly-introduced copyleft license) from entering the gateway's dependency tree — <code>deny.toml</code> is an allow-list of every license already present in the dependency graph, so anything not already on it (current or future) fails closed. Distinct from the existing <code>security-audit</code> job's <code>cargo audit</code>/<code>pip-audit</code> (vulnerabilities, not licensing).
+- <strong>CI code coverage gates</strong> (<code>rust-coverage</code>/<code>python-coverage</code> jobs, #1173): blocking thresholds of 70% (<code>cargo-llvm-cov --fail-under-lines</code>, gateway currently ~90%) and 75% (<code>coverage.py --fail-under</code>, Python SDK currently ~81%). Each job posts its per-file report to the run's Job Summary rather than a true PR-comment bot, since the latter needs <code>pull-requests: write</code> on a <code>pull_request</code>-triggered workflow that also runs against untrusted fork PRs — a write-token surface this repo's CI deliberately avoids (see <code>ci.yml</code>'s <code>permissions: contents: read</code>).
+- <strong>Container image vulnerability scanning</strong> (<code>.github/workflows/container-scan.yml</code>, CI-007 #1176): builds the gateway's distroless image (#1207) and scans it with Trivy on every push/PR. CRITICAL/HIGH findings fail the job (<code>ignore-unfixed: true</code>, so the gate only fires on CVEs with an available fix), blocking merge; results upload as SARIF to the GitHub Security tab (<code>github/codeql-action/upload-sarif</code>, job-scoped <code>security-events: write</code>) regardless of pass/fail. Distinct from the existing <code>cargo audit</code>/<code>pip-audit</code>/<code>cargo deny</code> jobs (#1174), which scan Rust/Python <em>dependency</em> manifests, not the built OS-level image layers. Pin note: <code>aquasecurity/trivy-action</code> must stay on a version that pins its <code>setup-trivy</code> dependency by SHA (currently <code>v0.36.0</code>) — <code>v0.29.0</code> referenced a <code>setup-trivy</code> tag that was later deleted upstream, breaking action resolution.
+- <strong>ETag conditional caching for GET responses</strong> (<code>main.rs::etag_middleware</code>, #1141): a generic middleware (not an endpoint-specific allow-list) hashes every GET 200 response body (SHA-256) into a quoted <code>ETag</code>; a repeat request with a matching <code>If-None-Match</code> gets a <code>304</code> with an empty body instead of re-sending the payload. Placed before the compression layer in the stack so the hash covers the canonical uncompressed body — verified the ETag is identical with or without <code>Accept-Encoding: gzip</code>. POST/PUT/PATCH/DELETE and non-200 responses are untouched. 4 new tests.
+- <strong>Cursor-based (keyset) pagination for 5 list endpoints</strong> (#1142): <code>GET /v1/decisions</code>, <code>/v1/receipts</code>, <code>/v1/audit/events</code>, <code>/v1/alerts</code>, <code>/v1/incidents</code> now accept <code>?cursor=</code> (opaque, hex-encoded <code>rowid</code>) and return <code>X-Next-Cursor</code> on the response when more rows follow — <code>None</code>/absent at the end of the result set. The JSON body stays a bare array, deliberately unchanged from before cursor support existed, since the Python/Go/TS SDKs already parse these 5 endpoints that way and a <code>next_cursor</code> body field would be a breaking shape change; the cursor rides on the header instead. Cursors seek on <code>rowid</code> (<code>rowid &lt; cursor</code>, not the existing <code>created_at</code>/<code>opened_at</code> <code>ORDER BY</code>) since <code>rowid</code> is strictly monotonic and tie-free, which keyset seeking needs; <code>?offset=</code> still works unchanged when no cursor is supplied, and <code>cursor</code> takes priority over <code>offset</code> when both are present. <code>db::paginate_rows</code> fetches <code>limit + 1</code> rows and uses the extra row purely as a has-more signal, truncating back to <code>limit</code> — fetching exactly <code>limit</code> rows and checking <code>len() &gt;= limit</code> is an off-by-one that wrongly emits a next-cursor whenever a result set ends precisely on a page boundary. 5 new boundary-regression tests (one per endpoint) plus an end-to-end multi-page route test.
+- <strong>SQLite FTS5 keyword search for <code>/v1/decisions</code> and <code>/v1/audit/events</code></strong> (#1450): migration <code>0018_fts5_search_index.sql</code> adds a shared <code>audit_search_index</code> FTS5 virtual table plus <code>AFTER INSERT</code> triggers on <code>decisions</code> and <code>audit_events</code> that index <code>tenant_id</code>/<code>source_table</code>/<code>source_id</code>/<code>searchable_text</code> (skill/action/resource/reason/decision/agent_id, table-specific) on every new row — no backfill or batch reindex job, since both source tables are append-only. Both list endpoints accept an optional <code>?q=</code> query param; <code>routes::sanitize_fts5_query</code> strips everything except alphanumerics/whitespace/<code>_</code> and appends a trailing <code>*</code> for prefix matching, returning <code>None</code> (no filter) for an empty/all-punctuation input — this also closes the FTS5 query-syntax injection surface (CWE-89 analog for FTS5's own query language) since raw operators (<code>"</code>, <code>-</code>, <code>OR</code>, <code>NEAR</code>, etc.) never reach <code>MATCH</code>. The <code>q</code> filter is a parameterized <code>id IN (SELECT source_id FROM audit_search_index WHERE searchable_text MATCH ? AND source_table = '...' AND tenant_id = ?)</code> subquery layered onto the existing cursor/offset pagination in <code>db::list_decisions_cursor</code>/<code>db::get_all_audit_events_cursor</code> — defense-in-depth tenant scoping inside the FTS subquery itself, not just the outer query. 2 new tests covering exact match, prefix match, tenant isolation, and no-match.
+- <strong>SOC Console Dashboard end-to-end test suite + approval/agent/stats field-mismatch fixes</strong> (#1326): <code>e2e/</code> is a Playwright suite (23 tests, <code>dashboard-shell.spec.ts</code> + <code>dashboard-data.spec.ts</code>) covering page load, the CSP header (#1309) and CSRF cookie/meta-tag (#1308), all 7 sidebar views, Agents Fleet, Alerts, MCP Servers, Explore search, Integrity Logs/receipts, and a full <strong>Approvals workflow</strong> (seed a pending approval via <code>/v1/authorize</code> under <code>semi_trusted_customer</code> trust, approve it through the real rendered UI, assert it leaves the queue) — <code>Dashboard E2E (Playwright)</code> CI job runs it against the <code>docker compose</code> gateway + <code>seed-demo.sh</code> on every PR. Writing real tests against a live gateway (not mocks) surfaced that <code>gateway/dashboard/app.js</code> read several field names that don't exist on the actual API responses, silently broken in production: <code>GET /v1/approvals</code> never exposed <code>agent_id</code> or the original <code>tool_call</code> at all, and its own row id was <code>approval_id</code> not <code>id</code> — every Approve/Reject button posted to <code>/v1/approvals/undefined/approve</code>; <code>POST /v1/approvals/:id/approve|reject</code> requires <code>approver_user_id</code> (non-optional) but the dashboard posted <code>{}</code> — every click silently failed validation; Agents Fleet/incident-detail read <code>operational_status</code> (actual: <code>status</code>); MCP Servers read <code>transport_type</code>/<code>drift_status</code>/<code>last_active_at</code> (actual: <code>transport</code>/<code>status</code>/<code>last_discovery_at</code>); Explore read <code>source_trust</code> on decisions, which doesn't exist (<code>root_trust_level</code>) — threw inside the filter callback on every Source Trust facet click; Overview stats read <code>protected_actions_total</code>/<code>denied_actions_total</code>, neither on <code>TenantStats</code> (<code>total_decisions</code>/<code>decisions_deny</code>). Fixed <code>list_approvals</code>/<code>get_approval</code> to additively enrich the response with <code>agent_id</code> (batch-joined from the linked decision via the new <code>db::list_decisions_by_ids</code>, avoiding N+1) and <code>tool_call</code> (the already-stored original <code>AuthorizeToolCall</code>, previously never serialized), and fixed every <code>app.js</code> field reference to match. Also fixed an unrelated CWE-200/CWE-522 finding hit in the same code: <code>AgentRecord</code> serialized <code>agent_token</code> (a SHA-256 hash) and <code>signing_key</code> (a <strong>live plaintext HMAC secret</strong>) directly over <code>GET /v1/agents</code>/<code>GET /v1/agents/:id</code> — neither SDK reads either field from those endpoints (only from register/rotate responses) — both now <code>#[serde(skip_serializing)]</code>.
+- <strong>MCP Approved Tool Allowlist UI</strong> (#1334): the dashboard's MCP Servers view gains a detail view (reusing the Incidents list/detail container show/hide pattern) — clicking a server row opens manifest hash + last discovery + trust level + transport metadata, the per-tool <strong>Approved Tool Allowlist</strong> table (status badges <code>pending</code>/<code>approved</code>/<code>disabled</code>, with Approve/Disable buttons calling the existing <code>POST .../tools/:tool_key/approve|disable</code>), a <strong>Manifest Drift History</strong> table, and server-level <strong>Quarantine/Restore</strong> containment buttons (<code>confirm()</code>-gated, calling the existing <code>POST /v1/mcp/servers/:server_key/quarantine|restore</code> — quarantine is server-wide, not per-tool, matching the issue's own clarified scope). Backed by the new <code>GET /v1/mcp/servers/:server_key/manifest-history</code> route (see API contract above), the only piece that didn't already exist. 1 new Playwright E2E test, self-contained via a new <code>registerTestMcpServer</code> helper (dedicated server + discovery call, doesn't mutate the shared seeded <code>github-mcp-demo</code>).
+- <strong>Trust Level Dashboard View</strong> (#1294): the Explore decision list's Source Trust column and facet sidebar now color-code each of the 6 context-trust-provenance levels (<code>trusted_internal_signed</code>=green, <code>trusted_internal_unsigned</code>=blue, <code>semi_trusted_customer</code>=yellow, <code>untrusted_external</code>=red, <code>malicious_suspected</code>=critical-red, <code>unknown</code>=grey) instead of one flat grey badge for every level. Overview page gains an "Untrusted Sources" stat card (<code>(untrusted_external + malicious_suspected) / total_decisions</code>, client-computed from the new <code>trust_level_breakdown</code>) and a Trust Level Distribution bar chart. Filtering decisions by trust level already existed via the Explore trust facet (unchanged). 1 new gateway test (<code>get_tenant_stats_includes_trust_level_breakdown</code>) + 1 new Playwright E2E test.
+- <strong>Agent Risk Scoreboard</strong> (#1290): <code>db::get_agent_risk_scoreboard</code> ranks agents by rolling 24h average <code>composite_risk_score</code> (<code>GET /v1/agents/risk-scoreboard</code>, <code>?format=csv</code> for export), deriving a <code>trend</code> against the prior 24h window (&gt;5-point delta threshold to avoid flapping on noise; <code>"stable"</code> when there's no current activity or no prior baseline). New "Risk Scoreboard" dashboard view (ranked table, trend arrows: rising=red up/falling=green down/stable=grey right) with a "View in Explore" action per agent — reuses the existing Explore view (already filterable by <code>agent_id</code>) as the agent detail context rather than building a dedicated agent detail page. Overview page gains a "Top 5 Riskiest Agents" card. 2 new gateway tests (db ranking/trend + route JSON/CSV) + 1 new Playwright E2E test.
+- <strong>Admin-operation audit trail</strong> (#1157): <code>delete_agent</code> and <code>revoke_agent_tool_permission</code> previously wrote no audit event at all on success, unlike sibling admin endpoints (<code>freeze_agent</code>/<code>unfreeze_agent</code>/<code>revoke_agent</code>, <code>quarantine_mcp_server</code>/<code>restore_mcp_server</code>, <code>close_incident</code>) which already insert an operation-specific <code>event_type</code>. New shared <code>write_admin_action_audit_event</code> helper (<code>gateway/src/routes/mod.rs</code>) writes a single, filterable <code>event_type: "admin_action"</code> row for these two (<code>action: "agent_deleted"</code> / <code>"agent_tool_permission_revoked"</code>), queryable via <code>GET /v1/audit/events?event_type=admin_action</code>. <code>delete_tenant</code> is deliberately excluded — its GDPR right-to-erasure delete wipes the tenant's own <code>audit_events</code> rows, so auditing the deletion would be self-defeating. 2 new gateway tests.
+- <strong>Background-task liveness on <code>GET /readyz</code></strong> (#1152): the event drain task, audit-batch writer, and 3 periodic jobs (receipt-chain integrity, audit-event archival, approval cleanup) run detached and fire-and-forget — previously, if one panicked it stopped running <em>permanently</em> while the gateway kept reporting healthy. <code>AppState.background_task_handles</code> now holds an <code>AbortHandle</code> per task (cloned via <code>JoinHandle::abort_handle()</code>, which never aborts the task itself, so <code>drain_handle</code>/<code>audit_batch_handle</code> are still owned/awaited during graceful shutdown exactly as before). <code>readyz_handler</code> checks <code>AbortHandle::is_finished()</code> (zero I/O) for each and returns <code>503</code> with <code>background_tasks: "down"</code> + <code>dead_background_tasks: [...]</code> if any died — gating the status code, unlike the existing advisory-only <code>audit_writer</code> field (which self-heals on the next successful write; a dead background task never does). Deliberately <em>not</em> on <code>/livez</code>, which has a documented no-I/O/no-dependency-check invariant (#1208) so a wedged dependency can't trigger a pod restart loop. 1 new gateway test.
+- <strong>Field-based filtering for <code>/v1/agents</code> and <code>/v1/incidents</code></strong> (#1145): <code>GET /v1/agents</code> previously had no filtering at all beyond pagination — now accepts <code>?status=</code> for an exact match (parameterized <code>(? IS NULL OR status = ?)</code>, same pattern as the existing <code>severity</code>/<code>agent_id</code> filters on incidents), with the unset case preserving the original "hide soft-deleted agents" default. <code>GET /v1/incidents</code> already filtered <code>status</code>/<code>severity</code>/<code>agent_id</code>; adds the missing <code>?kind=</code>. The issue's "invalid filter fields return 400" criterion is deliberately out of scope — that's a uniform error-response contract across every list endpoint, which is #1144's territory (standardize error response format), not bundled into this filter addition. 4 new gateway tests.
+- <strong>SSE watch mode for <code>/v1/alerts</code> and <code>/v1/incidents</code></strong> (#1146): <code>?watch=true</code> returns <code>text/event-stream</code> and pushes newly created rows — no historical backfill, matching Kubernetes <code>?watch=true</code> semantics — as a simpler REST alternative to the existing <code>/v1/ws/events</code> WebSocket stream. A background task polls new forward-watch queries (<code>db::list_soc_alerts_since</code>/<code>list_soc_incidents_since</code>, <code>rowid &gt; since</code>, parameterized, tenant-scoped) every 2s and feeds an <code>mpsc</code> channel adapted into a <code>Stream</code> via <code>futures_util::stream::unfold</code> (<code>futures-util</code> promoted from dev- to a direct runtime dependency, same locked version). <code>axum::response::sse::Sse::keep_alive()</code> handles the heartbeat-ping criterion natively. Deliberately polling-based rather than wiring a new broadcast channel into <code>events::drain</code>'s detection/correlation path — lower risk, zero changes to the hot SOC pipeline (Law 3); the issue itself frames SSE watch mode as the simpler, not lower-latency, alternative. Existing <code>severity</code>/<code>agent_id</code> (alerts) and <code>status</code>/<code>severity</code>/<code>agent_id</code>/<code>kind</code> (incidents, #1145) filters apply to watch mode too. 4 new gateway tests.
+- <strong>DB connection-pool health monitoring</strong> (#1150): <code>GET /metrics</code> gains <code>db_pool_connections_active</code>/<code>db_pool_connections_idle</code> (point-in-time gauges, read directly from the live pool — <code>pool.size()</code>/<code>pool.num_idle()</code> — at scrape time) and <code>db_pool_acquire_wait_seconds</code> (rolling mean, sampled by a new periodic job <code>jobs::sample_pool_health</code>, default every 30s via <code>AEGIS_POOL_HEALTH_SAMPLE_INTERVAL_SECS</code>, that times a synthetic <code>pool.acquire()</code> released immediately — instrumenting every real query call site for the same signal would be far more invasive). The sampler also logs a warning when the pool is over 80% busy, and is registered in <code>AppState.background_task_handles</code> (#1152) so a panicked sampler surfaces on <code>GET /readyz</code> too. 3 new gateway tests.
+- <strong>Per-incident evidence pack export</strong> (<code>GET /v1/incidents/:id/evidence-pack</code>, SOC-006, #1189): bundles a single incident together with the alerts and decisions that contributed to it, their linked receipts and audit events, and an on-demand RCA narrative, into a downloadable ZIP — a focused, single-incident counterpart to the tenant-wide <code>GET /v1/compliance/evidence-pack</code> (#1298), same in-memory <code>zip::ZipWriter</code> construction pattern. Linkage resolves through the same <code>event_id</code> chain <code>GET /v1/graph/incident/:incident_id</code> (#1272) already relies on: <code>soc_incidents.source_event_ids</code> → <code>soc_alerts</code> via exact <code>source_event_id</code> match, and → <code>decisions</code> via <code>audit_events.decision_id</code>. New <code>db::list_soc_alerts_by_source_event_ids</code> and <code>db::list_audit_events_by_decision_ids</code> batch-fetch across that chain in two queries total. 404 for an unknown or cross-tenant incident. 4 new gateway tests.
+- <strong>OpenAPI Spec Auto-Generation</strong> (#1401): auto-generates the OpenAPI 3.0 specification from route metadata, serving the dynamic schema at <code>GET /v1/openapi.json</code> and integrating Swagger UI at <code>GET /v1/docs</code> (fetching from <code>GET /v1/docs/openapi.json</code> to avoid route overlap).
+- <strong>Native TLS Support via Rustls</strong> (#1209): optional TLS support when <code>AEGIS_TLS_CERT</code> and <code>AEGIS_TLS_KEY</code> environment variables are set. Implements same-port TCP multiplexing: peeks incoming streams to route TLS traffic (Client Hello <code>0x16</code>) to Rustls, and redirects plain HTTP to HTTPS using an HTTP <code>308 Permanent Redirect</code> response. Enforces a minimum of TLS 1.2 and supports HTTP/1.1 and HTTP/2.
+- <strong>Distroless runtime image</strong> (<code>gateway/Dockerfile</code>, #1207): the runtime stage switched from <code>debian:bookworm-slim</code> + <code>apt-get install ca-certificates curl</code> to <code>gcr.io/distroless/cc-debian12:nonroot</code> — no shell, no package manager, runs as the built-in nonroot uid/gid (65532) instead of root. CA certs are copied explicitly from the builder stage (outbound TLS for webhook delivery/GitHub API/Qdrant); the release binary is stripped. Since distroless has no curl/shell for Docker's <code>HEALTHCHECK</code> to exec, the gateway binary gained a <code>--healthcheck</code> CLI flag (<code>main.rs</code>'s <code>check_liveness</code>) that GETs its own <code>/livez</code> and exits 0/1 — both the Dockerfile's <code>HEALTHCHECK</code> and <code>docker-compose.yml</code>'s <code>healthcheck</code> exec the binary itself instead of <code>curl</code>. Running as nonroot also broke <code>docker-compose.yml</code>'s <code>./data</code> bind mount (the in-image <code>chown</code> doesn't apply to a host bind mount — the host directory's ownership wins), fixed with a one-shot <code>busybox</code> <code>init-data-dir</code> service that <code>chmod 0777</code>s the mount before the gateway starts. Known deviation from the issue's <code>&lt;50MB</code> target: measured image size is <strong>~88MB</strong> — <code>cedar-policy</code>, <code>qdrant-client</code>/<code>tonic</code>, <code>sqlx</code>, and <code>rustls</code>/<code>aws-lc-rs</code> are substantial dependencies (the <code>cc-debian12</code> base alone is ~37MB); a <code>&lt;50MB</code> musl-static build against <code>distroless/static-debian12</code> is a possible future follow-up, not done here.
+- <strong>SQLite advisory-lock leader election for background jobs</strong> (REL-003, #1149): multiple gateway instances sharing one DB previously all ran the same periodic maintenance jobs (receipt-chain integrity, audit-event archival, approval cleanup) concurrently and redundantly. A <code>leader_lock</code> table (migration <code>0019</code>, one global row, not tenant-scoped — same precedent as <code>schema_meta</code>) plus <code>db::try_acquire_or_renew_leadership</code> — an atomic <code>UPDATE ... WHERE</code> that only succeeds when the calling instance already holds the lease or the existing lease has expired (<code>INSERT OR IGNORE</code> handles the very first boot) — means two instances racing this call can never both believe they're the leader. <code>jobs::run_leader_election_loop</code> renews every <code>AEGIS_LEADER_ELECTION_INTERVAL_SECS</code> (default 5s) with an <code>AEGIS_LEADER_LEASE_SECS</code> lease (default 20s); worst-case transfer after a leader dies is <code>lease + election_interval</code> ≈ 25s. The three maintenance job loops now skip their real work when not leader (<code>info!</code> only on a leader/standby transition, <code>debug!</code> per unchanged tick). Registered in <code>AppState.background_task_handles</code> (#1152) so a panicked election loop surfaces on <code>GET /readyz</code> too. 7 new tests.
+- <strong>Standardized Kubernetes-style error responses</strong> (API-005, #1144): error responses across the gateway were ad-hoc <code>{"error": "..."}</code> JSON bodies with no consistent shape — <code>gateway/src/error.rs</code> adds <code>StatusError</code>, a Kubernetes <code>Status</code>-style envelope (<code>kind</code>/<code>apiVersion</code>/<code>status</code>/<code>message</code>/<code>reason</code>/<code>details</code>/<code>code</code>), and a finite <code>ErrorReason</code> enum (<code>BadRequest</code>, <code>Unauthorized</code>, <code>Forbidden</code>, <code>NotFound</code>, <code>Conflict</code>, <code>AlreadyExists</code>, <code>Invalid</code>, <code>Timeout</code>, <code>TooManyRequests</code>, <code>NotImplemented</code>, <code>UnsupportedMediaType</code>, <code>InternalError</code>, <code>Unknown</code>) where each variant maps to exactly one HTTP status code. <code>StatusError</code> implements <code>IntoResponse</code>, so it dropped in for the old <code>(StatusCode, Json&lt;Value&gt;)</code> tuples at every error call site across all 13 route files plus <code>main.rs</code> (~250 sites); any extra ad-hoc fields the old bodies carried (informal <code>reason</code>/<code>approval_id</code>/<code>status</code> strings used for rate-limit/replay/webhook-signature diagnostics) are preserved via <code>.with_details(json!({...}))</code> rather than dropped. <code>TenantId</code>'s <code>FromRequestParts::Rejection</code> is now <code>StatusError</code> directly. <code>StatusError</code>/<code>ErrorReason</code> are registered in the OpenAPI component schemas with <code>body = StatusError</code> added to all 53 already-documented 4xx/5xx responses in <code>routes/openapi.rs</code>. Two pre-existing response shapes were deliberately left untouched since they aren't generic API errors: <code>/v1/authorize</code>'s <code>{"decision": "deny", "reason": "..."}</code> body (mirrors the existing <code>AuthorizeResponse</code> contract SDKs already parse), and the receipt-chain verifier's per-index <code>{"error": ...}</code> entries inside a 200 OK <code>verify-chain</code> response (describes <em>why</em> one receipt failed, not an HTTP error). 5 new tests.
+- <strong>Tokio runtime metrics endpoint</strong> (OBS-007, #1160): <code>GET /debug/runtime</code> mirrors Kubernetes' <code>/debug/pprof</code> convention — bound only on the existing 127.0.0.1 listener (same invariant as <code>/metrics</code>), no new bind, no public exposure. Returns <code>active_tasks_count</code>/<code>workers_count</code>/<code>total_poll_count</code>/<code>global_queue_depth</code>/<code>scheduler_utilization</code>/<code>uptime_secs</code> as JSON, sourced directly from <code>tokio::runtime::Handle::current().metrics()</code> (no extra dependency). Per-worker poll/busy-duration counters require the <code>tokio_unstable</code> cfg flag, applied repo-wide via the new root <code>.cargo/config.toml</code> — <code>gateway/Dockerfile</code>'s builder stage also gained <code>COPY .cargo ./.cargo</code> so the same flag reaches the actual container build, not just local/CI <code>cargo</code> invocations from the repo root. A process-wide <code>OnceLock&lt;Instant&gt;</code> approximates "runtime start" on first request rather than threading a new field through all 14 <code>AppState</code> construction sites for one derived metric. 1 new test.
+- <strong><code>docker-compose.dev.yml</code> with auto-seeded demo data</strong> (DX-002, #1203): <code>docker compose up</code> previously started with an empty DB, needing a separate manual <code>bash scripts/seed-demo.sh</code> run. <code>docker compose -f docker-compose.dev.yml up</code> now starts the gateway and auto-seeds richer demo data via a one-shot <code>seed-demo</code> service (<code>curlimages/curl</code>, <code>network_mode: host</code>, gated on the gateway's healthcheck) — the dev file reuses the base <code>docker-compose.yml</code>'s <code>gateway</code>/<code>init-data-dir</code> services via the <code>include:</code> directive rather than duplicating them. The new <code>scripts/seed-demo-dev.sh</code> (POSIX <code>sh</code>, runs identically on a host or inside the seed container) seeds 2 tenants, 3 agents (2+1 split), the demo GitHub tool registrations, and a <strong>real</strong> <code>deny_storm</code> HIGH incident — triggered through the actual <code>/v1/authorize</code> → <code>correlate.rs</code> pipeline (5 denied <code>merge_pull_request</code> attempts under <code>malicious_suspected</code> trust within the 60s correlation window), not a canned fixture — so the SOC dashboard has live data immediately after startup.
+- <strong>Chaos/fault-injection tests for DB failures</strong> (TEST-004, #1164): three real (not mocked) failure-injection scenarios. DB unreachable: <code>health_returns_503_when_db_pool_closed</code>/<code>authorize_action_returns_500_when_db_pool_closed</code> close the pool and assert <code>GET /health</code> degrades to <code>503</code> <code>db: "down"</code> and <code>authorize_action</code> returns a graceful <code>500</code> rather than panicking. Pool exhausted: <code>pool_acquire_times_out_gracefully_when_exhausted_not_panic</code> holds the sole connection of a <code>max_connections(1)</code> pool open and asserts a second query resolves to <code>Err(PoolTimedOut)</code> within <code>acquire_timeout</code>, wrapped in an outer <code>tokio::time::timeout</code> so the test itself fails loudly rather than hanging the suite if that contract ever breaks. Corrupted database file: <code>init_db_returns_error_not_panic_on_corrupted_database_file</code> writes non-SQLite garbage bytes to a fresh path and asserts <code>init_db</code> returns <code>Err</code> gracefully; <code>main()</code>'s <code>db::init_db(&amp;db_url).await?</code> now wraps the call with <code>tracing::error!</code> logging on failure before propagating, closing the "detects and logs error" criterion. 4 new tests.
+- <strong>Admission webhooks — pluggable pre-authorize hooks</strong> (API-004, #1143): <code>gateway/src/admission.rs</code>'s <code>AdmissionWebhookClient</code> is an optional Kubernetes-style MutatingAdmissionWebhook/ValidatingAdmissionWebhook for <code>/v1/authorize</code>, configured via <code>AEGIS_ADMISSION_WEBHOOK_URL</code> (required to enable; <code>AppState.admission_webhook</code> stays <code>None</code> and <code>/v1/authorize</code> makes zero extra network calls when unset), <code>AEGIS_ADMISSION_WEBHOOK_TIMEOUT_SECS</code> (default 5s), and <code>AEGIS_ADMISSION_WEBHOOK_FAIL_OPEN</code> (default <code>true</code>, governs the outcome on timeout/network/parse failure). Wired into <code>authorize_action</code> right after the frozen/revoked-agent check and before any risk/MCP/Cedar evaluation: a <code>pass</code> proceeds unchanged; a <code>reject</code> denies inline with the webhook's own reason (<code>matched_policies: ["admission_webhook_reject"]</code>); a <code>mutate</code> replaces <code>tool_call.parameters</code> before Cedar runs, so the mutation is visible to every downstream decision (including the approval that gets bound, per #1326's enriched <code>tool_call</code>). 12 new tests.
+- <strong>Canonicalization &amp; receipt-hash criterion benchmarks</strong> (TEST-005, #1165): <code>gateway/benches/canon_benchmark.rs</code> benchmarks <code>aegis_canon::canonicalize_json</code>/<code>canonical_value_string</code> (flat object, nested mixed-type object, 200-element array) and <code>gateway/benches/receipt_hash_benchmark.rs</code> benchmarks <code>gateway::routes::compute_receipt_hash</code> (bumped <code>pub(crate)</code> → <code>pub</code>, matching TASK-1313's <code>lib.rs</code> re-export pattern) against a chain-head and a mid-chain receipt — isolating these two hot-path primitives from <code>authorize_benchmark</code>'s end-to-end (~6.7ms, SQLite-dominated) measurement; both land sub-millisecond. Two new CI steps reuse the existing <code>check_bench_regression.py</code> at a 20% threshold against new checked-in baselines (<code>benches/baseline_canon.json</code>, <code>benches/baseline_receipt_hash.json</code>). k6/vegeta HTTP load testing and <code>docs/performance-baseline.md</code> baseline recording already existed from prior work; this closes the remaining "criterion benchmark for canonicalization and receipt hashing" + "CI fails on &gt;20% regression" acceptance criteria.
+- <strong>Database vacuum scheduling</strong> (TASK-0061, #907): <code>db::vacuum_database</code> (<code>VACUUM</code>) + <code>jobs::run_vacuum_job</code> reclaim free space left behind by the audit-event archival (#0106) and approval-cleanup (#0105) jobs' deletes, which previously had no space-reclamation follow-up. Same fixed-interval + <code>is_leader</code>-gated pattern as the other three maintenance jobs (a full-file <code>VACUUM</code> running concurrently from multiple instances sharing one DB would be wasteful/lock-contentious); configurable via <code>AEGIS_VACUUM_INTERVAL_SECS</code> (default 86400s/24h), registered in <code>background_task_handles</code> for #1152 liveness monitoring on <code>GET /readyz</code>. 2 new tests proving real behavior (bulk insert+delete leaves free pages behind; <code>PRAGMA page_count</code> measurably shrinks after vacuum; the <code>is_leader</code> gate blocks the actual work, not just a flag).
+- <strong>Tower load-shed layer for overload protection</strong> (TASK-0065, #911): an optional process-wide concurrency cap (<code>AEGIS_MAX_CONCURRENT_REQUESTS</code>, default 1000) — once that many requests are in flight, new ones are rejected immediately with a structured <code>503</code> (new <code>ErrorReason::ServiceUnavailable</code> in the #1144 envelope, distinct from the per-tenant <code>TooManyRequests</code> policy decision) instead of queuing behind the existing timeout layer. Deliberately built on <code>tower::limit::GlobalConcurrencyLimitLayer</code>, not the <code>ServiceBuilder::concurrency_limit()</code> convenience (<code>ConcurrencyLimitLayer</code>): for a <code>.route(path, get(handler))</code> registration, axum defers the <code>Handler -&gt; Route</code> conversion and re-applies every outer <code>Router::layer()</code> fresh on <strong>every incoming request</strong> (<code>axum::boxed::Map::call_with_state</code>) rather than once at startup, and <code>ConcurrencyLimitLayer::layer()</code> allocates a brand-new <code>Arc&lt;Semaphore&gt;</code> on each call — so under that path every request got its own private, always-free permit and shedding silently never triggered. <code>GlobalConcurrencyLimitLayer</code> stores one <code>Arc&lt;Semaphore&gt;</code> on the layer value itself and only ever clones that <code>Arc</code> from <code>.layer()</code>, keeping the permit count shared regardless of how many times axum reapplies the layer.
+- <strong>Zero-downtime secret rotation</strong> (PROD-006, #1211): <code>AEGIS_JWT_SECRET</code> now accepts a comma-separated list (<code>"new_secret,old_secret"</code>) — <code>validate_jwt</code> tries each entry in order, so tokens signed with either secret validate during a rotation window, via a shared <code>jwt_secret_candidates</code> helper (also used by <code>main.rs</code>'s startup validation) that filters out blank/<code>default_secret</code> entries. <code>AEGIS_RECEIPT_SIGNING_KEY</code> now accepts an optional <code>"key_id:hex_secret"</code> prefix (plain hex stays backward-compatible); <code>ReceiptSigner::key_id()</code> is persisted as a new additive <code>signer_key_id</code> column (migration <code>0020</code>) alongside <code>signer_public_key</code>, surfaced on <code>GET /v1/receipts/:id/verify</code> — never folded into <code>receipt_hash</code> (byte-parity guarded by a test). Receipt verification already used the public key embedded per-receipt at signing time rather than a live lookup against the currently-active key, so old receipts were already verifiable forever after a key rotation; <code>signer_key_id</code> is an audit/operator convenience for identifying which key generation signed a given receipt, not a verification requirement. Documented end-to-end in <code>docs/runbooks/secret-rotation.md</code>.
+- <strong>Rendered OpenAPI reference via Redoc, published to GitHub Pages</strong> (DOC-003, #1198): a new standalone <code>gateway/src/bin/export_openapi.rs</code> binary prints <code>routes::openapi::ApiDoc::openapi()</code> (pure compile-time route metadata — no database, no running server) as JSON; <code>docs/api/index.html</code> renders it with Redoc's CDN bundle. <code>docs/api/openapi.json</code> is regenerated fresh on every Docs CI run (never checked in) by a new Rust build step in <code>.github/workflows/docs.yml</code>, which now also triggers on <code>gateway/src/**</code>/<code>Cargo.toml</code>/<code>Cargo.lock</code> changes so an API-surface change always redeploys the page — previously the workflow only watched <code>docs/**</code>/<code>mkdocs.yml</code>. Complements the existing live Swagger UI at <code>GET /v1/docs</code>; both render the same <code>ApiDoc</code>. New <code>docs/api-reference.md</code> links the two and is wired into <code>mkdocs.yml</code>'s nav.
+- <strong>Splunk HTTP Event Collector (HEC) export</strong> (#1286): an optional, ops-wide periodic export job (<code>splunk_export.rs</code>, <code>AEGIS_SPLUNK_HEC_URL</code>/<code>AEGIS_SPLUNK_HEC_TOKEN</code> to enable) that forwards every tenant's new decisions/alerts/incidents to a single configured Splunk destination as newline-delimited HEC batches — <code>is_leader</code>-gated like the other periodic maintenance jobs, looping over every tenant via per-tenant in-memory rowid cursors (seeded at "current max" on first sight, so a restart never re-floods Splunk with full history) that only advance after a successful dispatch. <code>decision_to_hec_event</code> forwards structured metadata only — <code>input_json</code> (the raw tool-call payload) is never forwarded to the third-party SIEM. Connection health (<code>consecutive_failures</code>/<code>last_success_unix_secs</code>) is exposed on <code>GET /metrics</code>; the job's <code>AbortHandle</code> is registered for #1152 liveness monitoring on <code>GET /readyz</code>.
+- <strong>Per-tenant risk-weights TTL cache</strong> (#1513): <code>db::get_risk_weights</code> was previously re-read from SQLite inside <code>write_decision_and_audit</code> on every single <code>/v1/authorize</code> call, even though these operator-configured weights (<code>PUT /v1/tenants/risk-weights</code>) change only rarely. <code>RiskWeightsCache</code> (<code>routes/mod.rs</code>) is a plain per-tenant TTL cache (not an LRU like the existing <code>SkillActionCache</code>) — <code>get</code>/<code>insert</code> take an explicit <code>now: Instant</code>, mirroring <code>ReplayNonceCache::check_and_insert</code>'s pattern, so TTL expiry is testable without real sleeps. Default TTL 60s, configurable via <code>AEGIS_RISK_WEIGHTS_CACHE_TTL_SECS</code>; <code>put_tenant_risk_weights</code> invalidates the relevant tenant's entry on a successful upsert so an operator override takes effect immediately instead of waiting out the TTL.
+- <strong>Parallelized independent DB reads in <code>authorize_action</code></strong> (#1510): two pairs of independent reads now run concurrently via <code>tokio::join!</code> instead of serially. <code>db::agent_tool_permission_status</code> + the idempotency lookup (<code>db::get_decision_by_request_id</code>, gated on <code>!dry_run</code> + <code>request_id</code> present) — the in-memory nonce/replay check between them in the original code has no DB dependency, so each result is still checked in the original priority order (permission denial, then replay, then idempotent replay) immediately after the join; tradeoff: a permission-denied call carrying a <code>request_id</code> now does one "wasted" idempotency read it previously skipped. <code>db::get_skill_action</code> (on a skill-action-cache miss) + <code>db::get_mcp_server_by_key</code> (for an <code>mcp:</code>-prefixed tool) — <code>mcp_server_key</code> only depends on the already-normalized tool identifier, not the skill-action lookup's result. Deliberately untouched: <code>db::touch_agent_last_seen</code> (a write, #1511's territory) and <code>db::get_risk_weights</code> (already removed from this hot path entirely by #1513's TTL cache). 2 new tests proving exact behavior is preserved when both joined futures are exercised together.
+- <strong>Debounced agent heartbeat write</strong> (#1511): <code>db::touch_agent_last_seen</code> was the one remaining synchronous DB write on the <code>authorize_action</code> hot path (#1510 left it untouched deliberately). <code>HeartbeatDebouncer</code> (<code>routes/mod.rs</code>) is an in-memory <code>Mutex&lt;HashSet&lt;(tenant_id, agent_id)&gt;&gt;</code> that <code>authorize_action</code> touches instead of writing immediately; a new periodic job (<code>jobs::run_heartbeat_flush_job</code>, default every 30s via <code>AEGIS_HEARTBEAT_FLUSH_INTERVAL_SECS</code>) drains the set and batches the real writes. Deliberately <strong>not</strong> <code>is_leader</code>-gated like the other periodic maintenance jobs, since heartbeats are per-instance-observed activity, not global state needing single-leader coordination — every gateway instance must flush its own observed heartbeats. Graceful shutdown flushes any remaining buffered heartbeats before the pool is dropped. Registered in <code>AppState.background_task_handles</code> for #1152 liveness monitoring. 3 new tests.
+- <strong>OpenAPI Spec Auto-Generation</strong> (#1401): auto-generates the OpenAPI 3.0 specification from route metadata, serving the dynamic schema at <code>GET /v1/openapi.json</code> and integrating Swagger UI at <code>GET /v1/docs</code> (fetching from <code>GET /v1/docs/openapi.json</code> to avoid route overlap).
+- <strong>Native TLS Support via Rustls</strong> (#1209): optional TLS support when <code>AEGIS_TLS_CERT</code> and <code>AEGIS_TLS_KEY</code> environment variables are set. Implements same-port TCP multiplexing: peeks incoming streams to route TLS traffic (Client Hello <code>0x16</code>) to Rustls, and redirects plain HTTP to HTTPS using an HTTP <code>308 Permanent Redirect</code> response. Enforces a minimum of TLS 1.2 and supports HTTP/1.1 and HTTP/2.
+- Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, <code>CatchPanic</code> layer, <code>schema_meta</code> version tracking.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
