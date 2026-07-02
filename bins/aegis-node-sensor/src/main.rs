@@ -1,11 +1,11 @@
 //! `aegis-node-sensor` CLI entry point. Thin by design — see `lib.rs` for
 //! why this is a lib+bin crate. Phase 3.1: config + CLI + identity key
 //! handling. Phase 3.2: registers with the gateway on startup and
-//! heartbeats on an interval. Phase 3.3 (this file also covers): a durable
-//! local spool is opened and its pending-byte counts are reported on every
-//! heartbeat. The event shipper and signed command receipt are separate PRs
-//! (3.4-3.6) — nothing is enqueued into the spool yet (no event sources
-//! exist before the cage runner, Phase 4), so it stays empty in practice
+//! heartbeats on an interval. Phase 3.3: a durable local spool is opened.
+//! Phase 3.4 (this file also covers): the spool is drained to the gateway's
+//! ingest endpoint on its own tick. Signed command receipt is a separate PR
+//! (3.5-3.6) — nothing enqueues into the spool yet (no event sources exist
+//! before the cage runner, Phase 4), so shipping stays a no-op in practice
 //! until then.
 
 use std::path::PathBuf;
@@ -17,7 +17,13 @@ use clap::Parser;
 use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
+use aegis_node_sensor::shipper::EventShipper;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
+
+/// How often the shipper attempts to drain the spool. Independent of (and
+/// much shorter than) the heartbeat interval — events shouldn't sit queued
+/// for a full heartbeat cycle just because that's the only tick available.
+const SHIP_TICK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Registration is retried with linear backoff before giving up — the
 /// gateway may not be reachable yet on a fresh deployment (container
@@ -168,10 +174,13 @@ async fn main() -> ExitCode {
     // The gateway's confirmed interval is authoritative — it may differ from
     // the sensor's local default if the operator has tuned it per tenant.
     let heartbeat_interval = Duration::from_secs(registration.heartbeat_interval_secs);
+    let shipper = EventShipper::new(&client);
+    let mut heartbeat_tick = tokio::time::interval(heartbeat_interval);
+    let mut ship_tick = tokio::time::interval(SHIP_TICK_INTERVAL);
     let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(heartbeat_interval) => {
+            _ = heartbeat_tick.tick() => {
                 let req = HeartbeatRequest {
                     mode: config.mode.to_string(),
                     sensor_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -182,11 +191,20 @@ async fn main() -> ExitCode {
                 if let Err(e) = client.heartbeat(&sensor_id, &req).await {
                     // Transient heartbeat failures don't crash the sensor — the
                     // gateway will simply see a stale last_heartbeat_at until
-                    // the next attempt succeeds. Durable buffering/backoff for
-                    // sustained gateway outages is Phase 3.4 scope.
+                    // the next attempt succeeds. The spool durably buffers
+                    // events regardless of heartbeat health.
                     tracing::warn!(error = %e, "heartbeat failed, will retry next interval");
                 } else {
                     tracing::debug!("heartbeat ok");
+                }
+            }
+            _ = ship_tick.tick() => {
+                for lane in [Lane::Critical, Lane::Normal] {
+                    match shipper.ship_lane(&spool, lane).await {
+                        Ok(0) => {}
+                        Ok(n) => tracing::debug!(lane = ?lane, shipped = n, "shipped events"),
+                        Err(e) => tracing::warn!(lane = ?lane, error = %e, "ship tick failed"),
+                    }
                 }
             }
             _ = &mut shutdown => break,
