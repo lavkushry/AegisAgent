@@ -25,6 +25,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-cage-runner"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aegis-canon"
 version = "0.1.0"
 dependencies = [
