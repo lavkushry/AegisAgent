@@ -3,13 +3,18 @@
 //! handling. Phase 3.2: registers with the gateway on startup and
 //! heartbeats on an interval. Phase 3.3: a durable local spool is opened.
 //! Phase 3.4: the spool is drained to the gateway's ingest endpoint on its
-//! own tick. Phase 3.5 (this file also covers): polls for signed control
-//! commands addressed to this sensor, verifies and executes them, and
-//! ACK/NACKs the result. Sensor modes (observe/enforce/lockdown behavior
-//! beyond just tagging outgoing requests) are Phase 3.6.
+//! own tick. Phase 3.5: polls for signed control commands addressed to this
+//! sensor, verifies and executes them, and ACK/NACKs the result. Phase 3.6
+//! (this file also covers): tracks gateway reachability from heartbeat
+//! outcomes and consults the observe/enforce/lockdown decision engine
+//! whenever that reachability changes. There are no real controlled
+//! actions or runs to gate yet (those arrive with the cage runner, Phase
+//! 4) — this wires the mode engine to a real, if narrow, signal, rather
+//! than a placeholder.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use clap::Parser;
@@ -18,6 +23,7 @@ use aegis_node_sensor::command_receiver::{CommandReceiver, ExecutionOutcome};
 use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
+use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
 use aegis_node_sensor::shipper::EventShipper;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
 
@@ -188,6 +194,11 @@ async fn main() -> ExitCode {
             "no gateway_public_key_hex configured — all incoming control commands will be rejected fail-closed"
         );
     }
+    let mode_engine = ModeEngine::new(config.mode);
+    // Optimistically reachable at startup — registration just succeeded.
+    let gateway_reachable = AtomicBool::new(true);
+    log_mode_decision(&mode_engine, GatewayReachability::Reachable);
+
     let mut heartbeat_tick = tokio::time::interval(heartbeat_interval);
     let mut ship_tick = tokio::time::interval(SHIP_TICK_INTERVAL);
     let mut command_poll_tick = tokio::time::interval(COMMAND_POLL_INTERVAL);
@@ -202,14 +213,22 @@ async fn main() -> ExitCode {
                     queue_depth_normal: spool.pending_bytes(Lane::Normal).ok().map(|b| b as i64),
                     ..Default::default()
                 };
-                if let Err(e) = client.heartbeat(&sensor_id, &req).await {
+                let reachable_now = client.heartbeat(&sensor_id, &req).await.is_ok();
+                if !reachable_now {
                     // Transient heartbeat failures don't crash the sensor — the
                     // gateway will simply see a stale last_heartbeat_at until
                     // the next attempt succeeds. The spool durably buffers
                     // events regardless of heartbeat health.
-                    tracing::warn!(error = %e, "heartbeat failed, will retry next interval");
+                    tracing::warn!("heartbeat failed, will retry next interval");
                 } else {
                     tracing::debug!("heartbeat ok");
+                }
+                // Only act (and log) on an actual transition, not every tick.
+                if gateway_reachable.swap(reachable_now, Ordering::SeqCst) != reachable_now {
+                    log_mode_decision(
+                        &mode_engine,
+                        if reachable_now { GatewayReachability::Reachable } else { GatewayReachability::Unreachable },
+                    );
                 }
             }
             _ = ship_tick.tick() => {
@@ -283,6 +302,20 @@ async fn poll_and_process_commands(
             );
         }
     }
+}
+
+/// Log what the mode engine would decide for a controlled action and an
+/// unknown run at the current reachability — surfaces the sensor's live
+/// enforcement posture in logs whenever connectivity changes, ahead of
+/// there being real controlled actions/runs to apply it to.
+fn log_mode_decision(engine: &ModeEngine, gateway: GatewayReachability) {
+    tracing::info!(
+        mode = ?engine.mode(),
+        gateway = ?gateway,
+        controlled_action_decision = ?engine.decide_controlled_action(gateway),
+        unknown_run_decision = ?engine.decide_unknown_run(gateway),
+        "gateway reachability changed, mode engine decision updated"
+    );
 }
 
 async fn register_with_retries(

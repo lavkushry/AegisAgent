@@ -12,5 +12,6 @@ pub mod command_receiver;
 pub mod config;
 pub mod gateway_client;
 pub mod identity;
+pub mod mode_engine;
 pub mod shipper;
 pub mod spool;
