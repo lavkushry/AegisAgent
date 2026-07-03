@@ -1,0 +1,9 @@
+[package]
+name = "aegis-egress"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde = { workspace = true }
+ipnet = { version = "2.12", features = ["serde"] }
