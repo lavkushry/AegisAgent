@@ -5,15 +5,14 @@
 ## 1. Prerequisites
 
 - **Rust** ≥ 1.88 (MSRV in `Cargo.toml`) + `protoc` (protobuf compiler — `lib/api`'s build.rs compiles `proto/*.proto`)
-- **Python** ≥ 3.9 (SDK), **Node** ≥ 20 (UI, TS SDK, e2e), **Go** ≥ 1.22 (Go SDK)
+- **Python** ≥ 3.8 (SDK/demo; 3.9+ recommended for full dev extras), **Node** ≥ 20 (UI, TS SDK, e2e), **Go** ≥ 1.22 (Go SDK)
 - **Docker + Compose** (full stack), optional: `sqlx-cli`, `cargo-llvm-cov`, `cargo-flamegraph`
 
 ## 2. Fastest path (full stack in Docker)
 
 ```bash
-docker compose up --build -d         # gateway REST :8080, gRPC :6334, console at /dashboard
-bash scripts/seed-demo.sh            # demo tenant, agents, tools, policies
-python3 examples/integrity_demo.py   # see a decision + receipt happen
+make doctor                           # read-only local prereq and port checks
+make demo                             # gateway, seed data, attack block, approval integrity, receipts
 ```
 
 Pre-seeded dev variant: `docker compose -f docker-compose.dev.yml up --build -d` (+ `scripts/seed-demo-dev.sh`).

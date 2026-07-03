@@ -6,40 +6,55 @@ Go from `git clone` to watching AegisAgent **block a malicious GitHub merge** in
 
 - **Docker** + **Docker Compose**
 - **git**
-- **Python 3.8+** (only to run the attack-demo script — no extra accounts or API keys needed)
+- **Python 3.8+** (only to run the demo scripts; no extra accounts or API keys needed)
 
 That's it. Everything else (the gateway, the policy engine, the demo agent/tools) is seeded by the
 scripts below.
 
-## 1. Clone and start the gateway
+## 1. Clone the repository
 
 ```bash
 git clone https://github.com/lavkushry/AegisAgent.git
 cd AegisAgent
-docker compose up --build -d
 ```
 
-Wait for the health check to pass:
+## 2. Check local prerequisites
 
 ```bash
-curl -fsS http://127.0.0.1:8080/health
-# => {"status":"ok"}
+make doctor
 ```
 
-## 2. Seed the demo tenant, agent, and tools
+This checks Docker, Docker Compose, Python, `curl`, the compose file, and whether
+the local REST/gRPC demo ports are usable. It does not start services.
+
+## 3. Run the full proof demo
 
 ```bash
-bash scripts/seed-demo.sh
+make demo
 ```
 
-This registers:
+The demo starts the gateway, registers:
 
 - A tenant (`tenant_123`)
 - A demo coding agent (`coding-agent-prod`, `risk_tier: high`)
 - Mock GitHub tool actions (including a high-risk `merge_pull_request`)
 - An MCP demo server with a `create_issue` tool
 
-## 3. See the current state (the "dashboard")
+Then it runs both proof flows:
+
+- Prompt-injected GitHub issue -> untrusted provenance -> dangerous merge denied
+- Approval granted for one action hash -> swapped hash/replay -> fail closed
+
+Expected proof points:
+
+```text
+AegisAgent blocked the malicious merge attempt
+Gateway rejected the swapped claimed_action_hash
+Replay Blocked
+"verified": true
+```
+
+## 4. See the current state (the "dashboard")
 
 The Aegis SOC Console UI is still in development (see
 [SOC Console UI](AegisAgent_SOC_UI_Design.md)). Until it ships, the same data is available live over
@@ -55,9 +70,9 @@ curl -s http://127.0.0.1:8080/v1/audit/events \
   -H "Authorization: Bearer tenant_123" | python3 -m json.tool
 ```
 
-At this point `decisions.total` should be `0` — no actions have been authorized yet.
+At this point the demo has already written decisions, SOC events, and receipts.
 
-## 4. Trigger the attack — and watch Aegis block it
+## 5. Run only the prompt-injection attack
 
 ```bash
 python3 -m pip install -e sdk-python/
@@ -83,7 +98,7 @@ Deny reason: ...
 Audit URL: http://127.0.0.1:8080/v1/audit/events
 ```
 
-## 5. Confirm the block in the audit trail
+## 6. Confirm the block in the audit trail
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/audit/events \
@@ -120,6 +135,8 @@ curl -s "http://127.0.0.1:8080/v1/decisions?agent_id=<agent-id>" \
 
 ## Troubleshooting
 
+- **Not sure what is missing locally** — run `make doctor`; it fails before the demo if Docker,
+  Python, `curl`, compose config, or local ports are not ready.
 - **`docker compose up` fails health check** — check logs with `docker compose logs gateway`;
   the gateway binds `127.0.0.1:8080` and needs that port free.
 - **`seed-demo.sh` fails on tenant creation** — safe to re-run; it tolerates `409 Conflict` for an
