@@ -67,6 +67,6 @@ cd "$REPO_ROOT"
 # function names, but normal release builds shouldn't carry the extra
 # binary size/build time for a profiling-only concern.
 CARGO_PROFILE_RELEASE_DEBUG=true \
-  cargo flamegraph --manifest-path "$REPO_ROOT/src/Cargo.toml" --bench "$BENCH"
+  cargo flamegraph -p gateway --bench "$BENCH"
 
 echo "==> Done: $REPO_ROOT/flamegraph.svg"

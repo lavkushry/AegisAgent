@@ -163,9 +163,9 @@ Tests:
 Files:
 
 - root `Cargo.toml`
-- `crates/aegis-common`
-- `crates/aegis-api`
-- minimal migration of shared models from `gateway/src/models.rs`
+- `lib/common` (`aegis-common`)
+- `lib/api` (`aegis-api`)
+- minimal migration of shared models from `src/src/models.rs` into `lib/api`
 
 Acceptance:
 

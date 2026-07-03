@@ -3,7 +3,7 @@
 **Issue:** [#1338](https://github.com/lavkushry/AegisAgent/issues/1338)
 **Read first (general trust boundaries):** [`security-model.md`](security-model.md), specifically boundary **B5** (Gateway → External Tool / MCP Server).
 
-This document describes how AegisAgent treats the Model Context Protocol (MCP) as an untrusted-supply-chain surface: every MCP server is registered, every tool it advertises is pinned to a hashed manifest, drift is detected and auto-contained, and unknown or unapproved tools fail closed. There is no separate "MCP proxy" process — MCP defense is built directly into the gateway's `/v1/authorize` hot path and the `mcp_servers`/`mcp_tools` tables (`gateway/src/db.rs`, `gateway/src/routes.rs`).
+This document describes how AegisAgent treats the Model Context Protocol (MCP) as an untrusted-supply-chain surface: every MCP server is registered, every tool it advertises is pinned to a hashed manifest, drift is detected and auto-contained, and unknown or unapproved tools fail closed. There is no separate "MCP proxy" process — MCP defense is built directly into the gateway's `/v1/authorize` hot path and the `mcp_servers`/`mcp_tools` tables (`lib/storage/src/db/mcp.rs`, `src/src/routes/mcp.rs`, `src/src/routes/authorize.rs`).
 
 ---
 
@@ -36,7 +36,7 @@ AegisAgent's answer: **pin the manifest hash on first discovery, fail closed on 
 4. POST /v1/authorize (tool="mcp:<key>") Every call gated inline: server status, tool status, manifest pin
 ```
 
-Steps 1–3 are administrative (`gateway/src/routes.rs`: `register_mcp_server`, `discover_mcp_tools`, `approve_mcp_tool`/`disable_mcp_tool`). Step 4 is the enforcement hot path every `/v1/authorize` call for an MCP tool passes through, described in §4.
+Steps 1–3 are administrative (`src/src/routes/mcp.rs`: `register_mcp_server`, `discover_mcp_tools`, `approve_mcp_tool`/`disable_mcp_tool`). Step 4 is the enforcement hot path every `/v1/authorize` call for an MCP tool passes through, described in §4.
 
 ### 2.1 Manifest hashing and pinning
 
@@ -54,7 +54,7 @@ Steps 1–3 are administrative (`gateway/src/routes.rs`: `register_mcp_server`, 
 
 ## 3. Drift detection and auto-containment
 
-When a discovery call's computed manifest hash differs from the pinned value, `discover_mcp_tools` (`gateway/src/routes.rs`):
+When a discovery call's computed manifest hash differs from the pinned value, `discover_mcp_tools` (`src/src/routes/mcp.rs`):
 
 1. **Classifies the drift** via `classify_manifest_drift(old_tools, new_tools)` (#1336), diffing the two most recent manifest snapshots:
    - `tool_added` / `tool_removed` → **high** severity (a tool appearing or disappearing is the strongest hijack signal)

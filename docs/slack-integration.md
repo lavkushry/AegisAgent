@@ -22,13 +22,13 @@ Nothing in AegisAgent today constructs the Block Kit **buttons** that #1276 expe
 | `AEGIS_WEBHOOK_COOLDOWN_SECS` | `notify.rs::WebhookSink::notify` | Seconds the circuit breaker stays open before a half-open probe (default `30`). | Default of `30` applies. |
 | `AEGIS_SLACK_SIGNING_SECRET` | `routes.rs::slack_callback` | Enables `POST /v1/callbacks/slack` and is the key used to verify `X-Slack-Signature`. | `/v1/callbacks/slack` returns `404` for every request — the feature is effectively disabled, fail-closed (no secret means no signature can ever be verified). |
 
-All five are read once at gateway startup (`gateway/src/main.rs`); the Slack secret's presence (never its value) is logged so you can confirm configuration without inspecting the environment directly.
+All five are read once at gateway startup (`src/src/main.rs`); the Slack secret's presence (never its value) is logged so you can confirm configuration without inspecting the environment directly.
 
 ```bash
 export AEGIS_WEBHOOK_URL="https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXXXXXXXXXXXXXX"
 export AEGIS_WEBHOOK_SECRET="$(openssl rand -hex 32)"   # optional, signs outbound POSTs
 export AEGIS_SLACK_SIGNING_SECRET="$(openssl rand -hex 32)"  # from your Slack app's Basic Information page
-cargo run --manifest-path gateway/Cargo.toml
+cargo run -p gateway --bin gateway
 ```
 
 ---

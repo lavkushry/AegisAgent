@@ -36,7 +36,7 @@ Calling SDKs and clients should log warnings when these headers are received, en
 
 ## 3. Implementation Details
 
-AegisAgent implements prefix-based version routing using Axum's nested routing structure inside `gateway/src/main.rs`:
+AegisAgent implements prefix-based version routing using Axum's nested routing structure inside `src/src/main.rs`:
 
 1. **`api_routes` Router Builder:** Contains all registration, interception, SOC, and compliance endpoint registrations *without* any version prefixes.
 2. **Nesting and Middleware:**
@@ -72,4 +72,3 @@ When a request is sent to an unversioned route (e.g. `/authorize`, `/agents`), t
 * **Unspecified / Other Accept Headers**: Defaults to `/v1/...` for backward compatibility.
 
 Diagnostic and static endpoints (e.g., `/health`, `/livez`, `/readyz`, `/startupz`, `/metrics`, `/debug/runtime`, and `/dashboard/*`) are exempt from content negotiation and are always served directly from the root context.
-

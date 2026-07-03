@@ -1,6 +1,6 @@
 # AegisAgent — Canonical Agent Security Event (AseEvent) Schema
 
-> **Source of truth:** `gateway/src/events.rs` — `AseEvent` struct.
+> **Source of truth:** `lib/soc/src/events.rs` — `AseEvent` struct.
 > **Issue:** [#1388](https://github.com/lavkushry/AegisAgent/issues/1388)
 
 An **Agent Security Event** (`AseEvent`) is the normalized unit that every
@@ -60,11 +60,11 @@ correlators) branch on this value.
 
 | Kind | Emitter | When emitted |
 | ---- | ------- | ------------ |
-| `authorize_decision` | `routes.rs` — `authorize_action` | Every `POST /v1/authorize` that completes an inline decision (allow, deny, require_approval). This is by far the most frequent event. |
-| `replay_attempt` | `routes.rs` — `emit_replay_event` | When `POST /v1/authorize` detects a replay-nonce reuse (`replay_nonce_reused`) or a `POST /v1/approvals/:id/consume` re-consumes an already-consumed single-use approval. |
-| `mcp_manifest_drift` | `routes.rs` — `discover_mcp_tools` | When an MCP server's live manifest hash diverges from the pinned hash. Carries `risk_score` that reflects drift severity. |
-| `external_event:github_webhook` | `ingest.rs` | Normalized from a `POST /v1/ingest` payload with `source: "github_webhook"`. Always `decision = "allow"`, `risk_score = 0`. |
-| `external_event:openai_trace` | `ingest.rs` | Normalized from a `POST /v1/ingest` payload with `source: "openai_trace"`. Always `decision = "allow"`, `risk_score = 0`. |
+| `authorize_decision` | `src/src/routes/authorize.rs` — `authorize_action` | Every `POST /v1/authorize` that completes an inline decision (allow, deny, require_approval). This is by far the most frequent event. |
+| `replay_attempt` | `src/src/routes/authorize_receipts.rs` — `emit_replay_event` | When `POST /v1/authorize` detects a replay-nonce reuse (`replay_nonce_reused`) or a `POST /v1/approvals/:id/consume` re-consumes an already-consumed single-use approval. |
+| `mcp_manifest_drift` | `src/src/routes/mcp.rs` — `discover_mcp_tools` | When an MCP server's live manifest hash diverges from the pinned hash. Carries `risk_score` that reflects drift severity. |
+| `external_event:github_webhook` | `lib/soc/src/ingest.rs` | Normalized from a `POST /v1/ingest` payload with `source: "github_webhook"`. Always `decision = "allow"`, `risk_score = 0`. |
+| `external_event:openai_trace` | `lib/soc/src/ingest.rs` | Normalized from a `POST /v1/ingest` payload with `source: "openai_trace"`. Always `decision = "allow"`, `risk_score = 0`. |
 
 ---
 
@@ -201,7 +201,7 @@ correlators) branch on this value.
 ## Detection rules (Phase 1)
 
 Detection rules evaluate each `AseEvent` and produce **alerts**. Rules are
-YAML-driven (`gateway/src/rule_dsl.rs`). The embedded defaults ship in
+YAML-driven (`lib/soc/src/rule_dsl.rs`). The embedded defaults ship in
 `DEFAULT_RULES_YAML`; tenants may add custom rules via
 `POST /v1/soc/rules`.
 
@@ -220,7 +220,7 @@ YAML-driven (`gateway/src/rule_dsl.rs`). The embedded defaults ship in
 
 ### Behavioral baseline rules (SOC-007)
 
-Emitted by `gateway/src/baseline.rs` after per-agent frequency tracking.
+Emitted by `lib/soc/src/baseline.rs` after per-agent frequency tracking.
 
 | Alert rule | Severity | Trigger condition |
 | ---------- | -------- | ----------------- |
@@ -231,7 +231,7 @@ Emitted by `gateway/src/baseline.rs` after per-agent frequency tracking.
 
 ## Correlation rules (Phase 3)
 
-The stateful correlator (`gateway/src/correlate.rs`) groups events into
+The stateful correlator (`lib/soc/src/correlate.rs`) groups events into
 **incidents** when multi-event patterns are detected.
 
 | Incident kind | Severity | Pattern |

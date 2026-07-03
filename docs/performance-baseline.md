@@ -10,14 +10,14 @@ path — see "Targets vs. measured" and "Follow-up" below.
 
 ### 1. In-process criterion benchmark (primary)
 
-`gateway/benches/authorize_benchmark.rs` exercises the **real**
+`src/benches/authorize_benchmark.rs` exercises the **real**
 `gateway::routes::authorize_action` Axum handler end-to-end, in-process,
 against a real (tempfile) SQLite pool with all migrations applied — no mocks.
 
 To make this possible, the gateway crate was split into a thin `src/lib.rs`
 (re-exporting `routes`, `db`, `policy`, etc. as `pub mod`s) with `src/main.rs`
 as a binary that depends on it. A new `pub mod benchutil` in
-`gateway/src/routes.rs` (outside `#[cfg(test)]`, so it's available to
+`src/src/routes/authorize.rs` (outside `#[cfg(test)]`, so it's available to
 `cargo bench`) provides:
 
 - `setup_bench_state(db_path)` — builds an `AppState` against a fresh SQLite
@@ -60,14 +60,14 @@ emission (`emit_action_receipt`).
 The criterion default (`sample_size = 100`, 5s measurement time) was too slow
 for this sandbox given the real SQLite I/O on every iteration (each iteration
 performs a real `INSERT INTO decisions` + audit event row + receipt row).
-`benches/authorize_benchmark.rs` reduces `sample_size` to **30**, which
+`src/benches/authorize_benchmark.rs` reduces `sample_size` to **30**, which
 completed 930 iterations in ~6s. This is noted as a tradeoff — 30 samples is
 on the low end for criterion's statistical confidence, but sufficient to
 establish an order-of-magnitude baseline and a CI regression gate.
 
 ### 2. HTTP load test (vegeta)
 
-`gateway/benchmarks/authorize_load.sh` runs a short
+`src/benchmarks/authorize_load.sh` runs a short
 [vegeta](https://github.com/tsenart/vegeta) attack against a **live** gateway
 (`cargo run --release`), registering its own tenant + bench agent first. This
 measures true HTTP-level percentiles (vegeta computes p50/p95/p99/max from
@@ -77,16 +77,16 @@ the actual sample distribution, not an estimated mean).
   successfully installed via `go install github.com/tsenart/vegeta@latest`
   (binary at `$HOME/go/bin/vegeta`), satisfying the issue's "k6 OR vegeta"
   requirement. A `.k6.js` script
-  (`gateway/benchmarks/authorize_load.k6.js`) is also included for
+  (`src/benchmarks/authorize_load.k6.js`) is also included for
   environments where k6 is preferred, but is **untested** here (no `k6`
   binary). A pure-stdlib Python fallback
-  (`gateway/benchmarks/authorize_load.py`) is provided for environments
+  (`src/benchmarks/authorize_load.py`) is provided for environments
   without Go/vegeta either.
 
 Run with:
 ```bash
-cargo run --manifest-path gateway/Cargo.toml &
-GATEWAY=http://127.0.0.1:8080 DURATION=5s RATE=10 bash gateway/benchmarks/authorize_load.sh
+cargo run -p gateway --bin gateway &
+GATEWAY=http://127.0.0.1:8080 DURATION=5s RATE=10 bash src/benchmarks/authorize_load.sh
 ```
 
 ## Measured results
@@ -149,9 +149,9 @@ tracking.
 
 ## CI regression gate
 
-`gateway/scripts/check_bench_regression.py` compares the current run's
+`src/scripts/check_bench_regression.py` compares the current run's
 `mean.point_estimate` (from `target/criterion/authorize_action/allow_readonly_filesystem_read_file/new/estimates.json`)
-against a checked-in baseline (`gateway/benches/baseline.json`, currently
+against a checked-in baseline (`src/benches/baseline.json`, currently
 6.71ms, captured from the run above) and fails if the mean regresses by more
 than **25%**.
 
@@ -168,10 +168,10 @@ glossed over.
 
 Wired into `.github/workflows/ci.yml` as two additional steps in the existing
 `gateway` job (stable-only, after the existing `Tests` step):
-1. `cargo bench --manifest-path gateway/Cargo.toml` (sample_size=30, ~6s).
-2. `python3 gateway/scripts/check_bench_regression.py --baseline gateway/benches/baseline.json --estimates <criterion estimates path> --threshold 0.25`.
+1. `cargo bench --workspace` (sample_size=30, ~6s).
+2. `python3 src/scripts/check_bench_regression.py --baseline src/benches/baseline.json --estimates <criterion estimates path> --threshold 0.25`.
 
-The checked-in `gateway/benches/baseline.json` was captured on this sandbox's
+The checked-in `src/benches/baseline.json` was captured on this sandbox's
 hardware; CI runners will have different absolute numbers, so this baseline
 should be re-captured from an actual CI run before the gate is depended on for
 real regressions — this PR establishes the mechanism and a starting point.
@@ -181,18 +181,18 @@ real regressions — this PR establishes the mechanism and a starting point.
 `cargo-flamegraph` / `perf` require kernel capabilities (`perf_event_open`)
 not available in this sandbox, and there's no `sudo` to install them. Per the
 issue's guidance, this section is a **code-reading analysis** of the hot path
-as a substitute, with `gateway/src/routes.rs` line references for
+as a substitute, with `src/src/routes/authorize.rs` line references for
 `authorize_action` (starts at line 1682):
 
 To generate a real flame graph later, run on a machine with `perf`:
 ```bash
 cargo install flamegraph
-cargo flamegraph --bench authorize_benchmark --manifest-path gateway/Cargo.toml
+cargo flamegraph --bench authorize_benchmark -p gateway
 ```
 
 ### Hot path breakdown (allow, non-mutating, no approval)
 
-1. **Agent token lookup** — `db::get_agent_by_token` (`routes.rs:1712`). One
+1. **Agent token lookup** — `db::get_agent_by_token` (`authorize.rs`). One
    SQLite read (`SELECT ... FROM agents WHERE tenant_id = ? AND agent_token =
    ?`), hashing the bearer token with SHA-256 first (`db::hash_token`).
    Expected to be the first significant cost: SHA-256 over a short token is
@@ -263,7 +263,7 @@ speculative" guidance.
 
 ## Policy Evaluation Cache (#1314)
 
-Status: **verified, all ACs met** — `gateway/src/policy.rs` already
+Status: **verified, all ACs met** — `lib/policy/src/cedar.rs` already
 implemented the compiled-policy cache before this issue; this section
 documents the verification and the new micro-benchmark proving AC#4
 (`< 1ms` policy evaluation from cache).
@@ -304,7 +304,7 @@ paths are benchmarked separately below and both meet AC#4.
 
 ### Micro-benchmark (AC#4)
 
-New `gateway/benches/policy_eval_benchmark.rs` constructs a `PolicyEngine`
+New `src/benches/policy_eval_benchmark.rs` constructs a `PolicyEngine`
 via `PolicyEngine::init("policies.cedar")` (same as production) and
 benchmarks `PolicyEngine::authorize(tenant_id, &auth_req)` in isolation (no
 HTTP layer, no DB writes — unlike the `/v1/authorize` benchmark from
@@ -430,12 +430,12 @@ cost of canonicalization or receipt-chain hashing, the two primitives every
 decision and every receipt link hashes through. Two new benchmarks isolate
 just those costs, in-process, no DB/HTTP overhead:
 
-- `gateway/benches/canon_benchmark.rs` — `aegis_canon::canonicalize_json`
+- `src/benches/canon_benchmark.rs` — `aegis_canon::canonicalize_json`
   (recursive key-sort) and `aegis_canon::canonical_value_string`
   (canonicalize + compact-serialize) against three payload shapes: a small
   flat object, a nested object mixing strings/numbers/booleans/null/arrays,
   and a 200-element array.
-- `gateway/benches/receipt_hash_benchmark.rs` — `gateway::routes::compute_receipt_hash`
+- `src/benches/receipt_hash_benchmark.rs` — `gateway::routes::compute_receipt_hash`
   (canonicalize the receipt body, then SHA-256) against a chain-head receipt
   (`prev_receipt_hash` empty) and a mid-chain receipt (`prev_receipt_hash` a
   real 64-hex-char hash) — the steady-state case for a long-lived tenant.
@@ -459,14 +459,14 @@ end-to-end `/v1/authorize` cost (SQLite I/O dominates, see above).
 
 ### CI regression gate (AC#4: fail if >20% regression)
 
-Reuses the same `gateway/scripts/check_bench_regression.py` script
+Reuses the same `src/scripts/check_bench_regression.py` script
 TASK-1313's gate uses (mean-vs-baseline, see that script's own
 mean-vs-p99-approximation honesty note), at the issue's own 20% threshold
 instead of TASK-1313's 25%, against two new checked-in baselines:
 
-- `gateway/benches/baseline_canon.json` →
+- `src/benches/baseline_canon.json` →
   `canonicalization/canonicalize_json_nested_mixed_types`
-- `gateway/benches/baseline_receipt_hash.json` →
+- `src/benches/baseline_receipt_hash.json` →
   `receipt_hash/compute_receipt_hash_mid_chain`
 
 Both run as additional steps in the `gateway` CI job, after the existing

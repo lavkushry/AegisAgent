@@ -11,7 +11,7 @@ curl -s localhost:8080/readyz | jq        # db, audit_writer, background_tasks
 curl -s localhost:8080/startupz | jq      # migrations/policy finished?
 curl -s localhost:8080/metrics | grep -E 'aegis|approval|provenance'
 curl -s localhost:8080/debug/runtime | jq # tokio workers/utilization
-RUST_LOG=debug CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path src/Cargo.toml
+RUST_LOG=debug CEDAR_POLICY_PATH=policies.cedar cargo run -p gateway --bin gateway
 ```
 
 ## 2. "Why was this denied?"
@@ -46,7 +46,7 @@ Python raises typed errors: `AegisAuthorizationDenied` (decision), `AegisConnect
 
 ## 7. Performance
 
-`authorize_latency_seconds` histogram (OTLP) · benches: `cargo bench --manifest-path src/Cargo.toml` · flamegraphs: `scripts/flamegraph.sh authorize_benchmark` · SQLite knobs: [performance-tuning-guide.md](performance-tuning-guide.md). Slow authorize is usually WAL write contention — check the deferred-write/batching paths landed (#1511/#1512/#1315) and don't share one SQLite file across processes.
+`authorize_latency_seconds` histogram (OTLP) · benches: `cargo bench -p gateway` · flamegraphs: `scripts/flamegraph.sh authorize_benchmark` · SQLite knobs: [performance-tuning-guide.md](performance-tuning-guide.md). Slow authorize is usually WAL write contention — check the deferred-write/batching paths landed (#1511/#1512/#1315) and don't share one SQLite file across processes.
 
 ## 8. Tracing
 

@@ -191,7 +191,7 @@ trusted):
 The gateway passes this through verbatim as `context.trust_level` to Cedar.
 Classifiers upstream of the SDK may only **tighten** this label (move it
 down the list), never loosen it. The base policy pack
-(`gateway/policies.cedar`) encodes:
+(`policies.cedar` / `src/policies.cedar`) encodes:
 
 - `mutates_state == true` **and** `trust_level` is `trusted_internal_*` →
   evaluated normally (no special gating).
@@ -204,7 +204,7 @@ down the list), never loosen it. The base policy pack
 This is the **confused-deputy defense**: a prompt-injected instruction
 arriving via an untrusted channel cannot cause a mutating tool call to
 execute, no matter how the request is worded — only the *source* of the
-triggering content matters. See `gateway/policies.cedar` for the exact
+triggering content matters. See `policies.cedar` for the exact
 rules.
 
 ## Action hash computation (`aegis-jcs-1`)

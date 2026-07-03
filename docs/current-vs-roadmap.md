@@ -84,7 +84,7 @@ The target system adds runtime control for unknown or non-cooperative agents:
 Use the current MVP demo:
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 bash scripts/seed-demo.sh
 python3 examples/github-attack-demo.py
 ```

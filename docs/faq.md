@@ -300,7 +300,7 @@ A planned credential-isolation service: caged agents ask the broker to perform t
 ## How do I run it locally?
 
 ```bash
-docker compose up --build          # gateway on 127.0.0.1:8080, console at /dashboard
+docker compose up --build -d       # gateway on 127.0.0.1:8080, console at /dashboard
 bash scripts/seed-demo.sh
 python3 examples/integrity_demo.py
 ```

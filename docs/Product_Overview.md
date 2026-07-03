@@ -53,7 +53,7 @@ The eleven choke points (prompt/model, tool, API, MCP, egress, filesystem, proce
 ## See it in 5 minutes
 
 ```bash
-docker compose up --build          # gateway on 127.0.0.1:8080, console at /dashboard
+docker compose up --build -d       # gateway on 127.0.0.1:8080, console at /dashboard
 bash scripts/seed-demo.sh
 python3 examples/integrity_demo.py         # zero-setup wedge demo
 python3 examples/approve_then_swap_demo.py # watch the swap get refused
