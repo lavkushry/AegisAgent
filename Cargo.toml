@@ -8,6 +8,7 @@ members = [
     "lib/storage",
     "lib/policy",
     "lib/soc",
+    "lib/egress",
     "bins/aegis-node-sensor",
     "bins/aegis-cage-runner",
 ]

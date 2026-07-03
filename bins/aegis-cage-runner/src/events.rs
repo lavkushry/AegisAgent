@@ -52,12 +52,7 @@ pub struct CageEvent {
 }
 
 impl CageEvent {
-    pub fn new(
-        event_type: CageEventType,
-        tenant_id: &str,
-        run_id: &str,
-        sandbox_id: &str,
-    ) -> Self {
+    pub fn new(event_type: CageEventType, tenant_id: &str, run_id: &str, sandbox_id: &str) -> Self {
         Self {
             event_type,
             tenant_id: tenant_id.to_string(),
