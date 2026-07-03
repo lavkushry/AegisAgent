@@ -45,10 +45,10 @@ create_issue "PR-001 · [Gateway] Verify Rust compilation and make all existing 
 \`CLAUDE.md\` states several gateway features are written but NOT yet compiled.
 
 ## Tasks
-- [ ] \`cargo check --manifest-path gateway/Cargo.toml\` — fix all errors
-- [ ] \`cargo test --manifest-path gateway/Cargo.toml\` — all tests pass
-- [ ] \`cargo fmt --manifest-path gateway/Cargo.toml -- --check\`
-- [ ] \`cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings\`
+- [ ] \`cargo check --workspace\` — fix all errors
+- [ ] \`cargo test --workspace -- --test-threads=1\` — all tests pass
+- [ ] \`cargo fmt --all -- --check\`
+- [ ] \`cargo clippy --workspace --all-targets -- -D warnings\`
 
 ## Acceptance Criteria
 - \`cargo test\` exits 0

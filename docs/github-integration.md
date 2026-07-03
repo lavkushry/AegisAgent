@@ -20,12 +20,12 @@ There is no GitHub App manifest, private key, or JWT-exchange flow built into Ae
 | `AEGIS_GITHUB_APP_TOKEN` | `gh_comment.rs` (#1382), `gh_checks.rs` (#1383) | Bearer token for the GitHub REST API. Enables PR deny-comments and the "Aegis Security Gate" check run. | Both features are disabled — `/v1/authorize` still evaluates and records every decision normally, it just never calls out to GitHub. |
 | `AEGIS_GITHUB_WEBHOOK_SECRET` | `routes.rs::receive_github_webhook` (#1381) | HMAC-SHA256 secret used to verify `X-Hub-Signature-256` on every webhook delivery. | `POST /v1/webhooks/github` returns `401 webhook_not_configured` for every request — **fail-closed**, not fail-open: an unconfigured endpoint refuses everything rather than silently accepting unverified payloads. |
 
-Both are read once at startup (`gateway/src/main.rs`) and logged (token presence only, never the value) so you can confirm configuration from the gateway's startup log without inspecting the environment directly.
+Both are read once at startup (`src/src/main.rs`) and logged (token presence only, never the value) so you can confirm configuration from the gateway's startup log without inspecting the environment directly.
 
 ```bash
 export AEGIS_GITHUB_APP_TOKEN="ghs_..."          # installation access token or fine-grained PAT
 export AEGIS_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
-cargo run --manifest-path gateway/Cargo.toml
+cargo run -p gateway --bin gateway
 ```
 
 ---
@@ -91,7 +91,7 @@ This is the same `/v1/authorize` call your agent's SDK already makes for every t
 
 ```bash
 # Terminal 1
-CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path gateway/Cargo.toml
+CEDAR_POLICY_PATH=policies.cedar cargo run -p gateway --bin gateway
 
 # Terminal 2
 python3 examples/github-attack-demo.py

@@ -111,13 +111,17 @@ That distinction matters.
 
 ## Run the demo
 
-Start the gateway:
+Run the full local proof:
 
 ```bash
-docker compose up --build
+make demo
 ```
 
-In another terminal:
+Or run only this GitHub attack scenario manually:
+
+```bash
+docker compose up --build -d
+```
 
 ```bash
 bash scripts/seed-demo.sh

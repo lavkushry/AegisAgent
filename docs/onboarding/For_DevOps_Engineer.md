@@ -10,7 +10,7 @@
 
 | Env | How | Notes |
 |---|---|---|
-| Local dev | `docker compose up --build` + `bash scripts/seed-demo.sh` (or `docker-compose.dev.yml` for a pre-seeded stack) | binds `127.0.0.1:8080` (REST) / `6334` (gRPC) |
+| Local dev | `docker compose up --build -d` + `bash scripts/seed-demo.sh` (or `docker-compose.dev.yml` for a pre-seeded stack) | binds `127.0.0.1:8080` (REST) / `6334` (gRPC) |
 | Single-node prod | container from `release-publish.yml` images (cosign-signed, SLSA provenance, SBOM — verify before running) | SQLite + WAL; back up per [../runbooks/backup-and-restore.md](../runbooks/backup-and-restore.md) |
 | Kubernetes | `helm install aegis helm/aegis-gateway/` | probes wired to `/livez` `/readyz` `/startupz`; policy ConfigMap checksummed + hot-reloaded (`AEGIS_POLICY_HOT_RELOAD=true`); **keep `replicaCount: 1` until Postgres (#1194)** — SQLite is single-writer |
 

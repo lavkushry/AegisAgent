@@ -19,7 +19,7 @@ Closes #
 ## Checklist
 
 - [ ] Tests added/updated; `cargo test --workspace` and `python3 -m unittest discover -s sdk-python/tests` pass.
-- [ ] `cargo fmt -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+- [ ] `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 - [ ] `python3 -m black --check sdk-python/ examples/` passes.
 - [ ] No hardcoded secrets; secrets stay out of logs/receipts (hashes only).
 - [ ] Tenant-owned queries bind/filter `tenant_id`; parameterized SQL only.

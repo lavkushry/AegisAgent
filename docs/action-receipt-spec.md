@@ -94,7 +94,7 @@ Any mismatch ⇒ **invalid** (fail closed). Reference: `verify_chain()` / `verif
 
 ## 6. Implementation status (2026-06-02)
 
-- **Done & verified (Python):** format + hash chain + reference verifier (`seal_receipt`, `seal_chain`, `verify_receipt`, `verify_chain`); CLI `aegis-verify-receipts` / `python -m aegisagent.verify_receipts`; shared corpus `tests/receipt_chain_vectors.json` (pins exact `receipt_hash` values). 25/25 SDK tests incl. tamper/broken-link/reorder/non-ASCII/CLI. Canonicalization centralized in `aegisagent/canon.py`.
+- **Done & verified (Python):** format + hash chain + reference verifier (`seal_receipt`, `seal_chain`, `verify_receipt`, `verify_chain`); CLI `aegis-verify-receipts` / `python -m aegisagent.verify_receipts`; shared corpus `tests/receipt_chain_vectors.json` (pins exact `receipt_hash` values). SDK tests cover tamper, broken-link, reorder, non-ASCII, and CLI verification paths. Canonicalization centralized in `aegisagent/canon.py`.
 - **Done, pending `cargo` verification (Rust gateway):**
   - cross-language **parity lock** — `routes.rs::receipt_chain_matches_shared_corpus` reproduces every `receipt_hash` in `tests/receipt_chain_vectors.json` (`canonical_value_string` = `aegis-jcs-1`).
   - **gateway emission** — every `/v1/authorize` decision writes a hash-chained receipt into the `action_receipts` table (`emit_action_receipt`, chained per tenant via `rowid` head); body fields per `routes.rs::receipt_body_value` (excludes `receipt_hash` + volatile `created_at`).

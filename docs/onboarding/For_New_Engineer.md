@@ -32,7 +32,8 @@ Aegis is a control plane, not an agent. Known agents pass every tool call throug
 Follow [../Local_Development.md](../Local_Development.md). Fast path:
 
 ```bash
-docker compose up --build && bash scripts/seed-demo.sh
+docker compose up --build -d
+bash scripts/seed-demo.sh
 python3 examples/integrity_demo.py
 ```
 
@@ -52,10 +53,10 @@ python3 examples/integrity_demo.py
 ## 7. Verify your work
 
 ```bash
-cargo check --manifest-path src/Cargo.toml
-cargo test  --manifest-path src/Cargo.toml
-cargo fmt   --manifest-path src/Cargo.toml -- --check
-cargo clippy --manifest-path src/Cargo.toml -- -D warnings
+cargo check --workspace
+cargo test --workspace -- --test-threads=1
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 TDD is the house style (RED → GREEN → refactor); see `CLAUDE.md` and `CONTRIBUTING.md` at the repo root.

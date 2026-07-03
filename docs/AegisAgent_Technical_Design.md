@@ -90,7 +90,7 @@ def merge_pull_request(repo: str, pr_number: int, branch: str):
 
 **Fail-closed contract (normative):** the SDK MUST NOT execute if (a) the gateway is unreachable for a mutating/high-risk action, (b) the approval status is not `approved`, (c) the approved `action_hash` ≠ the recomputed hash, (d) the approval is expired/replayed, or (e) the single-use approval cannot be atomically consumed (409).
 
-> **SDK status (2026-06-05):** **Go** (`sdk-go`) and **TS** (`sdk-typescript`) ship the verified `aegis-jcs-1` canonicalizer — byte-parity with the shared corpus, `go test` + `node:test` green; their HTTP client + `@protect_tool`-equivalent decorator are next. **Python** (`sdk-python`) is the complete reference SDK (`@protect_tool` + receipts verifier, 25/25) and the canonicalization oracle. The Rust gateway shares the scheme.
+> **SDK status:** **Python** (`sdk-python`) is the reference SDK with `@protect_tool`, async support, receipt verification, and hash-bound approval consume. **Go** (`sdk-go`) and **TypeScript** (`sdk-typescript`) ship verified `aegis-jcs-1` canonicalization plus HTTP client/protect wrappers that send `claimed_action_hash` on approval consume. The Rust gateway shares the same scheme.
 
 ### 4.2 Runtime Gateway (Rust + Axum)
 
@@ -102,7 +102,7 @@ Authenticates SDK requests; resolves tenant/agent/user/session; normalizes the t
 
 **Canonical action.** `{tool, action, resource, mutates_state, parameters}` serialized with a deterministic scheme so the Go, TS, and Python SDKs and the Rust gateway produce identical bytes (now verified byte-identical via the shared corpus). `action_hash = SHA-256(canonical_action)`.
 
-> **Implemented (scheme `aegis-jcs-1`):** keys sorted by Unicode code point, compact separators, **raw UTF-8 (no `\uXXXX`)**, `null` for absent resource, reject non-finite floats. Locked by [`tests/canonical_action_vectors.json`](https://github.com/lavkushry/AegisAgent/blob/main/tests/canonical_action_vectors.json), asserted by both a Python test and a Rust test (`gateway/src/routes.rs::canonical_action_matches_shared_corpus`) — byte-equality across languages guaranteed transitively.
+> **Implemented (scheme `aegis-jcs-1`):** keys sorted by Unicode code point, compact separators, **raw UTF-8 (no `\uXXXX`)**, `null` for absent resource, reject non-finite floats. Locked by [`tests/canonical_action_vectors.json`](https://github.com/lavkushry/AegisAgent/blob/main/tests/canonical_action_vectors.json), asserted by Python, Go, TypeScript, and Rust tests (`src/src/routes/authorize.rs::canonical_action_matches_shared_corpus`) — byte-equality across languages guaranteed transitively.
 
 **Binding.** On `require_approval`, the gateway persists an approval row bound to `action_hash`, the canonical action, approver group, and expiry. The Slack/dashboard card renders the canonical action so the human approves *that*.
 

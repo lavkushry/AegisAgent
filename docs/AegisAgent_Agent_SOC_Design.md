@@ -55,7 +55,7 @@ These four laws are what keep the Agent SOC from collapsing into a generic — a
 Every section below obeys them.
 
 ### Law 1 — Deterministic policy decides. Scores never gate.
-Authorization is decided by **Cedar** (`gateway/policies.cedar`) evaluating the *source trust level* and
+Authorization is decided by **Cedar** (`policies.cedar` / `src/policies.cedar`) evaluating the *source trust level* and
 `mutates_state`. `risk_score` is **advisory display metadata** (already derived from the action's
 registered risk tier in `routes::risk_score_for_level`). A numeric "prompt_injection_score: 82" or
 "anomaly_score > 80" may **annotate** an alert; it must **never** be the thing that allows/denies. A score
@@ -89,8 +89,8 @@ action references that action's `action_hash` and `receipt_hash` as immutable ev
 
 | Wazuh component | Purpose | Agent SOC equivalent | Status in repo |
 |---|---|---|---|
-| Wazuh Agent | Collect endpoint telemetry | `@protect_tool` SDK + Gateway interceptor | ✅ `sdk-python/`, `gateway/src/routes.rs` |
-| Wazuh Server/Manager | Decode → rules → alerts | **Aegis Analysis Engine** (async daemon) | ✅ `gateway/src/{events,detect,correlate}.rs` |
+| Wazuh Agent | Collect endpoint telemetry | `@protect_tool` SDK + Gateway interceptor | ✅ `sdk-python/`, `src/src/routes/authorize.rs` |
+| Wazuh Server/Manager | Decode → rules → alerts | **Aegis Analysis Engine** (async daemon) | ✅ `lib/soc/src/{events,detect,correlate}.rs` |
 | Decoders | Normalise raw logs → fields | **Event Normalizer** (tool call → ASE, §7) | ✅ `events.rs` ASE + `canon.py` hashing |
 | Rules | Detect + correlate | **Detection Rule Engine** (atomic + correlation, §9) | ✅ `detect.rs`, `correlate.rs` |
 | Active Response | Run response scripts | **Response Engine** (freeze/revoke/quarantine, §15) | 🟡 manual freeze/revoke/quarantine APIs done; auto-dispatch pending (#1184) |
@@ -208,7 +208,7 @@ The async daemon. Modules (named for clarity; not separate processes at MVP):
 | `normalizer` | ASE shaping + enrichment | new; reuses `canon.py` |
 | `rules` | atomic detections (§9.2) | new |
 | `correlate` | freq/sequence/window chains (§19) | new |
-| `policy` | deterministic Cedar evaluation | ✅ `gateway/src/policy.rs` |
+| `policy` | deterministic Cedar evaluation | ✅ `lib/policy/src/cedar.rs` |
 | `risk` | advisory score/baseline (Law 1) | 🟡 `risk_score_for_level` |
 | `respond` | map verdict → action (§15) | partial |
 | `mcp` | manifest drift / discovery filter | 🟡 `mcp_tools` |
@@ -363,7 +363,7 @@ technique tag), adapted to agents. **All detection is deterministic** (Law 1/2);
 
 ## 10. Trust-provenance model (moat #2)
 
-The **gate input**. Six deterministic levels (`gateway/policies.cedar`, `.claude/rules/cedar_policy_authoring.md`):
+The **gate input**. Six deterministic levels (`policies.cedar` / `src/policies.cedar`, `.claude/rules/cedar_policy_authoring.md`):
 
 | # | Level | Example source |
 |---|---|---|
@@ -683,11 +683,11 @@ Incident timeline (each row carries its `receipt_hash`, so the timeline is prova
 
 | Phase | Deliverable | Touches | Unlocks |
 |---|---|---|---|
-| **0** | **Event emitter** in `/v1/authorize` (non-blocking `tokio::mpsc` → background drain) | `routes.rs`, new `events.rs` | the entire async plane (keystone) |
+| **0** | **Event emitter** in `/v1/authorize` (non-blocking `tokio::mpsc` → background drain) | `src/src/routes/authorize.rs`, `lib/soc/src/events.rs` | the entire async plane (keystone) |
 | **1** | Deterministic **playbook/rule engine** (atomic rules → match) | new module | confused-deputy, drift detections |
 | **2** | **Notify sink** — Slack/webhook on deny + approval | 1 consumer | L1 automation, instant visibility |
 | **3** | **Correlation engine** (freq + sequence + window) | stateful module | deny-storm, exfil, runaway |
-| **4** | **Response control API** — `freeze`/`revoke`/`quarantine` + responder | `routes.rs`, `db.rs` | L3 containment |
+| **4** | **Response control API** — `freeze`/`revoke`/`quarantine` + responder | `src/src/routes/agents.rs`, `src/src/routes/mcp.rs`, `lib/storage/src/db/`, `lib/soc/src/respond.rs` | L3 containment |
 | **5** | **ClickHouse sink + SOC Console** (live feed, incident timeline) | shipper + UI | the dashboard |
 | **6** | **RCA narrator** (sandboxed LLM, post-incident only) | new service | L4 explainability |
 | **7** | Agentless ingestion · behavioural baselining | collector, analytics | breadth + unknowns |
@@ -698,7 +698,7 @@ channel drained by a background task (same async pattern as the audit-write in
 phase is a *consumer* of that one stream and never touches the hot path again.
 
 Two new gateway pieces this needs (plan the Rust):
-1. **Event emitter** — `routes.rs` authorize handler emits the ASE after deciding.
+1. **Event emitter** — `src/src/routes/authorize.rs` emits the ASE after deciding.
 2. **Control endpoints** — `POST /v1/agents/:id/freeze|revoke`, `POST /v1/mcp/servers/:server_key/quarantine`;
    tenant-scoped, parameterized, fail-closed (freezing an unknown agent = deny by default); they flip
    `agents.status` / `mcp_servers.status`, which the authorize path already honours.
@@ -713,19 +713,19 @@ Two new gateway pieces this needs (plan the Rust):
 
 | Capability | State | Where |
 |---|---|---|
-| Inline authorize + Cedar gate | ✅ | `gateway/src/{routes,policy}.rs`, `policies.cedar` |
+| Inline authorize + Cedar gate | ✅ | `src/src/routes/authorize.rs`, `lib/policy/src/cedar.rs`, `policies.cedar` |
 | Trust-provenance (6 levels, deterministic) | ✅ | `policies.cedar`, `cedar_policy_authoring.md` |
-| Approval integrity (hash-bound, single-use, expiry) | ✅ | `routes.rs`, `approvals` table, `decorator.py` |
+| Approval integrity (hash-bound, single-use, expiry) | ✅ | `src/src/routes/approval.rs`, `lib/storage/src/db/approvals.rs`, SDK protect wrappers |
 | Hash-chained receipts + verifier + CLI | ✅ | `receipts.py`, `verify_receipts.py`, `action_receipts` |
 | Canonicalization `aegis-jcs-1` (cross-lang lock) | ✅ | `canon.py`, Rust + Go + TS, `tests/*_vectors.json` |
-| Tenant isolation + parameterized SQLx | ✅ | `db.rs` (every query binds `tenant_id`) |
-| Async event emission (ASE stream) | ✅ | **Phase 0** — `gateway/src/events.rs` |
-| Detection rule engine (atomic) | ✅ | **Phase 1** — `gateway/src/detect.rs` |
-| Notify sink (Slack/webhook) | ✅ | **Phase 2** — `gateway/src/notify.rs` |
-| Correlation / incidents | ✅ | **Phase 3** — `gateway/src/correlate.rs` |
-| Response control (freeze/revoke/quarantine) | 🟡 manual API done, auto-dispatch pending | **Phase 4** — `routes.rs` (`freeze_agent`/`revoke_agent`/`quarantine_mcp_server`); see #1184 |
+| Tenant isolation + parameterized SQLx | ✅ | `lib/storage/src/db/` (every tenant-owned query binds `tenant_id`) |
+| Async event emission (ASE stream) | ✅ | **Phase 0** — `lib/soc/src/events.rs` |
+| Detection rule engine (atomic) | ✅ | **Phase 1** — `lib/soc/src/detect.rs` |
+| Notify sink (Slack/webhook) | ✅ | **Phase 2** — `lib/soc/src/notify.rs` |
+| Correlation / incidents | ✅ | **Phase 3** — `lib/soc/src/correlate.rs` |
+| Response control (freeze/revoke/quarantine) | 🟡 manual API done, auto-dispatch pending | **Phase 4** — `src/src/routes/agents.rs`, `src/src/routes/mcp.rs`; see #1184 |
 | Event indexer (SQLite) + Console | ✅ SQLite + WS live stream, 🟡 console UI | **Phase 5** — `/v1/soc/summary`, `/v1/ws/events` |
-| RCA narrator (sandboxed LLM) | ✅ | **Phase 6** — `gateway/src/narrate.rs` |
+| RCA narrator (sandboxed LLM) | ✅ | **Phase 6** — `lib/soc/src/narrate.rs` |
 | Agentless ingestion · baselining | ❌ | **Phase 7** — see #1187, #1190 |
 
 ---
