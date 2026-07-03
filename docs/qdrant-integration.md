@@ -87,7 +87,7 @@ To run a fully private semantic audit engine locally, configure the stack as fol
    export AEGIS_EMBEDDING_MODEL="all-minilm"
    export AEGIS_EMBEDDING_DIMENSION="384"
    
-   cargo run --manifest-path src/Cargo.toml
+   cargo run -p gateway --bin gateway
    ```
 
 ---

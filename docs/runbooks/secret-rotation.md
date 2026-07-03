@@ -19,7 +19,7 @@ Unlike the [agent token rotation](agent-token-rotation.md) runbook (a per-agent,
    AEGIS_JWT_SECRET="new_secret_value,old_secret_value"
    ```
    Tokens signed with either secret validate during this window. Restart/roll the gateway to pick up the new value (it's read fresh per `validate_jwt` call from the process environment, but the environment itself only changes on restart in most deployments).
-2. **Start issuing new tokens signed with the new secret.** The gateway itself never issues JWTs (it only validates externally-issued ones — see `validate_jwt` in `gateway/src/routes/mod.rs`), so this step happens in whatever system mints your JWTs.
+2. **Start issuing new tokens signed with the new secret.** The gateway itself never issues JWTs (it only validates externally-issued ones — see `validate_jwt` in `src/src/routes/mod.rs`), so this step happens in whatever system mints your JWTs.
 3. **Wait out the rotation window** — at least as long as the longest-lived outstanding token's `exp`, so nothing still in circulation depends on the old secret.
 4. **Drop the old secret:**
    ```bash
@@ -39,7 +39,7 @@ curl -s -H "Authorization: Bearer $OLD_SIGNED_TOKEN" "http://127.0.0.1:8080/v1/d
 
 Each signed receipt embeds its own `signer_public_key` (and, if the value below uses the `key_id:` prefix, `signer_key_id`) **at signing time** — verification (`GET /v1/receipts/:id/verify`) always uses the key stored on that specific receipt, never a live lookup against the currently-configured key. This means **old receipts stay verifiable forever after the active key rotates** — there is no "rotation window" to manage for verification, unlike the JWT secret above.
 
-1. **Generate a new Ed25519 keypair** (32-byte secret, hex-encoded — see `ReceiptSigner::from_secret_hex` in `gateway/src/sign.rs` for the expected format).
+1. **Generate a new Ed25519 keypair** (32-byte secret, hex-encoded — see `ReceiptSigner::from_secret_hex` in `src/src/sign.rs` for the expected format).
 2. **Optionally tag it with a human-readable key ID** so future audits can tell which generation of key signed a given receipt without recognizing a raw public-key hex string:
    ```bash
    AEGIS_RECEIPT_SIGNING_KEY="rotation-2026-06:<new_32_byte_secret_hex>"

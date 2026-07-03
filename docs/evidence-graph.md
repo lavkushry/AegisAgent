@@ -1,7 +1,7 @@
 # AegisAgent — Evidence Graph
 
 **Issue:** [#1323](https://github.com/lavkushry/AegisAgent/issues/1323)
-**Code:** `gateway/src/graph.rs` (#1271, schema) · `gateway/src/routes.rs` (#1272, query API)
+**Code:** `src/src/graph.rs` (#1271, schema) · `src/src/routes/graph.rs` (#1272, query API)
 
 The evidence graph is AegisAgent's compliance-facing view that ties one tenant's agents, runs, tool calls, decisions, approvals, receipts, incidents, MCP servers, and policies together into a single auditable graph. It is **constructed at query time** from existing tables — there is no separate graph database or background job maintaining it, so it is always consistent with `decisions`/`approvals`/`action_receipts`/`soc_incidents` as of the moment you query it.
 
@@ -9,7 +9,7 @@ The evidence graph is AegisAgent's compliance-facing view that ties one tenant's
 
 ## 1. Node and edge types
 
-`gateway/src/graph.rs` defines the canonical, closed set of node and edge kinds. Both serialize directly to the field names [vis.js Network](https://visjs.github.io/vis-network/docs/network/) expects — `id`/`group`/`label` for nodes, `from`/`to`/`label` for edges — specifically so an `EvidenceGraph` response can be handed straight to a `vis.Network` `DataSet` with no client-side remapping (see §4).
+`src/src/graph.rs` defines the canonical, closed set of node and edge kinds. Both serialize directly to the field names [vis.js Network](https://visjs.github.io/vis-network/docs/network/) expects — `id`/`group`/`label` for nodes, `from`/`to`/`label` for edges — specifically so an `EvidenceGraph` response can be handed straight to a `vis.Network` `DataSet` with no client-side remapping (see §4).
 
 ### Node types (`NodeType`, serializes as a node's `group`)
 

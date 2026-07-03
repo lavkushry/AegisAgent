@@ -21,7 +21,7 @@ a rule matcher.
 ## Decision
 
 Embed Cedar (`cedar-policy` crate) directly in the gateway process. Policies
-live in `policies.cedar` (root) / `gateway/policies.cedar` (kept identical),
+live in `policies.cedar` (root) / `src/policies.cedar` (kept identical),
 authored against `Agent`/`Action`/`ToolAction` entities with a `context` map
 carrying `trust_level`, `mutates_state`, `agent_risk_tier`, `manifest_hash`,
 etc. A non-standard third state (`require_approval`, plus later `quarantine`

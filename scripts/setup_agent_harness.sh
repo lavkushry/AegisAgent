@@ -103,8 +103,8 @@ EOF
             cp "${SKILLS_DIR}/sdk_testing.md" "${CLAUDE_RULES_DIR}/sdk_testing.md"
             cat << 'EOF' > "${CLAUDE_RULES_DIR}/developer.md"
 # Persona: DeveloperAgent
-# Active Scope: /gateway, /sdk-python, /sdk-typescript, /mcp-gateway-lite, /examples
-# Key Tasks: Implement gateway Axum endpoints, configure SQLx queries, test @protect_tool decorator.
+# Active Scope: /src, /lib, /sdk-python, /sdk-typescript, /sdk-go, /examples
+# Key Tasks: Implement thin gateway adapters, lib crate services, SQLx-backed storage traits, and SDK protection tests.
 # Loaded Skills: database_migration.md, sdk_testing.md, tdd_workflow.md, token_budget_advisor.md
 EOF
             echo "Installed developer.md, database_migration.md, and sdk_testing.md rules."
@@ -115,7 +115,7 @@ EOF
             cp "${SKILLS_DIR}/cedar_policy_authoring.md" "${CLAUDE_RULES_DIR}/cedar_policy_authoring.md"
             cat << 'EOF' > "${CLAUDE_RULES_DIR}/auditor.md"
 # Persona: SecurityAuditorAgent
-# Active Scope: /gateway/src/policy.rs, /gateway/policies.cedar, /policy-templates, /skills
+# Active Scope: /lib/policy, /lib/storage, /src/src/routes, /policies.cedar, /src/policies.cedar, /skills
 # Key Tasks: Verify SQL query parameterization, audit multi-tenant isolation, write Cedar policies.
 # Loaded Skills: security_scan.md, cedar_policy_authoring.md, tdd_workflow.md, token_budget_advisor.md
 EOF

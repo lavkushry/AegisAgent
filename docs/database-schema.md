@@ -1,6 +1,6 @@
 # Database schema (ERD)
 
-The gateway uses a single SQLite database (`gateway/src/db.rs`, `run_migrations`).
+The gateway uses a single SQLite database (`lib/storage/src/db/mod.rs`, `run_migrations`).
 Every tenant-owned table carries a `tenant_id` column, and every tenant-scoped
 query filters/binds on it (multi-tenant isolation — see `CLAUDE.md`). New
 columns are added via additive `ensure_*_column` migrations (checked with
@@ -256,7 +256,7 @@ erDiagram
 - **`action_receipts`** forms a per-tenant hash chain: each row's
   `prev_receipt_hash` must equal the previous row's `receipt_hash` (oldest
   `created_at` first), and `receipt_hash` is `SHA-256(canonical(body))` under
-  scheme `aegis-jcs-1`. Verified by `gateway/src/jobs.rs::verify_tenant_receipt_chain`
+  scheme `aegis-jcs-1`. Verified by `src/src/jobs.rs::verify_tenant_receipt_chain`
   (periodic background job, #0107) and `POST /v1/receipts/verify-chain`.
 - **`audit_events_archive`** has no foreign key to `tenants`, since archived
   rows must outlive any later tenant deletion. Populated by
@@ -271,4 +271,3 @@ erDiagram
   re-running `run_migrations` against an already-migrated database is a no-op
   (locked in by `db::tests::migrations_are_idempotent_on_existing_database`, #0108).
 - **Qdrant Vector Database:** When enabled, Agent Security Events (`AseEvent`) are asynchronously vectorized and indexed in Qdrant. See the [Qdrant guide](qdrant-integration.md) for details on semantic indexing and configurations.
-

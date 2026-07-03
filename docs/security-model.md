@@ -182,19 +182,19 @@ The following table maps security properties to their implementation location fo
 | Property | Implementation |
 |----------|---------------|
 | Fail-closed on gateway unreachable | `sdk-python/aegisagent/decorator.py`, `sdk-go/aegis/protect.go`, `sdk-typescript/src/protect.ts` |
-| `action_hash` canonicalization | `sdk-python/aegisagent/canon.py`, `sdk-go/canon/canon.go`, `sdk-typescript/src/canon.ts`, `gateway/src/routes.rs` |
+| `action_hash` canonicalization | `sdk-python/aegisagent/canon.py`, `sdk-go/canon/canon.go`, `sdk-typescript/src/canon.ts`, `src/src/routes/authorize_canon.rs` |
 | Byte-equality gate | `tests/canonical_action_vectors.json`, cross-language CI |
-| Single-use approval (replay defense) | `gateway/src/db.rs` → `consume_approval`; `gateway/src/routes.rs` → `consume_approval` handler |
-| Approval expiry | `gateway/src/routes.rs` → `get_approval` (`EXPIRED` state); SDK decorator expiry check |
-| Trust-provenance Cedar evaluation | `gateway/src/policy.rs`; `gateway/policies.cedar` |
-| Tenant-scoped SQL | `gateway/src/db.rs` — every query binds `tenant_id` |
-| Receipt hash chain | `gateway/src/routes.rs` → `emit_action_receipt`; `gateway/src/sign.rs` (Ed25519) |
-| SOC out-of-band isolation | `gateway/src/events.rs` → `tokio::mpsc` channel; `drain` runs in dedicated Tokio task |
-| Deterministic detection (no LLM) | `gateway/src/detect.rs`; `gateway/src/rule_dsl.rs` |
-| RCA LLM sandboxing | `gateway/src/narrate.rs` — no tools, no authority, display-only output |
-| Advisory-only composite risk | `gateway/src/risk.rs` — score written to `decisions` row and response; never read by Cedar |
-| MCP manifest pinning | `gateway/src/routes.rs` → `discover_mcp_tools`; `mcp_servers.manifest_hash` column |
-| Redaction of secrets | `gateway/src/main.rs` → `redact_secrets`; hashes stored, not raw payloads |
+| Single-use approval (replay defense) | `lib/storage/src/db/approvals.rs` → `consume_approval`; `src/src/routes/approval.rs` → `consume_approval` handler |
+| Approval expiry | `src/src/routes/approval.rs` → `get_approval` (`EXPIRED` state); SDK decorator expiry check |
+| Trust-provenance Cedar evaluation | `lib/policy/src/cedar.rs`; `policies.cedar` / `src/policies.cedar` |
+| Tenant-scoped SQL | `lib/storage/src/db/` — every tenant-owned query binds `tenant_id` |
+| Receipt hash chain | `src/src/routes/authorize_receipts.rs` → `emit_action_receipt`; `src/src/sign.rs` (Ed25519); `lib/storage/src/db/receipts.rs` |
+| SOC out-of-band isolation | `lib/soc/src/events.rs` → `tokio::mpsc` channel; `drain` runs in dedicated Tokio task |
+| Deterministic detection (no LLM) | `lib/soc/src/detect.rs`; `lib/soc/src/rule_dsl.rs` |
+| RCA LLM sandboxing | `lib/soc/src/narrate.rs` — no tools, no authority, display-only output |
+| Advisory-only composite risk | `lib/policy/src/risk.rs`; `src/src/routes/authorize_decision.rs` — score written to `decisions` row and response; never read by Cedar |
+| MCP manifest pinning | `src/src/routes/mcp.rs` → `discover_mcp_tools`; `mcp_servers.manifest_hash` column |
+| Redaction of secrets | `src/src/main.rs` → `redact_secrets`; hashes stored, not raw payloads |
 
 ---
 

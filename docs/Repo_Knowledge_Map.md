@@ -64,7 +64,7 @@ AegisAgent/
 └── mkdocs.yml            # Docs site config (published by .github/workflows/docs.yml)
 ```
 
-Historical note: an empty `gateway/` directory remains from the pre-workspace layout (only a stale `target/`); the gateway crate now lives in `src/`. Some older skill files under `.claude/rules/` still reference `gateway/Cargo.toml` — use `src/Cargo.toml`.
+Historical note: the pre-workspace `gateway/` crate is gone; the gateway crate now lives in `src/`. Some older generated skill files may still reference `gateway/Cargo.toml` — use `src/Cargo.toml` or root workspace commands.
 
 ---
 
@@ -170,7 +170,7 @@ Test suites: Rust unit/integration in-crate; Python `sdk-python/tests`; Go `sdk-
 
 ## 10. Deployment layer
 
-- **Local:** `docker compose up --build` + `scripts/seed-demo.sh`; dev-seeded stack via `docker-compose.dev.yml`.
+- **Local:** `docker compose up --build -d` + `scripts/seed-demo.sh`; dev-seeded stack via `docker-compose.dev.yml`.
 - **Kubernetes:** `helm/aegis-gateway/` (probes wired to `/livez` `/readyz` `/startupz`; policy ConfigMap checksum + hot reload; HPA present but inert until Postgres).
 - **Config:** env-first (see [production-hardening.md](production-hardening.md)); `config/config.yaml` for ports.
 - **Observability:** Prometheus `/metrics`, OTLP traces/metrics (`AEGIS_OTLP_ENDPOINT`), Grafana dashboards in `grafana/dashboards/`.
@@ -226,10 +226,9 @@ The anonymous-agent path (gateway → signed command → node sensor → cage ru
 | No docs validation | `scripts/validate-docs.mjs` |
 
 ### Known stale/wrong spots (fix candidates)
-- `.claude/rules/*.md` skills reference `gateway/Cargo.toml` and `gateway/src/...` — the crate moved to `src/`.
+- Generated or local-only agent skill files may reference `gateway/Cargo.toml` and `gateway/src/...` — the crate moved to `src/`.
 - Root `README.md` quickstart predates some route/UI changes; cross-check when touching it.
 - `docs/archive/dashboard-mock.html` — design-era artifact, archived (superseded by `ui/`).
-- The empty `gateway/` directory should eventually be deleted (only a stale build `target/` remains).
 
 ---
 

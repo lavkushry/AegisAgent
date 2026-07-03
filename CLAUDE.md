@@ -14,7 +14,7 @@ The **integrity layer for AI agent actions** — open, self-hostable, framework-
 ## Current Status & Feature Parity History
 For the complete feature development records, SDK specifications, and ticket parity logs, see **[`docs/feature_history.md`](docs/feature_history.md)**.
 
-* **Baseline**: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `gateway/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, 3-SDK parity.
+* **Baseline**: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `src/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, 3-SDK parity.
 * **Agent-to-gateway mTLS (#1310)**: optional mutual-TLS auth, alternative to bearer tokens, gated on `AEGIS_MTLS_CA_CERT` (CRL revocation via `AEGIS_MTLS_CRL_PATH`). Verified client-cert Subject CN maps to an agent via `agents.mtls_cn` (set through `PATCH /v1/agents/:id`); unrecognized CN fails closed (401); unset env var leaves bearer-token auth unchanged. See `src/src/mtls.rs`.
 * **Signed policy bundles (#1280)**: `POST /v1/policies/bundles` uploads an Ed25519-signed, multi-policy Cedar bundle, gated on `AEGIS_POLICY_SIGNING_KEY` (verifying/public key); unset, every request fails closed (501). Signature covers the `aegis-jcs-1`-canonicalized `{policies, version, created_at}` hash; entries upsert by `policy_key`; all-or-nothing Cedar validation before any write. See `src/src/routes/policy.rs`.
 * **Database encryption at rest (#1192)**: compile-time `sqlcipher` Cargo feature (`cargo build --features sqlcipher`) feature-unifies the workspace's single `libsqlite3-sys` build with SQLCipher (`bundled-sqlcipher-vendored-openssl`), so `sqlx-sqlite` transparently links against SQLCipher instead of plain SQLite. At runtime, set `AEGIS_DB_ENCRYPTION_KEY` to enable the `PRAGMA key` on every connection. Fails closed at startup if the key is set but the binary wasn't compiled with the feature (`PRAGMA cipher_version` detects whether the linked library is SQLCipher-capable). See `lib/storage/src/db/mod.rs`.
@@ -44,7 +44,7 @@ AegisAgent uses a **two-layer storage model**:
 | Layer | Current | Production target |
 |---|---|---|
 | Relational (approvals, receipts, decisions, audit) | SQLite + WAL + `SQLITE_BUSY` retry | PostgreSQL (#1194, MVCC, concurrent writes) |
-| Semantic / vector index | Qdrant (external) via `gateway/src/qdrant.rs` | Qdrant (unchanged — already the right tool) |
+| Semantic / vector index | Qdrant (external) via `lib/soc/src/qdrant.rs` | Qdrant (unchanged — already the right tool) |
 
 * **Why not etcd for metadata?** etcd is optimized for distributed consensus KV store. Relational joins, foreign keys, and transactions needed for decisions/approvals make SQLite/PG the correct choice.
 * **Why not a pluggable flat-file store?** Flat-file stores lose ACID/relational integrity.
@@ -60,18 +60,18 @@ AegisAgent uses a **two-layer storage model**:
 
 ```bash
 # Gateway (Rust)
-cargo check  --manifest-path src/Cargo.toml
-cargo test   --manifest-path src/Cargo.toml        # 637 tests
-cargo test   --manifest-path src/Cargo.toml --features sqlcipher   # #1192, encryption-at-rest build
-cargo fmt    --manifest-path src/Cargo.toml -- --check
-cargo clippy --manifest-path src/Cargo.toml -- -D warnings
-cargo deny --manifest-path src/Cargo.toml check licenses   # #1174, blocks GPL/AGPL
-cargo llvm-cov --manifest-path src/Cargo.toml --fail-under-lines 70   # coverage gate
-CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path src/Cargo.toml   # binds 127.0.0.1:8080
+cargo check --workspace
+cargo test --workspace -- --test-threads=1
+cargo test -p gateway --features sqlcipher -- --test-threads=1   # #1192, encryption-at-rest build
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check licenses   # #1174, blocks GPL/AGPL
+cargo llvm-cov --workspace --fail-under-lines 70   # coverage gate
+CEDAR_POLICY_PATH=policies.cedar cargo run -p gateway --bin gateway   # binds 127.0.0.1:8080
 
 # SDK + Demos (Python)
 python3 -m pip install -e sdk-python/
-python3 -m unittest discover -s sdk-python/tests       # 187 tests
+python3 -m unittest discover -s sdk-python/tests
 python3 examples/integrity_demo.py                     # zero-setup wedge demo
 aegis-verify-receipts <receipts.json>                  # receipt chain verifier
 
@@ -82,8 +82,9 @@ cd sdk-go && go test ./...
 cd sdk-typescript && npm ci && npx tsc --noEmit && npm test
 
 # Local Stack & Playwright E2E
-docker compose up --build && bash scripts/seed-demo.sh
-docker compose -f docker-compose.dev.yml up --build    # seeded dev stack
+docker compose up --build -d
+bash scripts/seed-demo.sh
+docker compose -f docker-compose.dev.yml up --build -d    # seeded dev stack
 cd e2e && npm ci && AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright test
 ```
 

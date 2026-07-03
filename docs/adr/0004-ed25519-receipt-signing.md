@@ -13,7 +13,7 @@ Action receipts form a per-tenant hash chain
 that the gateway's own stored records weren't edited after the fact — but
 doesn't, by itself, let a third party (an auditor, a customer's compliance
 tooling) verify that a given receipt was produced by a specific gateway
-instance's key, independent of trusting the database. `gateway/src/sign.rs`
+instance's key, independent of trusting the database. `src/src/sign.rs`
 adds optional asymmetric signing over `receipt_hash` to close that gap when a
 tenant opts in.
 

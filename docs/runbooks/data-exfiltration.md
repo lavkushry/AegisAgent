@@ -5,12 +5,12 @@
 ## Symptoms
 
 - A SOC alert/incident with `kind: "data_exfil_pattern"` appears in `GET /v1/incidents`.
-- The pattern: a **Source** action (`gateway/src/correlate.rs`'s `SOURCE_TOKENS` — names containing `read`/`get`/`fetch`/`list`/`download`/`query`/`select`/`export`/`dump`/`cat`) is followed within `EXFIL_WINDOW_SECS` (120s) by a **Sink** action for the *same agent* (`SINK_TOKENS` — names containing `send`/`post`/`upload`/`email`/`webhook`/`push`/`publish`/`write_external`/`share`/`transfer`, or any action literally named `exfil`). Matching is substring-based and case-insensitive on the action name only, so it's a heuristic, not a content-aware DLP scan.
+- The pattern: a **Source** action (`lib/soc/src/correlate.rs`'s `SOURCE_TOKENS` — names containing `read`/`get`/`fetch`/`list`/`download`/`query`/`select`/`export`/`dump`/`cat`) is followed within `EXFIL_WINDOW_SECS` (120s) by a **Sink** action for the *same agent* (`SINK_TOKENS` — names containing `send`/`post`/`upload`/`email`/`webhook`/`push`/`publish`/`write_external`/`share`/`transfer`, or any action literally named `exfil`). Matching is substring-based and case-insensitive on the action name only, so it's a heuristic, not a content-aware DLP scan.
 - This is the canonical real-world pattern from the Invariant Labs GitHub-MCP disclosure (T-B2 in [`AegisAgent_Threat_Model.md`](../AegisAgent_Threat_Model.md)): a malicious issue tricks an agent into reading private data, then pushing it somewhere public/external.
 
 ## Before you start: check whether this already auto-resolved
 
-`data_exfil_pattern` maps to **freeze the agent + a critical-severity notification** in the Response Engine (`gateway/src/respond.rs`), but only runs at SOC autonomy level `L3`/`L4` (default is `L1`, notify-only). Check the tenant's effective level the same way as in [`deny-storm.md`](deny-storm.md) before assuming containment already happened.
+`data_exfil_pattern` maps to **freeze the agent + a critical-severity notification** in the Response Engine (`lib/soc/src/respond.rs`), but only runs at SOC autonomy level `L3`/`L4` (default is `L1`, notify-only). Check the tenant's effective level the same way as in [`deny-storm.md`](deny-storm.md) before assuming containment already happened.
 
 ## Investigation
 

@@ -52,7 +52,7 @@ curl http://127.0.0.1:8080/health
 
 ```bash
 # Build a release binary
-cargo build --release --manifest-path src/Cargo.toml
+cargo build --release -p gateway --bin gateway
 # binary lands at target/release/gateway (repo-root target/ — src/ is a
 # workspace member, not its own workspace; see the root Cargo.toml)
 

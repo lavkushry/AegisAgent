@@ -11,17 +11,17 @@
 ## 2. Fastest path (full stack in Docker)
 
 ```bash
-docker compose up --build            # gateway REST :8080, gRPC :6334, console at /dashboard
+docker compose up --build -d         # gateway REST :8080, gRPC :6334, console at /dashboard
 bash scripts/seed-demo.sh            # demo tenant, agents, tools, policies
 python3 examples/integrity_demo.py   # see a decision + receipt happen
 ```
 
-Pre-seeded dev variant: `docker compose -f docker-compose.dev.yml up --build` (+ `scripts/seed-demo-dev.sh`).
+Pre-seeded dev variant: `docker compose -f docker-compose.dev.yml up --build -d` (+ `scripts/seed-demo-dev.sh`).
 
 ## 3. Running the gateway from source
 
 ```bash
-CEDAR_POLICY_PATH=policies.cedar cargo run --manifest-path src/Cargo.toml
+CEDAR_POLICY_PATH=policies.cedar cargo run -p gateway --bin gateway
 # binds 127.0.0.1:8080 (dev default — loopback on purpose)
 ```
 
@@ -34,14 +34,14 @@ SQLite file store; migrations in `lib/storage/migrations/` run automatically at 
 ## 4. Test suites
 
 ```bash
-cargo test  --manifest-path src/Cargo.toml                 # ~637 gateway tests
-cargo test  --manifest-path src/Cargo.toml --features sqlcipher   # encryption-at-rest build
-cargo fmt   --manifest-path src/Cargo.toml -- --check
-cargo clippy --manifest-path src/Cargo.toml -- -D warnings
-cargo llvm-cov --manifest-path src/Cargo.toml --fail-under-lines 70
+cargo test --workspace -- --test-threads=1
+cargo test -p gateway --features sqlcipher -- --test-threads=1   # encryption-at-rest build
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo llvm-cov --workspace --fail-under-lines 70
 
 python3 -m pip install -e sdk-python/
-python3 -m unittest discover -s sdk-python/tests           # 187 SDK tests
+python3 -m unittest discover -s sdk-python/tests
 
 cd sdk-go && go test ./...
 cd sdk-typescript && npm ci && npx tsc --noEmit && npm test

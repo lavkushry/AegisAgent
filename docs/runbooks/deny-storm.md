@@ -6,13 +6,13 @@
 
 - A SOC alert/incident with `kind: "deny_storm"` appears in `GET /v1/incidents` or the live `GET /v1/ws/events` feed.
 - An outbound Slack/webhook notification fires (see [`slack-integration.md`](../slack-integration.md) §3) — `deny` decisions are always high-signal.
-- One agent accumulates **5 or more `deny` decisions within 60 seconds** (`DENY_STORM_N` / `DENY_STORM_WINDOW_SECS`, `gateway/src/correlate.rs`) — the rule fires exactly once, at the threshold crossing, not on every subsequent deny.
+- One agent accumulates **5 or more `deny` decisions within 60 seconds** (`DENY_STORM_N` / `DENY_STORM_WINDOW_SECS`, `lib/soc/src/correlate.rs`) — the rule fires exactly once, at the threshold crossing, not on every subsequent deny.
 
 This is distinct from auto risk-tier escalation (#1296): that mechanism uses a separate, slower default threshold (5 denials within a rolling **60 minutes**, configurable via `GET|PUT /v1/tenants/risk-escalation`) and tightens `agents.risk_tier`, which is real authorization state. A `deny_storm` incident can fire well before risk-tier escalation would trigger.
 
 ## Before you start: check whether this already auto-resolved
 
-The Response Engine (`gateway/src/respond.rs`) maps `deny_storm` → **freeze the agent**, but only runs at SOC autonomy level `L3`/`L4`. The default is `L1` (notify only — no auto-freeze). Check the tenant's effective level first:
+The Response Engine (`lib/soc/src/respond.rs`) maps `deny_storm` → **freeze the agent**, but only runs at SOC autonomy level `L3`/`L4`. The default is `L1` (notify only — no auto-freeze). Check the tenant's effective level first:
 
 ```bash
 # No HTTP API exists for this yet — it's read from `tenants.soc_autonomy_level`

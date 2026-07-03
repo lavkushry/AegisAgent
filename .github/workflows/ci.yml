@@ -47,7 +47,7 @@ jobs:
           workspaces: .
           key: ${{ matrix.rust }}
       - name: Check formatting
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
         if: matrix.rust == 'stable'
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
