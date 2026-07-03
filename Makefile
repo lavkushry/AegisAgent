@@ -2,14 +2,19 @@ PYTHON ?= python3
 VENV ?= .venv
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PRE_COMMIT := $(VENV)/bin/pre-commit
+PYTHON_RUNTIME_DEPS := $(VENV)/.aegis-python-runtime-deps
 PYTHON_DEPS := $(VENV)/.aegis-python-deps
 
-.PHONY: setup demo test rust-test python-test go-test ts-test fmt lint check clean docs-validate docs-serve docs-build
+.PHONY: setup doctor demo test rust-test python-test go-test ts-test fmt lint check clean docs-validate docs-serve docs-build
 
 $(VENV_PYTHON):
 	$(PYTHON) -m venv $(VENV)
 
-$(PYTHON_DEPS): $(VENV_PYTHON) sdk-python/pyproject.toml
+$(PYTHON_RUNTIME_DEPS): $(VENV_PYTHON) sdk-python/pyproject.toml
+	$(VENV_PYTHON) -m pip install -e "sdk-python"
+	touch $(PYTHON_RUNTIME_DEPS)
+
+$(PYTHON_DEPS): $(PYTHON_RUNTIME_DEPS)
 	$(VENV_PYTHON) -m pip install -e "sdk-python[dev]"
 	touch $(PYTHON_DEPS)
 
@@ -29,7 +34,10 @@ setup: $(PYTHON_DEPS)
 	$(VENV_PYTHON) -m pip install pre-commit
 	$(VENV_PRE_COMMIT) install
 
-demo: $(PYTHON_DEPS)
+doctor:
+	bash scripts/doctor.sh
+
+demo: doctor $(PYTHON_RUNTIME_DEPS)
 	PYTHON_BIN=$(VENV_PYTHON) bash scripts/run-killer-demo.sh
 
 # Runs the core local Rust, Python, Go, and TypeScript suites.
@@ -64,5 +72,5 @@ check: lint test
 clean:
 	cargo clean
 	rm -rf sdk-typescript/node_modules sdk-typescript/dist
-	rm -rf $(VENV) gateway/target
+	rm -rf $(VENV)
 	find . -name "__pycache__" -not -path "./target/*" -exec rm -rf {} +

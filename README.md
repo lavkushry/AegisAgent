@@ -13,7 +13,7 @@
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker)](https://github.com/lavkushry/AegisAgent/pkgs/container/aegisagent)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-orange.svg)](Cargo.toml)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](sdk-python/pyproject.toml)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](sdk-python/pyproject.toml)
 [![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://lavkushry.github.io/AegisAgent/)
 
 AegisAgent is an open-source, self-hostable **security integrity layer and API firewall** designed for **autonomous AI agents** and **Model Context Protocol (MCP)** tool execution. It acts as a zero-trust guardrail between your AI agent runtime (LangGraph, OpenAI Agents, Autogen, Custom) and external systems, preventing unauthorized actions caused by prompt injections, tool-use hijacking, and data exfiltration.
@@ -104,7 +104,11 @@ cd AegisAgent
 make demo
 ```
 
-The demo starts the local gateway, seeds a coding agent and GitHub tool, blocks
+`make demo` first runs `make doctor`, which checks Docker, Docker Compose,
+Python, `curl`, the compose file, and whether the local REST/gRPC demo ports are
+usable.
+
+The demo then starts the local gateway, seeds a coding agent and GitHub tool, blocks
 a prompt-injected merge attempt from untrusted external input, proves
 approve-then-swap fails closed on `action_hash` mismatch, blocks approval
 replay, and prints the receipt chain head plus server-side receipt verification.
@@ -135,6 +139,9 @@ AegisAgent is built in Rust for raw speed and security, featuring rigorous unit,
 ```bash
 # Setup development environment (formatting, linters, pre-commit hooks)
 make setup
+
+# Check local demo prerequisites without starting services
+make doctor
 
 # Run the complete test suite (Rust, Python, TS, Go)
 make check
