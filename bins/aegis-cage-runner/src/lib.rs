@@ -6,12 +6,16 @@
 //! Phase 4.1: the `SandboxRuntime` trait every backend implements,
 //! `SandboxSpec` and its forbidden-mount/forbidden-credential validation.
 //! Phase 4.2 (this crate also covers): the first concrete backend, Docker,
-//! plus isolated per-sandbox workspace management. Still no `main.rs` — the
-//! gateway-facing wiring (Phase 4.3) is what will actually invoke this.
+//! plus isolated per-sandbox workspace management. Phase 4.4 (this crate
+//! also covers): the `agent_run_started`/`process_started`/
+//! `process_exited`/`agent_run_finished` runtime event stream ([`events`]).
+//! Still no `main.rs` — the gateway-facing wiring (Phase 4.3) is what will
+//! actually invoke this.
 
 pub mod docker_cli;
 pub mod docker_runtime;
 pub mod error;
+pub mod events;
 pub mod runtime;
 pub mod spec;
 pub mod workspace;

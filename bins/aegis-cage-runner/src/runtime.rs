@@ -21,6 +21,12 @@ use crate::spec::SandboxSpec;
 pub struct SandboxHandle {
     pub sandbox_id: String,
     pub backend_id: String,
+    /// Carried from `SandboxSpec` at `create()` time so every later
+    /// lifecycle call (`start`/`kill`/`destroy`/...) can still tag its
+    /// emitted events with the owning tenant/run, without a runtime having
+    /// to keep its own sandbox_id -> identity side table.
+    pub tenant_id: String,
+    pub run_id: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -82,17 +88,39 @@ pub(crate) mod mock {
     //! substitute for the Docker implementation (Phase 4.2).
 
     use super::*;
-    use std::sync::Mutex;
+    use crate::events::{CageEvent, CageEventSink, CageEventType, NullEventSink};
+    use std::sync::{Arc, Mutex};
 
     pub struct MockRuntime {
         states: Mutex<HashMap<String, SandboxState>>,
+        event_sink: Arc<dyn CageEventSink>,
     }
 
     impl MockRuntime {
         pub fn new() -> Self {
             Self {
                 states: Mutex::new(HashMap::new()),
+                event_sink: Arc::new(NullEventSink),
             }
+        }
+
+        pub fn with_event_sink(event_sink: Arc<dyn CageEventSink>) -> Self {
+            Self {
+                states: Mutex::new(HashMap::new()),
+                event_sink,
+            }
+        }
+
+        fn emit(&self, event_type: CageEventType, handle: &SandboxHandle, exit_code: Option<i32>) {
+            self.event_sink.record(
+                CageEvent::new(
+                    event_type,
+                    &handle.tenant_id,
+                    &handle.run_id,
+                    &handle.sandbox_id,
+                )
+                .with_exit_code(exit_code),
+            );
         }
     }
 
@@ -109,6 +137,8 @@ pub(crate) mod mock {
             let handle = SandboxHandle {
                 sandbox_id: spec.sandbox_id.clone(),
                 backend_id: format!("mock-{}", spec.sandbox_id),
+                tenant_id: spec.tenant_id.clone(),
+                run_id: spec.run_id.clone(),
                 created_at: Utc::now(),
             };
             self.states.lock().unwrap().insert(
@@ -127,6 +157,9 @@ pub(crate) mod mock {
                 .get_mut(&handle.sandbox_id)
                 .ok_or_else(|| CageError::NotFound(handle.sandbox_id.clone()))?;
             state.status = SandboxStatus::Running;
+            drop(states);
+            self.emit(CageEventType::AgentRunStarted, handle, None);
+            self.emit(CageEventType::ProcessStarted, handle, None);
             Ok(())
         }
 
@@ -154,6 +187,8 @@ pub(crate) mod mock {
                 .get_mut(&handle.sandbox_id)
                 .ok_or_else(|| CageError::NotFound(handle.sandbox_id.clone()))?;
             state.status = SandboxStatus::Killed;
+            drop(states);
+            self.emit(CageEventType::ProcessExited, handle, None);
             Ok(())
         }
 
@@ -178,6 +213,7 @@ pub(crate) mod mock {
 
         async fn destroy(&self, handle: &SandboxHandle) -> Result<(), CageError> {
             self.states.lock().unwrap().remove(&handle.sandbox_id);
+            self.emit(CageEventType::AgentRunFinished, handle, None);
             Ok(())
         }
     }
@@ -279,11 +315,56 @@ mod tests {
         let bogus = SandboxHandle {
             sandbox_id: "does-not-exist".to_string(),
             backend_id: "mock-does-not-exist".to_string(),
+            tenant_id: "tenant_a".to_string(),
+            run_id: "run_1".to_string(),
             created_at: Utc::now(),
         };
         assert!(matches!(
             runtime.start(&bogus).await.unwrap_err(),
             CageError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_run_emits_the_full_event_timeline_linked_to_run_and_sandbox() {
+        use crate::events::{CageEventType, RecordingEventSink};
+        use std::sync::Arc;
+
+        let sink = Arc::new(RecordingEventSink::new());
+        let runtime = MockRuntime::with_event_sink(sink.clone());
+        let handle = runtime.create(&sample_spec()).await.unwrap();
+
+        runtime.start(&handle).await.unwrap();
+        runtime.kill(&handle, KillReason::Timeout).await.unwrap();
+        runtime.destroy(&handle).await.unwrap();
+
+        let events = sink.events();
+        let event_types: Vec<CageEventType> = events.iter().map(|e| e.event_type).collect();
+        assert_eq!(
+            event_types,
+            vec![
+                CageEventType::AgentRunStarted,
+                CageEventType::ProcessStarted,
+                CageEventType::ProcessExited,
+                CageEventType::AgentRunFinished,
+            ],
+            "the run's timeline must contain all four cage lifecycle events, in order"
+        );
+        for event in &events {
+            assert_eq!(event.tenant_id, "tenant_a");
+            assert_eq!(event.run_id, "run_1");
+            assert_eq!(event.sandbox_id, "sandbox_1");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_with_no_configured_sink_still_completes_its_lifecycle() {
+        // The default (NullEventSink) must never make lifecycle operations
+        // fail — telemetry is best-effort, not a gate.
+        let runtime = MockRuntime::new();
+        let handle = runtime.create(&sample_spec()).await.unwrap();
+        runtime.start(&handle).await.unwrap();
+        runtime.kill(&handle, KillReason::Timeout).await.unwrap();
+        runtime.destroy(&handle).await.unwrap();
     }
 }
