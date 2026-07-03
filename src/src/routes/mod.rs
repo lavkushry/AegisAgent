@@ -960,6 +960,13 @@ pub struct AppState {
     /// bundle signature can ever be verified, and accepting one unverified
     /// would defeat the feature's purpose.
     pub policy_signing_verifying_key: Option<String>,
+    /// Ed25519 signing key (hex, optional `"key_id:"` prefix), for
+    /// gateway-initiated cage-run control commands (Phase 4.3). Configured
+    /// via `AEGIS_COMMAND_SIGNING_KEY`. When `None`, the
+    /// pause/resume/kill/quarantine routes refuse every request with `503`
+    /// — fail closed, since an unconfigured key means the gateway can't
+    /// sign a command any sensor would trust.
+    pub command_signing_key: Option<String>,
     /// HMAC-SHA256 signing secret for verifying `X-Slack-Signature` on
     /// `POST /v1/callbacks/slack` (#1276). Configured via
     /// `AEGIS_SLACK_SIGNING_SECRET`. When `None`, the endpoint refuses every
@@ -1620,6 +1627,7 @@ pub mod benchutil {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1921,6 +1929,7 @@ pub(crate) mod test_helpers {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: Some(secret.to_string()),
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -1973,6 +1982,60 @@ pub(crate) mod test_helpers {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: Some(verifying_key_hex.to_string()),
+            command_signing_key: None,
+            slack_signing_secret: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+            qdrant_exporter: None,
+            admission_webhook: None,
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `command_signing_key` set to `Some(signing_key_hex)`, for testing the
+    /// cage-run control routes' signed-command issuance (Phase 4.3).
+    pub(crate) async fn setup_state_with_command_signing_key(
+        test_name: &str,
+        signing_key_hex: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.storage.get_pool().clone(),
+            state_raw.metrics.clone(),
+            None,
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            storage: state_raw.storage.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
+            canonical_hash_cache: CanonicalHashCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            policy_signing_verifying_key: None,
+            command_signing_key: Some(signing_key_hex.to_string()),
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -2027,6 +2090,7 @@ pub(crate) mod test_helpers {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -2083,6 +2147,7 @@ pub(crate) mod test_helpers {
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: Some(secret.to_string()),
             github_pr_commenter: None,
             github_checks_client: None,
@@ -2190,6 +2255,7 @@ pub(crate) mod test_helpers {
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -2318,6 +2384,7 @@ pub(crate) mod test_helpers {
             audit_batch,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,

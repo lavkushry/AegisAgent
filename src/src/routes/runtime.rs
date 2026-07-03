@@ -3,19 +3,24 @@
 //! tenant-scoped via the `TenantId` extractor and delegates to the tenant-scoped
 //! `StorageBackend` methods. Ingest is idempotent (dedup on `event_id`).
 //!
-//! Not yet wired: signature verification for sensor-shipped events and the
-//! cage-run control operations (pause/kill) — those arrive with the sensor and
-//! cage-runner phases.
+//! Phase 4.3 (this file also covers): cage-run control routes
+//! (pause/resume/kill/quarantine). Each issues a gateway-signed control
+//! command targeting the run (reusing the Phase 2.3/2.7 `control_commands`
+//! store and the exact signature scheme `aegis-node-sensor`'s
+//! `CommandReceiver` already verifies) rather than mutating the run
+//! directly — the sensor/cage that actually executes it is the only thing
+//! that gets to change what's really running.
 
 #![allow(unused_imports)]
 use crate::error::StatusError;
+use crate::sign;
 use axum::{
     extract::{Path, RawQuery, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -25,6 +30,11 @@ use uuid::Uuid;
 use crate::models::*;
 
 use super::{parse_pagination, AppState, TenantId};
+
+/// How long a gateway-issued control command remains valid before a sensor
+/// must treat it as expired — matches the example in
+/// `docs/AegisAgent_Control_Command_Protocol.md`.
+const CONTROL_COMMAND_EXPIRY_SECS: i64 = 300;
 
 /// Body for `POST /v1/agent-cage/runs`. Server assigns `id`, `status`,
 /// `started_at`, and `created_at`; the caller supplies the run identity/context.
@@ -229,10 +239,174 @@ pub async fn list_run_events(
     }
 }
 
+/// Body for `POST /v1/agent-cage/runs/:id/{pause,resume,kill,quarantine}`.
+#[derive(Debug, Deserialize)]
+pub struct RunControlRequest {
+    pub actor: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Build, sign, and persist a control command targeting `run_id`. Fails
+/// closed if no `AEGIS_COMMAND_SIGNING_KEY` is configured — the gateway
+/// never issues a command it knows a sensor can't verify. 404s if the run
+/// doesn't exist for this tenant.
+async fn issue_run_control_command(
+    state: &AppState,
+    tenant_id: &str,
+    run_id: &str,
+    action: &str,
+    req: &RunControlRequest,
+) -> Result<ControlCommandRecord, StatusError> {
+    match state.storage.get_agent_run(tenant_id, run_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(StatusError::not_found("agent run not found")),
+        Err(e) => {
+            error!("Failed to fetch agent run for control command: {:?}", e);
+            return Err(StatusError::internal("Database error"));
+        }
+    }
+
+    let signing_key_hex = state.command_signing_key.as_deref().ok_or_else(|| {
+        StatusError::service_unavailable(
+            "gateway command signing key not configured; cannot issue control commands",
+        )
+    })?;
+    let signer = sign::CommandSigner::from_env_value(signing_key_hex).map_err(|e| {
+        error!("AEGIS_COMMAND_SIGNING_KEY is set but invalid: {e}");
+        StatusError::service_unavailable(
+            "gateway command signing key is misconfigured; cannot issue control commands",
+        )
+    })?;
+
+    let now = Utc::now();
+    let mut record = ControlCommandRecord {
+        command_id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.to_string(),
+        target_type: "run".to_string(),
+        target_id: run_id.to_string(),
+        action: action.to_string(),
+        reason: req.reason.clone(),
+        issued_by: req.actor.clone(),
+        issued_at: now,
+        expires_at: now + Duration::seconds(CONTROL_COMMAND_EXPIRY_SECS),
+        nonce: Uuid::new_v4().to_string(),
+        requires_ack: true,
+        receipt_required: true,
+        signature: String::new(),
+        status: "issued".to_string(),
+        created_at: now,
+    };
+    record.signature = signer.sign(&sign::canonical_command_bytes(&record));
+
+    state
+        .storage
+        .insert_control_command(&record)
+        .await
+        .map_err(|e| {
+            error!("Failed to persist control command: {:?}", e);
+            StatusError::internal("Database error")
+        })?;
+    Ok(record)
+}
+
+/// POST /v1/agent-cage/runs/:id/pause
+pub async fn pause_run(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(run_id): Path<String>,
+    Json(req): Json<RunControlRequest>,
+) -> impl IntoResponse {
+    match issue_run_control_command(&state, &tenant_id, &run_id, "pause_run", &req).await {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// POST /v1/agent-cage/runs/:id/resume
+pub async fn resume_run(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(run_id): Path<String>,
+    Json(req): Json<RunControlRequest>,
+) -> impl IntoResponse {
+    match issue_run_control_command(&state, &tenant_id, &run_id, "resume_run", &req).await {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// POST /v1/agent-cage/runs/:id/kill
+pub async fn kill_run(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(run_id): Path<String>,
+    Json(req): Json<RunControlRequest>,
+) -> impl IntoResponse {
+    match issue_run_control_command(&state, &tenant_id, &run_id, "kill_run", &req).await {
+        Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// POST /v1/agent-cage/runs/:id/quarantine — issues a `quarantine_run`
+/// signed command AND records a `quarantine_records` row (Phase 2.5/2.7),
+/// so the run is both instructed to freeze evidence and durably marked
+/// quarantined even if the sensor never manages to ACK.
+pub async fn quarantine_run(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(run_id): Path<String>,
+    Json(req): Json<RunControlRequest>,
+) -> impl IntoResponse {
+    let command = match issue_run_control_command(
+        &state,
+        &tenant_id,
+        &run_id,
+        "quarantine_run",
+        &req,
+    )
+    .await
+    {
+        Ok(record) => record,
+        Err(e) => return e.into_response(),
+    };
+
+    let now = Utc::now();
+    let quarantine = QuarantineRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.clone(),
+        target_type: "run".to_string(),
+        target_value: run_id.clone(),
+        reason: req.reason.clone(),
+        actor: req.actor.clone(),
+        status: "active".to_string(),
+        incident_id: None,
+        created_at: now,
+        released_at: None,
+        released_by: None,
+    };
+    if let Err(e) = state.storage.insert_quarantine(&quarantine).await {
+        error!("Failed to record quarantine for run: {:?}", e);
+        return StatusError::internal("Database error").into_response();
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "control_command": command,
+            "quarantine_record": quarantine,
+        })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routes::test_helpers::{register_tenant_helper, setup_state};
+    use crate::routes::test_helpers::{
+        register_tenant_helper, setup_state, setup_state_with_command_signing_key,
+    };
     use axum::body::to_bytes;
     use axum::extract::RawQuery;
 
@@ -449,5 +623,199 @@ mod tests {
         let rows: Vec<RuntimeEventRecord> = serde_json::from_slice(&body).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].event_id, "evt-a");
+    }
+
+    // Fixed 32-byte test secret (hex, bytes 0x01..0x20) — deterministic,
+    // test-only material, not a real key. Matches the convention used for
+    // receipt-signing tests (see routes/receipts.rs).
+    const TEST_COMMAND_SIGNING_SECRET_HEX: &str =
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+
+    async fn create_run(state: &Arc<AppState>, tenant_id: &str, run_key: &str) -> AgentRunRecord {
+        let response = create_agent_run(
+            State(state.clone()),
+            TenantId(tenant_id.to_string()),
+            Json(CreateAgentRunRequest {
+                run_key: run_key.to_string(),
+                agent_id: None,
+                source_component: "sdk".to_string(),
+                mode: None,
+                root_trace_id: None,
+                root_trust_level: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn anonymous_run_start_has_no_agent_id() {
+        let (state, tenant_id, _agent_token) = setup_state("cage_anon_run_start").await;
+        let run = create_run(&state, &tenant_id, "run-anon-1").await;
+        assert!(run.agent_id.is_none());
+        assert_eq!(run.status, "started");
+    }
+
+    #[tokio::test]
+    async fn control_routes_fail_closed_without_a_signing_key() {
+        let (state, tenant_id, _agent_token) = setup_state("cage_control_no_key").await;
+        let run = create_run(&state, &tenant_id, "run-no-key").await;
+
+        let response = kill_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunControlRequest {
+                actor: "soc-analyst".to_string(),
+                reason: Some("suspicious activity".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn kill_run_issues_a_verifiable_signed_command() {
+        let (state, tenant_id, _agent_token) =
+            setup_state_with_command_signing_key("cage_kill_run", TEST_COMMAND_SIGNING_SECRET_HEX)
+                .await;
+        let run = create_run(&state, &tenant_id, "run-kill-1").await;
+
+        let response = kill_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunControlRequest {
+                actor: "soc-analyst".to_string(),
+                reason: Some("suspicious activity".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let command: ControlCommandRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(command.action, "kill_run");
+        assert_eq!(command.target_type, "run");
+        assert_eq!(command.target_id, run.id);
+        assert_eq!(command.status, "issued");
+
+        // A sensor/cage mock verifies the exact same way
+        // aegis-node-sensor's CommandReceiver does: signature over
+        // canonical_command_bytes, checked against the signer's public key.
+        let signer = sign::CommandSigner::from_secret_hex(TEST_COMMAND_SIGNING_SECRET_HEX).unwrap();
+        let sig_bytes = hex::decode(&command.signature).unwrap();
+        let sig_arr: [u8; 64] = sig_bytes.try_into().unwrap();
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
+        let pk_bytes = hex::decode(signer.public_key_hex()).unwrap();
+        let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pk_arr).unwrap();
+        use ed25519_dalek::Verifier;
+        assert!(verifying_key
+            .verify_strict(&sign::canonical_command_bytes(&command), &signature)
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_run_issue_signed_commands() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_pause_resume_run",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+        let run = create_run(&state, &tenant_id, "run-pause-1").await;
+        let req = || RunControlRequest {
+            actor: "operator".to_string(),
+            reason: None,
+        };
+
+        let response = pause_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let command: ControlCommandRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(command.action, "pause_run");
+
+        let response = resume_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(req()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let command: ControlCommandRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(command.action, "resume_run");
+    }
+
+    #[tokio::test]
+    async fn control_routes_404_for_an_unknown_run() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_control_unknown_run",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+
+        let response = kill_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("does-not-exist".to_string()),
+            Json(RunControlRequest {
+                actor: "operator".to_string(),
+                reason: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn quarantine_run_creates_control_command_and_quarantine_record() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_quarantine_run",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+        let run = create_run(&state, &tenant_id, "run-quarantine-1").await;
+
+        let response = quarantine_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunControlRequest {
+                actor: "soc-analyst".to_string(),
+                reason: Some("secret exfil detected".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["control_command"]["action"], "quarantine_run");
+        assert_eq!(json["quarantine_record"]["target_type"], "run");
+        assert_eq!(json["quarantine_record"]["target_value"], run.id);
+        assert_eq!(json["quarantine_record"]["status"], "active");
+
+        // The quarantine record is independently durable — verify it via
+        // storage directly, not just the response body.
+        let records = state
+            .storage
+            .list_quarantine(&tenant_id, 50, 0)
+            .await
+            .unwrap();
+        assert!(records.iter().any(|r| r.target_value == run.id));
     }
 }

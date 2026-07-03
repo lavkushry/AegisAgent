@@ -139,6 +139,97 @@ pub fn global_signer() -> Option<&'static ReceiptSigner> {
         .as_ref()
 }
 
+/// Phase 4.3 (Agent Cage): Ed25519 signing of gateway-initiated control
+/// commands (`pause_run`/`resume_run`/`kill_run`/`quarantine_run`, issued by
+/// the run-control routes rather than supplied by a caller). Structurally
+/// identical to [`ReceiptSigner`] but kept as its own type rather than
+/// generalizing the two: they sign different things for different reasons
+/// (a receipt hash for third-party audit vs. a command's canonical bytes for
+/// a sensor to verify before executing), and conflating them would make an
+/// accidental cross-use (signing a command with the receipt key or vice
+/// versa) a type error instead of a silent bug.
+pub struct CommandSigner {
+    signing_key: SigningKey,
+    key_id: Option<String>,
+}
+
+impl CommandSigner {
+    pub fn from_secret_hex(secret_hex: &str) -> Result<Self, String> {
+        let bytes = hex::decode(secret_hex.trim())
+            .map_err(|e| format!("secret key is not valid hex: {e}"))?;
+        let arr: [u8; SECRET_KEY_LENGTH] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| format!("secret key must be {SECRET_KEY_LENGTH} bytes"))?;
+        Ok(Self {
+            signing_key: SigningKey::from_bytes(&arr),
+            key_id: None,
+        })
+    }
+
+    /// Same `"key_id:hex_secret"` convention as [`ReceiptSigner::from_env_value`].
+    pub fn from_env_value(value: &str) -> Result<Self, String> {
+        match value.trim().split_once(':') {
+            Some((key_id, hex_secret)) if !key_id.is_empty() => {
+                let mut signer = Self::from_secret_hex(hex_secret)?;
+                signer.key_id = Some(key_id.to_string());
+                Ok(signer)
+            }
+            _ => Self::from_secret_hex(value),
+        }
+    }
+
+    /// Sign the canonical bytes of a control command (see
+    /// `canonical_command_bytes`). Returns a lowercase-hex Ed25519 signature.
+    pub fn sign(&self, canonical_bytes: &[u8]) -> String {
+        let signature: Signature = self.signing_key.sign(canonical_bytes);
+        hex::encode(signature.to_bytes())
+    }
+
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(self.signing_key.verifying_key().to_bytes())
+    }
+
+    pub fn key_id(&self) -> Option<&str> {
+        self.key_id.as_deref()
+    }
+}
+
+/// Canonical, sorted-key, compact-JSON byte representation of a control
+/// command's signable fields — everything except `signature` and `status`,
+/// which aren't part of what's signed. Must stay byte-for-byte identical to
+/// `aegis-node-sensor`'s `command_receiver::canonical_bytes`
+/// (`bins/aegis-node-sensor/src/command_receiver.rs`), which is what
+/// verifies a command signed here. If one side's field set or serialization
+/// ever drifts from the other, every command silently fails verification.
+pub fn canonical_command_bytes(record: &crate::models::ControlCommandRecord) -> Vec<u8> {
+    use std::collections::BTreeMap;
+
+    let mut map: BTreeMap<&'static str, serde_json::Value> = BTreeMap::new();
+    map.insert("command_id", serde_json::json!(record.command_id));
+    map.insert("tenant_id", serde_json::json!(record.tenant_id));
+    map.insert("target_type", serde_json::json!(record.target_type));
+    map.insert("target_id", serde_json::json!(record.target_id));
+    map.insert("action", serde_json::json!(record.action));
+    map.insert("reason", serde_json::json!(record.reason));
+    map.insert("issued_by", serde_json::json!(record.issued_by));
+    map.insert(
+        "issued_at",
+        serde_json::json!(record.issued_at.to_rfc3339()),
+    );
+    map.insert(
+        "expires_at",
+        serde_json::json!(record.expires_at.to_rfc3339()),
+    );
+    map.insert("nonce", serde_json::json!(record.nonce));
+    map.insert("requires_ack", serde_json::json!(record.requires_ack));
+    map.insert(
+        "receipt_required",
+        serde_json::json!(record.receipt_required),
+    );
+    serde_json::to_vec(&map).expect("a BTreeMap<&str, Value> always serializes")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +335,72 @@ mod tests {
         // succeed with a nonsensical empty key_id.
         let value = format!(":{TEST_SECRET_HEX}");
         assert!(ReceiptSigner::from_env_value(&value).is_err());
+    }
+
+    fn sample_command_record() -> crate::models::ControlCommandRecord {
+        let issued_at = "2026-01-01T00:00:00Z".parse().unwrap();
+        let expires_at = "2026-01-01T00:05:00Z".parse().unwrap();
+        crate::models::ControlCommandRecord {
+            command_id: "cmd-1".to_string(),
+            tenant_id: "tenant_a".to_string(),
+            target_type: "run".to_string(),
+            target_id: "run-1".to_string(),
+            action: "kill_run".to_string(),
+            reason: Some("exfil detected".to_string()),
+            issued_by: "user:admin@example.com".to_string(),
+            issued_at,
+            expires_at,
+            nonce: "nonce-1".to_string(),
+            requires_ack: true,
+            receipt_required: true,
+            signature: String::new(),
+            status: "issued".to_string(),
+            created_at: issued_at,
+        }
+    }
+
+    #[test]
+    fn command_signer_sign_verify_round_trip() {
+        let signer = CommandSigner::from_secret_hex(TEST_SECRET_HEX).unwrap();
+        let record = sample_command_record();
+        let bytes = canonical_command_bytes(&record);
+        let sig_hex = signer.sign(&bytes);
+
+        let sig_bytes = hex::decode(&sig_hex).unwrap();
+        let sig_arr: [u8; 64] = sig_bytes.try_into().unwrap();
+        let signature = Signature::from_bytes(&sig_arr);
+        let pk_bytes = hex::decode(signer.public_key_hex()).unwrap();
+        let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
+        let verifying_key = VerifyingKey::from_bytes(&pk_arr).unwrap();
+        assert!(verifying_key.verify_strict(&bytes, &signature).is_ok());
+    }
+
+    #[test]
+    fn canonical_command_bytes_changes_if_any_signable_field_changes() {
+        let base = sample_command_record();
+        let base_bytes = canonical_command_bytes(&base);
+
+        let mut tampered = sample_command_record();
+        tampered.action = "kill_all".to_string();
+        assert_ne!(base_bytes, canonical_command_bytes(&tampered));
+
+        let mut tampered_nonce = sample_command_record();
+        tampered_nonce.nonce = "different-nonce".to_string();
+        assert_ne!(base_bytes, canonical_command_bytes(&tampered_nonce));
+    }
+
+    #[test]
+    fn canonical_command_bytes_is_stable_sorted_key_compact_json() {
+        // A pinned golden value: if this ever changes, aegis-node-sensor's
+        // command_receiver::canonical_bytes (which this must stay
+        // byte-for-byte identical to) needs the same change, or every
+        // command signed by the gateway silently fails sensor verification.
+        let record = sample_command_record();
+        let bytes = canonical_command_bytes(&record);
+        let json_str = String::from_utf8(bytes).unwrap();
+        assert_eq!(
+            json_str,
+            r#"{"action":"kill_run","command_id":"cmd-1","expires_at":"2026-01-01T00:05:00+00:00","issued_at":"2026-01-01T00:00:00+00:00","issued_by":"user:admin@example.com","nonce":"nonce-1","reason":"exfil detected","receipt_required":true,"requires_ack":true,"target_id":"run-1","target_type":"run","tenant_id":"tenant_a"}"#
+        );
     }
 }

@@ -932,6 +932,15 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/agent-cage/runs/:id", get(routes::get_agent_run))
         .route("/ingest/runtime-events", post(routes::ingest_runtime_event))
         .route("/runtime/runs/:id/events", get(routes::list_run_events))
+        // Cage-run control (Phase 4.3): each issues a gateway-signed control
+        // command targeting the run rather than mutating it directly.
+        .route("/agent-cage/runs/:id/pause", post(routes::pause_run))
+        .route("/agent-cage/runs/:id/resume", post(routes::resume_run))
+        .route("/agent-cage/runs/:id/kill", post(routes::kill_run))
+        .route(
+            "/agent-cage/runs/:id/quarantine",
+            post(routes::quarantine_run),
+        )
         // Runtime control plane (Phase 2.7): bans, quarantine, control commands
         .route("/bans", post(routes::create_ban).get(routes::list_bans))
         .route("/bans/:id", get(routes::get_ban))
@@ -1706,6 +1715,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Ed25519 signing key (hex, optional "key_id:" prefix) for gateway-
+    // initiated cage-run control commands (Phase 4.3). When unset, the
+    // pause/resume/kill/quarantine routes fail closed with 503 — the
+    // gateway never issues a command it knows a sensor can't verify.
+    let command_signing_key = std::env::var("AEGIS_COMMAND_SIGNING_KEY").ok();
+    if command_signing_key.is_none() {
+        info!(
+            "AEGIS_COMMAND_SIGNING_KEY is not set. Cage-run control routes \
+             (pause/resume/kill/quarantine) will refuse all requests with 503."
+        );
+    }
+
     // HMAC-SHA256 signing secret for verifying X-Slack-Signature on
     // POST /v1/callbacks/slack (#1276). When unset, the endpoint refuses every
     // request with 404 (fail closed).
@@ -1785,6 +1806,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_batch,
         github_webhook_secret,
         policy_signing_verifying_key,
+        command_signing_key,
         slack_signing_secret,
         github_pr_commenter,
         github_checks_client,
@@ -2511,6 +2533,7 @@ mod tests {
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -2808,6 +2831,7 @@ mod tests {
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
@@ -3146,6 +3170,7 @@ mod tests {
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
+            command_signing_key: None,
             slack_signing_secret: None,
             github_pr_commenter: None,
             github_checks_client: None,
