@@ -17,7 +17,7 @@ docker compose up --build -d
 bash scripts/seed-demo.sh   # optional — demo agents/tools/decisions
 
 # Local dev: auto-seeded
-docker compose -f docker-compose.dev.yml up --build
+docker compose -f docker-compose.dev.yml up --build -d
 ```
 
 Both compose files run the gateway image built from [`src/Dockerfile`](../src/Dockerfile) — a multi-stage build that lands on `gcr.io/distroless/cc-debian12:nonroot` (no shell, no package manager, runs as uid/gid 65532). The base file's `init-data-dir` service is a one-shot `busybox` container that `chmod`s the bind-mounted `./data` directory before the gateway starts, since the host-side directory is created under your local user, not uid 65532.

@@ -14,6 +14,8 @@
  *      every .mmd on disk is listed in the index.
  *   5. Implementation_Status_Matrix.md contains every required capability row.
  *   6. The explorer page exists and loads the architecture map.
+ *   7. Active docs/scripts do not regress to stale pre-workspace paths or
+ *      blocking Docker Compose quickstart snippets.
  *
  * Exit code 0 = pass (warnings allowed), 1 = errors found.
  */
@@ -24,6 +26,15 @@ const ROOT = resolve(dirname(new URL(import.meta.url).pathname), "..");
 const DOCS = join(ROOT, "docs");
 const errors = [];
 const warnings = [];
+
+function* textFiles(dir, suffixes) {
+  if (!existsSync(dir)) return;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) yield* textFiles(p, suffixes);
+    else if (suffixes.some(s => e.name.endsWith(s))) yield p;
+  }
+}
 
 // ── 1. Required docs ────────────────────────────────────────────────────────
 const REQUIRED_DOCS = [
@@ -180,6 +191,63 @@ const explorer = existsSync(join(DOCS, "explorer/index.html"))
   ? readFileSync(join(DOCS, "explorer/index.html"), "utf8") : "";
 if (explorer && !explorer.includes("architecture-map.json")) {
   errors.push("explorer/index.html does not load architecture-map.json");
+}
+
+// ── 7. Docs hygiene guardrails ─────────────────────────────────────────────
+// These checks prevent the highest-trust docs from drifting back to the
+// pre-workspace gateway layout, and prevent copy-paste setup snippets that
+// block forever before the seed/demo command can run.
+const HYGIENE_SCAN_FILES = [
+  "README.md", "CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", "Makefile",
+]
+  .map(f => join(ROOT, f))
+  .filter(existsSync)
+  .concat([...mdFiles(DOCS)])
+  .concat([...textFiles(join(ROOT, "scripts"), [".sh", ".mjs", ".py"])])
+  .concat([...textFiles(join(ROOT, ".github"), [".yml", ".yaml"])]);
+
+const HYGIENE_RULES = [
+  {
+    name: "stale pre-workspace gateway path",
+    pattern: /gateway\/(?:src|Cargo\.toml|policies\.cedar|benches|benchmarks|scripts)\b/,
+    hint: "use current src/ or lib/ paths; historical notes belong in docs/feature_history.md",
+  },
+  {
+    name: "single-crate manifest command",
+    pattern: /--manifest-path\s+src\/Cargo\.toml\b/,
+    hint: "use root workspace/package commands such as `cargo check --workspace` or `cargo run -p gateway --bin gateway`",
+  },
+  {
+    name: "blocking Docker Compose quickstart",
+    pattern: /docker\s+compose(?:\s+-f\s+\S+)?\s+up\s+--build(?!\s+-d\b)/,
+    hint: "use `docker compose up --build -d` before follow-on seed/demo commands",
+  },
+];
+
+function isHygieneExempt(relFile, line) {
+  if (relFile === "docs/feature_history.md") return true;
+  if (relFile === "docs/Repo_Knowledge_Map.md") {
+    return (
+      line.includes("Historical note:") ||
+      line.includes("Generated or local-only agent skill files")
+    );
+  }
+  return false;
+}
+
+for (const file of HYGIENE_SCAN_FILES) {
+  const relFile = relative(ROOT, file);
+  const lines = readFileSync(file, "utf8").split("\n");
+  lines.forEach((line, idx) => {
+    if (isHygieneExempt(relFile, line)) return;
+    for (const rule of HYGIENE_RULES) {
+      if (rule.pattern.test(line)) {
+        errors.push(
+          `${rule.name} in ${relFile}:${idx + 1}: ${line.trim()} (${rule.hint})`
+        );
+      }
+    }
+  });
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
