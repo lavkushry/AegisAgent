@@ -83,13 +83,15 @@ class DemoGateway:
             "expires_at": FUTURE,
         }
 
-    def consume_approval(self, approval_id):
-        # Single-use: an approval may be consumed exactly once. A replayed
-        # attempt returns nothing, so the SDK fails closed (no double-execution).
+    def consume_approval(self, approval_id, claimed_action_hash=None):
+        # Single-use and hash-bound: an approval may be consumed exactly once,
+        # and only by the exact action hash the human approved.
         if approval_id in self._consumed:
             return None
         bound_hash = self._issued.get(approval_id)
         if not bound_hash:
+            return None
+        if claimed_action_hash is not None and claimed_action_hash != bound_hash:
             return None
         self._consumed.add(approval_id)
         return {"status": "consumed", "action_hash": bound_hash}
