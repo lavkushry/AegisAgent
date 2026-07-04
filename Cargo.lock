@@ -73,6 +73,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-egress-proxy"
+version = "0.1.0"
+dependencies = [
+ "aegis-egress",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "ipnet",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aegis-node-sensor"
 version = "0.1.0"
 dependencies = [

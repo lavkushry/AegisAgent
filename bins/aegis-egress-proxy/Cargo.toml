@@ -1,0 +1,22 @@
+[package]
+name = "aegis-egress-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "AegisAgent network egress choke point: an HTTP CONNECT/forward proxy that gates every outbound connection on an egress decision — a separate binary from the gateway, never the other way around."
+
+[dependencies]
+aegis-egress = { path = "../../lib/egress" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = { workspace = true }
+async-trait = "0.1.89"
+clap = { version = "4.6", features = ["derive", "env"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+ipnet = { version = "2.12", features = ["serde"] }
+
+[dev-dependencies]
+axum = { workspace = true }
