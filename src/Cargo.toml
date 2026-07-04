@@ -18,6 +18,7 @@ aegis-api = { path = "../lib/api" }
 aegis-storage = { path = "../lib/storage" }
 aegis-policy = { path = "../lib/policy" }
 aegis-soc = { path = "../lib/soc" }
+aegis-egress = { path = "../lib/egress" }
 tonic = "0.12.3"
 prost = "0.13.5"
 axum = { version = "0.7.5", features = ["macros", "ws"] }
