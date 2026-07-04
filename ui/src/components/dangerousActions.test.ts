@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -9,9 +9,12 @@ function readUiSource(relativePath: string): string {
 }
 
 describe("dangerous console action confirmation inventory", () => {
+  it("does not keep the stale direct-fetch approvals tab alongside the schema panel", () => {
+    expect(existsSync(join(root, "src/components/ApprovalsTab.tsx"))).toBe(false);
+  });
+
   it("does not use browser-native confirm dialogs in React SOC console components", () => {
     const componentSources = [
-      "src/components/ApprovalsTab.tsx",
       "src/components/DetectionsTab.tsx",
       "src/components/IncidentsTab.tsx",
       "src/components/McpTab.tsx",
@@ -26,7 +29,7 @@ describe("dangerous console action confirmation inventory", () => {
   });
 
   it.each([
-    ["src/components/ApprovalsTab.tsx", ["approveApproval", "rejectApproval", "editApproval"]],
+    ["src/panels/differentiators/ApprovalCard.tsx", ["approveApproval", "rejectApproval", "editApproval"]],
     ["src/components/DetectionsTab.tsx", ["deleteDetectionRule"]],
     ["src/components/IncidentsTab.tsx", ["/close", "evidence-pack"]],
     ["src/components/McpTab.tsx", ["quarantineMcpServer", "restoreMcpServer"]],

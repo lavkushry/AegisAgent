@@ -36,6 +36,26 @@ pub(crate) fn approval_is_expired(app: &ApprovalRecord) -> bool {
     app.expires_at.map(|e| e < Utc::now()).unwrap_or(false)
 }
 
+fn approval_matched_policies(raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+
+    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(raw) {
+        return parsed
+            .into_iter()
+            .map(|policy| policy.trim().to_string())
+            .filter(|policy| !policy.is_empty())
+            .collect();
+    }
+
+    raw.split(',')
+        .map(str::trim)
+        .filter(|policy| !policy.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// #1307: anti-brute-force header carrying a tenant-scoped API key (#939,
 /// `api_keys` table) that — if it matches an `active` key for the requesting
 /// tenant — bypasses both the per-IP (AC#1) and per-approval-id (AC#2) rate
@@ -206,13 +226,17 @@ pub async fn get_approval(
             // approving. Additive fields only; existing consumers are unaffected.
             let tool_call: Option<AuthorizeToolCall> =
                 serde_json::from_str(&app.original_skill_call).ok();
-            let agent_id = state
+            let decision = state
                 .storage
                 .get_decision_by_id(&tenant_id, &app.decision_id)
                 .await
                 .ok()
-                .flatten()
-                .map(|d| d.agent_id);
+                .flatten();
+            let agent_id = decision.as_ref().map(|d| d.agent_id.as_str());
+            let root_trust_level = decision
+                .as_ref()
+                .and_then(|d| d.root_trust_level.as_deref())
+                .unwrap_or("unknown");
             // A still-pending approval past its window is dead: report EXPIRED so
             // any client (even a forked SDK) fails closed instead of waiting.
             let effective_status = if app.status == "created" && approval_is_expired(&app) {
@@ -224,10 +248,24 @@ pub async fn get_approval(
                 StatusCode::OK,
                 Json(json!({
                     "approval_id": app.id,
+                    "decision_id": app.decision_id,
                     "status": effective_status,
                     "approver_group": app.approver_group,
                     "approver_user_id": app.approver_user_id,
                     "reason": app.reason,
+                    "decision_reason": decision.as_ref().and_then(|d| d.reason.as_deref()),
+                    "matched_policies": approval_matched_policies(
+                        decision.as_ref().and_then(|d| d.matched_policy_ids.as_deref())
+                    ),
+                    "risk_score": decision.as_ref().and_then(|d| d.risk_score),
+                    "risk_level": decision.as_ref().and_then(|d| d.risk_score).map(risk_level_for_score),
+                    "composite_risk_score": decision.as_ref().and_then(|d| d.composite_risk_score),
+                    "run_id": decision.as_ref().and_then(|d| d.run_id.as_deref()),
+                    "trace_id": decision.as_ref().and_then(|d| d.trace_id.as_deref()),
+                    "parent_run_id": decision.as_ref().and_then(|d| d.parent_run_id.as_deref()),
+                    "resource": decision.as_ref().and_then(|d| d.resource.as_deref()),
+                    "source_trust": root_trust_level,
+                    "root_trust_level": root_trust_level,
                     // #approval-edit-lifecycle: surface the full hash story so a
                     // human/SDK can see exactly what they're acting on.
                     // `action_hash` (kept for SDK back-compat) and
@@ -801,13 +839,17 @@ pub async fn list_approvals(
             let mapped: Vec<serde_json::Value> = approvals
                 .into_iter()
                 .map(|app| {
+                    let decision = decisions_by_id.get(&app.decision_id);
                     let edited_call: Option<AuthorizeToolCall> = app
                         .edited_skill_call
                         .as_ref()
                         .and_then(|s| serde_json::from_str(s).ok());
                     let tool_call: Option<AuthorizeToolCall> =
                         serde_json::from_str(&app.original_skill_call).ok();
-                    let agent_id = decisions_by_id.get(&app.decision_id).map(|d| &d.agent_id);
+                    let agent_id = decision.map(|d| &d.agent_id);
+                    let root_trust_level = decision
+                        .and_then(|d| d.root_trust_level.as_deref())
+                        .unwrap_or("unknown");
                     let effective_status = if app.status == "created" && approval_is_expired(&app) {
                         "EXPIRED".to_string()
                     } else {
@@ -815,10 +857,24 @@ pub async fn list_approvals(
                     };
                     json!({
                         "approval_id": app.id,
+                        "decision_id": app.decision_id,
                         "status": effective_status,
                         "approver_group": app.approver_group,
                         "approver_user_id": app.approver_user_id,
                         "reason": app.reason,
+                        "decision_reason": decision.and_then(|d| d.reason.as_deref()),
+                        "matched_policies": approval_matched_policies(
+                            decision.and_then(|d| d.matched_policy_ids.as_deref())
+                        ),
+                        "risk_score": decision.and_then(|d| d.risk_score),
+                        "risk_level": decision.and_then(|d| d.risk_score).map(risk_level_for_score),
+                        "composite_risk_score": decision.and_then(|d| d.composite_risk_score),
+                        "run_id": decision.and_then(|d| d.run_id.as_deref()),
+                        "trace_id": decision.and_then(|d| d.trace_id.as_deref()),
+                        "parent_run_id": decision.and_then(|d| d.parent_run_id.as_deref()),
+                        "resource": decision.and_then(|d| d.resource.as_deref()),
+                        "source_trust": root_trust_level,
+                        "root_trust_level": root_trust_level,
                         // Keep the queue contract aligned with GET /:id: the
                         // hash beside the canonical action bytes must always be
                         // the hash an approve/consume operation will bind to.
@@ -1949,21 +2005,25 @@ mod tests {
             tenant_id: tenant_id.clone(),
             agent_id: agent_id.clone(),
             user_id: None,
-            run_id: None,
-            trace_id: None,
+            run_id: Some("run-merge-42".to_string()),
+            trace_id: Some("trace-merge-42".to_string()),
             skill: "github".to_string(),
             action: "merge_pull_request".to_string(),
             resource: Some("octocat/demo#42".to_string()),
             input_json: "{}".to_string(),
             decision: "require_approval".to_string(),
-            risk_score: None,
-            reason: None,
-            matched_policy_ids: None,
+            risk_score: Some(95),
+            reason: Some(
+                "Critical GitHub mutation from untrusted provenance requires approval.".to_string(),
+            ),
+            matched_policy_ids: Some(
+                "github_merge_pull_request,critical_risk_requires_approval".to_string(),
+            ),
             request_id: None,
             latency_ms: None,
-            composite_risk_score: None,
-            root_trust_level: None,
-            parent_run_id: None,
+            composite_risk_score: Some(88),
+            root_trust_level: Some("untrusted".to_string()),
+            parent_run_id: Some("run-parent-1".to_string()),
             created_at: Utc::now(),
         };
         state.storage.insert_decision(&record_dec).await.unwrap();
@@ -2011,6 +2071,26 @@ mod tests {
         let list = json.as_array().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0]["agent_id"].as_str(), Some(agent_id.as_str()));
+        assert_eq!(list[0]["decision_id"].as_str(), Some(decision_id.as_str()));
+        assert_eq!(list[0]["run_id"].as_str(), Some("run-merge-42"));
+        assert_eq!(list[0]["trace_id"].as_str(), Some("trace-merge-42"));
+        assert_eq!(list[0]["parent_run_id"].as_str(), Some("run-parent-1"));
+        assert_eq!(list[0]["source_trust"].as_str(), Some("untrusted"));
+        assert_eq!(list[0]["root_trust_level"].as_str(), Some("untrusted"));
+        assert_eq!(list[0]["risk_score"].as_i64(), Some(95));
+        assert_eq!(list[0]["risk_level"].as_str(), Some("critical"));
+        assert_eq!(list[0]["composite_risk_score"].as_i64(), Some(88));
+        assert_eq!(
+            list[0]["decision_reason"].as_str(),
+            Some("Critical GitHub mutation from untrusted provenance requires approval.")
+        );
+        assert_eq!(
+            list[0]["matched_policies"].as_array().unwrap(),
+            &vec![
+                serde_json::json!("github_merge_pull_request"),
+                serde_json::json!("critical_risk_requires_approval"),
+            ]
+        );
         assert_eq!(list[0]["tool_call"]["tool"].as_str(), Some("github"));
         assert_eq!(
             list[0]["tool_call"]["action"].as_str(),
@@ -2035,6 +2115,17 @@ mod tests {
             .unwrap();
         let single_json: serde_json::Value = serde_json::from_slice(&single_body).unwrap();
         assert_eq!(single_json["agent_id"].as_str(), Some(agent_id.as_str()));
+        assert_eq!(single_json["run_id"].as_str(), Some("run-merge-42"));
+        assert_eq!(single_json["trace_id"].as_str(), Some("trace-merge-42"));
+        assert_eq!(single_json["source_trust"].as_str(), Some("untrusted"));
+        assert_eq!(single_json["risk_level"].as_str(), Some("critical"));
+        assert_eq!(
+            single_json["matched_policies"].as_array().unwrap(),
+            &vec![
+                serde_json::json!("github_merge_pull_request"),
+                serde_json::json!("critical_risk_requires_approval"),
+            ]
+        );
         assert_eq!(single_json["tool_call"]["tool"].as_str(), Some("github"));
     }
 
