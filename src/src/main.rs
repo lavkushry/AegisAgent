@@ -960,6 +960,11 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/control/commands/:id/status",
             post(routes::update_control_command_status),
         )
+        // Egress proxy (Phase 5.2): fast ban/quarantine/rule check + explicit block/unblock
+        .route("/egress/check", post(routes::check_egress))
+        .route("/egress/events", get(routes::list_egress_events))
+        .route("/egress/block", post(routes::block_egress))
+        .route("/egress/unblock", post(routes::unblock_egress))
         // Runtime control plane (Phase 3.2): aegis-node-sensor register/heartbeat
         .route("/sensors/register", post(routes::register_sensor))
         .route("/sensors", get(routes::list_sensors))

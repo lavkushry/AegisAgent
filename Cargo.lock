@@ -1880,6 +1880,7 @@ dependencies = [
  "aegis-api",
  "aegis-canon",
  "aegis-common",
+ "aegis-egress",
  "aegis-policy",
  "aegis-soc",
  "aegis-storage",
