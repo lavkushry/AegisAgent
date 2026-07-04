@@ -1,0 +1,17 @@
+[package]
+name = "aegis-tool-broker-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "AegisAgent tool broker abstractions: connector trait, canonical action hashing, credential references, and output redaction — no raw credentials ever reach an agent, a log, or an event."
+
+[dependencies]
+aegis-canon = { path = "../../src/canon" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1.89"
+
+[dev-dependencies]
+tokio = { workspace = true }

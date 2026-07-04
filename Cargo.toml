@@ -9,6 +9,7 @@ members = [
     "lib/policy",
     "lib/soc",
     "lib/egress",
+    "lib/tool-broker-core",
     "bins/aegis-node-sensor",
     "bins/aegis-cage-runner",
     "bins/aegis-egress-proxy",
