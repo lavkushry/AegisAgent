@@ -201,6 +201,35 @@ jobs:
           cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+  # ── M2: one-command local demo guardrails ───────────────────────────────────
+  # Cheap checks for the 10-minute path before the slower Docker E2E jobs run.
+  # These catch broken shell entrypoints, stale docs/setup commands, invalid
+  # compose config, Makefile target drift, and local preflight regressions.
+  demo-guardrails:
+    name: Demo guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Shell syntax for local demo scripts
+        run: bash -n scripts/doctor.sh scripts/run-killer-demo.sh scripts/seed-demo.sh scripts/seed-demo-dev.sh
+      - name: Docs and path guardrails
+        run: node scripts/validate-docs.mjs
+      - name: Docker Compose config
+        run: docker compose config >/dev/null
+      - name: Makefile demo targets resolve
+        run: |
+          make -n doctor
+          make -n demo
+          make -n setup
+      - name: Doctor preflight
+        run: make doctor
+
   # ── PR-051: TypeScript SDK test gate ──────────────────────────────────────────
   typescript-sdk:
     name: TypeScript SDK
