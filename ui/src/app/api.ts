@@ -62,11 +62,16 @@ export interface AuthorizeToolCall {
 export interface ApprovalRecord {
   id?: string;
   approval_id?: string;
+  decision_id?: string;
   tool_name?: string;
   tool_call?: AuthorizeToolCall;
   edited_tool_call?: AuthorizeToolCall;
   agent_id?: string;
+  run_id?: string | null;
+  trace_id?: string | null;
+  parent_run_id?: string | null;
   source_trust?: string;
+  root_trust_level?: string;
   action_hash?: string;
   original_action_hash?: string;
   edited_action_hash?: string;
@@ -76,6 +81,13 @@ export interface ApprovalRecord {
   expires_at?: string;
   status?: string;
   approver_group?: string;
+  approver_user_id?: string;
+  reason?: string | null;
+  decision_reason?: string | null;
+  matched_policies?: string[];
+  risk_score?: number | null;
+  risk_level?: string | null;
+  composite_risk_score?: number | null;
 }
 
 export interface AgentRiskRecord {

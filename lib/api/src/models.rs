@@ -802,6 +802,37 @@ impl ApprovalRecord {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApprovalQueueItem {
+    pub approval_id: String,
+    pub decision_id: String,
+    pub status: String,
+    pub approver_group: Option<String>,
+    pub approver_user_id: Option<String>,
+    pub reason: Option<String>,
+    pub decision_reason: Option<String>,
+    pub matched_policies: Vec<String>,
+    pub risk_score: Option<i32>,
+    pub risk_level: Option<String>,
+    pub composite_risk_score: Option<i32>,
+    pub run_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub parent_run_id: Option<String>,
+    pub resource: Option<String>,
+    pub source_trust: String,
+    pub root_trust_level: String,
+    pub action_hash: String,
+    pub original_action_hash: String,
+    pub edited_action_hash: Option<String>,
+    pub effective_action_hash: String,
+    pub is_edited: bool,
+    pub tool_call: Option<AuthorizeToolCall>,
+    pub edited_tool_call: Option<AuthorizeToolCall>,
+    pub agent_id: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub decided_at: Option<DateTime<Utc>>,
+}
+
 /// TASK-0092 (#938): a tenant-managed webhook subscription, registered via
 /// `/v1/webhook_subscriptions` to receive SOC notifications (alerts/incidents)
 /// at an operator-supplied endpoint. `secret_hash` is `sha256(secret)` — the

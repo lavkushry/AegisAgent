@@ -8,42 +8,28 @@ import { useEffectiveRole } from "@/hooks/useSessionRole";
 import { approveApproval, editApproval, rejectApproval, type AuthorizeToolCall } from "@/app/api";
 import { frameRows } from "@/datasources/frame";
 import { errorMessage } from "@/lib/format";
-import { canonicalizeJson } from "@/lib/canonicalJson";
 import TrustBadge from "@/components/security/TrustBadge";
 import HashChip from "@/components/security/HashChip";
 import { ConfirmDialog } from "@/components/primitives";
 import type { PanelProps } from "../types";
-
-interface ApprovalRow {
-  id?: string;
-  approval_id?: string;
-  agent_id?: string;
-  source_trust?: string;
-  action_hash?: string;
-  original_action_hash?: string;
-  edited_action_hash?: string;
-  effective_action_hash?: string;
-  is_edited?: boolean;
-  expires_in?: string;
-  expires_at?: string;
-  status?: string;
-  tool_name?: string;
-  tool_call?: AuthorizeToolCall;
-  edited_tool_call?: AuthorizeToolCall;
-}
+import {
+  actionLabel,
+  approvalActionDisabledReason,
+  approvalConfirmationTarget,
+  approvalId,
+  approvalMetadataRows,
+  canonicalActionBytes,
+  currentToolCall,
+  editDisabledReason,
+  effectiveActionHash,
+  parseEditedToolCall,
+  type ApprovalRow,
+} from "./approvalCardModel";
 
 type PendingAction =
   | { kind: "approve"; approval: ApprovalRow }
   | { kind: "reject"; approval: ApprovalRow }
   | { kind: "edit"; approval: ApprovalRow; editedToolCall: AuthorizeToolCall };
-
-function approvalId(a: ApprovalRow): string {
-  return a.id ?? a.approval_id ?? "";
-}
-
-function effectiveActionHash(a: ApprovalRow): string | undefined {
-  return a.effective_action_hash ?? a.action_hash;
-}
 
 /**
  * The Approval Queue panel — the human-in-the-loop control made visible.
@@ -106,25 +92,18 @@ export default function ApprovalCard({ data }: PanelProps) {
 
   const startEditing = (a: ApprovalRow) => {
     setEditingId(approvalId(a));
-    setEditParamsJson(JSON.stringify((a.edited_tool_call ?? a.tool_call)?.parameters ?? {}, null, 2));
+    setEditParamsJson(JSON.stringify(currentToolCall(a)?.parameters ?? {}, null, 2));
     setEditError(null);
   };
 
   const requestEdit = (a: ApprovalRow) => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(editParamsJson);
-    } catch {
-      setEditError("Parameters must be valid JSON.");
-      return;
-    }
-    const currentToolCall = a.edited_tool_call ?? a.tool_call;
-    if (!currentToolCall) {
-      setEditError("The gateway did not return the frozen tool call; editing is disabled.");
+    const parsed = parseEditedToolCall(a, editParamsJson);
+    if (!parsed.ok) {
+      setEditError(parsed.error);
       return;
     }
     setAuditReason("");
-    setPendingAction({ kind: "edit", approval: a, editedToolCall: { ...currentToolCall, parameters: parsed } });
+    setPendingAction({ kind: "edit", approval: a, editedToolCall: parsed.editedToolCall });
   };
 
   const requestDecision = (kind: "approve" | "reject", approval: ApprovalRow) => {
@@ -167,9 +146,12 @@ export default function ApprovalCard({ data }: PanelProps) {
         const id = approvalId(a);
         const isEditing = editingId === id;
         const busy = approveMutation.isPending || rejectMutation.isPending || editMutation.isPending;
-        const expired = a.status?.toUpperCase() === "EXPIRED";
-        const actionDisabled = busy || !canAct || !id || expired;
-        const actionTitle = expired ? "Approval expired; the gateway will fail closed" : denyReason;
+        const actionContext = { busy, canAct, denyReason };
+        const actionTitle = approvalActionDisabledReason(a, actionContext);
+        const actionDisabled = Boolean(actionTitle);
+        const editTitle = editDisabledReason(a, actionContext);
+        const editDisabled = Boolean(editTitle);
+        const metadataRows = approvalMetadataRows(a);
         return (
           <div
             key={id}
@@ -181,25 +163,34 @@ export default function ApprovalCard({ data }: PanelProps) {
                   Action authorization request
                 </span>
                 <h4 className="font-bold text-sm font-mono mt-0.5 text-[var(--brand)]">
-                  {(a.edited_tool_call ?? a.tool_call)?.tool ?? a.tool_name ?? "tool"}.
-                  {(a.edited_tool_call ?? a.tool_call)?.action ?? "action"}
+                  {actionLabel(a)}
                 </h4>
               </div>
               <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap">
-                expires {a.expires_in ?? "N/A"}
+                expires {a.expires_in ?? a.expires_at ?? "N/A"}
               </span>
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-[11px] py-2 border-y border-[var(--border-default)]">
-              <div>
-                <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)]">Agent</span>
-                <code className="text-[var(--text-primary)] font-mono">{a.agent_id ?? "N/A"}</code>
-              </div>
-              <div>
-                <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)]">Source trust</span>
-                <div className="mt-0.5"><TrustBadge trust={a.source_trust ?? "unknown"} /></div>
-              </div>
+              {metadataRows.map((row) => (
+                <div key={row.label} className={row.label === "Policy reason" || row.label === "Policies" ? "col-span-2" : undefined}>
+                  <span className="block text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{row.label}</span>
+                  {row.kind === "trust" ? (
+                    <div className="mt-0.5"><TrustBadge trust={row.value} /></div>
+                  ) : row.monospace ? (
+                    <code className="text-[var(--text-primary)] font-mono break-all">{row.value}</code>
+                  ) : (
+                    <span className="text-[var(--text-primary)]">{row.value}</span>
+                  )}
+                </div>
+              ))}
             </div>
+
+            {editDisabled && !actionDisabled ? (
+              <div className="rounded border border-[var(--border-default)] bg-[var(--surface-app)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
+                Edit disabled: {editTitle}.
+              </div>
+            ) : null}
 
             <div className="text-[10px]">
               <span className="block uppercase tracking-wider text-[var(--text-muted)] font-semibold text-[9px] mb-1">
@@ -227,7 +218,7 @@ export default function ApprovalCard({ data }: PanelProps) {
                 />
               ) : (
                 <pre className="bg-[var(--surface-app)] border border-[var(--border-default)] rounded-lg p-2.5 text-[11px] text-[var(--brand)] font-mono overflow-auto max-h-32 custom-scrollbar whitespace-pre-wrap break-all">
-                  {(a.edited_tool_call ?? a.tool_call) ? canonicalizeJson(a.edited_tool_call ?? a.tool_call) : "Unavailable from gateway"}
+                  {canonicalActionBytes(a) ?? "Unavailable from gateway"}
                 </pre>
               )}
               {isEditing ? (
@@ -271,8 +262,8 @@ export default function ApprovalCard({ data }: PanelProps) {
                   </button>
                   <button
                     onClick={() => startEditing(a)}
-                    disabled={actionDisabled || !(a.edited_tool_call ?? a.tool_call)}
-                    title={actionTitle ?? ((a.edited_tool_call ?? a.tool_call) ? "Edit parameters (re-hash + re-evaluate)" : "Frozen tool call unavailable")}
+                    disabled={editDisabled}
+                    title={editTitle ?? "Edit parameters (re-hash + re-evaluate)"}
                     className="bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-[var(--text-primary)] border border-[var(--border-default)] text-xs rounded-lg px-2.5 py-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Edit3 size={13} />
@@ -308,7 +299,7 @@ export default function ApprovalCard({ data }: PanelProps) {
           : pendingAction?.kind === "approve"
             ? "Your identity and reason will be bound to this action hash. The gateway remains the source of truth and rejects expired or changed actions."
             : "The agent action will remain blocked and your reason will be written to the audit trail."}
-        target={pendingAction ? `${approvalId(pendingAction.approval)} · ${effectiveActionHash(pendingAction.approval) ?? "hash unavailable"}` : ""}
+        target={pendingAction ? approvalConfirmationTarget(pendingAction.approval) : ""}
         reason={auditReason}
         onReasonChange={setAuditReason}
         confirmLabel={pendingAction?.kind === "approve" ? "Approve exact action" : pendingAction?.kind === "reject" ? "Reject action" : "Create new hash & re-evaluate"}

@@ -110,6 +110,7 @@ use utoipa::OpenApi;
             PolicyVersionRecord,
             DecisionRecord,
             ApprovalRecord,
+            ApprovalQueueItem,
             WebhookSubscriptionRecord,
             DetectionRuleRecord,
             ApiKeyRecord,
@@ -956,7 +957,7 @@ fn revoke_api_key_api() {}
     path = "/v1/approvals",
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "List of pending approvals", body = Vec<ApprovalRecord>)
+        (status = 200, description = "List of pending approvals", body = Vec<ApprovalQueueItem>)
     )
 )]
 fn list_approvals_api() {}
@@ -969,7 +970,7 @@ fn list_approvals_api() {}
         ("id" = String, Path, description = "Approval ID")
     ),
     responses(
-        (status = 200, description = "Approval details", body = ApprovalRecord),
+        (status = 200, description = "Approval details", body = ApprovalQueueItem),
         (status = 404, description = "Approval not found", body = StatusError)
     )
 )]
