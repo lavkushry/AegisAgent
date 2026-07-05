@@ -337,9 +337,14 @@ mod tests {
     #[tokio::test]
     async fn list_policies_cursor_paginates_and_sets_next_cursor() {
         let pool = setup_pool("policies_cursor_paginate").await;
-        register_tenant(&pool, "tenant_pol_cursor", "Policies Cursor Tenant", "developer")
-            .await
-            .unwrap();
+        register_tenant(
+            &pool,
+            "tenant_pol_cursor",
+            "Policies Cursor Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
         for i in 0..3 {
             insert_policy(
                 &pool,
@@ -353,10 +358,9 @@ mod tests {
             .unwrap();
         }
 
-        let (page, next_cursor) =
-            list_policies_cursor(&pool, "tenant_pol_cursor", 2, 0, None)
-                .await
-                .unwrap();
+        let (page, next_cursor) = list_policies_cursor(&pool, "tenant_pol_cursor", 2, 0, None)
+            .await
+            .unwrap();
         assert_eq!(page.len(), 2);
         assert!(next_cursor.is_some());
 
