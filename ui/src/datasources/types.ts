@@ -127,6 +127,8 @@ export interface EvidenceExportRange {
 
 export type StreamTopic = "ase" | "alert" | "approval";
 
+export type StreamConnectionStatus = "connecting" | "live" | "polling" | "closed";
+
 export interface StreamRequest {
   readonly topics: ReadonlyArray<StreamTopic>;
   readonly variables: VariableValues;
@@ -154,5 +156,6 @@ export interface Datasource {
   subscribe?(
     sub: StreamRequest,
     onEvent: (e: StreamEvent) => void,
+    onStatus?: (status: StreamConnectionStatus) => void,
   ): StreamSubscription;
 }

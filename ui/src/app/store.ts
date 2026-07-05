@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { StreamConnectionStatus } from "@/datasources/stream";
 import { DEMO_MODE, loadConnectionSettings, persistBearerToken } from "./runtimeConfig";
 
 export type Theme = "dark-soc" | "light" | "oled";
@@ -13,6 +14,7 @@ interface AppState {
   timeRange: string; // "1h", "24h", "7d", etc.
   variables: Record<string, string>;
   liveMode: boolean;
+  streamStatus: StreamConnectionStatus;
   theme: Theme;
   density: Density;
   role: Role;
@@ -30,6 +32,7 @@ interface AppState {
   setTimeRange: (range: string) => void;
   setVariables: (variables: Record<string, string>) => void;
   setLiveMode: (live: boolean) => void;
+  setStreamStatus: (status: StreamConnectionStatus) => void;
   setTheme: (theme: Theme) => void;
   setDensity: (density: Density) => void;
   setRole: (role: Role) => void;
@@ -91,6 +94,7 @@ export const useAppStore = create<AppState>((set) => ({
   timeRange: "24h",
   variables: {},
   liveMode: false,
+  streamStatus: "closed",
   theme: getInitialTheme(),
   density: getInitialDensity(),
   role: getInitialRole(),
@@ -110,11 +114,16 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setActiveTenant: (tenant) => {
     if (typeof window !== "undefined") localStorage.setItem("aegis_active_tenant", tenant);
-    set({ activeTenant: tenant });
+    set((state) => ({
+      activeTenant: tenant,
+      authEpoch: state.authEpoch + 1,
+      streamStatus: "closed",
+    }));
   },
   setTimeRange: (range) => set({ timeRange: range }),
   setVariables: (variables) => set({ variables }),
   setLiveMode: (liveMode) => set({ liveMode }),
+  setStreamStatus: (streamStatus) => set({ streamStatus }),
   setTheme: (theme) => {
     if (typeof window !== "undefined") localStorage.setItem("aegis_theme", theme);
     applyAttribute("data-theme", theme);

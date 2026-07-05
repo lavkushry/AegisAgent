@@ -55,6 +55,7 @@ use utoipa::OpenApi;
         narrate_incident_api,
         get_incident_evidence_pack_api,
         soc_summary_api,
+        soc_stream_api,
         soc_query_api,
         semantic_search_api,
         create_tenant_api,
@@ -1361,6 +1362,16 @@ fn export_tenant_api() {}
     )
 )]
 fn ws_events_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/stream",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Server-Sent Events stream of ASE, alert, and approval deltas")
+    )
+)]
+fn soc_stream_api() {}
 
 #[utoipa::path(
     get,

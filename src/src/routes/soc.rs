@@ -3,7 +3,7 @@ use crate::error::StatusError;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -1775,6 +1775,100 @@ pub(crate) async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, t
             }
         }
     }
+}
+
+/// Maps a broadcast [`AseEvent`] onto the console stream topic contract.
+fn soc_stream_topic_for_event(ev: &AseEvent) -> &'static str {
+    if ev.decision == "require_approval" {
+        return "approval";
+    }
+    if ev.kind.contains("alert")
+        || matches!(
+            ev.kind.as_str(),
+            "deny_storm"
+                | "replay_attempt"
+                | "agent_quarantined"
+                | "agent_risk_escalated"
+                | "mcp_manifest_drift"
+                | "agent_token_leak_detected"
+        )
+    {
+        return "alert";
+    }
+    "ase"
+}
+
+fn soc_stream_topic_enabled(requested: &[String], topic: &str) -> bool {
+    requested.is_empty() || requested.iter().any(|value| value == topic)
+}
+
+/// Backing stream for `GET /v1/soc/stream`: tenant-scoped SSE over the same
+/// live SOC broadcast channel that powers `/v1/ws/events`, using the UI
+/// envelope `{ topic, ts, payload }` expected by `SocStreamDatasource`.
+fn soc_stream_sse(
+    events: EventSink,
+    tenant_id: String,
+    topics: Vec<String>,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(32);
+    tokio::spawn(async move {
+        let mut rx_bc = events.subscribe();
+        loop {
+            match rx_bc.recv().await {
+                Ok(ev) => {
+                    if ev.tenant_id != tenant_id {
+                        continue;
+                    }
+                    let topic = soc_stream_topic_for_event(&ev);
+                    if !soc_stream_topic_enabled(&topics, topic) {
+                        continue;
+                    }
+                    let data = json!({
+                        "topic": topic,
+                        "ts": ev.occurred_at,
+                        "payload": ev,
+                    });
+                    let sse_event = Event::default().event(topic).data(data.to_string());
+                    if tx.send(sse_event).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    let notice = json!({ "type": "events_dropped", "count": n });
+                    let sse_event = Event::default()
+                        .event("notice")
+                        .data(notice.to_string());
+                    if tx.send(sse_event).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    receiver_into_stream(rx)
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SocStreamQuery {
+    #[serde(default)]
+    pub topic: Vec<String>,
+}
+
+/// `GET /v1/soc/stream` — header-authenticated SSE feed for ASE, alert, and
+/// approval deltas. Advisory only; query APIs remain the source of truth.
+pub async fn soc_stream(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Query(query): Query<SocStreamQuery>,
+) -> impl IntoResponse {
+    Sse::new(soc_stream_sse(
+        state.events.clone(),
+        tenant_id,
+        query.topic,
+    ))
+    .keep_alive(KeepAlive::default())
+    .into_response()
 }
 
 #[cfg(test)]
@@ -3589,5 +3683,75 @@ mod tests {
             Some(0),
             "soc_query must be tenant-scoped — no cross-tenant decisions"
         );
+    }
+
+    /// GET /v1/soc/stream delivers tenant-scoped SSE envelopes for live SOC events.
+    #[tokio::test]
+    async fn soc_stream_delivers_tenant_scoped_sse_envelopes() {
+        use futures_util::StreamExt;
+
+        let (state, tenant_id, _) = setup_state("soc_stream_sse").await;
+
+        let response = soc_stream(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Query(SocStreamQuery {
+                topic: vec!["approval".to_string(), "ase".to_string()],
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "text/event-stream"
+        );
+
+        let mut body_stream = response.into_body().into_data_stream();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        fn make_event(tenant_id: &str, event_id: &str, decision: &str) -> AseEvent {
+            AseEvent {
+                event_id: event_id.to_string(),
+                occurred_at: Utc::now().to_rfc3339(),
+                tenant_id: tenant_id.to_string(),
+                kind: "authorize_decision".to_string(),
+                agent_id: "agent_stream_test".to_string(),
+                decision: decision.to_string(),
+                tool: "github".to_string(),
+                action: "merge".to_string(),
+                resource: None,
+                risk_score: 80,
+                reason: "policy".to_string(),
+                run_id: None,
+                trace_id: None,
+                matched_policies: vec![],
+                redacted_fields: vec![],
+                schema_version: 1,
+                evidence: None,
+            }
+        }
+
+        state
+            .events
+            .emit(make_event("tenant_b", "evt_other_tenant", "require_approval"));
+        state
+            .events
+            .emit(make_event(&tenant_id, "evt_approval", "require_approval"));
+
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), body_stream.next())
+            .await
+            .expect("SSE event must arrive within 2s")
+            .expect("stream must not end")
+            .expect("chunk must not be an error");
+        let text = String::from_utf8(chunk.to_vec()).unwrap();
+        assert!(text.contains("event:approval") || text.contains("event: approval"));
+        assert!(text.contains("evt_approval"));
+        assert!(!text.contains("evt_other_tenant"));
+        assert!(text.contains("\"topic\":\"approval\"") || text.contains("\"topic\": \"approval\""));
     }
 }

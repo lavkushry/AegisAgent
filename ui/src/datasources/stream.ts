@@ -3,6 +3,7 @@ import type {
   DataFrame,
   Datasource,
   DatasourceCapabilities,
+  StreamConnectionStatus,
   StreamEvent,
   StreamRequest,
   StreamSubscription,
@@ -11,7 +12,7 @@ import type {
 
 export const STREAM_DATASOURCE_ID = "soc-stream";
 
-export type StreamConnectionStatus = "connecting" | "live" | "polling" | "closed";
+export type { StreamConnectionStatus };
 
 export interface StreamDatasourceOptions {
   readonly initialRetryMs?: number;
@@ -76,7 +77,7 @@ function polledEventTimestamp(row: Record<string, unknown>): string {
   return stringField(row, ["ts", "created_at", "occurred_at", "opened_at", "updated_at"]) ?? new Date().toISOString();
 }
 
-function polledEventKey(topic: StreamTopic, row: Record<string, unknown>): string {
+function stableEventKey(topic: StreamTopic, row: Record<string, unknown>): string {
   const stableId = stringField(row, [
     "event_id",
     "id",
@@ -88,6 +89,28 @@ function polledEventKey(topic: StreamTopic, row: Record<string, unknown>): strin
   ]);
   if (stableId) return `${topic}:${stableId}`;
   return `${topic}:${JSON.stringify(row)}`;
+}
+
+function polledEventKey(topic: StreamTopic, row: Record<string, unknown>): string {
+  return stableEventKey(topic, row);
+}
+
+function streamEventKey(event: StreamEvent): string {
+  const payload =
+    event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+      ? (event.payload as Record<string, unknown>)
+      : {};
+  const stableId = stringField(payload, [
+    "event_id",
+    "id",
+    "approval_id",
+    "alert_id",
+    "decision_id",
+    "receipt_hash",
+    "action_hash",
+  ]);
+  if (stableId) return `${event.topic}:${stableId}`;
+  return `${event.topic}:${event.ts}:${JSON.stringify(payload)}`;
 }
 
 function parseEventBlock(block: string): StreamEvent | null {
@@ -139,6 +162,7 @@ export class SocStreamDatasource implements Datasource {
     const controller = new AbortController();
     let closed = false;
     const seenPollingRows = new Set<string>();
+    const seenStreamEvents = new Set<string>();
     const pollIntervalMs = this.config.pollIntervalMs ?? 5_000;
     const initialRetryMs = this.config.initialRetryMs ?? 1_000;
     const maxRetryMs = this.config.maxRetryMs ?? 30_000;
@@ -201,7 +225,12 @@ export class SocStreamDatasource implements Datasource {
             while (boundary >= 0) {
               const event = parseEventBlock(buffer.slice(0, boundary));
               buffer = buffer.slice(boundary + 2);
-              if (event) onEvent(event);
+              if (event) {
+                const key = streamEventKey(event);
+                if (seenStreamEvents.has(key)) continue;
+                seenStreamEvents.add(key);
+                onEvent(event);
+              }
               boundary = buffer.indexOf("\n\n");
             }
           }

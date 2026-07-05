@@ -4,11 +4,13 @@ import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { errorMessage } from "@/lib/format";
 import { useConsoleUrlSync } from "@/hooks/useConsoleUrlSync";
+import { useSocStream } from "@/hooks/useSocStream";
 import ControlsBar from "./ControlsBar";
 import SidebarNav from "./SidebarNav";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   useConsoleUrlSync();
+  useSocStream();
   const queryClient = useQueryClient();
   const [isFetching, setIsFetching] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
