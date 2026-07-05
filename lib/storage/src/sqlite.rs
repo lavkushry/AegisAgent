@@ -2226,6 +2226,71 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn insert_soc_dashboard(
+        &self,
+        tenant_id: &str,
+        uid: &str,
+        title: &str,
+        schema_version: i64,
+        schema_json: &str,
+    ) -> Result<SocDashboardRecord, AegisError> {
+        db::insert_soc_dashboard(
+            &self.pool,
+            tenant_id,
+            uid,
+            title,
+            schema_version,
+            schema_json,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn update_soc_dashboard(
+        &self,
+        tenant_id: &str,
+        uid: &str,
+        title: &str,
+        schema_version: i64,
+        schema_json: &str,
+    ) -> Result<Option<SocDashboardRecord>, AegisError> {
+        db::update_soc_dashboard(
+            &self.pool,
+            tenant_id,
+            uid,
+            title,
+            schema_version,
+            schema_json,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_soc_dashboards(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<SocDashboardRecord>, AegisError> {
+        db::list_soc_dashboards(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_soc_dashboard_by_uid(
+        &self,
+        tenant_id: &str,
+        uid: &str,
+    ) -> Result<Option<SocDashboardRecord>, AegisError> {
+        db::get_soc_dashboard_by_uid(&self.pool, tenant_id, uid)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_soc_dashboard(&self, tenant_id: &str, uid: &str) -> Result<bool, AegisError> {
+        db::delete_soc_dashboard(&self.pool, tenant_id, uid)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // General & System
     async fn health_check(&self) -> Result<(), AegisError> {
         db::health_check(&self.pool)

@@ -72,4 +72,14 @@ describe("console URL state", () => {
       "view=analytics",
     );
   });
+
+  it("accepts dashboard editor deep links", () => {
+    expect(parseConsoleUrl("?view=dashboard-editor&range=24h")).toMatchObject({
+      view: "dashboard-editor",
+      timeRange: "24h",
+    });
+    expect(
+      serializeConsoleUrl({ view: "dashboard-editor", timeRange: "24h", liveMode: false, variables: {} }),
+    ).toContain("view=dashboard-editor");
+  });
 });

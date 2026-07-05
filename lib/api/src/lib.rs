@@ -1,4 +1,5 @@
 //! aegis-api library.
+pub mod dashboard_schema;
 pub mod graph;
 pub mod models;
 pub mod records;

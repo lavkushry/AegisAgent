@@ -948,6 +948,17 @@ fn api_routes() -> Router<Arc<AppState>> {
             get(routes::list_silences).post(routes::create_silence),
         )
         .route("/soc/silences/:id", delete(routes::delete_silence))
+        // #1634: tenant-owned dashboard schemas
+        .route(
+            "/soc/dashboards",
+            get(routes::list_soc_dashboards).post(routes::create_soc_dashboard),
+        )
+        .route(
+            "/soc/dashboards/:uid",
+            get(routes::get_soc_dashboard)
+                .put(routes::update_soc_dashboard)
+                .delete(routes::delete_soc_dashboard),
+        )
         // Runtime control plane (Phase 2.6): agent-cage runs + runtime-event ingest
         .route(
             "/agent-cage/runs",

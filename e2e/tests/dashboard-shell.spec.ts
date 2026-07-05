@@ -41,6 +41,7 @@ test.describe("production SOC console shell", () => {
     ["rules", "Rules"], ["approvals", "Approvals"], ["agents", "Agents Fleet"],
     ["mcp", "MCP Servers"], ["receipts", "Receipts Log"],
     ["analytics", "Analytics"],
+    ["dashboard-editor", "Dashboard editor"],
     ["settings", "Settings"],
   ] as const;
 
