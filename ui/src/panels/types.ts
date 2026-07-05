@@ -23,6 +23,7 @@ export type PanelType =
   | "heatmap"
   | "status"
   | "feed"
+  | "note"
   | "provable-timeline"
   | "approval-card"
   | "receipt-integrity"
@@ -55,6 +56,7 @@ export interface PanelDefinition<TOptions = Record<string, unknown>> {
   readonly aggregate?: "count_over_time" | "count_by";
   readonly groupBy?: "agent_id" | "decision" | "source_trust" | "tool" | "action";
   readonly interval?: string;
+  readonly rulesCatalog?: "soc" | "detection";
   readonly options?: TOptions;
   readonly drilldowns?: ReadonlyArray<DrilldownLink>;
 }
