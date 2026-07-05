@@ -25,7 +25,10 @@ type BadgeField = "approvals_pending" | "alerts_total" | "incidents_open";
 function NavBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
-    <span className="ml-auto rounded-full bg-[var(--sev-critical)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-white">
+    <span
+      aria-hidden="true"
+      className="ml-auto rounded-full bg-[var(--sev-critical)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-white"
+    >
       {count > 99 ? "99+" : count}
     </span>
   );
@@ -84,6 +87,7 @@ export default function SidebarNav() {
           <button
             key={id}
             type="button"
+            aria-label={label}
             onClick={() => setActiveView(id as ConsoleView)}
             className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold md:gap-3 md:py-2.5 ${
               activeView === id

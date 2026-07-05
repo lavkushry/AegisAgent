@@ -296,6 +296,9 @@ export function resolveMockResponse(
       },
     };
   }
+  if (path === "/v1/soc/stream") {
+    return { status: 501, body: { error: "SSE not available in mock gateway" } };
+  }
   if (path.startsWith("/v1/decisions/timeseries")) {
     return {
       status: 200,
