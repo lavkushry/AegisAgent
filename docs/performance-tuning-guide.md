@@ -12,7 +12,12 @@ level on boot, and require a restart to change.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `AEGIS_DB_MAX_CONNECTIONS` | `5` | SQLite max pool connections (`lib/storage/src/db/mod.rs`). |
+| `AEGIS_DB_POOL_SIZE` | `5` (SQLite) / `10` (Postgres) | Max pool connections (#1318). Takes precedence over `AEGIS_DB_MAX_CONNECTIONS`. |
+| `AEGIS_DB_MAX_CONNECTIONS` | same as above | Legacy alias for `AEGIS_DB_POOL_SIZE`. |
+| `AEGIS_DB_IDLE_TIMEOUT_SECS` | `30` | Close idle pooled connections after this many seconds. |
+| `AEGIS_DB_ACQUIRE_TIMEOUT_SECS` | `5` | Fail an acquire attempt after this many seconds when the pool is exhausted. |
+| `AEGIS_DB_MAX_LIFETIME_SECS` | `1800` | Recycle pooled connections after this lifetime (#1318). |
+| `AEGIS_DB_TEST_BEFORE_ACQUIRE` | `true` (Postgres) / `false` (SQLite) | Run a liveness check before handing out a pooled connection (#1318). |
 | `DATABASE_URL` | `sqlite://aegis.db` | `sqlite://...` or (with the `postgres` feature) a Postgres URL. |
 
 Not configurable via env (intentional, baked-in safe defaults — see
@@ -25,7 +30,9 @@ Not configurable via env (intentional, baked-in safe defaults — see
   safe under WAL (only loses the most recent transaction on an OS crash,
   never corrupts the file).
 
-**When to raise `AEGIS_DB_MAX_CONNECTIONS`:** SQLite's single-writer model
+**Pool metrics on `GET /metrics`:** `db_pool_connections_active`, `db_pool_connections_idle`, `db_pool_connections_max`, `db_pool_connections_size`, and `db_pool_acquire_wait_seconds` (queue-pressure / waiting proxy when the pool is saturated).
+
+**When to raise `AEGIS_DB_POOL_SIZE`:** SQLite's single-writer model
 means raising this mostly helps *read* concurrency, not write throughput —
 see "SQLite throughput ceiling" in `performance-baseline.md` for the
 measured ceiling and the path to scaling past it (read replicas / Postgres).

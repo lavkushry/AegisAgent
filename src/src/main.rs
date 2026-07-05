@@ -239,14 +239,23 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
     // pool at scrape time — no separate sampling/storage needed for these two
     // (unlike `db_pool_acquire_wait_seconds`, which needs a timed probe and is
     // rendered as part of `render_prometheus` above).
+    let pool = state.storage.get_pool();
     let (idle, active) = state.storage.get_pool_metrics();
+    let max_connections = pool.max_connections();
+    let pool_size = pool.size();
     body.push_str(&format!(
-        "# HELP db_pool_connections_active Number of SQLite pool connections currently checked out\n\
+        "# HELP db_pool_connections_active Number of pool connections currently checked out\n\
          # TYPE db_pool_connections_active gauge\n\
          db_pool_connections_active {active}\n\
-         # HELP db_pool_connections_idle Number of SQLite pool connections currently idle\n\
+         # HELP db_pool_connections_idle Number of pool connections currently idle\n\
          # TYPE db_pool_connections_idle gauge\n\
-         db_pool_connections_idle {idle}\n"
+         db_pool_connections_idle {idle}\n\
+         # HELP db_pool_connections_max Configured max pool size (#1318)\n\
+         # TYPE db_pool_connections_max gauge\n\
+         db_pool_connections_max {max_connections}\n\
+         # HELP db_pool_connections_size Current pool size (idle + active)\n\
+         # TYPE db_pool_connections_size gauge\n\
+         db_pool_connections_size {pool_size}\n"
     ));
     // #1286: Splunk HEC export connection health — advisory only, mirrors
     // the pool gauges above (read directly from live process state, no
@@ -3329,6 +3338,8 @@ mod tests {
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.contains("# TYPE db_pool_connections_active gauge"));
         assert!(text.contains("# TYPE db_pool_connections_idle gauge"));
+        assert!(text.contains("# TYPE db_pool_connections_max gauge"));
+        assert!(text.contains("# TYPE db_pool_connections_size gauge"));
         assert!(text.contains("# TYPE db_pool_acquire_wait_seconds gauge"));
 
         cleanup_db(&db_url);

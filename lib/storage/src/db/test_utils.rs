@@ -27,6 +27,9 @@ pub static JOURNAL_SIZE_LIMIT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mu
 /// env var (#896).
 pub static WAL_AUTOCHECKPOINT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Serializes tests that mutate process-wide DB pool env vars (#1318).
+pub static POOL_CONFIG_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub async fn setup_pool(test_name: &str) -> DbPool {
     std::fs::create_dir_all("target").unwrap();
     let db_url = format!(
