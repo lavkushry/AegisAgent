@@ -21,7 +21,7 @@ const baseApproval: ApprovalRow = {
   source_trust: "untrusted",
   action_hash: "sha256:effective",
   original_action_hash: "sha256:original",
-  expires_at: "2026-07-04T12:00:00Z",
+  expires_at: "2099-07-04T12:00:00Z",
   status: "created",
   approver_group: "platform-leads",
   decision_reason: "Critical mutation requires approval.",
@@ -79,10 +79,10 @@ describe("approval card integrity model", () => {
 
   it("treats stale expires_at values as expired client-side defense in depth", () => {
     expect(
-      approvalIsExpired(baseApproval, new Date("2026-07-04T12:00:01Z")),
+      approvalIsExpired(baseApproval, new Date("2099-07-04T12:00:01Z")),
     ).toBe(true);
     expect(
-      approvalIsExpired(baseApproval, new Date("2026-07-04T11:59:59Z")),
+      approvalIsExpired(baseApproval, new Date("2099-07-04T11:59:59Z")),
     ).toBe(false);
   });
 
@@ -112,7 +112,7 @@ describe("approval card integrity model", () => {
 
   it("shows approval id, action, hash, and expiry in the confirmation target", () => {
     expect(approvalConfirmationTarget(baseApproval)).toBe(
-      "approval-123 · github.merge_pull_request · sha256:effective · expires 2026-07-04T12:00:00Z",
+      "approval-123 · github.merge_pull_request · sha256:effective · expires 2099-07-04T12:00:00Z",
     );
   });
 

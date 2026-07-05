@@ -2,6 +2,7 @@ export interface FetchOptions {
   gatewayUrl: string;
   bearerToken: string;
   tenantId: string;
+  signal?: AbortSignal;
 }
 
 export class GatewayRequestError extends Error {
@@ -223,6 +224,7 @@ export async function fetchFromGateway<T>(
   const config: RequestInit = {
     method,
     headers: buildGatewayHeaders(options, hasBody),
+    signal: options.signal,
   };
 
   if (hasBody) {
@@ -261,7 +263,7 @@ export async function downloadFromGateway(
   path: string,
 ): Promise<Blob> {
   const url = `${options.gatewayUrl.replace(/\/+$/, "")}${path}`;
-  const response = await fetch(url, { headers: buildGatewayHeaders(options) });
+  const response = await fetch(url, { headers: buildGatewayHeaders(options), signal: options.signal });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }

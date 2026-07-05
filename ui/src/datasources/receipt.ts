@@ -29,6 +29,10 @@ const RECEIPT_FIELDS: ReadonlyArray<FieldDescriptor> = [
   { name: "receipt_hash", type: "hash", facetable: false },
 ];
 
+function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
+  return signal ? { ...opts, signal } : opts;
+}
+
 export class ReceiptDatasource implements Datasource {
   readonly id = RECEIPT_DATASOURCE_ID;
   readonly capabilities: DatasourceCapabilities = {
@@ -44,7 +48,7 @@ export class ReceiptDatasource implements Datasource {
     const params = new URLSearchParams({ limit: String(req.limit ?? 50) });
     if (req.cursor) params.set("cursor", req.cursor);
     const rows = await fetchFromGateway<Array<Record<string, unknown>>>(
-      this.opts,
+      withSignal(this.opts, req.signal),
       `/v1/receipts?${params.toString()}`,
     );
     return rowsToFrame(Array.isArray(rows) ? rows : []);
@@ -54,15 +58,15 @@ export class ReceiptDatasource implements Datasource {
     return Promise.resolve(RECEIPT_FIELDS);
   }
 
-  async verifyReceipt(receiptId: string): Promise<VerifyResult> {
+  async verifyReceipt(receiptId: string, signal?: AbortSignal): Promise<VerifyResult> {
     const data = await fetchFromGateway<Record<string, unknown>>(
-      this.opts,
+      withSignal(this.opts, signal),
       `/v1/receipts/${encodeURIComponent(receiptId)}/verify`,
     );
     return normalizeVerification(data);
   }
 
-  async verifyRange(receipts: ReadonlyArray<Record<string, unknown>>): Promise<VerifyResult> {
+  async verifyRange(receipts: ReadonlyArray<Record<string, unknown>>, signal?: AbortSignal): Promise<VerifyResult> {
     const timestamps = receipts
       .map((receipt) => receipt.ts ?? receipt.created_at)
       .filter((value): value is string => typeof value === "string" && !Number.isNaN(Date.parse(value)))
@@ -73,7 +77,7 @@ export class ReceiptDatasource implements Datasource {
 
     try {
       const data = await fetchFromGateway<Record<string, unknown>>(
-        this.opts,
+        withSignal(this.opts, signal),
         "/v1/receipts/verify-range",
         "POST",
         range,
@@ -87,7 +91,7 @@ export class ReceiptDatasource implements Datasource {
 
     try {
       const data = await fetchFromGateway<Record<string, unknown>>(
-        this.opts,
+        withSignal(this.opts, signal),
         "/v1/receipts/verify-chain",
         "POST",
         { receipts },
@@ -109,7 +113,7 @@ export class ReceiptDatasource implements Datasource {
           message: `Receipt at row ${index + 1} has no ID for fallback verification.`,
         };
       }
-      const result = await this.verifyReceipt(receiptId);
+      const result = await this.verifyReceipt(receiptId, signal);
       if (result.status !== "verified") {
         return { ...result, brokenAtRow: result.brokenAtRow ?? index + 1 };
       }
@@ -121,11 +125,11 @@ export class ReceiptDatasource implements Datasource {
     };
   }
 
-  exportEvidencePack(range: EvidenceExportRange = {}): Promise<Blob> {
+  exportEvidencePack(range: EvidenceExportRange = {}, signal?: AbortSignal): Promise<Blob> {
     const params = new URLSearchParams();
     if (range.from) params.set("from", range.from);
     if (range.to) params.set("to", range.to);
     const query = params.size > 0 ? `?${params.toString()}` : "";
-    return downloadFromGateway(this.opts, `/v1/compliance/evidence-pack${query}`);
+    return downloadFromGateway(withSignal(this.opts, signal), `/v1/compliance/evidence-pack${query}`);
   }
 }
