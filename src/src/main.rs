@@ -1649,6 +1649,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let approval_attempt_tracker =
         routes::ApprovalAttemptTracker::new(approval_attempt_limit, approval_attempt_window_secs);
 
+    // Per-source-IP+tenant failed agent-token auth tracker for `/v1/authorize`
+    // (#1604): max N invalid-token attempts per `{ip}|{tenant}` per window.
+    let auth_failure_limit: u64 = std::env::var("AEGIS_AUTH_FAILURE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let auth_failure_window_secs: u64 = std::env::var("AEGIS_AUTH_FAILURE_WINDOW_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3600);
+    let auth_failure_tracker = routes::ApprovalAttemptTracker::new(
+        auth_failure_limit,
+        auth_failure_window_secs,
+    );
+
     // Read-through cache for registered-action metadata (#899). Bounded LRU;
     // AEGIS_SKILL_CACHE_CAPACITY == 0 disables it.
     let skill_cache_capacity: usize = std::env::var("AEGIS_SKILL_CACHE_CAPACITY")
@@ -1808,6 +1823,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         quota_manager,
         approval_callback_ip_limiter,
         approval_attempt_tracker,
+        auth_failure_tracker,
         skill_cache,
         mcp_server_cache,
         mcp_tool_cache,
@@ -2532,6 +2548,7 @@ mod tests {
             quota_manager: routes::QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
             mcp_server_cache: routes::McpServerCache::new(1024),
             mcp_tool_cache: routes::McpToolCache::new(1024),
@@ -2830,6 +2847,7 @@ mod tests {
             quota_manager: routes::QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
             mcp_server_cache: routes::McpServerCache::new(1024),
             mcp_tool_cache: routes::McpToolCache::new(1024),
@@ -3169,6 +3187,7 @@ mod tests {
             quota_manager: routes::QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: routes::RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: routes::ApprovalAttemptTracker::new(5, 3600),
             skill_cache: routes::SkillActionCache::new(1024),
             mcp_server_cache: routes::McpServerCache::new(1024),
             mcp_tool_cache: routes::McpToolCache::new(1024),

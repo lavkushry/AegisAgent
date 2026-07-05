@@ -109,13 +109,61 @@ pub(crate) async fn idempotent_replay_response(
         .into_response()
 }
 
+/// Composite tracker key for `/v1/authorize` auth-failure lockout (#1604).
+pub(crate) fn auth_failure_tracker_key(client_addr: &SocketAddr, tenant_id: &str) -> String {
+    format!("{}|{}", client_addr.ip(), tenant_id)
+}
+
+/// Returns `Some(429)` when repeated invalid agent-token attempts from this
+/// source have exhausted the lockout budget (#1604).
+pub(crate) fn authorize_auth_failure_guard(
+    state: &Arc<AppState>,
+    client_addr: &SocketAddr,
+    tenant_id: &str,
+) -> Option<axum::response::Response> {
+    let key = auth_failure_tracker_key(client_addr, tenant_id);
+    if state.auth_failure_tracker.is_blocked(&key) {
+        state.metrics.inc_auth_failure_lockout();
+        return Some(
+            StatusError::too_many_requests(
+                "Too many failed authentication attempts. Try again later.",
+            )
+            .with_details(serde_json::json!({"reason": "rate_limited_auth_failures"}))
+            .into_response(),
+        );
+    }
+    None
+}
+
+/// Record one failed agent-token authentication attempt for lockout (#1604).
+pub(crate) fn record_authorize_auth_failure(
+    state: &Arc<AppState>,
+    client_addr: &SocketAddr,
+    tenant_id: &str,
+) {
+    let key = auth_failure_tracker_key(client_addr, tenant_id);
+    state.auth_failure_tracker.record_failure(&key);
+    state.metrics.inc_auth_failure_attempt();
+}
+
 // Authorize Action Handler
 #[tracing::instrument(name = "authorize", skip_all)]
 pub async fn authorize_action(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    authorize_action_impl(state, headers, body, client_addr).await
+}
+
+#[tracing::instrument(name = "authorize", skip_all)]
+pub(crate) async fn authorize_action_impl(
+    state: Arc<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+    client_addr: SocketAddr,
+) -> axum::response::Response {
     // #1156: parent this span to the caller's trace, if the SDK sent a W3C
     // `traceparent` header. A no-op when OTel export isn't configured (the
     // global propagator stays the no-op default — see `otel::init_tracer_provider`).
@@ -158,6 +206,12 @@ pub async fn authorize_action(
         }
     };
 
+    if let Some(resp) =
+        authorize_auth_failure_guard(&state, &client_addr, &runtime_tenant_id)
+    {
+        return resp;
+    }
+
     // #1310: mTLS authentication. The TLS accept loop in `main.rs` sets this
     // internal header to a client certificate's verified Subject CN only
     // after a successful mTLS handshake against the configured CA, and
@@ -180,6 +234,7 @@ pub async fn authorize_action(
         {
             Ok(Some(a)) => a,
             Ok(None) => {
+                record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
                 return StatusError::unauthorized("Unrecognized mTLS client certificate")
                     .into_response()
             }
@@ -192,7 +247,10 @@ pub async fn authorize_action(
         // Resolve agent from Bearer agent_token
         let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
             Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
-            _ => return StatusError::unauthorized("Missing agent token").into_response(),
+            _ => {
+                record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
+                return StatusError::unauthorized("Missing agent token").into_response();
+            }
         };
         match state
             .storage
@@ -205,6 +263,7 @@ pub async fn authorize_action(
         {
             Ok(Some(a)) => a,
             Ok(None) => {
+                record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
                 return StatusError::unauthorized("Invalid or quarantined agent token")
                     .into_response()
             }
@@ -1188,10 +1247,16 @@ pub async fn authorize_action(
         // (redaction invariant) — only `callback_url` and
         // `sha256(secret)` are stored.
         let (callback_url, callback_secret_hash) = match &payload.callback {
-            Some(cb) => (
-                Some(cb.url.clone()),
-                cb.secret.as_ref().map(|s| sha256_hex(s.as_bytes())),
-            ),
+            Some(cb) => {
+                if let Err(e) = aegis_common::ssrf::validate_callback_url(&cb.url) {
+                    return StatusError::bad_request(format!("Invalid callback URL: {e}"))
+                        .into_response();
+                }
+                (
+                    Some(cb.url.clone()),
+                    cb.secret.as_ref().map(|s| sha256_hex(s.as_bytes())),
+                )
+            }
             None => (None, None),
         };
 
@@ -1661,13 +1726,8 @@ mod tests {
             format!("Bearer {}", agent_token).parse().unwrap(),
         );
 
-        let response = authorize_action(
-            State(state),
-            headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state, headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1675,6 +1735,62 @@ mod tests {
         assert_eq!(
             json["message"],
             "Missing X-Aegis-Tenant-ID or X-Tenant-ID header"
+        );
+    }
+
+    /// #1604: repeated invalid agent-token attempts from the same source
+    /// IP+tenant eventually 429 with `rate_limited_auth_failures`, independent
+    /// of the per-tenant token-bucket rate limiter (which only applies after a
+    /// valid agent is resolved).
+    #[tokio::test]
+    async fn authorize_rate_limited_after_repeated_invalid_agent_tokens() {
+        use std::sync::atomic::Ordering;
+
+        let (state, tenant_id, _agent_token) = setup_state("auth_failure_limit").await;
+        let request = mcp_authorize_request("filesystem", "read_file");
+        let client_addr = conn_info_for_ip(42);
+
+        for attempt in 1..=6u32 {
+            let headers = agent_headers("definitely-not-a-valid-token", &tenant_id);
+            let response = authorize_action_impl(
+                state.clone(),
+                headers,
+                Bytes::from(serde_json::to_vec(&request).unwrap()),
+                client_addr,
+            )
+            .await;
+
+            if attempt <= 5 {
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "attempt {attempt} should be unauthorized"
+                );
+            } else {
+                assert_eq!(
+                    response.status(),
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "attempt {attempt} should be rate limited"
+                );
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(json["details"]["reason"], "rate_limited_auth_failures");
+            }
+        }
+
+        assert_eq!(
+            state
+                .metrics
+                .auth_failure_attempts_total
+                .load(Ordering::Relaxed),
+            5
+        );
+        assert_eq!(
+            state
+                .metrics
+                .auth_failure_lockouts_total
+                .load(Ordering::Relaxed),
+            1
         );
     }
 
@@ -1691,13 +1807,8 @@ mod tests {
 
         state.storage.get_pool().close().await;
 
-        let response = authorize_action(
-            State(state),
-            headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state, headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1721,13 +1832,8 @@ mod tests {
         let request = mcp_authorize_request("filesystem", "read_file");
         let headers = agent_headers(&agent_token, &tenant_id);
 
-        let response = authorize_action(
-            State(state),
-            headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state, headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
 
         // Verify Retry-After header
         let retry_after = response
@@ -2006,6 +2112,7 @@ mod tests {
             quota_manager: QuotaManager::new(0, 86400), // quota disabled
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -2034,25 +2141,15 @@ mod tests {
         let headers = agent_headers(&agent_token, &tenant_id);
 
         // First request is allowed through rate limiter
-        let resp1 = authorize_action(
-            State(state.clone()),
-            headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp1 = authorize_action_impl(state.clone(), headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         // Since we don't have "mcp:server:tool" registered/approved in the database for this test setup,
         // it will be denied (403 or similar) or return require_approval/etc., but NOT 429!
         assert_ne!(resp1.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Immediate second request is blocked by rate limiter (429)
-        let resp2 = authorize_action(
-            State(state.clone()),
-            headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp2 = authorize_action_impl(state.clone(), headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Now test quota
@@ -2067,6 +2164,7 @@ mod tests {
             quota_manager: QuotaManager::new(1, 86400),   // quota limit 1
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -2092,23 +2190,13 @@ mod tests {
         });
 
         // First request is allowed through quota
-        let resp3 = authorize_action(
-            State(state_quota.clone()),
-            headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp3 = authorize_action_impl(state_quota.clone(), headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         assert_ne!(resp3.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Second request is blocked by quota (429)
-        let resp4 = authorize_action(
-            State(state_quota.clone()),
-            headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp4 = authorize_action_impl(state_quota.clone(), headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         assert_eq!(resp4.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
@@ -2805,13 +2893,8 @@ mod tests {
 
         let request = mcp_authorize_request("github", "push_commit");
         let headers = agent_headers(&agent_token, &tenant_id);
-        let response = authorize_action(
-            State(state),
-            headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state, headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
 
         assert_eq!(
             response.status(),
@@ -3776,6 +3859,39 @@ mod tests {
         assert_ne!(stored.callback_secret_hash.as_deref(), Some("topsecret"));
     }
 
+    /// #1605: tenant-supplied callback URLs are SSRF-guarded at registration.
+    #[tokio::test]
+    async fn authorize_rejects_ssrf_callback_url() {
+        let (state, tenant_id, agent_token) = setup_state("authorize_callback_ssrf").await;
+        register_ship_action(&state, &tenant_id, "low").await;
+
+        let mut request = mcp_authorize_request("deployer", "ship");
+        request.tool_call.mutates_state = true;
+        request.context.source_trust = "semi_trusted_customer".to_string();
+        request.callback = Some(crate::models::ApprovalCallback {
+            url: "https://169.254.169.254/latest/meta-data".to_string(),
+            secret: None,
+        });
+
+        let response = authorize_action_impl(
+            state,
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Invalid callback URL")
+        );
+    }
+
     /// #0120: the `risk_score` returned by `/v1/authorize` matches the
     /// registered action's risk level via `risk_score_for_level`.
     #[tokio::test]
@@ -3991,23 +4107,13 @@ mod tests {
         request.timestamp = Some(Utc::now());
 
         // First request succeeds normally.
-        let first = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let first = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         assert_eq!(first.status(), StatusCode::OK);
 
         // Replaying the exact same nonce is rejected.
-        let second = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let second = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         assert_eq!(second.status(), StatusCode::CONFLICT);
 
         let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
@@ -4026,13 +4132,8 @@ mod tests {
         request.nonce = Some("nonce-stale-1".to_string());
         request.timestamp = Some(Utc::now() - Duration::seconds(301));
 
-        let response = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -4054,22 +4155,12 @@ mod tests {
         request2.nonce = Some("nonce-two".to_string());
         request2.timestamp = Some(Utc::now());
 
-        let first = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request1).unwrap()),
-        )
-        .await
-        .into_response();
+        let first = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request1).unwrap()), test_conn_info()).await;
         assert_eq!(first.status(), StatusCode::OK);
 
-        let second = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request2).unwrap()),
-        )
-        .await
-        .into_response();
+        let second = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request2).unwrap()), test_conn_info()).await;
         assert_eq!(second.status(), StatusCode::OK);
     }
 
@@ -4115,8 +4206,7 @@ mod tests {
         let mut headers = agent_headers(&agent_token, &tenant_id);
         headers.insert("x-aegis-request-signature", sig.parse().unwrap());
 
-        let resp = authorize_action(State(state), headers, body)
-            .await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -4133,8 +4223,7 @@ mod tests {
         // No X-Aegis-Request-Signature header
         let headers = agent_headers(&agent_token, &tenant_id);
 
-        let resp = authorize_action(State(state), headers, body)
-            .await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -4156,8 +4245,7 @@ mod tests {
         let forged = signing_header("wrong-key", &body);
         headers.insert("x-aegis-request-signature", forged.parse().unwrap());
 
-        let resp = authorize_action(State(state), headers, body)
-            .await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -4183,8 +4271,7 @@ mod tests {
         let mut headers = agent_headers(&agent_token, &tenant_id);
         headers.insert("x-aegis-request-signature", sig.parse().unwrap());
 
-        let resp = authorize_action(State(state), headers, tampered_body)
-            .await
+        let resp = authorize_action_impl(state, headers, tampered_body, test_conn_info()).await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -4202,8 +4289,7 @@ mod tests {
 
         // No signature header — should still pass since agent has no signing_key
         let headers = agent_headers(&agent_token, &tenant_id);
-        let resp = authorize_action(State(state), headers, body)
-            .await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -4811,13 +4897,8 @@ mod tests {
         let mut req = mcp_authorize_request("filesystem", "read_file");
         req.agent.environment = "staging".to_string();
 
-        let response = authorize_action(
-            State(state),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state, agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -4963,13 +5044,8 @@ mod tests {
             .unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let response = authorize_action(
-            State(state),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state, agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -5043,13 +5119,8 @@ mod tests {
         // quarantine_canary / trigger → ToolAction::"quarantine_canary_trigger"
         // matches the @decision("quarantine") canary policy in policies.cedar.
         let req = mcp_authorize_request("quarantine_canary", "trigger");
-        let resp = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -5086,22 +5157,13 @@ mod tests {
 
         // First call: trigger quarantine.
         let req = mcp_authorize_request("quarantine_canary", "trigger");
-        let _ = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await;
+        let _ = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         // Second call: any tool — must be 401 (agent no longer resolvable).
         let req2 = mcp_authorize_request("filesystem", "read_file");
-        let resp2 = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req2).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp2 = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req2).unwrap()), test_conn_info()).await;
 
         assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
     }
@@ -5123,13 +5185,8 @@ mod tests {
         state.storage.update_agent(&agent).await.unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action(
-            State(state.clone()),
-            mtls_headers("agent-cert-007", &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp = authorize_action_impl(state.clone(), mtls_headers("agent-cert-007", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         assert_eq!(
             resp.status(),
@@ -5146,13 +5203,8 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("mtls_cn_unrecognized").await;
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action(
-            State(state.clone()),
-            mtls_headers("never-bound-cn", &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp = authorize_action_impl(state.clone(), mtls_headers("never-bound-cn", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
@@ -5174,13 +5226,8 @@ mod tests {
         state.storage.update_agent(&agent).await.unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action(
-            State(state.clone()),
-            mtls_headers("agent-cert-quarantined", &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp = authorize_action_impl(state.clone(), mtls_headers("agent-cert-quarantined", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
@@ -5193,13 +5240,8 @@ mod tests {
         let (state, tenant_id, agent_token) = setup_state("mtls_cn_fallback").await;
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -5236,13 +5278,8 @@ mod tests {
 
         // Old token now rejected.
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_old = authorize_action(
-            State(state.clone()),
-            agent_headers(&old_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_old = authorize_action_impl(state.clone(), agent_headers(&old_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
         assert_eq!(resp_old.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -5283,13 +5320,8 @@ mod tests {
 
         // Original token still works.
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_after = authorize_action(
-            State(state.clone()),
-            agent_headers(&token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_after = authorize_action_impl(state.clone(), agent_headers(&token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
         assert_eq!(resp_after.status(), StatusCode::OK);
 
         let events = state
@@ -5363,13 +5395,8 @@ mod tests {
             }
         });
 
-        let resp_canonical = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&canonical_payload).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_canonical = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&canonical_payload).unwrap()), test_conn_info()).await;
         assert_eq!(resp_canonical.status(), StatusCode::OK);
         let body_canonical: serde_json::Value = serde_json::from_slice(
             &to_bytes(resp_canonical.into_body(), usize::MAX)
@@ -5379,13 +5406,8 @@ mod tests {
         .unwrap();
         let decision_canonical = body_canonical["decision"].as_str().unwrap().to_string();
 
-        let resp_mixed = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&mixed_case_payload).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_mixed = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&mixed_case_payload).unwrap()), test_conn_info()).await;
         assert_eq!(resp_mixed.status(), StatusCode::OK);
         let body_mixed: serde_json::Value =
             serde_json::from_slice(&to_bytes(resp_mixed.into_body(), usize::MAX).await.unwrap())
@@ -5422,13 +5444,8 @@ mod tests {
             }
         });
 
-        let resp = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&payload).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&payload).unwrap()), test_conn_info()).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value =
@@ -5466,13 +5483,8 @@ mod tests {
             }
         });
 
-        let resp = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&payload).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&payload).unwrap()), test_conn_info()).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value =
@@ -6153,13 +6165,8 @@ mod tests {
         let mut request = mcp_authorize_request("filesystem", "read_file");
         request.request_id = Some("perm-denied-with-request-id".to_string());
 
-        let response = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()),
-        )
-        .await
-        .into_response();
+        let response = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -6681,13 +6688,8 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let _permit = semaphore.acquire().await.unwrap();
                 let request = mcp_authorize_request("filesystem", "read_file");
-                let response = authorize_action(
-                    State(state),
-                    agent_headers(&agent_token, &tenant_id),
-                    Bytes::from(serde_json::to_vec(&request).unwrap()),
-                )
-                .await
-                .into_response();
+                let response = authorize_action_impl(state, agent_headers(&agent_token, &tenant_id),
+                    Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
                 let status = response.status();
                 let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
                 let parsed: AuthorizeResponse = serde_json::from_slice(&body)
@@ -7170,6 +7172,7 @@ mod tests {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -7378,6 +7381,7 @@ mod tests {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),

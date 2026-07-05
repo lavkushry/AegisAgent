@@ -63,6 +63,7 @@ handful of `String`s + scalars), so erring high costs little memory.
 | `AEGIS_QUOTA_WINDOW_SECS` | `86400` | Quota window (default 24h). |
 | `AEGIS_APPROVAL_CALLBACK_IP_LIMIT` | `10` | Per-source-IP token bucket for `POST /v1/approvals/:id/{approve,reject,edit}` (#1307); refills at `limit / 60` tokens/sec. |
 | `AEGIS_APPROVAL_ATTEMPT_LIMIT` / `AEGIS_APPROVAL_ATTEMPT_WINDOW_SECS` | `5` / `3600` | Max failed (4xx) approval-callback attempts per `approval_id` per window (#1307). |
+| `AEGIS_AUTH_FAILURE_LIMIT` / `AEGIS_AUTH_FAILURE_WINDOW_SECS` | `5` / `3600` | Max failed agent-token auth attempts per `{source_ip}\|{tenant_id}` on `/v1/authorize` before 429 lockout (#1604). |
 
 **Load-testing against the gateway?** Set
 `AEGIS_RATE_LIMIT_CAPACITY`/`AEGIS_RATE_LIMIT_REFILL_RATE` very high first —

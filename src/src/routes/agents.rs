@@ -1564,13 +1564,8 @@ mod tests {
 
         // Verify the agent is quarantined (authorize returns 401).
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_before = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_before = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
         assert_eq!(resp_before.status(), StatusCode::UNAUTHORIZED);
 
         // Restore the agent.
@@ -1591,13 +1586,8 @@ mod tests {
 
         // After restore, authorize should work again.
         let req2 = mcp_authorize_request("filesystem", "read_file");
-        let resp_after = authorize_action(
-            State(state.clone()),
-            agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req2).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_after = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req2).unwrap()), test_conn_info()).await;
         assert_eq!(resp_after.status(), StatusCode::OK);
     }
 
@@ -1632,24 +1622,14 @@ mod tests {
 
         // Old token is rejected.
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_old = authorize_action(
-            State(state.clone()),
-            agent_headers(&old_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_old = authorize_action_impl(state.clone(), agent_headers(&old_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
         assert_eq!(resp_old.status(), StatusCode::UNAUTHORIZED);
 
         // New token works.
         let req2 = mcp_authorize_request("filesystem", "read_file");
-        let resp_new = authorize_action(
-            State(state.clone()),
-            agent_headers(&new_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req2).unwrap()),
-        )
-        .await
-        .into_response();
+        let resp_new = authorize_action_impl(state.clone(), agent_headers(&new_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req2).unwrap()), test_conn_info()).await;
         assert_eq!(resp_new.status(), StatusCode::OK);
 
         // Audit event recorded.

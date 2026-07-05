@@ -144,6 +144,12 @@ pub struct SecurityMetrics {
     /// A non-zero value indicates a bug that would otherwise have dropped
     /// the client's TCP connection without a response.
     pub handler_panics_total: AtomicU64,
+    /// Number of failed `/v1/authorize` agent-token authentication attempts
+    /// recorded by the per-source lockout tracker (#1604).
+    pub auth_failure_attempts_total: AtomicU64,
+    /// Number of `/v1/authorize` requests rejected with 429 because the
+    /// per-source auth-failure lockout was active (#1604).
+    pub auth_failure_lockouts_total: AtomicU64,
     /// `/v1/authorize` request duration histogram (OBS-001, #1154).
     pub authorize_duration: DurationHistogram,
     /// Number of `/v1/authorize` decisions that resulted in "allow" (OBS-002, #1155).
@@ -205,6 +211,20 @@ impl SecurityMetrics {
     #[inline]
     pub fn inc_handler_panic(&self) {
         self.handler_panics_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment `auth_failure_attempts_total` by 1 (#1604).
+    #[inline]
+    pub fn inc_auth_failure_attempt(&self) {
+        self.auth_failure_attempts_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment `auth_failure_lockouts_total` by 1 (#1604).
+    #[inline]
+    pub fn inc_auth_failure_lockout(&self) {
+        self.auth_failure_lockouts_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increment the per-decision counter for `/v1/authorize` outcomes.
@@ -272,6 +292,8 @@ impl SecurityMetrics {
         let mismatch = self.approval_hash_mismatch_total.load(Ordering::Relaxed);
         let provenance = self.provenance_denials_total.load(Ordering::Relaxed);
         let panics = self.handler_panics_total.load(Ordering::Relaxed);
+        let auth_failures = self.auth_failure_attempts_total.load(Ordering::Relaxed);
+        let auth_lockouts = self.auth_failure_lockouts_total.load(Ordering::Relaxed);
 
         let mut out = format!(
             "# HELP approval_hash_mismatch_total Number of approve-then-swap / hash-mismatch events detected\n\
@@ -282,7 +304,13 @@ impl SecurityMetrics {
              provenance_denials_total {provenance}\n\
              # HELP aegis_handler_panics_total Number of handler panics caught by the CatchPanic layer\n\
              # TYPE aegis_handler_panics_total counter\n\
-             aegis_handler_panics_total {panics}\n"
+             aegis_handler_panics_total {panics}\n\
+             # HELP auth_failure_attempts_total Number of failed /v1/authorize agent-token authentication attempts (#1604)\n\
+             # TYPE auth_failure_attempts_total counter\n\
+             auth_failure_attempts_total {auth_failures}\n\
+             # HELP auth_failure_lockouts_total Number of /v1/authorize requests rejected due to auth-failure lockout (#1604)\n\
+             # TYPE auth_failure_lockouts_total counter\n\
+             auth_failure_lockouts_total {auth_lockouts}\n"
         );
         out.push_str(
             &self

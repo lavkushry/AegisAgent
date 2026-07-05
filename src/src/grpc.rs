@@ -165,13 +165,13 @@ impl AegisService for AegisGrpcServiceImpl {
         let rest_req = map_authorize_request(req);
         let body_bytes = serde_json::to_vec(&rest_req).unwrap_or_default();
 
-        let response = crate::routes::authorize_action(
-            axum::extract::State(self._state.clone()),
+        let response = crate::routes::authorize_action_impl(
+            self._state.clone(),
             headers,
             axum::body::Bytes::from(body_bytes),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
         )
-        .await
-        .into_response();
+        .await;
 
         let status = response.status();
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

@@ -16,3 +16,4 @@ hmac = { workspace = true }
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }
 hex = "=0.4.3"
 sqlx = { workspace = true }
+url = "2.5"
