@@ -962,6 +962,11 @@ pub struct AppState {
     /// bulk. Critical events (deny on critical risk) bypass this sink and
     /// are written synchronously.
     pub audit_batch: crate::audit_batch::AuditBatchSink,
+    /// Non-blocking sink for batched `action_receipts` writes (#904). Best-effort
+    /// receipt emission on `/v1/authorize` enqueues here; a background task
+    /// ([`crate::receipt_batch::run_receipt_batch_writer`]) flushes them in bulk.
+    /// Protected decisions bypass this sink and append synchronously.
+    pub receipt_batch: crate::receipt_batch::ReceiptBatchSink,
     /// Opt-in HMAC-SHA256 secret for verifying `X-Hub-Signature-256` on
     /// `POST /v1/ingest` requests with `source: "github_webhook"` (#1339).
     /// Configured via `AEGIS_GITHUB_WEBHOOK_SECRET`. When `None` (the
@@ -1641,6 +1646,7 @@ pub mod benchutil {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
             command_signing_key: None,
@@ -1944,6 +1950,7 @@ pub(crate) mod test_helpers {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
             github_webhook_secret: Some(secret.to_string()),
             policy_signing_verifying_key: None,
             command_signing_key: None,
@@ -1998,6 +2005,7 @@ pub(crate) mod test_helpers {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: Some(verifying_key_hex.to_string()),
             command_signing_key: None,
@@ -2052,6 +2060,7 @@ pub(crate) mod test_helpers {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
             command_signing_key: Some(signing_key_hex.to_string()),
@@ -2108,6 +2117,7 @@ pub(crate) mod test_helpers {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
             command_signing_key: None,
@@ -2166,6 +2176,7 @@ pub(crate) mod test_helpers {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
             command_signing_key: None,
@@ -2274,6 +2285,7 @@ pub(crate) mod test_helpers {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
@@ -2405,6 +2417,7 @@ pub(crate) mod test_helpers {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: state_raw.audit_writer_unhealthy.clone(),
             audit_batch,
+            receipt_batch: state_raw.receipt_batch.clone(),
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
             command_signing_key: None,

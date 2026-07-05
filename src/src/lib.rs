@@ -16,6 +16,7 @@
 // Re-exported from workspace libraries
 pub use aegis_storage::audit_batch;
 pub use aegis_storage::db;
+pub use aegis_storage::receipt_batch;
 pub use aegis_storage::risk_escalation;
 
 pub use aegis_soc::backtest;

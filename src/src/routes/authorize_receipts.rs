@@ -50,8 +50,8 @@ pub(crate) fn apply_receipt_signature(receipt: &mut ActionReceiptRecord) {
 /// ceremony here.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_action_receipt(
+    receipt_batch: &crate::receipt_batch::ReceiptBatchSink,
     storage: &Arc<dyn aegis_storage::traits::StorageBackend>,
-    deferred_write_tracker: &Arc<super::DeferredWriteTracker>,
     tenant_id: &str,
     agent_id: &str,
     payload: &AuthorizeRequest,
@@ -68,19 +68,12 @@ pub(crate) async fn emit_action_receipt(
         action_hash,
     );
 
-    let storage = Arc::clone(storage);
-    let tenant_id_owned = tenant_id.to_string();
-    deferred_write_tracker.spawn_tracked(async move {
-        // `SqliteStorage::append_action_receipt_atomic` doesn't retry on its
-        // own, so wrap it the same way the deferred risk-score write is.
-        if let Err(e) = super::retry_storage_write_on_busy(3, || {
-            storage.append_action_receipt_atomic(&tenant_id_owned, receipt.clone())
-        })
+    if let Err(e) = receipt_batch
+        .emit(storage.get_pool(), tenant_id, receipt)
         .await
-        {
-            error!("Failed to write action receipt: {:?}", e);
-        }
-    });
+    {
+        error!("Failed to enqueue action receipt: {:?}", e);
+    }
 }
 
 /// Receipt-durability class of a decision (PR2). Protected decisions MUST have a

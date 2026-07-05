@@ -1170,8 +1170,8 @@ pub async fn authorize_action_impl(
             }
         } else {
             emit_action_receipt(
+                &state.receipt_batch,
                 &state.storage,
-                &state.deferred_write_tracker,
                 &tenant_id,
                 &agent_id,
                 &payload,
@@ -2139,6 +2139,7 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
@@ -2201,6 +2202,7 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
@@ -7337,6 +7339,7 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
@@ -7546,6 +7549,7 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
             command_signing_key: None,

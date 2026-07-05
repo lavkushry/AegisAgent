@@ -32,6 +32,7 @@ use gateway::otel;
 use gateway::policy;
 use gateway::policy_watcher;
 use gateway::qdrant;
+use gateway::receipt_batch;
 use gateway::routes;
 use gateway::splunk_export;
 
@@ -1448,6 +1449,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let audit_batch_abort_handle = audit_batch_handle.abort_handle();
 
+    // #904: receipt-chain write batching for best-effort authorize receipts.
+    let (receipt_batch, receipt_batch_rx) =
+        receipt_batch::ReceiptBatchSink::channel(receipt_batch::DEFAULT_CAPACITY);
+    let receipt_batch_handle = tokio::spawn(receipt_batch::run_receipt_batch_writer(
+        pool.clone(),
+        receipt_batch_rx,
+        receipt_batch::batch_size_from_env(),
+        receipt_batch::flush_interval_from_env(),
+    ));
+    let receipt_batch_abort_handle = receipt_batch_handle.abort_handle();
+
     // REL-003 (#1149): SQLite advisory-lock-based leader election so multiple
     // gateway instances sharing one DB don't all run the maintenance jobs
     // below concurrently. `is_leader` starts false (fail-safe: no instance
@@ -1601,6 +1613,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut background_task_handles = vec![
         ("event_drain", drain_abort_handle),
         ("audit_batch_writer", audit_batch_abort_handle),
+        ("receipt_batch_writer", receipt_batch_abort_handle),
         ("leader_election_loop", leader_election_abort_handle),
         (
             "receipt_chain_integrity_job",
@@ -1869,6 +1882,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         startup_complete: std::sync::atomic::AtomicBool::new(false),
         audit_writer_unhealthy: audit_writer_unhealthy.clone(),
         audit_batch,
+        receipt_batch,
         github_webhook_secret,
         policy_signing_verifying_key,
         command_signing_key,
@@ -2313,6 +2327,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     }
 
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(drain_timeout),
+        receipt_batch_handle,
+    )
+    .await
+    {
+        Ok(Ok(n)) => info!("Flushed {} receipts during shutdown", n),
+        Ok(Err(e)) => tracing::error!("Receipt batch writer task panicked: {:?}", e),
+        Err(_) => tracing::warn!(
+            "Receipt batch writer drain timed out. Some receipts may have been lost."
+        ),
+    }
+
     // #1156: flush any spans still buffered in the OTel batch processor.
     if let Some(provider) = otel_tracer_provider {
         otel::shutdown_tracer_provider(&provider);
@@ -2596,6 +2623,7 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(true),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: gateway::receipt_batch::ReceiptBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
@@ -2895,6 +2923,7 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: gateway::receipt_batch::ReceiptBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
@@ -3235,6 +3264,7 @@ mod tests {
             startup_complete: std::sync::atomic::AtomicBool::new(false),
             audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audit_batch: gateway::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: gateway::receipt_batch::ReceiptBatchSink::channel(1024).0,
 
             github_webhook_secret: None,
             policy_signing_verifying_key: None,
