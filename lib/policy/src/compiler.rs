@@ -176,6 +176,57 @@ spec:
     ]
 }
 
+/// #1142: matches `SOC_MAX_LIMIT` (200) in `aegis-storage` — kept local so the
+/// static template catalog does not depend on the storage crate.
+const TEMPLATE_LIST_MAX_LIMIT: i64 = 200;
+
+/// Stable synthetic rowid for a built-in template at `index` in
+/// [`get_templates`]'s canonical order. Highest rowid = first template so
+/// keyset pagination can reuse the `ORDER BY rowid DESC` / `rowid < cursor`
+/// convention without a database table.
+fn template_rowid(index: usize, total: usize) -> i64 {
+    (total - index) as i64
+}
+
+/// #1142: cursor-paginated variant of [`get_templates`].
+///
+/// Built-in templates are not persisted; pagination is applied in-memory with
+/// synthetic rowids. When `cursor` is `Some`, `offset` is ignored (same as DB
+/// list endpoints).
+pub fn list_policy_templates_cursor(
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+) -> (Vec<PolicyTemplate>, Option<i64>) {
+    let limit = limit.clamp(1, TEMPLATE_LIST_MAX_LIMIT);
+    let offset = offset.max(0);
+
+    let all = get_templates();
+    let total = all.len();
+    let mut indexed: Vec<(i64, PolicyTemplate)> = all
+        .into_iter()
+        .enumerate()
+        .map(|(i, template)| (template_rowid(i, total), template))
+        .collect();
+
+    if let Some(c) = cursor {
+        indexed.retain(|(rowid, _)| *rowid < c);
+    } else if offset > 0 {
+        let skip = offset.min(indexed.len() as i64) as usize;
+        indexed.drain(0..skip);
+    }
+
+    let has_more = indexed.len() as i64 > limit;
+    let page: Vec<_> = indexed.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_more {
+        page.last().map(|(rowid, _)| *rowid)
+    } else {
+        None
+    };
+    let items = page.into_iter().map(|(_, template)| template).collect();
+    (items, next_cursor)
+}
+
 pub fn compile_yaml_to_cedar(yaml_str: &str) -> Result<String, String> {
     let policy: AgentGuardPolicy =
         serde_yml::from_str(yaml_str).map_err(|e| format!("YAML parsing error: {}", e))?;
@@ -307,6 +358,23 @@ pub fn compile_yaml_to_cedar(yaml_str: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1142: `list_policy_templates_cursor` returns `next_cursor` when more rows exist.
+    #[test]
+    fn list_policy_templates_cursor_paginates_and_sets_next_cursor() {
+        let (page, next_cursor) = list_policy_templates_cursor(2, 0, None);
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].key, "production-baseline");
+        let next_cursor = next_cursor.expect("eight templates remain beyond the first page");
+
+        let (page2, next_cursor2) = list_policy_templates_cursor(2, 0, Some(next_cursor));
+        assert_eq!(page2.len(), 2);
+        assert!(next_cursor2.is_some());
+
+        let (all, next_cursor3) = list_policy_templates_cursor(200, 0, None);
+        assert_eq!(all.len(), 10);
+        assert!(next_cursor3.is_none());
+    }
 
     #[test]
     fn test_compile_production_baseline() {

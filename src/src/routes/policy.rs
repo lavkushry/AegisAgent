@@ -740,12 +740,27 @@ pub async fn compile_policy(
     }
 }
 
+/// GET /v1/policies/templates — built-in AgentGuardPolicy YAML templates.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous page's
+///   `X-Next-Cursor` response header; takes priority over `offset` when both
+///   are supplied.
 pub async fn list_policy_templates(
     State(_state): State<Arc<AppState>>,
     TenantId(_tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    let templates = aegis_policy::compiler::get_templates();
-    (StatusCode::OK, Json(templates)).into_response()
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match super::parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
+
+    let (templates, next_cursor) =
+        aegis_policy::compiler::list_policy_templates_cursor(limit, offset, cursor);
+    super::paginated_response(&templates, next_cursor)
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -779,9 +794,13 @@ mod tests {
         let (state, tenant_id, _) = setup_state("compile_templates").await;
 
         // 1. Get templates
-        let response = list_policy_templates(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response = list_policy_templates(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let templates: Vec<aegis_policy::compiler::PolicyTemplate> =
@@ -1743,6 +1762,48 @@ spec: {}
             "a signed bundle's policy, once uploaded and hot-reloaded, must \
              evaluate identically to loading the same Cedar text directly"
         );
+    }
+
+    /// #1142: `GET /v1/policies/templates` emits `X-Next-Cursor` when more rows follow.
+    #[tokio::test]
+    async fn list_policy_templates_route_sets_next_cursor_header() {
+        let (state, tenant_id, _) = setup_state("list_policy_templates_cursor_header").await;
+
+        let response = list_policy_templates(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let next_cursor = response
+            .headers()
+            .get("x-next-cursor")
+            .expect("nine templates exist beyond the first page")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: Vec<aegis_policy::compiler::PolicyTemplate> =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].key, "production-baseline");
+
+        let response2 = list_policy_templates(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(Some(format!("limit=1&cursor={next_cursor}"))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response2.status(), StatusCode::OK);
+        assert!(response2.headers().get("x-next-cursor").is_some());
+        let body2 = to_bytes(response2.into_body(), usize::MAX).await.unwrap();
+        let page2: Vec<aegis_policy::compiler::PolicyTemplate> =
+            serde_json::from_slice(&body2).unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].key, "read-only-access");
     }
 
     /// #1142: `GET /v1/policies/audit-log` emits `X-Next-Cursor` when more rows follow.
