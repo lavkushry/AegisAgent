@@ -1046,6 +1046,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         &self,
         tenant_id: &str,
     ) -> Result<Vec<DetectionRuleRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of [`list_detection_rules`].
+    async fn list_detection_rules_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<DetectionRuleRecord>, Option<i64>), AegisError>;
     async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
 
     // Playbooks

@@ -112,6 +112,48 @@ pub async fn list_detection_rules(
     )
 }
 
+/// #1142: cursor-paginated variant of [`list_detection_rules`].
+pub async fn list_detection_rules_cursor(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+) -> Result<(Vec<DetectionRuleRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let query = "SELECT *, rowid FROM detection_rules
+         WHERE tenant_id = ?
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
+}
+
 /// TASK-0088 (#934): delete a tenant's detection rule. Returns `true` if a
 /// row was deleted.
 pub async fn delete_detection_rule(
@@ -958,6 +1000,48 @@ mod tests {
     use super::*;
     use crate::db::test_utils::*;
     use crate::db::*;
+
+    /// #1142: `list_detection_rules_cursor` returns `next_cursor` when more rows exist.
+    #[tokio::test]
+    async fn list_detection_rules_cursor_paginates_and_sets_next_cursor() {
+        let pool = setup_pool("detection_rules_cursor_paginate").await;
+        register_tenant(
+            &pool,
+            "tenant_det_cursor",
+            "Detection Rules Cursor Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
+        for i in 0..3 {
+            upsert_detection_rule(
+                &pool,
+                "tenant_det_cursor",
+                &format!("rule_key_{i}"),
+                &format!("Rule {i}"),
+                "high",
+                "decision == 'deny'",
+                "summary",
+                true,
+            )
+            .await
+            .unwrap();
+        }
+
+        let (page, next_cursor) =
+            list_detection_rules_cursor(&pool, "tenant_det_cursor", 2, 0, None)
+                .await
+                .unwrap();
+        assert_eq!(page.len(), 2);
+        assert!(next_cursor.is_some());
+
+        let (page2, next_cursor2) =
+            list_detection_rules_cursor(&pool, "tenant_det_cursor", 2, 0, next_cursor)
+                .await
+                .unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(next_cursor2, None);
+    }
 
     #[tokio::test]
     async fn soc_alerts_pagination_limit_offset() {
