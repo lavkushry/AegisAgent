@@ -36,6 +36,10 @@ const ENTITY_FIELDS: Partial<Record<EntityKind, ReadonlyArray<FieldDescriptor>>>
   ],
 };
 
+function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
+  return signal ? { ...opts, signal } : opts;
+}
+
 /**
  * Reads tenant-scoped entities from the gateway REST API and returns them
  * as DataFrames. Wraps the existing fetchFromGateway transport; it does not
@@ -68,7 +72,7 @@ export class GatewayEntityDatasource implements Datasource {
     const params = new URLSearchParams({ limit: String(limit) });
     if (req.search) params.set("q", req.search);
     const path = `${entityPath}?${params.toString()}`;
-    const rows = await fetchFromGateway<Array<Record<string, unknown>>>(this.opts, path);
+    const rows = await fetchFromGateway<Array<Record<string, unknown>>>(withSignal(this.opts, req.signal), path);
     return rowsToFrame(Array.isArray(rows) ? rows : []);
   }
 
@@ -80,7 +84,7 @@ export class GatewayEntityDatasource implements Datasource {
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     const points = await fetchFromGateway<Array<{ bucket: string; count: number }>>(
-      this.opts,
+      withSignal(this.opts, req.signal),
       `/v1/decisions/timeseries?${params.toString()}`,
     );
     const rows = Array.isArray(points) ? points : [];

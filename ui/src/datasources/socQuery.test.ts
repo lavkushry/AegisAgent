@@ -115,6 +115,28 @@ describe("SocQueryDatasource", () => {
     expect(frame.length).toBe(1);
   });
 
+  it("propagates abort signals to structured query and decisions fallback requests", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 404, statusText: "Not Found" }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: "decision-1", decision: "deny" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new SocQueryDatasource(options).query({
+      ...request,
+      signal: controller.signal,
+    });
+
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[1][1]?.signal).toBe(controller.signal);
+  });
+
   it("sends first-class ASE filters without falling back to decisions", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ rows: [{ event_type: "egress_denied" }] }), {

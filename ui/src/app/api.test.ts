@@ -68,6 +68,16 @@ describe("gateway transport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("passes abort signals through the central gateway transport", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchFromGateway({ ...options, signal: controller.signal }, "/v1/stats");
+
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+
   it.each([
     ["approve", approveApproval],
     ["reject", rejectApproval],

@@ -27,6 +27,10 @@ const EVENT_FIELDS: ReadonlyArray<FieldDescriptor> = [
   { name: "trace_id", type: "string", facetable: true },
 ];
 
+function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
+  return signal ? { ...opts, signal } : opts;
+}
+
 interface SocQueryResponse {
   rows?: Array<Record<string, unknown>>;
   fields?: ReadonlyArray<Field>;
@@ -98,7 +102,7 @@ export class SocQueryDatasource implements Datasource {
 
     try {
       const response = await fetchFromGateway<SocQueryResponse | Array<Record<string, unknown>>>(
-        this.opts,
+        withSignal(this.opts, req.signal),
         "/v1/soc/query",
         "POST",
         body,
@@ -142,7 +146,7 @@ export class SocQueryDatasource implements Datasource {
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     const rows = await fetchFromGateway<Array<Record<string, unknown>>>(
-      this.opts,
+      withSignal(this.opts, req.signal),
       `/v1/decisions?${params.toString()}`,
     );
     return rowsToFrame(Array.isArray(rows) ? rows : []);

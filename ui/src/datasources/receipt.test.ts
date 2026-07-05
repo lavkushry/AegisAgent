@@ -40,6 +40,21 @@ describe("ReceiptDatasource", () => {
     });
   });
 
+  it("propagates query abort signals to receipt list reads", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(receipts));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new ReceiptDatasource(options).query({
+      entity: "receipt",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+      signal: controller.signal,
+    });
+
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+
   it("falls back to caller-supplied chain verification when stored-range verification is unavailable", async () => {
     const fetchMock = vi
       .fn()
@@ -57,6 +72,7 @@ describe("ReceiptDatasource", () => {
   });
 
   it("falls back to explicit per-receipt verification only when both range endpoints are unavailable", async () => {
+    const controller = new AbortController();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({}, 404))
@@ -65,16 +81,20 @@ describe("ReceiptDatasource", () => {
       .mockResolvedValueOnce(jsonResponse({ verified: false, error: "hash mismatch" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ReceiptDatasource(options).verifyRange(receipts);
+    const result = await new ReceiptDatasource(options).verifyRange(receipts, controller.signal);
 
     expect(result).toMatchObject({ status: "failed", ok: false, brokenAtRow: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[2][0]).toBe(
       "http://127.0.0.1:8080/v1/receipts/receipt-1/verify",
     );
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[1][1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[2][1]?.signal).toBe(controller.signal);
   });
 
   it("downloads authoritative evidence from the gateway compliance endpoint", async () => {
+    const controller = new AbortController();
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Blob(["zip"]), {
         status: 200,
@@ -83,11 +103,12 @@ describe("ReceiptDatasource", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const blob = await new ReceiptDatasource(options).exportEvidencePack();
+    const blob = await new ReceiptDatasource(options).exportEvidencePack({}, controller.signal);
 
     expect(blob.type).toBe("application/zip");
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://127.0.0.1:8080/v1/compliance/evidence-pack",
     );
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
   });
 });
