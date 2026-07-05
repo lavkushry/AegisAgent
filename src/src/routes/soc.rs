@@ -1835,9 +1835,7 @@ fn soc_stream_sse(
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     let notice = json!({ "type": "events_dropped", "count": n });
-                    let sse_event = Event::default()
-                        .event("notice")
-                        .data(notice.to_string());
+                    let sse_event = Event::default().event("notice").data(notice.to_string());
                     if tx.send(sse_event).await.is_err() {
                         break;
                     }
@@ -1862,13 +1860,9 @@ pub async fn soc_stream(
     TenantId(tenant_id): TenantId,
     Query(query): Query<SocStreamQuery>,
 ) -> impl IntoResponse {
-    Sse::new(soc_stream_sse(
-        state.events.clone(),
-        tenant_id,
-        query.topic,
-    ))
-    .keep_alive(KeepAlive::default())
-    .into_response()
+    Sse::new(soc_stream_sse(state.events.clone(), tenant_id, query.topic))
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 #[cfg(test)]
@@ -3736,9 +3730,11 @@ mod tests {
             }
         }
 
-        state
-            .events
-            .emit(make_event("tenant_b", "evt_other_tenant", "require_approval"));
+        state.events.emit(make_event(
+            "tenant_b",
+            "evt_other_tenant",
+            "require_approval",
+        ));
         state
             .events
             .emit(make_event(&tenant_id, "evt_approval", "require_approval"));
@@ -3752,6 +3748,8 @@ mod tests {
         assert!(text.contains("event:approval") || text.contains("event: approval"));
         assert!(text.contains("evt_approval"));
         assert!(!text.contains("evt_other_tenant"));
-        assert!(text.contains("\"topic\":\"approval\"") || text.contains("\"topic\": \"approval\""));
+        assert!(
+            text.contains("\"topic\":\"approval\"") || text.contains("\"topic\": \"approval\"")
+        );
     }
 }

@@ -10,8 +10,7 @@ use utoipa::OpenApi;
 use super::openapi::ApiDoc;
 
 /// Health/probe routes registered outside the `/v1` nest but documented in OpenAPI.
-const TOP_LEVEL_DOCUMENTED_PATHS: &[&str] =
-    &["/health", "/livez", "/readyz", "/startupz"];
+const TOP_LEVEL_DOCUMENTED_PATHS: &[&str] = &["/health", "/livez", "/readyz", "/startupz"];
 
 /// Path templates from `api_routes()` in `main.rs`, parsed at compile time so
 /// the parity test always diffs against the same source the binary uses.
@@ -72,22 +71,13 @@ pub(crate) fn registered_axum_path_templates() -> BTreeSet<String> {
         .into_iter()
         .map(|p| format!("/v1{p}"))
         .collect::<BTreeSet<_>>();
-    paths.extend(
-        TOP_LEVEL_DOCUMENTED_PATHS
-            .iter()
-            .map(|p| (*p).to_string()),
-    );
+    paths.extend(TOP_LEVEL_DOCUMENTED_PATHS.iter().map(|p| (*p).to_string()));
     paths
 }
 
 /// Path templates declared in `ApiDoc::openapi()`.
 pub(crate) fn openapi_path_templates() -> BTreeSet<String> {
-    ApiDoc::openapi()
-        .paths
-        .paths
-        .keys()
-        .cloned()
-        .collect()
+    ApiDoc::openapi().paths.paths.keys().cloned().collect()
 }
 
 #[cfg(test)]

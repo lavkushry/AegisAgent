@@ -206,9 +206,7 @@ pub(crate) async fn authorize_action_impl(
         }
     };
 
-    if let Some(resp) =
-        authorize_auth_failure_guard(&state, &client_addr, &runtime_tenant_id)
-    {
+    if let Some(resp) = authorize_auth_failure_guard(&state, &client_addr, &runtime_tenant_id) {
         return resp;
     }
 
@@ -236,7 +234,7 @@ pub(crate) async fn authorize_action_impl(
             Ok(None) => {
                 record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
                 return StatusError::unauthorized("Unrecognized mTLS client certificate")
-                    .into_response()
+                    .into_response();
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
@@ -265,7 +263,7 @@ pub(crate) async fn authorize_action_impl(
             Ok(None) => {
                 record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
                 return StatusError::unauthorized("Invalid or quarantined agent token")
-                    .into_response()
+                    .into_response();
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
@@ -1726,8 +1724,13 @@ mod tests {
             format!("Bearer {}", agent_token).parse().unwrap(),
         );
 
-        let response = authorize_action_impl(state, headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state,
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1807,8 +1810,13 @@ mod tests {
 
         state.storage.get_pool().close().await;
 
-        let response = authorize_action_impl(state, headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state,
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1832,8 +1840,13 @@ mod tests {
         let request = mcp_authorize_request("filesystem", "read_file");
         let headers = agent_headers(&agent_token, &tenant_id);
 
-        let response = authorize_action_impl(state, headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state,
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         // Verify Retry-After header
         let retry_after = response
@@ -2141,15 +2154,25 @@ mod tests {
         let headers = agent_headers(&agent_token, &tenant_id);
 
         // First request is allowed through rate limiter
-        let resp1 = authorize_action_impl(state.clone(), headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let resp1 = authorize_action_impl(
+            state.clone(),
+            headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         // Since we don't have "mcp:server:tool" registered/approved in the database for this test setup,
         // it will be denied (403 or similar) or return require_approval/etc., but NOT 429!
         assert_ne!(resp1.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Immediate second request is blocked by rate limiter (429)
-        let resp2 = authorize_action_impl(state.clone(), headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let resp2 = authorize_action_impl(
+            state.clone(),
+            headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Now test quota
@@ -2190,13 +2213,23 @@ mod tests {
         });
 
         // First request is allowed through quota
-        let resp3 = authorize_action_impl(state_quota.clone(), headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let resp3 = authorize_action_impl(
+            state_quota.clone(),
+            headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_ne!(resp3.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Second request is blocked by quota (429)
-        let resp4 = authorize_action_impl(state_quota.clone(), headers.clone(),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let resp4 = authorize_action_impl(
+            state_quota.clone(),
+            headers.clone(),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(resp4.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
@@ -2893,8 +2926,13 @@ mod tests {
 
         let request = mcp_authorize_request("github", "push_commit");
         let headers = agent_headers(&agent_token, &tenant_id);
-        let response = authorize_action_impl(state, headers,
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state,
+            headers,
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(
             response.status(),
@@ -3884,12 +3922,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(
-            json["message"]
-                .as_str()
-                .unwrap_or("")
-                .contains("Invalid callback URL")
-        );
+        assert!(json["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Invalid callback URL"));
     }
 
     /// #0120: the `risk_score` returned by `/v1/authorize` matches the
@@ -4107,13 +4143,23 @@ mod tests {
         request.timestamp = Some(Utc::now());
 
         // First request succeeds normally.
-        let first = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let first = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(first.status(), StatusCode::OK);
 
         // Replaying the exact same nonce is rejected.
-        let second = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let second = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(second.status(), StatusCode::CONFLICT);
 
         let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
@@ -4132,8 +4178,13 @@ mod tests {
         request.nonce = Some("nonce-stale-1".to_string());
         request.timestamp = Some(Utc::now() - Duration::seconds(301));
 
-        let response = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -4155,12 +4206,22 @@ mod tests {
         request2.nonce = Some("nonce-two".to_string());
         request2.timestamp = Some(Utc::now());
 
-        let first = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request1).unwrap()), test_conn_info()).await;
+        let first = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request1).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(first.status(), StatusCode::OK);
 
-        let second = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request2).unwrap()), test_conn_info()).await;
+        let second = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request2).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(second.status(), StatusCode::OK);
     }
 
@@ -4206,7 +4267,8 @@ mod tests {
         let mut headers = agent_headers(&agent_token, &tenant_id);
         headers.insert("x-aegis-request-signature", sig.parse().unwrap());
 
-        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+            .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -4223,7 +4285,8 @@ mod tests {
         // No X-Aegis-Request-Signature header
         let headers = agent_headers(&agent_token, &tenant_id);
 
-        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+            .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -4245,7 +4308,8 @@ mod tests {
         let forged = signing_header("wrong-key", &body);
         headers.insert("x-aegis-request-signature", forged.parse().unwrap());
 
-        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+            .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -4271,7 +4335,8 @@ mod tests {
         let mut headers = agent_headers(&agent_token, &tenant_id);
         headers.insert("x-aegis-request-signature", sig.parse().unwrap());
 
-        let resp = authorize_action_impl(state, headers, tampered_body, test_conn_info()).await
+        let resp = authorize_action_impl(state, headers, tampered_body, test_conn_info())
+            .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -4289,7 +4354,8 @@ mod tests {
 
         // No signature header — should still pass since agent has no signing_key
         let headers = agent_headers(&agent_token, &tenant_id);
-        let resp = authorize_action_impl(state, headers, body, test_conn_info()).await
+        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+            .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -4897,8 +4963,13 @@ mod tests {
         let mut req = mcp_authorize_request("filesystem", "read_file");
         req.agent.environment = "staging".to_string();
 
-        let response = authorize_action_impl(state, agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state,
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -5044,8 +5115,13 @@ mod tests {
             .unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let response = authorize_action_impl(state, agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state,
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -5119,8 +5195,13 @@ mod tests {
         // quarantine_canary / trigger → ToolAction::"quarantine_canary_trigger"
         // matches the @decision("quarantine") canary policy in policies.cedar.
         let req = mcp_authorize_request("quarantine_canary", "trigger");
-        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let resp = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -5157,13 +5238,23 @@ mod tests {
 
         // First call: trigger quarantine.
         let req = mcp_authorize_request("quarantine_canary", "trigger");
-        let _ = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let _ = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         // Second call: any tool — must be 401 (agent no longer resolvable).
         let req2 = mcp_authorize_request("filesystem", "read_file");
-        let resp2 = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req2).unwrap()), test_conn_info()).await;
+        let resp2 = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req2).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
     }
@@ -5185,8 +5276,13 @@ mod tests {
         state.storage.update_agent(&agent).await.unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(state.clone(), mtls_headers("agent-cert-007", &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let resp = authorize_action_impl(
+            state.clone(),
+            mtls_headers("agent-cert-007", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(
             resp.status(),
@@ -5203,8 +5299,13 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("mtls_cn_unrecognized").await;
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(state.clone(), mtls_headers("never-bound-cn", &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let resp = authorize_action_impl(
+            state.clone(),
+            mtls_headers("never-bound-cn", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
@@ -5226,8 +5327,13 @@ mod tests {
         state.storage.update_agent(&agent).await.unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(state.clone(), mtls_headers("agent-cert-quarantined", &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let resp = authorize_action_impl(
+            state.clone(),
+            mtls_headers("agent-cert-quarantined", &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
@@ -5240,8 +5346,13 @@ mod tests {
         let (state, tenant_id, agent_token) = setup_state("mtls_cn_fallback").await;
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let resp = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -5278,8 +5389,13 @@ mod tests {
 
         // Old token now rejected.
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_old = authorize_action_impl(state.clone(), agent_headers(&old_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let resp_old = authorize_action_impl(
+            state.clone(),
+            agent_headers(&old_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(resp_old.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -5320,8 +5436,13 @@ mod tests {
 
         // Original token still works.
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_after = authorize_action_impl(state.clone(), agent_headers(&token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&req).unwrap()), test_conn_info()).await;
+        let resp_after = authorize_action_impl(
+            state.clone(),
+            agent_headers(&token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(resp_after.status(), StatusCode::OK);
 
         let events = state
@@ -5395,8 +5516,13 @@ mod tests {
             }
         });
 
-        let resp_canonical = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&canonical_payload).unwrap()), test_conn_info()).await;
+        let resp_canonical = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&canonical_payload).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(resp_canonical.status(), StatusCode::OK);
         let body_canonical: serde_json::Value = serde_json::from_slice(
             &to_bytes(resp_canonical.into_body(), usize::MAX)
@@ -5406,8 +5532,13 @@ mod tests {
         .unwrap();
         let decision_canonical = body_canonical["decision"].as_str().unwrap().to_string();
 
-        let resp_mixed = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&mixed_case_payload).unwrap()), test_conn_info()).await;
+        let resp_mixed = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&mixed_case_payload).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(resp_mixed.status(), StatusCode::OK);
         let body_mixed: serde_json::Value =
             serde_json::from_slice(&to_bytes(resp_mixed.into_body(), usize::MAX).await.unwrap())
@@ -5444,8 +5575,13 @@ mod tests {
             }
         });
 
-        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&payload).unwrap()), test_conn_info()).await;
+        let resp = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&payload).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value =
@@ -5483,8 +5619,13 @@ mod tests {
             }
         });
 
-        let resp = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&payload).unwrap()), test_conn_info()).await;
+        let resp = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&payload).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value =
@@ -6165,8 +6306,13 @@ mod tests {
         let mut request = mcp_authorize_request("filesystem", "read_file");
         request.request_id = Some("perm-denied-with-request-id".to_string());
 
-        let response = authorize_action_impl(state.clone(), agent_headers(&agent_token, &tenant_id),
-            Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+        let response = authorize_action_impl(
+            state.clone(),
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -6688,8 +6834,13 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let _permit = semaphore.acquire().await.unwrap();
                 let request = mcp_authorize_request("filesystem", "read_file");
-                let response = authorize_action_impl(state, agent_headers(&agent_token, &tenant_id),
-                    Bytes::from(serde_json::to_vec(&request).unwrap()), test_conn_info()).await;
+                let response = authorize_action_impl(
+                    state,
+                    agent_headers(&agent_token, &tenant_id),
+                    Bytes::from(serde_json::to_vec(&request).unwrap()),
+                    test_conn_info(),
+                )
+                .await;
                 let status = response.status();
                 let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
                 let parsed: AuthorizeResponse = serde_json::from_slice(&body)

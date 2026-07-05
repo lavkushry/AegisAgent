@@ -1660,10 +1660,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(3600);
-    let auth_failure_tracker = routes::ApprovalAttemptTracker::new(
-        auth_failure_limit,
-        auth_failure_window_secs,
-    );
+    let auth_failure_tracker =
+        routes::ApprovalAttemptTracker::new(auth_failure_limit, auth_failure_window_secs);
 
     // Read-through cache for registered-action metadata (#899). Bounded LRU;
     // AEGIS_SKILL_CACHE_CAPACITY == 0 disables it.

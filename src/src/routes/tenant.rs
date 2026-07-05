@@ -1036,8 +1036,13 @@ mod tests {
             axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
         );
 
-        let _ = authorize_action_impl(state.clone(), headers,
-            Bytes::from(serde_json::to_vec(&auth_payload).unwrap()), test_conn_info()).await;
+        let _ = authorize_action_impl(
+            state.clone(),
+            headers,
+            Bytes::from(serde_json::to_vec(&auth_payload).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         // Query stats
         let stats_resp = get_tenant_stats(State(state.clone()), TenantId(tenant_id.clone()))
@@ -1093,8 +1098,13 @@ mod tests {
             axum::http::HeaderValue::from_str(&tenant_id).unwrap(),
         );
 
-        let _ = authorize_action_impl(state.clone(), headers,
-            Bytes::from(serde_json::to_vec(&auth_payload).unwrap()), test_conn_info()).await;
+        let _ = authorize_action_impl(
+            state.clone(),
+            headers,
+            Bytes::from(serde_json::to_vec(&auth_payload).unwrap()),
+            test_conn_info(),
+        )
+        .await;
 
         let resp = get_db_stats(State(state.clone())).await.into_response();
         assert_eq!(resp.status(), StatusCode::OK);
