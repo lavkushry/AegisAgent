@@ -6,7 +6,7 @@
 ## Overview
 This skill teaches the core architecture, coding conventions, and workflows used in AegisAgent.
 AegisAgent follows a **Qdrant-inspired layered Cargo workspace** with dual-protocol serving
-(REST via Axum + gRPC via tonic). **Read `docs/ARCHITECTURE.md` first** — it is the source of truth.
+(REST via Axum + gRPC via tonic). **Read `docs/architecture.md` first** — it is the source of truth.
 
 ## Architecture (Qdrant-Inspired)
 

@@ -8,7 +8,7 @@ globs:
 
 This skill provides AI developer agents with a step-by-step tour of the AegisAgent codebase structure.
 
-> **READ `docs/ARCHITECTURE.md` FIRST** — it defines all mandatory patterns.
+> **READ `docs/architecture.md` FIRST** — it defines all mandatory patterns.
 
 ---
 
@@ -18,7 +18,7 @@ This skill provides AI developer agents with a step-by-step tour of the AegisAge
 AegisAgent/
 ├── .claude/              # Runtime rules & project metadata
 ├── docs/
-│   ├── ARCHITECTURE.md   # *** MANDATORY — all patterns defined here ***
+│   ├── architecture.md   # *** MANDATORY — all patterns defined here ***
 │   └── ...
 ├── config/
 │   └── config.yaml       # YAML config (Qdrant pattern, rest_port + grpc_port)
@@ -59,7 +59,7 @@ AegisAgent/
 
 When exploring the codebase, study modules in this order:
 
-1. **Architecture Rules (`docs/ARCHITECTURE.md`):**
+1. **Architecture Rules (`docs/architecture.md`):**
    Read this FIRST. It defines the Qdrant-inspired workspace layout, dependency rules,
    trait-based storage, dual-protocol (REST + gRPC) pattern, and handler conventions.
 

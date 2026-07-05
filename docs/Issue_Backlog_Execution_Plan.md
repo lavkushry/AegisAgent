@@ -55,7 +55,7 @@ Key gaps:
 - Open UI roadmap issues still represent substantial productionization work.
 - Some backend dependency issues may already be partially or fully implemented and need verification/regression tests before closure.
 - OpenAPI parity has no automated check.
-- `docs/ARCHITECTURE.md` and `docs/architecture.md` are both tracked, creating case-sensitive/case-insensitive checkout risk.
+- Resolved in #1640: only `docs/architecture.md` remains tracked (duplicate case-only path removed).
 
 ## Dependency graph / waves
 
@@ -152,7 +152,7 @@ Wave 5: P3/future/docs/epics
 | 41 | #1633 | [UI/U6] Build Analytics dashboards for SOC metrics and product success metrics | UI / analytics | P2 | #1611, #1623 | dashboard schemas/panels | dashboard render/drilldown tests | M | Low | No |
 | 42 | #1634 | [UI/U6] Build in-app dashboard editor as capstone, reusing DashboardSchema | UI / dashboards | P2 | dashboard framework stable | dashboard editor components, backend deps | schema validation/editor tests | L | Medium | Maybe |
 | 43 | #1639 | [UI/Quality] Add mock data mode / Storybook-like component harness for SOC panels | UI / quality | P2 | design system stable | UI harness route/components | harness guard/component states | M | Low | No |
-| 44 | #1640 | [Cleanup] docs/ARCHITECTURE.md and docs/architecture.md are two git-tracked files differing only by case | docs / CI | P3 | CI green | docs paths, links, possibly git mv | link checks / docs build | S | Medium | Yes |
+| 44 | #1640 | [Cleanup] duplicate `docs/architecture.md` case-collision (resolved — single tracked path) | docs / CI | P3 | CI green | docs paths, links, possibly git mv | link checks / docs build | S | Medium | Yes |
 | 45 | #1210 | [PROD-005] Add horizontal scaling support (shared state) | infra | P3 | storage/control abstractions | storage/config/deploy docs | multi-instance tests if feasible | L | High | Yes |
 | 46 | #1394 | [FEATURE] Build Policy Advisor Agent (Recommend Policy Changes) | policy / SOC automation | P3 | #1392 | `lib/soc/*`, policy docs/UI | recommendation advisory tests | L / split | Medium | Yes |
 | 47 | #1395 | [FEATURE] Build Threat Hunter Agent (Proactive Anomaly Search) | SOC automation | P3 | #1392 | `lib/soc/*`, query APIs/UI | non-enforcement and sandbox tests | L / split | Medium | Yes |
