@@ -302,6 +302,200 @@ where
     }
 }
 
+/// One pending receipt queued for batched hash-chain append (#904).
+#[derive(Clone, Debug)]
+pub struct PendingReceiptAppend {
+    pub tenant_id: String,
+    pub record: ActionReceiptRecord,
+}
+
+/// Apply head linkage, `receipt_hash`, and optional Ed25519 signature metadata.
+pub fn finalize_receipt_link(
+    record: &mut ActionReceiptRecord,
+    prev_receipt_hash: String,
+) -> String {
+    record.prev_receipt_hash = prev_receipt_hash;
+    record.receipt_hash = compute_receipt_hash(record);
+    if let Some(signer) = aegis_common::hash::global_signer() {
+        record.signature = Some(signer.sign_hash(&record.receipt_hash));
+        record.signer_public_key = Some(signer.public_key_hex());
+        record.signer_key_id = signer.key_id().map(str::to_string);
+    }
+    record.receipt_hash.clone()
+}
+
+fn chain_receipts_from_head(records: &mut [ActionReceiptRecord], head: String) {
+    let mut prev = head;
+    for record in records.iter_mut() {
+        prev = finalize_receipt_link(record, prev);
+    }
+}
+
+fn group_pending_by_tenant(
+    pending: &[PendingReceiptAppend],
+) -> Vec<(String, Vec<ActionReceiptRecord>)> {
+    use std::collections::HashMap;
+    let mut order = Vec::new();
+    let mut groups: HashMap<String, Vec<ActionReceiptRecord>> = HashMap::new();
+    for item in pending {
+        if !groups.contains_key(&item.tenant_id) {
+            order.push(item.tenant_id.clone());
+        }
+        groups
+            .entry(item.tenant_id.clone())
+            .or_default()
+            .push(item.record.clone());
+    }
+    order
+        .into_iter()
+        .map(|tenant_id| (tenant_id.clone(), groups.remove(&tenant_id).unwrap()))
+        .collect()
+}
+
+async fn insert_action_receipt_rows_sqlite(
+    conn: &mut sqlx::SqliteConnection,
+    records: &[ActionReceiptRecord],
+) -> Result<(), sqlx::Error> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id) ",
+    );
+    qb.push_values(records, |mut b, record| {
+        b.push_bind(record.id.clone())
+            .push_bind(record.tenant_id.clone())
+            .push_bind(record.decision_id.clone())
+            .push_bind(record.ts.clone())
+            .push_bind(record.agent_id.clone())
+            .push_bind(record.user_id.clone())
+            .push_bind(record.run_id.clone())
+            .push_bind(record.trace_id.clone())
+            .push_bind(record.tool.clone())
+            .push_bind(record.action.clone())
+            .push_bind(record.resource.clone())
+            .push_bind(record.source_trust.clone())
+            .push_bind(record.decision.clone())
+            .push_bind(record.approver.clone())
+            .push_bind(record.action_hash.clone())
+            .push_bind(record.prev_receipt_hash.clone())
+            .push_bind(record.receipt_hash.clone())
+            .push_bind(record.canon_version.clone())
+            .push_bind(record.signature.clone())
+            .push_bind(record.signer_public_key.clone())
+            .push_bind(record.signer_key_id.clone());
+    });
+    qb.build().execute(&mut *conn).await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+async fn insert_action_receipt_rows_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    records: &[ActionReceiptRecord],
+) -> Result<(), sqlx::Error> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "INSERT INTO action_receipts (id, tenant_id, decision_id, ts, agent_id, user_id, run_id, trace_id, tool, action, resource, source_trust, decision, approver, action_hash, prev_receipt_hash, receipt_hash, canon_version, signature, signer_public_key, signer_key_id) ",
+    );
+    qb.push_values(records, |mut b, record| {
+        b.push_bind(record.id.clone())
+            .push_bind(record.tenant_id.clone())
+            .push_bind(record.decision_id.clone())
+            .push_bind(record.ts.clone())
+            .push_bind(record.agent_id.clone())
+            .push_bind(record.user_id.clone())
+            .push_bind(record.run_id.clone())
+            .push_bind(record.trace_id.clone())
+            .push_bind(record.tool.clone())
+            .push_bind(record.action.clone())
+            .push_bind(record.resource.clone())
+            .push_bind(record.source_trust.clone())
+            .push_bind(record.decision.clone())
+            .push_bind(record.approver.clone())
+            .push_bind(record.action_hash.clone())
+            .push_bind(record.prev_receipt_hash.clone())
+            .push_bind(record.receipt_hash.clone())
+            .push_bind(record.canon_version.clone())
+            .push_bind(record.signature.clone())
+            .push_bind(record.signer_public_key.clone())
+            .push_bind(record.signer_key_id.clone());
+    });
+    qb.build().execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Atomically append multiple receipts in one transaction (#904).
+///
+/// Receipts are grouped per `tenant_id` (preserving enqueue order within each
+/// tenant), each group is chained from the tenant's current DB head, and all
+/// groups are committed under a single `BEGIN IMMEDIATE` writer lock so
+/// concurrent single-row appends cannot fork a chain mid-batch.
+pub async fn append_action_receipts_batch_atomic(
+    pool: &DbPool,
+    pending: &[PendingReceiptAppend],
+) -> Result<(), sqlx::Error> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let groups = group_pending_by_tenant(pending);
+
+    match pool {
+        DbPool::Sqlite(p) => {
+            let mut conn = p.acquire().await?;
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+            async fn rollback(conn: &mut sqlx::SqliteConnection) {
+                let _ = sqlx::query("ROLLBACK").execute(conn).await;
+            }
+
+            for (tenant_id, mut records) in groups {
+                let head = sqlx::query_as::<_, (String,)>(
+                    "SELECT receipt_hash FROM action_receipts WHERE tenant_id = ? ORDER BY rowid DESC LIMIT 1",
+                )
+                .bind(&tenant_id)
+                .fetch_optional(&mut *conn)
+                .await;
+                let head = match head {
+                    Ok(h) => h,
+                    Err(e) => {
+                        rollback(&mut conn).await;
+                        return Err(e);
+                    }
+                };
+                let prev = head.map(|(h,)| h).unwrap_or_default();
+                chain_receipts_from_head(&mut records, prev);
+                if let Err(e) = insert_action_receipt_rows_sqlite(&mut conn, &records).await {
+                    rollback(&mut conn).await;
+                    return Err(e);
+                }
+            }
+
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            Ok(())
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let mut tx = p.begin().await?;
+            for (tenant_id, mut records) in groups {
+                let head: Option<(String,)> = sqlx::query_as(
+                    "SELECT receipt_hash FROM action_receipts WHERE tenant_id = $1 ORDER BY rowid DESC LIMIT 1",
+                )
+                .bind(&tenant_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let prev = head.map(|(h,)| h).unwrap_or_default();
+                chain_receipts_from_head(&mut records, prev);
+                insert_action_receipt_rows_postgres(&mut tx, &records).await?;
+            }
+            tx.commit().await?;
+            Ok(())
+        }
+    }
+}
+
 pub async fn get_action_receipt_by_id(
     pool: &DbPool,
     tenant_id: &str,
@@ -357,6 +551,84 @@ mod tests {
     /// `decisions::list_decisions_cursor_no_false_next_cursor_at_exact_boundary`
     /// for the full rationale. Two receipts exist; requesting `limit=2` must
     /// return both with `next_cursor: None`.
+    /// #904: batched append preserves per-tenant hash-chain order.
+    #[tokio::test]
+    async fn append_action_receipts_batch_atomic_chains_multiple_per_tenant() {
+        let pool = setup_pool("receipts_batch_chain").await;
+        register_tenant(&pool, "tenant_a", "Tenant A", "developer")
+            .await
+            .unwrap();
+
+        append_action_receipt_atomic(&pool, "tenant_a", |prev| bare_receipt("tenant_a", prev))
+            .await
+            .unwrap();
+
+        let pending = vec![
+            PendingReceiptAppend {
+                tenant_id: "tenant_a".to_string(),
+                record: bare_receipt("tenant_a", String::new()),
+            },
+            PendingReceiptAppend {
+                tenant_id: "tenant_a".to_string(),
+                record: bare_receipt("tenant_a", String::new()),
+            },
+        ];
+        append_action_receipts_batch_atomic(&pool, &pending)
+            .await
+            .unwrap();
+
+        let chain = list_action_receipts_chain_order(&pool, "tenant_a")
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[0].prev_receipt_hash, "");
+        for i in 1..chain.len() {
+            assert_eq!(
+                chain[i].prev_receipt_hash,
+                chain[i - 1].receipt_hash,
+                "chain link broken at index {i}"
+            );
+        }
+    }
+
+    /// #904: interleaved tenants in one batch each get an independent chain.
+    #[tokio::test]
+    async fn append_action_receipts_batch_atomic_interleaved_tenants() {
+        let pool = setup_pool("receipts_batch_interleaved").await;
+        for (id, name) in [("tenant_a", "Tenant A"), ("tenant_b", "Tenant B")] {
+            register_tenant(&pool, id, name, "developer").await.unwrap();
+        }
+
+        let pending = vec![
+            PendingReceiptAppend {
+                tenant_id: "tenant_a".to_string(),
+                record: bare_receipt("tenant_a", String::new()),
+            },
+            PendingReceiptAppend {
+                tenant_id: "tenant_b".to_string(),
+                record: bare_receipt("tenant_b", String::new()),
+            },
+            PendingReceiptAppend {
+                tenant_id: "tenant_a".to_string(),
+                record: bare_receipt("tenant_a", String::new()),
+            },
+        ];
+        append_action_receipts_batch_atomic(&pool, &pending)
+            .await
+            .unwrap();
+
+        for tenant_id in ["tenant_a", "tenant_b"] {
+            let chain = list_action_receipts_chain_order(&pool, tenant_id)
+                .await
+                .unwrap();
+            assert_eq!(chain.len(), if tenant_id == "tenant_a" { 2 } else { 1 });
+            assert_eq!(chain[0].prev_receipt_hash, "");
+            for i in 1..chain.len() {
+                assert_eq!(chain[i].prev_receipt_hash, chain[i - 1].receipt_hash);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn list_action_receipts_cursor_no_false_next_cursor_at_exact_boundary() {
         let pool = setup_pool("receipts_cursor_boundary").await;
