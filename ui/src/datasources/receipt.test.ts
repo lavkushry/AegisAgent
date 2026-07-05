@@ -40,6 +40,44 @@ describe("ReceiptDatasource", () => {
     });
   });
 
+  it("surfaces X-Next-Cursor pagination from receipt list responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(receipts.slice(0, 1)), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "x-next-cursor": "cursor-99",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const frame = await new ReceiptDatasource(options).query({
+      entity: "receipt",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+      limit: 1,
+    });
+
+    expect(frame.length).toBe(1);
+    expect(frame.meta?.cursor).toBe("cursor-99");
+    expect(fetchMock.mock.calls[0][0]).toContain("/v1/receipts?limit=1");
+  });
+
+  it("forwards cursor tokens when requesting subsequent receipt pages", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(receipts));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new ReceiptDatasource(options).query({
+      entity: "receipt",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+      cursor: "cursor-42",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toContain("cursor=cursor-42");
+  });
+
   it("propagates query abort signals to receipt list reads", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(receipts));

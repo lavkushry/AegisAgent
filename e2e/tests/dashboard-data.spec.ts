@@ -50,11 +50,11 @@ test.describe("production SOC console data workflows", () => {
     await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey);
     await openConfiguredConsole(page);
     await page.getByRole("button", { name: "Receipts Log" }).click();
-    await expect(page.getByText("Cryptographic Receipts Integrity Log")).toBeVisible();
-    const link = page.getByText(/link:/).first();
-    await expect(link).toBeVisible({ timeout: 10_000 });
-    await link.locator("../..").click();
-    await expect(page.getByRole("button", { name: "Verify Signature Link" }).first()).toBeVisible();
+    await expect(page.getByText("Cryptographic receipt chain")).toBeVisible();
+    await expect(page.getByText("Chain not yet verified")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Verify range" })).toBeVisible();
+    await expect(page.getByText(/link:/)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Verify receipt" }).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("ApprovalCard shows canonical bytes and denies viewer actions", async ({ page, request, baseURL }) => {
