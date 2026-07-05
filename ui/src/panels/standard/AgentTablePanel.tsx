@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Lock, Unlock } from "lucide-react";
 import { useAppStore } from "@/app/store";
@@ -9,6 +9,7 @@ import { freezeAgent, unfreezeAgent } from "@/app/api";
 import { frameRows } from "@/datasources/frame";
 import StatusBadge from "@/components/security/StatusBadge";
 import { ConfirmDialog } from "@/components/primitives";
+import VirtualTable, { type VirtualTableColumn } from "@/components/primitives/VirtualTable";
 import type { PanelProps } from "../types";
 
 interface AgentRow {
@@ -26,8 +27,7 @@ type PendingAgentAction = {
 
 /**
  * Fleet inventory panel with role-gated Active Response (freeze / restore).
- * Reads agent rows from the DataFrame; writes go through the api.ts control
- * endpoints. The gateway enforces authorization server-side regardless.
+ * Virtualized for large tenant fleets (#1317); writes go through api.ts.
  */
 export default function AgentTablePanel({ data }: PanelProps) {
   const { gatewayUrl, bearerToken, activeTenant } = useAppStore();
@@ -77,69 +77,105 @@ export default function AgentTablePanel({ data }: PanelProps) {
     }
   };
 
+  const columns = useMemo<VirtualTableColumn<AgentRow>[]>(
+    () => [
+      {
+        key: "id",
+        header: "Agent key",
+        headerClassName: "py-2",
+        cellClassName: "py-2 font-mono text-[var(--brand)] font-bold",
+        cell: (agent) => agent.id,
+      },
+      {
+        key: "status",
+        header: "Status",
+        headerClassName: "py-2",
+        cellClassName: "py-2",
+        cell: (agent) => <StatusBadge status={agent.status} size="sm" />,
+      },
+      {
+        key: "risk_tier",
+        header: "Risk tier",
+        headerClassName: "py-2",
+        cellClassName: "py-2 font-semibold",
+        cell: (agent) => (
+          <span style={{ color: "var(--sev-high)" }}>{agent.risk_tier || "low"}</span>
+        ),
+      },
+      {
+        key: "environment",
+        header: "Environment",
+        headerClassName: "py-2",
+        cellClassName: "py-2 font-mono text-[var(--text-secondary)]",
+        cell: (agent) => agent.environment || "production",
+      },
+      {
+        key: "model",
+        header: "Model",
+        headerClassName: "py-2",
+        cellClassName: "py-2 text-[var(--text-primary)]",
+        cell: (agent) => agent.model || "N/A",
+      },
+      {
+        key: "actions",
+        header: "Active response",
+        headerClassName: "py-2 text-right",
+        cellClassName: "py-2 text-right",
+        cell: (agent) => {
+          const id = agent.id;
+          const isFrozen = agent.status === "frozen";
+          const revoked = agent.status === "revoked";
+          if (revoked) {
+            return <span className="text-[var(--text-muted)] italic">Revoked</span>;
+          }
+          return (
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                if (id) requestAgentAction(isFrozen ? "unfreeze" : "freeze", id);
+              }}
+              disabled={busy || !canRespond || !id}
+              title={canRespond ? undefined : "Requires analyst, approver, or admin role"}
+              className="inline-flex items-center gap-1 text-[11px] font-semibold border rounded-lg px-3 py-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              style={
+                isFrozen
+                  ? {
+                      color: "var(--state-verified)",
+                      borderColor: "color-mix(in oklab, var(--state-verified) 40%, transparent)",
+                    }
+                  : {
+                      color: "var(--state-pending)",
+                      borderColor: "color-mix(in oklab, var(--state-pending) 40%, transparent)",
+                    }
+              }
+            >
+              {isFrozen ? (
+                <>
+                  <Unlock size={12} /> Restore
+                </>
+              ) : (
+                <>
+                  <Lock size={12} /> Freeze
+                </>
+              )}
+            </button>
+          );
+        },
+      },
+    ],
+    [busy, canRespond],
+  );
+
   return (
-    <div className="overflow-auto custom-scrollbar h-full">
-      <table className="w-full text-left text-xs min-w-[680px]">
-        <thead>
-          <tr className="text-[var(--text-muted)] uppercase text-[10px] tracking-wider font-semibold border-b border-[var(--border-default)]">
-            <th className="py-2">Agent key</th>
-            <th className="py-2">Status</th>
-            <th className="py-2">Risk tier</th>
-            <th className="py-2">Environment</th>
-            <th className="py-2">Model</th>
-            <th className="py-2 text-right">Active response</th>
-          </tr>
-        </thead>
-        <tbody>
-          {agents.map((agent, i) => {
-            const id = agent.id;
-            const isFrozen = agent.status === "frozen";
-            const revoked = agent.status === "revoked";
-            return (
-              <tr
-                key={id ?? `agent-${i}`}
-                className="border-b border-[var(--border-default)] hover:bg-[var(--surface-elevated)]"
-                style={{ height: "var(--row-height, 28px)" }}
-              >
-                <td className="py-2 font-mono text-[var(--brand)] font-bold">{agent.id}</td>
-                <td className="py-2"><StatusBadge status={agent.status} size="sm" /></td>
-                <td className="py-2 font-semibold" style={{ color: "var(--sev-high)" }}>
-                  {agent.risk_tier || "low"}
-                </td>
-                <td className="py-2 font-mono text-[var(--text-secondary)]">{agent.environment || "production"}</td>
-                <td className="py-2 text-[var(--text-primary)]">{agent.model || "N/A"}</td>
-                <td className="py-2 text-right">
-                  {revoked ? (
-                    <span className="text-[var(--text-muted)] italic">Revoked</span>
-                  ) : (
-                    <button
-                      onClick={() => id && requestAgentAction(isFrozen ? "unfreeze" : "freeze", id)}
-                      disabled={busy || !canRespond || !id}
-                      title={canRespond ? undefined : "Requires analyst, approver, or admin role"}
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold border rounded-lg px-3 py-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                      style={
-                        isFrozen
-                          ? { color: "var(--state-verified)", borderColor: "color-mix(in oklab, var(--state-verified) 40%, transparent)" }
-                          : { color: "var(--state-pending)", borderColor: "color-mix(in oklab, var(--state-pending) 40%, transparent)" }
-                      }
-                    >
-                      {isFrozen ? (
-                        <>
-                          <Unlock size={12} /> Restore
-                        </>
-                      ) : (
-                        <>
-                          <Lock size={12} /> Freeze
-                        </>
-                      )}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="h-full">
+      <VirtualTable
+        rows={agents}
+        columns={columns}
+        getRowKey={(agent, index) => agent.id ?? `agent-${index}`}
+        tableClassName="w-full text-left text-xs min-w-[680px]"
+        maxHeight="100%"
+        rowClassName="border-b border-[var(--border-default)] hover:bg-[var(--surface-elevated)]"
+      />
       <ConfirmDialog
         open={pendingAction !== null}
         title={pendingAction?.kind === "freeze" ? "Freeze this agent?" : "Restore this frozen agent?"}

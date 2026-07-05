@@ -7,3 +7,5 @@ export { default as RedactedValue } from "./RedactedValue";
 export { EmptyState, ErrorState, LoadingSkeleton } from "./States";
 export { SectionHeader, StatCard } from "./Layout";
 export { default as TimeAgo } from "./TimeAgo";
+export { default as VirtualTable } from "./VirtualTable";
+export type { VirtualTableColumn, VirtualTableProps } from "./VirtualTable";
