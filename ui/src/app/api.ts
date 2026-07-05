@@ -23,6 +23,28 @@ export interface TenantStats {
   receipt_chain_verified?: boolean;
 }
 
+export interface TenantRecord {
+  id: string;
+  name: string;
+  plan: string;
+  created_at: string;
+  auto_respond_enabled?: boolean;
+  auto_rotate_token_on_leak_enabled?: boolean;
+}
+
+export interface RiskWeights {
+  environment_weight_mutating: number;
+  context_trust_penalty_trusted_internal_signed: number;
+  context_trust_penalty_trusted_internal_unsigned: number;
+  context_trust_penalty_semi_trusted_customer: number;
+  context_trust_penalty_untrusted_external: number;
+  context_trust_penalty_malicious_suspected: number;
+  context_trust_penalty_unknown: number;
+  mcp_trust_penalty: number;
+  anomaly_weight_pct: number;
+  approval_credit: number;
+}
+
 export interface SocSummary {
   approvals_pending?: number;
   incidents_open?: number;
@@ -698,6 +720,33 @@ export interface PlaybookRecord {
 
 export function listPlaybooks(opts: FetchOptions, limit = 50) {
   return fetchListFromGateway<PlaybookRecord[]>(opts, `/v1/playbooks?limit=${limit}`);
+}
+
+export function getTenant(opts: FetchOptions, tenantId: string) {
+  return fetchFromGateway<TenantRecord>(opts, `/v1/tenants/${encodeURIComponent(tenantId)}`);
+}
+
+export function getTenantRiskWeights(opts: FetchOptions) {
+  return fetchFromGateway<RiskWeights>(opts, "/v1/tenants/risk-weights");
+}
+
+export interface GatewayHealthStatus {
+  live: boolean;
+  ready: boolean;
+}
+
+export async function probeGatewayHealth(gatewayUrl: string, signal?: AbortSignal): Promise<GatewayHealthStatus> {
+  const base = gatewayUrl.replace(/\/+$/, "");
+  const probe = async (path: string) => {
+    try {
+      const response = await fetch(`${base}${path}`, { signal });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  };
+  const [live, ready] = await Promise.all([probe("/livez"), probe("/readyz")]);
+  return { live, ready };
 }
 
 export async function probeGatewayEndpoint(opts: FetchOptions, path: string): Promise<boolean> {
