@@ -573,3 +573,88 @@ export function backtestSocRule(opts: FetchOptions, ruleKey: string, from?: stri
   const body = from && to ? { from, to } : {};
   return fetchFromGateway<BacktestResult>(opts, `/v1/soc/rules/${ruleKey}/backtest`, "POST", body);
 }
+
+// Webhook contact points (tenant-scoped SOC notification routing)
+export interface WebhookSubscriptionRecord {
+  id: string;
+  tenant_id: string;
+  url: string;
+  secret_hash?: string | null;
+  event_types: string;
+  status: string;
+  min_severity: string;
+  format: string;
+  delivery_status: string;
+  consecutive_failures: number;
+  last_delivery_at?: string | null;
+  last_success_at?: string | null;
+  created_at: string;
+  /** Returned once at creation only — never persisted in listings. */
+  delivery_secret?: string;
+}
+
+export interface CreateWebhookSubscriptionPayload {
+  url: string;
+  secret?: string;
+  event_types?: string;
+  min_severity?: "info" | "high";
+  format?: "json" | "cef";
+}
+
+export function listWebhookSubscriptions(opts: FetchOptions, limit = 50) {
+  return fetchListFromGateway<WebhookSubscriptionRecord[]>(
+    opts,
+    `/v1/webhook_subscriptions?limit=${limit}`,
+  );
+}
+
+export function createWebhookSubscription(opts: FetchOptions, payload: CreateWebhookSubscriptionPayload) {
+  return fetchFromGateway<WebhookSubscriptionRecord>(opts, "/v1/webhook_subscriptions", "POST", {
+    event_types: payload.event_types ?? "alert,incident",
+    min_severity: payload.min_severity ?? "info",
+    format: payload.format ?? "json",
+    ...payload,
+  });
+}
+
+export function deleteWebhookSubscription(opts: FetchOptions, id: string) {
+  return fetchFromGateway<Record<string, unknown>>(opts, `/v1/webhook_subscriptions/${id}`, "DELETE");
+}
+
+export function reactivateWebhookSubscription(opts: FetchOptions, id: string) {
+  return fetchFromGateway<WebhookSubscriptionRecord>(
+    opts,
+    `/v1/webhook_subscriptions/${id}/reactivate`,
+    "POST",
+  );
+}
+
+// Deterministic active-response playbooks (read-only in alerting UI)
+export interface PlaybookRecord {
+  id: string;
+  tenant_id: string;
+  name: string;
+  trigger_kind: string;
+  trigger_severity: string;
+  trigger_agent_id?: string | null;
+  trigger_environment?: string | null;
+  steps_json: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export function listPlaybooks(opts: FetchOptions, limit = 50) {
+  return fetchListFromGateway<PlaybookRecord[]>(opts, `/v1/playbooks?limit=${limit}`);
+}
+
+export async function probeGatewayEndpoint(opts: FetchOptions, path: string): Promise<boolean> {
+  try {
+    await fetchFromGateway<unknown>(opts, path);
+    return true;
+  } catch (error) {
+    if (error instanceof GatewayRequestError && [404, 405, 501].includes(error.status)) {
+      return false;
+    }
+    return true;
+  }
+}

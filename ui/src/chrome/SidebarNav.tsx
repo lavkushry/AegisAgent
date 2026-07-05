@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertOctagon, Clock, FileCheck2, Fingerprint, LayoutDashboard, LayoutGrid, Search, Server, Settings, Shield, ShieldAlert, Terminal, Users } from "lucide-react";
+import { AlertOctagon, Bell, Clock, FileCheck2, Fingerprint, LayoutDashboard, LayoutGrid, Search, Server, Settings, Shield, ShieldAlert, Terminal, Users } from "lucide-react";
 import { useAppStore } from "@/app/store";
 import { useSocSummary } from "@/hooks/useSocSummary";
 import type { ConsoleView } from "@/state/consoleUrl";
@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   ["incidents", "Incidents", AlertOctagon, "incidents_open"],
   ["detections", "Detections", ShieldAlert, "alerts_total"],
   ["rules", "Rules", Terminal, null],
+  ["alerting", "Alerting", Bell, null],
   ["approvals", "Approvals", Clock, "approvals_pending"],
   ["agents", "Agents Fleet", Users, null],
   ["mcp", "MCP Servers", Server, null],
