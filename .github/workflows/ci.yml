@@ -54,8 +54,8 @@ jobs:
       - name: Verify SQLx offline query cache (#922)
         if: matrix.rust == 'stable'
         run: |
-          export DATABASE_URL="sqlite://db/aegisagent.db"
           mkdir -p db
+          export DATABASE_URL="sqlite://${GITHUB_WORKSPACE}/db/aegisagent.db"
           (cd lib/storage && sqlx database create)
           (cd lib/storage && sqlx migrate run)
           (cd lib/storage && cargo sqlx prepare --check -- --all-targets)
