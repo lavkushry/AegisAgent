@@ -58,6 +58,17 @@ use utoipa::OpenApi;
         soc_stream_api,
         soc_query_api,
         semantic_search_api,
+        list_contact_points_api,
+        create_contact_point_api,
+        update_contact_point_api,
+        delete_contact_point_api,
+        list_notification_policies_api,
+        create_notification_policy_api,
+        update_notification_policy_api,
+        delete_notification_policy_api,
+        list_silences_api,
+        create_silence_api,
+        delete_silence_api,
         create_tenant_api,
         get_tenant_api,
         delete_tenant_api,
@@ -1299,6 +1310,94 @@ fn soc_query_api() {}
     )
 )]
 fn semantic_search_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/contact-points",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "List contact points"))
+)]
+fn list_contact_points_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/soc/contact-points",
+    security(("bearer_auth" = [])),
+    responses((status = 201, description = "Contact point created"))
+)]
+fn create_contact_point_api() {}
+
+#[utoipa::path(
+    put,
+    path = "/v1/soc/contact-points/{id}",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Contact point updated"))
+)]
+fn update_contact_point_api() {}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/soc/contact-points/{id}",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Contact point deleted"))
+)]
+fn delete_contact_point_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/notification-policies",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "List notification policies"))
+)]
+fn list_notification_policies_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/soc/notification-policies",
+    security(("bearer_auth" = [])),
+    responses((status = 201, description = "Notification policy created"))
+)]
+fn create_notification_policy_api() {}
+
+#[utoipa::path(
+    put,
+    path = "/v1/soc/notification-policies/{id}",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Notification policy updated"))
+)]
+fn update_notification_policy_api() {}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/soc/notification-policies/{id}",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Notification policy deleted"))
+)]
+fn delete_notification_policy_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/silences",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "List alert silences"))
+)]
+fn list_silences_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/soc/silences",
+    security(("bearer_auth" = [])),
+    responses((status = 201, description = "Silence created"))
+)]
+fn create_silence_api() {}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/soc/silences/{id}",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Silence deleted"))
+)]
+fn delete_silence_api() {}
 
 #[utoipa::path(
     post,

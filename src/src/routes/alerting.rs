@@ -577,9 +577,7 @@ pub async fn create_silence(
     let starts_at = match payload.starts_at.as_deref() {
         Some(s) => match parse_rfc3339("starts_at", s) {
             Some(v) => v,
-            None => {
-                return StatusError::bad_request("invalid starts_at timestamp").into_response()
-            }
+            None => return StatusError::bad_request("invalid starts_at timestamp").into_response(),
         },
         None => Utc::now(),
     };
