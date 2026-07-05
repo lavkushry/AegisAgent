@@ -12,7 +12,7 @@ import RulesPage from "../components/rules/RulesPage";
 import DashboardLoader from "../dashboards/DashboardLoader";
 import { overviewDashboard } from "../dashboards/system/overview";
 import { integrityDashboard } from "../dashboards/system/integrity";
-import { fleetDashboard } from "../dashboards/system/fleet";
+import AgentsFleetTab from "../components/fleet/AgentsFleetTab";
 import { approvalsDashboard } from "../dashboards/system/approvals";
 import { receiptsDashboard } from "../dashboards/system/receipts";
 
@@ -29,7 +29,7 @@ export default function Home() {
     detections: <DetectionsPage />,
     rules: <RulesPage />,
     approvals: <DashboardLoader schema={approvalsDashboard} />,
-    agents: <DashboardLoader schema={fleetDashboard} />, mcp: <McpTab />, receipts: <DashboardLoader schema={receiptsDashboard} />,
+    agents: <AgentsFleetTab />, mcp: <McpTab />, receipts: <DashboardLoader schema={receiptsDashboard} />,
     settings: <SettingsTab />,
   };
 

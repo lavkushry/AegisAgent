@@ -22,6 +22,7 @@ export interface ConsoleUrlState {
   exploreQuery?: string;
   incidentId?: string;
   receiptId?: string;
+  agentId?: string;
   variables: Record<string, string>;
 }
 
@@ -39,6 +40,7 @@ export function parseConsoleUrl(search: string): Partial<ConsoleUrlState> {
     ...(params.get("q") ? { exploreQuery: params.get("q")! } : {}),
     ...(params.get("incident") ? { incidentId: params.get("incident")! } : {}),
     ...(params.get("receipt") ? { receiptId: params.get("receipt")! } : {}),
+    ...(params.get("agent") ? { agentId: params.get("agent")! } : {}),
     ...(Object.keys(variables).length ? { variables } : {}),
   };
 }
@@ -51,6 +53,7 @@ export function serializeConsoleUrl(state: ConsoleUrlState): string {
   if (state.exploreQuery) params.set("q", state.exploreQuery);
   if (state.incidentId) params.set("incident", state.incidentId);
   if (state.receiptId) params.set("receipt", state.receiptId);
+  if (state.agentId) params.set("agent", state.agentId);
   Object.entries(state.variables).forEach(([key, value]) => value && params.set(`var-${key}`, value));
   return `?${params.toString()}`;
 }

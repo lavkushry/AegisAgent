@@ -93,14 +93,43 @@ export interface ApprovalRecord {
 
 export interface AgentRiskRecord {
   agent_id?: string;
+  agent_key?: string;
+  current_avg_risk_score?: number;
   avg_risk_score?: number;
+  decision_count_24h?: number;
   trend?: string;
 }
 
 export interface AgentRecord {
-  id?: string;
-  status?: string;
-  risk_tier?: string;
+  id: string;
+  tenant_id?: string;
+  agent_key: string;
+  name: string;
+  owner_team?: string | null;
+  owner_email?: string | null;
+  environment: string;
+  framework?: string | null;
+  model_provider?: string | null;
+  model_name?: string | null;
+  purpose?: string | null;
+  risk_tier: string;
+  status: string;
+  last_seen_at?: string | null;
+  frozen_reason?: string | null;
+  quarantined_at?: string | null;
+  force_approval?: boolean;
+  allowed_environments?: string | null;
+  mtls_cn?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AgentToolPermission {
+  id: string;
+  tenant_id: string;
+  agent_id: string;
+  tool_key: string;
+  created_at: string;
 }
 
 export interface McpServerRecord {
@@ -375,6 +404,19 @@ export function getAgents(opts: FetchOptions) {
   return fetchFromGateway<AgentRecord[]>(opts, "/v1/agents");
 }
 
+export function getAgent(opts: FetchOptions, agentId: string) {
+  const id = encodeURIComponent(agentId);
+  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}`);
+}
+
+export function listAgentPermissions(opts: FetchOptions, agentId: string) {
+  const id = encodeURIComponent(agentId);
+  return fetchFromGateway<{ permissions: AgentToolPermission[] }>(
+    opts,
+    `/v1/agents/${id}/permissions`,
+  ).then((response) => response.permissions ?? []);
+}
+
 export function freezeAgent(opts: FetchOptions, agentId: string, reason?: string) {
   const id = encodeURIComponent(agentId);
   const body = reason?.trim() ? { reason: reason.trim() } : undefined;
@@ -385,6 +427,18 @@ export function unfreezeAgent(opts: FetchOptions, agentId: string, reason?: stri
   const id = encodeURIComponent(agentId);
   const body = reason?.trim() ? { reason: reason.trim() } : undefined;
   return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/unfreeze`, "POST", body);
+}
+
+export function revokeAgent(opts: FetchOptions, agentId: string, reason?: string) {
+  const id = encodeURIComponent(agentId);
+  const body = reason?.trim() ? { reason: reason.trim() } : undefined;
+  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/revoke`, "POST", body);
+}
+
+export function restoreAgent(opts: FetchOptions, agentId: string, reason?: string) {
+  const id = encodeURIComponent(agentId);
+  const body = reason?.trim() ? { reason: reason.trim() } : undefined;
+  return fetchFromGateway<AgentRecord>(opts, `/v1/agents/${id}/restore`, "POST", body);
 }
 
 export function getAgentScoreboard(opts: FetchOptions) {

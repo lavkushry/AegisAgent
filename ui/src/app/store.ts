@@ -23,6 +23,7 @@ interface AppState {
   exploreQuery: string;
   activeIncidentId: string | null;
   activeReceiptId: string | null;
+  activeAgentId: string | null;
   setGatewayUrl: (url: string) => void;
   setBearerToken: (token: string) => void;
   setActiveTenant: (tenant: string) => void;
@@ -38,6 +39,7 @@ interface AppState {
   consumeExploreSeed: () => void;
   setActiveIncidentId: (id: string | null) => void;
   setActiveReceiptId: (id: string | null) => void;
+  setActiveAgentId: (id: string | null) => void;
 }
 
 const getInitialValue = (key: string, fallback: string) => {
@@ -97,6 +99,7 @@ export const useAppStore = create<AppState>((set) => ({
   exploreQuery: "",
   activeIncidentId: null,
   activeReceiptId: null,
+  activeAgentId: null,
   setGatewayUrl: (url) => {
     if (typeof window !== "undefined") localStorage.setItem("aegis_gateway_url", url);
     set({ gatewayUrl: url });
@@ -132,9 +135,20 @@ export const useAppStore = create<AppState>((set) => ({
   consumeExploreSeed: () => set({ exploreSeed: null }),
   setActiveIncidentId: (activeIncidentId) => set({ activeIncidentId }),
   setActiveReceiptId: (activeReceiptId) => set({ activeReceiptId }),
+  setActiveAgentId: (activeAgentId) => set({ activeAgentId }),
 }));
 
 /** Roles permitted to act on the approval queue (separation of duties). */
 export function canApprove(role: Role): boolean {
   return role === "approver" || role === "admin";
+}
+
+/** Roles permitted to run SOC active-response controls (freeze/restore/revoke). */
+export function canRespond(role: Role): boolean {
+  return role !== "viewer";
+}
+
+/** Permanent revoke is admin-only; gateway enforces server-side as well. */
+export function canRevokeAgent(role: Role): boolean {
+  return role === "admin";
 }

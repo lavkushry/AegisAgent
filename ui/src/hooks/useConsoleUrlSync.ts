@@ -19,6 +19,7 @@ export function useConsoleUrlSync(): void {
       if (parsed.exploreQuery) current.setExploreSeed(parsed.exploreQuery);
       if (parsed.incidentId) current.setActiveIncidentId(parsed.incidentId);
       if (parsed.receiptId) current.setActiveReceiptId(parsed.receiptId);
+      if (parsed.agentId) current.setActiveAgentId(parsed.agentId);
     };
     applyLocation();
     const hydrationTimer = window.setTimeout(() => setHydrated(true), 0);
@@ -38,6 +39,7 @@ export function useConsoleUrlSync(): void {
       exploreQuery: state.exploreQuery || undefined,
       incidentId: state.activeIncidentId || undefined,
       receiptId: state.activeReceiptId || undefined,
+      agentId: state.activeAgentId || undefined,
       variables: state.variables,
     });
     window.history.replaceState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
@@ -45,6 +47,7 @@ export function useConsoleUrlSync(): void {
     hydrated,
     state.activeIncidentId,
     state.activeReceiptId,
+    state.activeAgentId,
     state.activeView,
     state.exploreQuery,
     state.liveMode,

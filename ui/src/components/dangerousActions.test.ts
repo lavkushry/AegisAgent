@@ -34,6 +34,7 @@ describe("dangerous console action confirmation inventory", () => {
     ["src/components/IncidentsTab.tsx", ["/close", "evidence-pack"]],
     ["src/components/McpTab.tsx", ["quarantineMcpServer", "restoreMcpServer"]],
     ["src/panels/standard/AgentTablePanel.tsx", ["freezeAgent", "unfreezeAgent"]],
+    ["src/components/fleet/AgentDetailPage.tsx", ["revokeAgent", "restoreAgent"]],
   ])("%s routes implemented dangerous actions through ConfirmDialog", (relativePath, expectedMarkers) => {
     const source = readUiSource(relativePath);
 
