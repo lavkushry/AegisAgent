@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { useAppStore } from "@/app/store";
 import { ShieldCheck, AlertTriangle, Loader2, Download, Check, X, ChevronDown } from "lucide-react";
 import { useDatasources } from "@/datasources/registry";
 import { frameRows } from "@/datasources/frame";
@@ -64,6 +65,8 @@ export default function ReceiptIntegrity({
   const [exportReason, setExportReason] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const activeReceiptId = useAppStore((s) => s.activeReceiptId);
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const baseRows = frameRows(data);
   const rows = [...baseRows, ...extraRows];
@@ -76,6 +79,12 @@ export default function ReceiptIntegrity({
     setRowStates({});
     setRange({ status: "idle" });
   }, [data.length, data.meta?.cursor, definition.id, timeRange.from, timeRange.to]);
+
+  useEffect(() => {
+    if (!activeReceiptId) return;
+    const node = rowRefs.current[activeReceiptId];
+    node?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeReceiptId, baseRows.length, extraRows.length]);
 
   const pick = (row: Record<string, unknown>, field: string): string => {
     const v = row[field];
@@ -248,13 +257,26 @@ export default function ReceiptIntegrity({
           const agentId = pick(row, opts.agentField);
           const decision = pick(row, opts.decisionField);
           const trust = pick(row, opts.trustField) || pick(row, "root_trust_level");
+          const rowReceiptId = pick(row, opts.receiptIdField) || pick(row, "id");
+          const focused = Boolean(activeReceiptId && rowReceiptId === activeReceiptId);
           return (
             <div
               key={String(row.id ?? `${receiptHash}-${i}`)}
+              ref={(el) => {
+                if (rowReceiptId) rowRefs.current[rowReceiptId] = el;
+              }}
               className="flex flex-wrap items-center gap-2 text-xs py-2 px-2 rounded border"
               style={{
-                borderColor: broken ? "var(--state-failed)" : "var(--border-default)",
-                backgroundColor: broken ? "color-mix(in oklab, var(--state-failed) 12%, transparent)" : "transparent",
+                borderColor: focused
+                  ? "var(--border-active)"
+                  : broken
+                    ? "var(--state-failed)"
+                    : "var(--border-default)",
+                backgroundColor: focused
+                  ? "color-mix(in oklab, var(--brand) 12%, transparent)"
+                  : broken
+                    ? "color-mix(in oklab, var(--state-failed) 12%, transparent)"
+                    : "transparent",
               }}
             >
               <span className="w-6 text-[var(--text-muted)] font-mono shrink-0">{i + 1}</span>

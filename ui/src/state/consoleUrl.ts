@@ -16,11 +16,14 @@ export const CONSOLE_VIEWS = [
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
 
+export type ExploreEntityParam = "decision" | "ase";
+
 export interface ConsoleUrlState {
   view: ConsoleView;
   timeRange: string;
   liveMode: boolean;
   exploreQuery?: string;
+  exploreEntity?: ExploreEntityParam;
   incidentId?: string;
   receiptId?: string;
   agentId?: string;
@@ -39,6 +42,9 @@ export function parseConsoleUrl(search: string): Partial<ConsoleUrlState> {
     ...(params.get("range") ? { timeRange: params.get("range")! } : {}),
     ...(params.has("live") ? { liveMode: params.get("live") === "1" } : {}),
     ...(params.get("q") ? { exploreQuery: params.get("q")! } : {}),
+    ...(params.get("entity") === "decision" || params.get("entity") === "ase"
+      ? { exploreEntity: params.get("entity") as ExploreEntityParam }
+      : {}),
     ...(params.get("incident") ? { incidentId: params.get("incident")! } : {}),
     ...(params.get("receipt") ? { receiptId: params.get("receipt")! } : {}),
     ...(params.get("agent") ? { agentId: params.get("agent")! } : {}),
@@ -52,6 +58,7 @@ export function serializeConsoleUrl(state: ConsoleUrlState): string {
   params.set("range", state.timeRange);
   if (state.liveMode) params.set("live", "1");
   if (state.exploreQuery) params.set("q", state.exploreQuery);
+  if (state.exploreEntity) params.set("entity", state.exploreEntity);
   if (state.incidentId) params.set("incident", state.incidentId);
   if (state.receiptId) params.set("receipt", state.receiptId);
   if (state.agentId) params.set("agent", state.agentId);

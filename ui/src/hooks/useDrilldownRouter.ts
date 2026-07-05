@@ -2,16 +2,8 @@
 
 import { useCallback } from "react";
 import { useAppStore } from "@/app/store";
+import { applyDrilldownLink } from "@/dashboards/drilldown";
 import type { DrilldownLink } from "@/panels/types";
-
-/** Replace ${field} tokens in a template with values from a clicked row. */
-function fillTemplate(template: string, row?: Record<string, unknown>): string {
-  if (!row) return template;
-  return template.replace(/\$\{(\w+)\}/g, (_, key: string) => {
-    const value = row[key];
-    return value === null || value === undefined ? "" : String(value);
-  });
-}
 
 /**
  * Turns a panel DrilldownLink into navigation. Until the console moves to
@@ -25,28 +17,33 @@ export function useDrilldownRouter(): (
   const setActiveView = useAppStore((s) => s.setActiveView);
   const setExploreSeed = useAppStore((s) => s.setExploreSeed);
   const setActiveIncidentId = useAppStore((s) => s.setActiveIncidentId);
+  const setActiveReceiptId = useAppStore((s) => s.setActiveReceiptId);
+  const setActiveAgentId = useAppStore((s) => s.setActiveAgentId);
+  const setVariables = useAppStore((s) => s.setVariables);
 
   return useCallback(
     (link: DrilldownLink, row?: Record<string, unknown>) => {
-      switch (link.target.kind) {
-        case "explore":
-          setExploreSeed(fillTemplate(link.target.aqlTemplate, row));
-          setActiveView("explore");
-          break;
-        case "verify-receipt":
-          setActiveView("integrity");
-          break;
-        case "incident": {
-          const incidentId = row?.[link.target.incidentIdField];
-          setActiveIncidentId(typeof incidentId === "string" ? incidentId : null);
-          setActiveView("incidents");
-          break;
-        }
-        case "dashboard":
-          setActiveView(link.target.uid);
-          break;
-      }
+      applyDrilldownLink(
+        {
+          setActiveView,
+          setExploreSeed,
+          setActiveIncidentId,
+          setActiveReceiptId,
+          setActiveAgentId,
+          setVariables,
+          getVariables: () => useAppStore.getState().variables,
+        },
+        link,
+        row,
+      );
     },
-    [setActiveView, setActiveIncidentId, setExploreSeed],
+    [
+      setActiveAgentId,
+      setActiveIncidentId,
+      setActiveReceiptId,
+      setActiveView,
+      setExploreSeed,
+      setVariables,
+    ],
   );
 }

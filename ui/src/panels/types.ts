@@ -34,6 +34,8 @@ export interface DrilldownLink {
   readonly label: string;
   readonly target:
     | { kind: "verify-receipt"; receiptIdField: string }
+    | { kind: "receipt"; receiptIdField: string }
+    | { kind: "agent"; agentIdField: string }
     | { kind: "dashboard"; uid: string; mapVars?: Record<string, string> }
     | { kind: "explore"; aqlTemplate: string }
     | { kind: "incident"; incidentIdField: string };

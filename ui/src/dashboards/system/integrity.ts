@@ -50,7 +50,8 @@ export const integrityDashboard: DashboardSchema = {
               prevHashField: "prev_receipt_hash",
             },
             drilldowns: [
-              { label: "Explore agent", target: { kind: "explore", aqlTemplate: "${agent_id}" } },
+              { label: "Explore agent", target: { kind: "explore", aqlTemplate: "agent_id:${agent_id}" } },
+              { label: "Open receipt", target: { kind: "receipt", receiptIdField: "receipt_id" } },
             ],
           },
           w: 12,
