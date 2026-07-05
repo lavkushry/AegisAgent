@@ -158,7 +158,8 @@ pub async fn authorize_action(
 }
 
 #[tracing::instrument(name = "authorize", skip_all)]
-pub(crate) async fn authorize_action_impl(
+#[doc(hidden)]
+pub async fn authorize_action_impl(
     state: Arc<AppState>,
     headers: HeaderMap,
     body: Bytes,
