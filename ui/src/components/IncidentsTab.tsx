@@ -16,6 +16,12 @@ import { AlertOctagon, CheckSquare, FileText, Download, ShieldCheck, Activity, S
 import SeverityTag from "./security/SeverityTag";
 import { errorMessage } from "@/lib/format";
 import { ConfirmDialog } from "@/components/primitives";
+import HashChip from "@/components/security/HashChip";
+import {
+  applyRangeVerificationResult,
+  incidentGraphNodesToReceiptRows,
+  type ChainVerifyState,
+} from "@/panels/differentiators/provableTimelineState";
 
 type PendingIncidentAction = {
   kind: "close" | "export";
@@ -41,11 +47,8 @@ export default function IncidentsTab() {
 
   const selectedIncidentId = useAppStore((state) => state.activeIncidentId);
   const setSelectedIncidentId = useAppStore((state) => state.setActiveIncidentId);
-  const [verifyingTimeline, setVerifyingTimeline] = useState(false);
-  const [verificationOutput, setVerificationOutput] = useState<{
-    status: "verified" | "failed" | "unknown";
-    msg: string;
-  } | null>(null);
+  const [chainVerify, setChainVerify] = useState<ChainVerifyState>({ status: "idle" });
+  const [brokenReceiptId, setBrokenReceiptId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingIncidentAction | null>(null);
   const [auditReason, setAuditReason] = useState("");
   const [exportingEvidence, setExportingEvidence] = useState(false);
@@ -148,50 +151,37 @@ export default function IncidentsTab() {
   };
 
   const handleVerifyTimeline = async () => {
-    if (!graph || !graph.nodes) return;
-    setVerifyingTimeline(true);
-    setVerificationOutput(null);
+    if (!graph?.nodes?.length) return;
+    const receiptRows = incidentGraphNodesToReceiptRows(graph.nodes);
 
-    // Find all receipt nodes in the graph
-    const receiptNodes = graph.nodes.filter((node) => node.group === "receipt");
-
-    if (receiptNodes.length === 0) {
-      setVerificationOutput({
+    if (receiptRows.length === 0) {
+      setChainVerify({
         status: "unknown",
-        msg: "No receipts are available, so this timeline cannot be verified.",
+        message: "No receipts are available, so this timeline cannot be verified.",
       });
-      setVerifyingTimeline(false);
+      setBrokenReceiptId(null);
       return;
     }
 
-    try {
-      let allOk = true;
-      let checkedCount = 0;
-      for (const node of receiptNodes) {
-        const result = await receiptDatasource.verifyReceipt!(node.id);
-        if (result.status !== "verified") {
-          allOk = false;
-          setVerificationOutput({ status: result.status, msg: result.message });
-          break;
-        }
-        checkedCount++;
-      }
+    setChainVerify({ status: "running" });
+    setBrokenReceiptId(null);
 
-      if (allOk) {
-        setVerificationOutput({
-          status: "verified",
-          msg: `Cryptographic validation complete: All ${checkedCount} actions in this incident timeline verified as tamper-free.`,
-        });
+    try {
+      const result = await receiptDatasource.verifyRange!(receiptRows);
+      const applied = applyRangeVerificationResult(result, receiptRows.length);
+      setChainVerify(applied.chain);
+      if (applied.chain.status === "failed" && applied.chain.brokenAt > 0) {
+        const brokenRow = receiptRows[applied.chain.brokenAt - 1];
+        setBrokenReceiptId(typeof brokenRow?.id === "string" ? brokenRow.id : null);
       }
     } catch (err: unknown) {
-      setVerificationOutput({
-        status: "failed",
-        msg: `Verification failed: ${errorMessage(err)}`,
-      });
-    } finally {
-      setVerifyingTimeline(false);
+      setChainVerify({ status: "failed", brokenAt: 0, message: errorMessage(err) });
+      setBrokenReceiptId(null);
     }
   };
+
+  const receiptNodeId = (nodeId: string): string =>
+    nodeId.startsWith("receipt:") ? nodeId.slice("receipt:".length) : nodeId;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -212,7 +202,8 @@ export default function IncidentsTab() {
                 key={inc.id}
                 onClick={() => {
                   setSelectedIncidentId(inc.id);
-                  setVerificationOutput(null);
+                  setChainVerify({ status: "idle" });
+                  setBrokenReceiptId(null);
                 }}
                 className={`p-3 border rounded-lg cursor-pointer transition-colors text-xs ${
                   selectedIncidentId === inc.id
@@ -312,27 +303,48 @@ export default function IncidentsTab() {
                 </h4>
                 
                 <button
-                  onClick={handleVerifyTimeline}
-                  disabled={isGraphLoading || verifyingTimeline}
+                  type="button"
+                  onClick={() => void handleVerifyTimeline()}
+                  disabled={isGraphLoading || chainVerify.status === "running"}
                   className="text-xs text-[var(--brand)] hover:text-[var(--brand)] font-medium underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
                 >
-                  <ShieldCheck size={14} /> {verifyingTimeline ? "Verifying..." : "Verify Cryptographic Timeline"}
+                  <ShieldCheck size={14} />
+                  {chainVerify.status === "running" ? "Verifying chain…" : "Verify receipt chain"}
                 </button>
               </div>
 
-              {/* Verification Output Bar */}
-              {verificationOutput && (
-                <div className={`p-3 border rounded-lg text-xs flex items-center gap-2 ${
-                  verificationOutput.status === "verified"
-                    ? "bg-green-950/20 border-green-500/30 text-green-400"
-                    : verificationOutput.status === "unknown"
-                      ? "bg-amber-950/20 border-amber-500/30 text-amber-400"
-                      : "bg-red-950/20 border-red-500/30 text-red-400"
-                }`}>
-                  {verificationOutput.status === "verified" ? <ShieldCheck size={16} /> : <AlertTriangle size={16} />}
-                  <span>{verificationOutput.msg}</span>
+              {chainVerify.status !== "idle" ? (
+                <div
+                  className="p-3 border rounded-lg text-xs flex items-center gap-2"
+                  style={{
+                    borderColor:
+                      chainVerify.status === "verified"
+                        ? "color-mix(in oklab, var(--state-verified) 40%, transparent)"
+                        : chainVerify.status === "unknown"
+                          ? "color-mix(in oklab, var(--state-pending) 40%, transparent)"
+                          : "color-mix(in oklab, var(--state-failed) 40%, transparent)",
+                    color:
+                      chainVerify.status === "verified"
+                        ? "var(--state-verified)"
+                        : chainVerify.status === "unknown"
+                          ? "var(--state-pending)"
+                          : "var(--state-failed)",
+                  }}
+                >
+                  {chainVerify.status === "verified" ? <ShieldCheck size={16} /> : <AlertTriangle size={16} />}
+                  <span>
+                    {chainVerify.status === "verified"
+                      ? `Tamper-free (${chainVerify.total}/${chainVerify.total} receipt links): ${chainVerify.message}`
+                      : chainVerify.status === "unknown"
+                        ? chainVerify.message
+                        : chainVerify.status === "failed"
+                          ? (chainVerify.brokenAt > 0
+                            ? `Broken at receipt ${chainVerify.brokenAt}: ${chainVerify.message}`
+                            : chainVerify.message)
+                          : "Verifying ordered receipt linkage…"}
+                  </span>
                 </div>
-              )}
+              ) : null}
 
               {/* Timeline Nodes */}
               <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
@@ -344,30 +356,50 @@ export default function IncidentsTab() {
                   graph.nodes
                     .filter((node) => node.group === "decision" || node.group === "receipt" || node.group === "approval")
                     .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""))
-                    .map((node, idx: number) => (
-                      <div
-                        key={idx}
-                        className="flex justify-between items-center gap-4 p-3 bg-[var(--surface-app)]/30 border border-[var(--border-default)] rounded-lg text-xs"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2.5 h-2.5 rounded-full ${
-                            node.group === "receipt" ? "bg-green-500" : node.group === "approval" ? "bg-amber-500" : "bg-[var(--brand)]"
-                          }`} />
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-[var(--text-primary)]">{node.label}</span>
-                            {node.metadata !== undefined && node.metadata !== null && (
-                              <span className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5 truncate max-w-[300px]">
-                                {typeof node.metadata === "string" ? node.metadata : JSON.stringify(node.metadata)}
+                    .map((node, idx: number) => {
+                      const isBrokenReceipt =
+                        node.group === "receipt"
+                        && brokenReceiptId !== null
+                        && receiptNodeId(node.id) === brokenReceiptId;
+                      return (
+                        <div
+                          key={`${node.id}-${idx}`}
+                          className="flex justify-between items-center gap-4 p-3 rounded-lg text-xs border"
+                          style={{
+                            borderColor: isBrokenReceipt ? "var(--state-failed)" : "var(--border-default)",
+                            backgroundColor: isBrokenReceipt
+                              ? "color-mix(in oklab, var(--state-failed) 12%, transparent)"
+                              : "color-mix(in oklab, var(--surface-app) 30%, transparent)",
+                          }}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{
+                                backgroundColor:
+                                  node.group === "receipt"
+                                    ? "var(--state-verified)"
+                                    : node.group === "approval"
+                                      ? "var(--state-pending)"
+                                      : "var(--brand)",
+                              }}
+                            />
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-semibold text-[var(--text-primary)] capitalize">
+                                {node.group ?? "event"} · {node.label || node.id}
                               </span>
-                            )}
+                              {node.group === "receipt" && node.label ? (
+                                <HashChip hash={node.label} kind="receipt" />
+                              ) : null}
+                            </div>
                           </div>
-                        </div>
 
-                        <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap">
-                          {node.timestamp ? new Date(node.timestamp).toLocaleTimeString() : ""}
-                        </span>
-                      </div>
-                    ))
+                          <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap">
+                            {node.timestamp ? new Date(node.timestamp).toLocaleTimeString() : ""}
+                          </span>
+                        </div>
+                      );
+                    })
                 )}
               </div>
             </div>

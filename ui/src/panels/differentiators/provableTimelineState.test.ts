@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyRangeVerificationResult,
+  incidentGraphNodesToReceiptRows,
   pickTimelineTime,
   timelineRowsForVerify,
 } from "./provableTimelineState";
@@ -76,6 +77,33 @@ describe("provableTimelineState", () => {
     expect(applied.rowStates).toEqual({
       1: { status: "failed", message: "Hash mismatch." },
     });
+  });
+
+  it("normalizes incident graph receipt nodes for ordered range verification", () => {
+    const rows = incidentGraphNodesToReceiptRows([
+      {
+        id: "receipt:receipt-2",
+        group: "receipt",
+        label: "hash-2",
+        timestamp: "2026-06-28T12:00:00Z",
+      },
+      {
+        id: "receipt:receipt-1",
+        group: "receipt",
+        label: "hash-1",
+        timestamp: "2026-06-28T10:00:00Z",
+      },
+      {
+        id: "decision:decision-1",
+        group: "decision",
+        label: "deny",
+        timestamp: "2026-06-28T09:00:00Z",
+      },
+    ]);
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.id).toBe("receipt-1");
+    expect(rows[1]?.receipt_hash).toBe("hash-2");
   });
 
   it("keeps unknown verification fail-closed without green row markers", () => {

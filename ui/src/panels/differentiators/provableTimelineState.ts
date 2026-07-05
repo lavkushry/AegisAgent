@@ -92,6 +92,54 @@ export function sortTimelineRows(
   });
 }
 
+export interface IncidentGraphNode {
+  id: string;
+  group?: string;
+  label?: string;
+  timestamp?: string;
+  metadata?: unknown;
+}
+
+/** Convert incident evidence-graph receipt nodes into verifyRange payloads. */
+export function incidentGraphNodesToReceiptRows(
+  nodes: ReadonlyArray<IncidentGraphNode>,
+): Array<Record<string, unknown>> {
+  const receiptNodes = nodes
+    .filter((node) => node.group === "receipt")
+    .map((node) => {
+      const receiptId = node.id.startsWith("receipt:")
+        ? node.id.slice("receipt:".length)
+        : node.id;
+      const metadata =
+        typeof node.metadata === "object" && node.metadata !== null
+          ? (node.metadata as Record<string, unknown>)
+          : {};
+      const receiptHash =
+        pickTimelineField(metadata, "receipt_hash")
+        || (typeof node.label === "string" ? node.label : "");
+      const prevHash = pickTimelineField(metadata, "prev_receipt_hash");
+      const time = node.timestamp ?? "";
+
+      return {
+        id: receiptId,
+        receipt_id: receiptId,
+        ts: time,
+        created_at: time,
+        receipt_hash: receiptHash,
+        prev_receipt_hash: prevHash,
+      };
+    });
+
+  return [...receiptNodes].sort((left, right) => {
+    const leftMs = Date.parse(String(left.ts ?? ""));
+    const rightMs = Date.parse(String(right.ts ?? ""));
+    if (Number.isNaN(leftMs) && Number.isNaN(rightMs)) return 0;
+    if (Number.isNaN(leftMs)) return 1;
+    if (Number.isNaN(rightMs)) return -1;
+    return leftMs - rightMs;
+  });
+}
+
 export function applyRangeVerificationResult(
   result: VerifyResult,
   rowCount: number,
