@@ -16,9 +16,10 @@ import { integrityDashboard } from "../dashboards/system/integrity";
 import AgentsFleetTab from "../components/fleet/AgentsFleetTab";
 import { approvalsDashboard } from "../dashboards/system/approvals";
 import { receiptsDashboard } from "../dashboards/system/receipts";
+import { analyticsDashboard } from "../dashboards/system/analytics";
 
 
-type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "rules" | "alerting" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
+type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "rules" | "alerting" | "approvals" | "agents" | "mcp" | "receipts" | "analytics" | "settings";
 
 export default function Home() {
   const activeTab = useAppStore((s) => s.activeView) as ActiveTab;
@@ -32,6 +33,7 @@ export default function Home() {
     alerting: <AlertingPage />,
     approvals: <DashboardLoader schema={approvalsDashboard} />,
     agents: <AgentsFleetTab />, mcp: <McpTab />, receipts: <DashboardLoader schema={receiptsDashboard} />,
+    analytics: <DashboardLoader schema={analyticsDashboard} />,
     settings: <SettingsTab />,
   };
 

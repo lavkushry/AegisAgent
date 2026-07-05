@@ -65,4 +65,11 @@ describe("console URL state", () => {
       "view=rules",
     );
   });
+
+  it("accepts analytics dashboard deep links", () => {
+    expect(parseConsoleUrl("?view=analytics&range=7d")).toMatchObject({ view: "analytics", timeRange: "7d" });
+    expect(serializeConsoleUrl({ view: "analytics", timeRange: "24h", liveMode: false, variables: {} })).toContain(
+      "view=analytics",
+    );
+  });
 });

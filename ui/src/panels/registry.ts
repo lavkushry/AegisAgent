@@ -5,6 +5,7 @@ import TimeSeriesPanel from "./standard/TimeSeriesPanel";
 import StatusPanel from "./standard/StatusPanel";
 import FeedPanel from "./standard/FeedPanel";
 import HeatmapPlaceholder from "./standard/HeatmapPlaceholder";
+import NotePanel from "./standard/NotePanel";
 import AgentTablePanel from "./standard/AgentTablePanel";
 import ApprovalCard from "./differentiators/ApprovalCard";
 import ProvableTimeline from "./differentiators/ProvableTimeline";
@@ -43,6 +44,12 @@ const entries: PanelRegistryEntry[] = [
   {
     type: "feed",
     Component: FeedPanel as PanelRegistryEntry["Component"],
+    defaultOptions: {},
+    chartLib: "none",
+  },
+  {
+    type: "note",
+    Component: NotePanel as PanelRegistryEntry["Component"],
     defaultOptions: {},
     chartLib: "none",
   },

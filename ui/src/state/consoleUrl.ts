@@ -11,6 +11,7 @@ export const CONSOLE_VIEWS = [
   "agents",
   "mcp",
   "receipts",
+  "analytics",
   "settings",
 ] as const;
 

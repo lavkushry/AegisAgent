@@ -54,12 +54,13 @@ export default function PanelRuntime({
       definition.aggregate,
       definition.groupBy,
       definition.interval,
+      definition.rulesCatalog,
       activeTenant,
       authEpoch,
       timeRange,
       variables,
     ],
-    enabled: Boolean(datasource),
+    enabled: Boolean(datasource) && definition.type !== "note",
     staleTime: (refreshSec ?? 30) * 2_000,
     refetchInterval: refreshSec ? refreshSec * 1000 : false,
     queryFn: ({ signal }) => {
@@ -73,6 +74,7 @@ export default function PanelRuntime({
         aggregate: definition.aggregate,
         groupBy: definition.groupBy,
         interval: definition.interval,
+        rulesCatalog: definition.rulesCatalog,
         timeRange,
         variables,
         signal,
@@ -99,7 +101,7 @@ export default function PanelRuntime({
       isRefreshing={isFetching && !isLoading}
       isStale={isStale && !isFetching}
       error={error ? errorMessage(error) : undefined}
-      isEmpty={!isLoading && frame.length === 0}
+      isEmpty={!isLoading && definition.type !== "note" && frame.length === 0}
     >
       <Component
         definition={definition}
