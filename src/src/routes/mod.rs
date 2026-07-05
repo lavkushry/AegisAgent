@@ -48,10 +48,10 @@ pub mod graph;
 pub mod mcp;
 pub mod openapi;
 pub mod playbook;
-#[cfg(test)]
-pub mod route_parity;
 pub mod policy;
 pub mod receipts;
+#[cfg(test)]
+pub mod route_parity;
 pub mod runtime;
 pub mod sensors;
 pub mod soc;

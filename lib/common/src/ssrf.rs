@@ -38,8 +38,7 @@ pub fn validate_callback_url(raw: &str) -> Result<(), CallbackUrlError> {
         return Err(CallbackUrlError::Empty);
     }
 
-    let parsed =
-        Url::parse(trimmed).map_err(|e| CallbackUrlError::InvalidUrl(e.to_string()))?;
+    let parsed = Url::parse(trimmed).map_err(|e| CallbackUrlError::InvalidUrl(e.to_string()))?;
 
     if parsed.scheme() != "https" {
         return Err(CallbackUrlError::HttpsRequired);
@@ -157,7 +156,9 @@ mod tests {
     fn rejects_loopback_literal() {
         assert_eq!(
             validate_callback_url("https://127.0.0.1/cb"),
-            Err(CallbackUrlError::BlockedAddress("127.0.0.1".parse().unwrap()))
+            Err(CallbackUrlError::BlockedAddress(
+                "127.0.0.1".parse().unwrap()
+            ))
         );
     }
 
@@ -175,11 +176,15 @@ mod tests {
     fn rejects_private_rfc1918_literal() {
         assert_eq!(
             validate_callback_url("https://10.0.0.1/hook"),
-            Err(CallbackUrlError::BlockedAddress("10.0.0.1".parse().unwrap()))
+            Err(CallbackUrlError::BlockedAddress(
+                "10.0.0.1".parse().unwrap()
+            ))
         );
         assert_eq!(
             validate_callback_url("https://192.168.1.50/hook"),
-            Err(CallbackUrlError::BlockedAddress("192.168.1.50".parse().unwrap()))
+            Err(CallbackUrlError::BlockedAddress(
+                "192.168.1.50".parse().unwrap()
+            ))
         );
     }
 
