@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../fixtures/guardedTest";
 import { openConfiguredConsole, TENANT_ID } from "./helpers";
 
 test.describe("production SOC console shell", () => {
@@ -37,8 +37,8 @@ test.describe("production SOC console shell", () => {
   const navCases = [
     ["overview", "Overview"], ["dashboards", "Dashboards"],
     ["integrity", "Integrity Console"], ["explore", "Explore"],
-    ["incidents", "Incidents"], ["detections", "Detections & Rules"],
-    ["approvals", "Approvals"], ["agents", "Agents Fleet"],
+    ["incidents", "Incidents"], ["detections", "Detections"],
+    ["rules", "Rules"], ["approvals", "Approvals"], ["agents", "Agents Fleet"],
     ["mcp", "MCP Servers"], ["receipts", "Receipts Log"],
     ["settings", "Settings"],
   ] as const;

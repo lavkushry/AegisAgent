@@ -1,6 +1,13 @@
-import type { APIRequestContext, Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { FAKE_SECRET } from "../fixtures/gatewayFixtures";
 
 export const TENANT_ID = "tenant_123";
+
+const SECRET_PATTERNS = [
+  /sk-live-[A-Za-z0-9-]+/,
+  /Bearer\s+[A-Za-z0-9._-]{16,}/,
+  /"api_key"\s*:\s*"(?!\\[REDACTED\\])/,
+];
 
 /** Configure production UI credentials for one browser page without persisting the bearer token. */
 export async function openConfiguredConsole(page: Page): Promise<void> {
@@ -15,7 +22,37 @@ export async function openConfiguredConsole(page: Page): Promise<void> {
 export interface TestAgent {
   /** The agent's gateway-assigned UUID — this is what `approvals.agent_id` renders in the UI. */
   id: string;
+  /** Human-readable agent key shown in the fleet table primary column. */
+  agentKey: string;
   agentToken: string;
+}
+
+/** Fill the ConfirmDialog audit reason and confirm a dangerous action. */
+export async function confirmDangerousAction(
+  page: Page,
+  reason: string,
+  confirmLabel?: string | RegExp,
+): Promise<void> {
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.locator("textarea").fill(reason);
+  const confirm = dialog.getByRole("button", {
+    name: confirmLabel ?? /Confirm|Freeze|Quarantine|Approve|Reject|Revoke|Restore|Export/i,
+  });
+  await confirm.click();
+  await expect(dialog).toBeHidden({ timeout: 10_000 });
+}
+
+/** Assert sensitive fixture material never renders in the DOM. */
+export async function assertNoSecrets(page: Page, extraForbidden?: string[]): Promise<void> {
+  const bodyText = await page.locator("body").innerText();
+  const forbidden = [FAKE_SECRET, ...(extraForbidden ?? [])];
+  for (const secret of forbidden) {
+    expect(bodyText).not.toContain(secret);
+  }
+  for (const pattern of SECRET_PATTERNS) {
+    expect(bodyText).not.toMatch(pattern);
+  }
 }
 
 /**
@@ -49,7 +86,7 @@ export async function registerTestAgent(
     throw new Error(`Failed to register test agent: HTTP ${resp.status()}`);
   }
   const body = await resp.json();
-  return { id: body.id as string, agentToken: body.agent_token as string };
+  return { id: body.id as string, agentKey, agentToken: body.agent_token as string };
 }
 
 /**
