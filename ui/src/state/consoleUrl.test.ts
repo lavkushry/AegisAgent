@@ -29,6 +29,20 @@ describe("console URL state", () => {
     expect(search).not.toMatch(/token|authorization|tenant_123/i);
   });
 
+  it("round-trips agent detail deep links", () => {
+    const search = serializeConsoleUrl({
+      view: "agents",
+      timeRange: "24h",
+      liveMode: false,
+      agentId: "agent-123",
+      variables: {},
+    });
+    expect(parseConsoleUrl(search)).toMatchObject({
+      view: "agents",
+      agentId: "agent-123",
+    });
+  });
+
   it("accepts split detections and rules console views for deep links", () => {
     expect(parseConsoleUrl("?view=detections&range=24h")).toMatchObject({ view: "detections", timeRange: "24h" });
     expect(parseConsoleUrl("?view=rules&range=7d")).toMatchObject({ view: "rules", timeRange: "7d" });

@@ -6,6 +6,9 @@ import {
   editApproval,
   fetchFromGateway,
   freezeAgent,
+  getAgent,
+  restoreAgent,
+  revokeAgent,
   getMcpManifestHistory,
   quarantineMcpServer,
   normalizeMcpManifestHistory,
@@ -164,6 +167,28 @@ describe("gateway transport", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       reason: "Suspected compromised token",
     });
+  });
+
+  it("fetches a single agent detail by encoded id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "agent/id", agent_key: "agent" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getAgent(options, "agent/id");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8080/v1/agents/agent%2Fid");
+  });
+
+  it.each([
+    ["revoke", revokeAgent, "/revoke", "Compromised credentials"],
+    ["restore", restoreAgent, "/restore", "Investigation complete"],
+  ] as const)("sends %s reason through active-response endpoint", async (_label, helper, suffix, reason) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "agent/id", status: "active" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await helper(options, "agent/id", reason);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`http://127.0.0.1:8080/v1/agents/agent%2Fid${suffix}`);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ reason });
   });
 
   it("sends unfreeze reason to preserve active-response audit context", async () => {
