@@ -3,7 +3,6 @@
 import React from "react";
 import { useAppStore } from "./store";
 import AppShell from "@/chrome/AppShell";
-import OverviewTab from "../components/OverviewTab";
 import ExploreTab from "../components/ExploreTab";
 import IncidentsTab from "../components/IncidentsTab";
 import McpTab from "../components/McpTab";
@@ -21,7 +20,8 @@ type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incident
 export default function Home() {
   const activeTab = useAppStore((s) => s.activeView) as ActiveTab;
   const views: Record<ActiveTab, React.ReactNode> = {
-    overview: <OverviewTab />, dashboards: <DashboardLoader schema={overviewDashboard} />,
+    overview: <DashboardLoader schema={overviewDashboard} />,
+    dashboards: <DashboardLoader schema={overviewDashboard} />,
     integrity: <DashboardLoader schema={integrityDashboard} />, explore: <ExploreTab />,
     incidents: <IncidentsTab />, detections: <DetectionsTab />, approvals: <DashboardLoader schema={approvalsDashboard} />,
     agents: <DashboardLoader schema={fleetDashboard} />, mcp: <McpTab />, receipts: <ReceiptsTab />,

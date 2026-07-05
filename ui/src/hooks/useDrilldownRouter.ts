@@ -24,6 +24,7 @@ export function useDrilldownRouter(): (
 ) => void {
   const setActiveView = useAppStore((s) => s.setActiveView);
   const setExploreSeed = useAppStore((s) => s.setExploreSeed);
+  const setActiveIncidentId = useAppStore((s) => s.setActiveIncidentId);
 
   return useCallback(
     (link: DrilldownLink, row?: Record<string, unknown>) => {
@@ -35,14 +36,17 @@ export function useDrilldownRouter(): (
         case "verify-receipt":
           setActiveView("integrity");
           break;
-        case "incident":
+        case "incident": {
+          const incidentId = row?.[link.target.incidentIdField];
+          setActiveIncidentId(typeof incidentId === "string" ? incidentId : null);
           setActiveView("incidents");
           break;
+        }
         case "dashboard":
           setActiveView(link.target.uid);
           break;
       }
     },
-    [setActiveView, setExploreSeed],
+    [setActiveView, setActiveIncidentId, setExploreSeed],
   );
 }
