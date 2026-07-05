@@ -1,9 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { getMcpServers, quarantineMcpServer, restoreMcpServer, getMcpManifestHistory } from "../app/api";
+import { quarantineMcpServer, restoreMcpServer } from "../app/api";
+import { GatewayEntityDatasource } from "@/datasources/gatewayEntity";
+import { mcpManifestRowsFromFrame, mcpServerRowsFromFrame } from "@/datasources/entityData";
 import { Server, Lock, Unlock, History, Clock } from "lucide-react";
 import StatusBadge from "./security/StatusBadge";
 import { errorMessage } from "@/lib/format";
@@ -14,28 +16,46 @@ type PendingMcpAction = {
   serverKey: string;
 };
 
+const DEFAULT_TIME_RANGE = { from: "now-24h", to: "now" } as const;
+
 export default function McpTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
   const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
+  const entityDatasource = useMemo(
+    () => new GatewayEntityDatasource({ gatewayUrl, bearerToken, tenantId: activeTenant }),
+    [gatewayUrl, bearerToken, activeTenant],
+  );
   const queryClient = useQueryClient();
 
   const [selectedServerKey, setSelectedServerKey] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingMcpAction | null>(null);
   const [auditReason, setAuditReason] = useState("");
 
-  // Fetch MCP servers list
-  const { data: servers, isLoading, error } = useQuery({
+  const { data: serversFrame, isLoading, error } = useQuery({
     queryKey: ["mcpServers", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getMcpServers(apiOpts),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "mcp_server",
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
     refetchInterval: 5000,
   });
+  const servers = mcpServerRowsFromFrame(serversFrame);
 
-  // Fetch manifest history for selected server
-  const { data: history, isLoading: isHistoryLoading } = useQuery({
+  const { data: historyFrame, isLoading: isHistoryLoading } = useQuery({
     queryKey: ["mcpHistory", gatewayUrl, activeTenant, authEpoch, selectedServerKey],
-    queryFn: () => getMcpManifestHistory(apiOpts, selectedServerKey!),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "mcp_server",
+      entityId: selectedServerKey!,
+      subResource: "manifest-history",
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
     enabled: !!selectedServerKey,
   });
+  const history = mcpManifestRowsFromFrame(historyFrame);
 
   const quarantineMutation = useMutation({
     mutationFn: ({ key, reason }: { key: string; reason: string }) =>

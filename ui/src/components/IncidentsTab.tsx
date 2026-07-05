@@ -3,7 +3,14 @@
 import React, { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { downloadFromGateway, getIncidents, getIncidentDetail, fetchFromGateway, getIncidentGraph, type IncidentNarration } from "../app/api";
+import { downloadFromGateway, fetchFromGateway } from "../app/api";
+import { GatewayEntityDatasource } from "@/datasources/gatewayEntity";
+import {
+  incidentFromFrame,
+  incidentGraphFromFrame,
+  incidentNarrationFromFrame,
+  incidentRowsFromFrame,
+} from "@/datasources/entityData";
 import { ReceiptDatasource } from "@/datasources/receipt";
 import { AlertOctagon, CheckSquare, FileText, Download, ShieldCheck, Activity, ShieldAlert, AlertTriangle } from "lucide-react";
 import SeverityTag from "./security/SeverityTag";
@@ -21,10 +28,15 @@ export default function IncidentsTab() {
     () => ({ gatewayUrl, bearerToken, tenantId: activeTenant }),
     [gatewayUrl, bearerToken, activeTenant],
   );
+  const entityDatasource = useMemo(
+    () => new GatewayEntityDatasource(apiOpts),
+    [apiOpts],
+  );
   const receiptDatasource = useMemo(
     () => new ReceiptDatasource(apiOpts),
     [apiOpts],
   );
+  const defaultTimeRange = useMemo(() => ({ from: "now-24h", to: "now" }), []);
   const queryClient = useQueryClient();
 
   const selectedIncidentId = useAppStore((state) => state.activeIncidentId);
@@ -38,33 +50,58 @@ export default function IncidentsTab() {
   const [auditReason, setAuditReason] = useState("");
   const [exportingEvidence, setExportingEvidence] = useState(false);
 
-  // Fetch list of incidents
-  const { data: incidents, isLoading: isIncidentsLoading } = useQuery({
+  const { data: incidentsFrame, isLoading: isIncidentsLoading } = useQuery({
     queryKey: ["incidents", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getIncidents(apiOpts),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "incident",
+      timeRange: defaultTimeRange,
+      variables: {},
+      signal,
+    }),
     refetchInterval: 5000,
   });
+  const incidents = incidentRowsFromFrame(incidentsFrame);
 
-  // Fetch details for the selected incident
-  const { data: incidentDetail, isLoading: isDetailLoading } = useQuery({
+  const { data: incidentDetailFrame, isLoading: isDetailLoading } = useQuery({
     queryKey: ["incidentDetail", gatewayUrl, activeTenant, authEpoch, selectedIncidentId],
-    queryFn: () => getIncidentDetail(apiOpts, selectedIncidentId!),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "incident",
+      entityId: selectedIncidentId!,
+      timeRange: defaultTimeRange,
+      variables: {},
+      signal,
+    }),
     enabled: !!selectedIncidentId,
   });
+  const incidentDetail = incidentFromFrame(incidentDetailFrame);
 
-  // Fetch RCA narration
-  const { data: narration, isLoading: isNarrationLoading } = useQuery({
+  const { data: narrationFrame, isLoading: isNarrationLoading } = useQuery({
     queryKey: ["incidentNarration", gatewayUrl, activeTenant, authEpoch, selectedIncidentId],
-    queryFn: () => fetchFromGateway<IncidentNarration>(apiOpts, `/v1/incidents/${selectedIncidentId}/narrate`),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "incident",
+      entityId: selectedIncidentId!,
+      subResource: "narrate",
+      timeRange: defaultTimeRange,
+      variables: {},
+      signal,
+    }),
     enabled: !!selectedIncidentId,
   });
+  const narration = incidentNarrationFromFrame(narrationFrame);
 
-  // Fetch evidence graph
-  const { data: graph, isLoading: isGraphLoading } = useQuery({
+  const { data: graphFrame, isLoading: isGraphLoading } = useQuery({
     queryKey: ["incidentGraph", gatewayUrl, activeTenant, authEpoch, selectedIncidentId],
-    queryFn: () => getIncidentGraph(apiOpts, selectedIncidentId!),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "incident",
+      entityId: selectedIncidentId!,
+      subResource: "graph",
+      timeRange: defaultTimeRange,
+      variables: {},
+      signal,
+    }),
     enabled: !!selectedIncidentId,
   });
+  const graph = incidentGraphFromFrame(graphFrame);
 
   // Mutation to close incident
   const closeIncidentMutation = useMutation({

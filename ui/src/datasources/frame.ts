@@ -57,6 +57,25 @@ export function cell(frame: DataFrame, fieldName: string, rowIndex: number): unk
   return field ? field.values[rowIndex] : undefined;
 }
 
+/** Serialize a single JSON object into a one-row DataFrame. */
+export function objectToSingleRowFrame(obj: Record<string, unknown>): DataFrame {
+  const fields: Field[] = Object.entries(obj).map(([name, value]) => {
+    const { type, format } = inferType(name, value);
+    return { name, type, format, values: [value ?? null] };
+  });
+  return { fields, length: 1, meta: { total: 1 } };
+}
+
+/** Reconstruct a single-row object frame back into a plain record. */
+export function singleRowAsObject(frame: DataFrame | undefined): Record<string, unknown> {
+  if (!frame || frame.length === 0) return {};
+  const row: Record<string, unknown> = {};
+  for (const field of frame.fields) {
+    row[field.name] = field.values[0] ?? null;
+  }
+  return row;
+}
+
 /** Reconstruct row objects from a frame (for table rendering). */
 export function frameRows(frame: DataFrame): Array<Record<string, unknown>> {
   const rows: Array<Record<string, unknown>> = [];

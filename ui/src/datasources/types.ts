@@ -43,6 +43,12 @@ export type FieldFormat =
   | "bytes"
   | "raw";
 
+/** Single-object gateway reads surfaced as one-row DataFrames. */
+export type GatewaySnapshot = "tenant-stats" | "soc-summary" | "agent-scoreboard";
+
+/** Optional sub-path under an entity resource (detail, graph, manifest history, etc.). */
+export type GatewaySubResource = "detail" | "graph" | "narrate" | "manifest-history";
+
 /** What a query needs to run. Datasources translate this to a transport call. */
 export interface QueryRequest {
   readonly aql?: string;
@@ -52,6 +58,13 @@ export interface QueryRequest {
   readonly limit?: number;
   readonly cursor?: string;
   readonly search?: string;
+  /** Fetch a tenant-scoped summary object instead of an entity list. */
+  readonly snapshot?: GatewaySnapshot;
+  /** Target record id/key for entity detail or sub-resource reads. */
+  readonly entityId?: string;
+  readonly subResource?: GatewaySubResource;
+  /** Select SOC engine rules vs persisted detection rules. */
+  readonly rulesCatalog?: "soc" | "detection";
   /** Aggregate mode — when set, the datasource returns a bucketed series. */
   readonly aggregate?: "count" | "count_over_time" | "count_by";
   /** Bucket granularity for count_over_time ("minute" | "hour" | "day"). */

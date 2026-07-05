@@ -4,9 +4,6 @@ import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import {
-  getAlerts,
-  getSocRules,
-  getDetectionRules,
   createSocRule,
   deleteDetectionRule,
   backtestSocRule,
@@ -14,6 +11,8 @@ import {
   type BacktestResult,
   type SocRuleRecord,
 } from "../app/api";
+import { GatewayEntityDatasource } from "@/datasources/gatewayEntity";
+import { alertRowsFromFrame, socRuleRowsFromFrame } from "@/datasources/entityData";
 import { errorMessage } from "@/lib/format";
 import {
   ShieldAlert,
@@ -73,9 +72,15 @@ function jsonToYaml(obj: unknown): string {
   return lines.join("\n");
 }
 
+const DEFAULT_TIME_RANGE = { from: "now-24h", to: "now" } as const;
+
 export default function DetectionsTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
   const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
+  const entityDatasource = useMemo(
+    () => new GatewayEntityDatasource({ gatewayUrl, bearerToken, tenantId: activeTenant }),
+    [gatewayUrl, bearerToken, activeTenant],
+  );
   const queryClient = useQueryClient();
 
   const [subTab, setSubTab] = useState<"alerts" | "rules">("alerts");
@@ -116,24 +121,40 @@ export default function DetectionsTab() {
   const [isBacktesting, setIsBacktesting] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
-  // Fetch Alerts (Active Detections)
-  const { data: alerts, isLoading: loadingAlerts, error: alertsError } = useQuery({
+  const { data: alertsFrame, isLoading: loadingAlerts, error: alertsError } = useQuery({
     queryKey: ["alerts", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getAlerts(apiOpts, 100),
-    refetchInterval: 5000, // Poll every 5s for live alerts feed
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "alert",
+      limit: 100,
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
+    refetchInterval: 5000,
   });
+  const alerts = alertRowsFromFrame(alertsFrame);
 
-  // Fetch Effective Rules (what's active on the gateway)
-  const { data: effectiveRules, isLoading: loadingEffective } = useQuery({
+  const { data: effectiveRulesFrame, isLoading: loadingEffective } = useQuery({
     queryKey: ["socRules", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getSocRules(apiOpts),
+    queryFn: ({ signal }) => entityDatasource.query({
+      rulesCatalog: "soc",
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
   });
+  const effectiveRules = socRuleRowsFromFrame(effectiveRulesFrame);
 
-  // Fetch Custom Rules (to retrieve DB record ID and status including disabled rules)
-  const { data: customRules, isLoading: loadingCustom } = useQuery({
+  const { data: customRulesFrame, isLoading: loadingCustom } = useQuery({
     queryKey: ["customRules", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getDetectionRules(apiOpts),
+    queryFn: ({ signal }) => entityDatasource.query({
+      rulesCatalog: "detection",
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
   });
+  const customRules = socRuleRowsFromFrame(customRulesFrame);
 
   // Consolidate the catalogue of default and custom rules
   const catalog = useMemo(() => {
