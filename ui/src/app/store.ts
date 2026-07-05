@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ExploreEntity } from "@/components/exploreData";
 import type { StreamConnectionStatus } from "@/datasources/stream";
 import { DEMO_MODE, loadConnectionSettings, persistBearerToken } from "./runtimeConfig";
 
@@ -27,6 +28,7 @@ interface AppState {
   /** Pending Explore search seeded by a drilldown; consumed by ExploreTab. */
   exploreSeed: string | null;
   exploreQuery: string;
+  exploreEntity: ExploreEntity;
   activeIncidentId: string | null;
   activeReceiptId: string | null;
   activeAgentId: string | null;
@@ -45,6 +47,7 @@ interface AppState {
   setActiveView: (view: string) => void;
   setExploreSeed: (seed: string) => void;
   setExploreQuery: (query: string) => void;
+  setExploreEntity: (entity: ExploreEntity) => void;
   consumeExploreSeed: () => void;
   setActiveIncidentId: (id: string | null) => void;
   setActiveReceiptId: (id: string | null) => void;
@@ -117,6 +120,7 @@ export const useAppStore = create<AppState>((set) => ({
   activeView: "overview",
   exploreSeed: null,
   exploreQuery: "",
+  exploreEntity: "decision",
   activeIncidentId: null,
   activeReceiptId: null,
   activeAgentId: null,
@@ -169,6 +173,7 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveView: (view) => set({ activeView: view }),
   setExploreSeed: (seed) => set({ exploreSeed: seed, exploreQuery: seed }),
   setExploreQuery: (exploreQuery) => set({ exploreQuery }),
+  setExploreEntity: (exploreEntity) => set({ exploreEntity }),
   consumeExploreSeed: () => set({ exploreSeed: null }),
   setActiveIncidentId: (activeIncidentId) => set({ activeIncidentId }),
   setActiveReceiptId: (activeReceiptId) => set({ activeReceiptId }),

@@ -43,6 +43,21 @@ describe("console URL state", () => {
     });
   });
 
+  it("round-trips explore entity selection", () => {
+    const search = serializeConsoleUrl({
+      view: "explore",
+      timeRange: "24h",
+      liveMode: false,
+      exploreQuery: "decision:deny",
+      exploreEntity: "ase",
+      variables: {},
+    });
+    expect(parseConsoleUrl(search)).toMatchObject({
+      exploreQuery: "decision:deny",
+      exploreEntity: "ase",
+    });
+  });
+
   it("accepts split detections and rules console views for deep links", () => {
     expect(parseConsoleUrl("?view=detections&range=24h")).toMatchObject({ view: "detections", timeRange: "24h" });
     expect(parseConsoleUrl("?view=rules&range=7d")).toMatchObject({ view: "rules", timeRange: "7d" });

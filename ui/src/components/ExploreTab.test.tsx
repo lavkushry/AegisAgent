@@ -17,8 +17,14 @@ vi.mock("../app/store", () => ({
       authEpoch: 0,
       exploreSeed: null,
       exploreQuery: "",
+      exploreEntity: "decision",
       consumeExploreSeed: vi.fn(),
       setExploreQuery: vi.fn(),
+      setExploreEntity: vi.fn(),
+      setActiveView: vi.fn(),
+      setActiveAgentId: vi.fn(),
+      setActiveReceiptId: vi.fn(),
+      setTimeRange: vi.fn(),
       timeRange: "24h",
     };
     return typeof selector === "function" ? selector(state) : state;

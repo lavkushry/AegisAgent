@@ -15,13 +15,14 @@ import {
   AlertCircle,
 } from "lucide-react";
 import JsonViewer from "@/components/primitives/JsonViewer";
+import { exploreAqlForAgent } from "@/dashboards/drilldown";
 import { filterAlerts } from "./alertFilters";
 import { getSeverityStyle } from "./severityStyles";
 
 const DEFAULT_TIME_RANGE = { from: "now-24h", to: "now" } as const;
 
 export default function DetectionsPage() {
-  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch, setExploreSeed, setActiveView } = useAppStore();
   const entityDatasource = useMemo(
     () => new GatewayEntityDatasource({ gatewayUrl, bearerToken, tenantId: activeTenant }),
     [gatewayUrl, bearerToken, activeTenant],
@@ -181,6 +182,16 @@ export default function DetectionsPage() {
                         </span>
                         <JsonViewer value={alert} />
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExploreSeed(exploreAqlForAgent(alert.agent_id));
+                          setActiveView("explore");
+                        }}
+                        className="rounded-md border border-[var(--border-default)] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--brand)]"
+                      >
+                        Investigate in Explore
+                      </button>
                     </div>
                   )}
                 </div>

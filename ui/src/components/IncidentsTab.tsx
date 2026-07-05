@@ -22,6 +22,7 @@ import {
   incidentGraphNodesToReceiptRows,
   type ChainVerifyState,
 } from "@/panels/differentiators/provableTimelineState";
+import { exploreAqlForAgent } from "@/dashboards/drilldown";
 
 type PendingIncidentAction = {
   kind: "close" | "export";
@@ -47,6 +48,10 @@ export default function IncidentsTab() {
 
   const selectedIncidentId = useAppStore((state) => state.activeIncidentId);
   const setSelectedIncidentId = useAppStore((state) => state.setActiveIncidentId);
+  const setExploreSeed = useAppStore((state) => state.setExploreSeed);
+  const setActiveView = useAppStore((state) => state.setActiveView);
+  const setActiveAgentId = useAppStore((state) => state.setActiveAgentId);
+  const setActiveReceiptId = useAppStore((state) => state.setActiveReceiptId);
   const [chainVerify, setChainVerify] = useState<ChainVerifyState>({ status: "idle" });
   const [brokenReceiptId, setBrokenReceiptId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingIncidentAction | null>(null);
@@ -254,6 +259,28 @@ export default function IncidentsTab() {
                   <span>&middot;</span>
                   <span>Agent: <code className="text-[var(--brand)]">{incidentDetail.agent_id}</code></span>
                 </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveAgentId(incidentDetail.agent_id);
+                      setActiveView("agents");
+                    }}
+                    className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] uppercase text-[var(--text-secondary)]"
+                  >
+                    Open agent
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExploreSeed(exploreAqlForAgent(incidentDetail.agent_id));
+                      setActiveView("explore");
+                    }}
+                    className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] uppercase text-[var(--text-secondary)]"
+                  >
+                    Explore agent decisions
+                  </button>
+                </div>
               </div>
 
               <div className="flex gap-2">
@@ -389,14 +416,37 @@ export default function IncidentsTab() {
                                 {node.group ?? "event"} · {node.label || node.id}
                               </span>
                               {node.group === "receipt" && node.label ? (
-                                <HashChip hash={node.label} kind="receipt" />
+                                <HashChip
+                                  hash={node.label}
+                                  kind="receipt"
+                                  onDrilldown={() => {
+                                    setActiveReceiptId(node.label ?? null);
+                                    setActiveView("receipts");
+                                  }}
+                                />
                               ) : null}
                             </div>
                           </div>
 
+                          <div className="flex items-center gap-2">
+                            {node.group === "decision" ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (incidentDetail?.agent_id) {
+                                    setExploreSeed(exploreAqlForAgent(incidentDetail.agent_id));
+                                    setActiveView("explore");
+                                  }
+                                }}
+                                className="text-[10px] uppercase text-[var(--brand)] underline"
+                              >
+                                Explore
+                              </button>
+                            ) : null}
                           <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap">
                             {node.timestamp ? new Date(node.timestamp).toLocaleTimeString() : ""}
                           </span>
+                          </div>
                         </div>
                       );
                     })

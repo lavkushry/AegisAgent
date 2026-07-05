@@ -9,7 +9,13 @@ import { AqlCompileError, AqlParseError } from "@/datasources/aql/types";
 import { fieldsForEntity } from "@/datasources/fieldCatalog";
 import { ReceiptDatasource } from "@/datasources/receipt";
 import { SocQueryDatasource } from "@/datasources/socQuery";
-import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Fingerprint } from "lucide-react";
+import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Fingerprint, ExternalLink } from "lucide-react";
+import SavedSearchPanel from "./explore/SavedSearchPanel";
+import {
+  exploreAqlForActionHash,
+  exploreAqlForAgent,
+  exploreAqlForReceipt,
+} from "@/dashboards/drilldown";
 import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
 import HashChip from "./security/HashChip";
@@ -41,6 +47,12 @@ export default function ExploreTab() {
   const consumeExploreSeed = useAppStore((s) => s.consumeExploreSeed);
   const exploreQuery = useAppStore((s) => s.exploreQuery);
   const setExploreQuery = useAppStore((s) => s.setExploreQuery);
+  const exploreEntity = useAppStore((s) => s.exploreEntity);
+  const setExploreEntity = useAppStore((s) => s.setExploreEntity);
+  const setActiveView = useAppStore((s) => s.setActiveView);
+  const setActiveAgentId = useAppStore((s) => s.setActiveAgentId);
+  const setActiveReceiptId = useAppStore((s) => s.setActiveReceiptId);
+  const setTimeRange = useAppStore((s) => s.setTimeRange);
   const timeRange = useAppStore((s) => s.timeRange);
   const apiOpts = useMemo(
     () => ({ gatewayUrl, bearerToken, tenantId: activeTenant }),
@@ -55,17 +67,29 @@ export default function ExploreTab() {
     [apiOpts],
   );
 
-  const [entity, setEntity] = useState<ExploreEntity>("decision");
+  const [entity, setEntity] = useState<ExploreEntity>(exploreEntity);
   const [searchQuery, setSearchQuery] = useState(() => exploreSeed ?? exploreQuery);
   const [debouncedQuery, setDebouncedQuery] = useState(() => exploreSeed ?? exploreQuery);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [verifyStates, setVerifyStates] = useState<Record<string, VerifyState>>({});
 
   useEffect(() => {
-    if (exploreSeed) consumeExploreSeed();
-    // Mount-only seed consumption.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!exploreSeed) return;
+    setSearchQuery(exploreSeed);
+    setDebouncedQuery(exploreSeed);
+    consumeExploreSeed();
+  }, [exploreSeed, consumeExploreSeed]);
+
+  useEffect(() => {
+    if (exploreQuery && exploreQuery !== debouncedQuery) {
+      setSearchQuery(exploreQuery);
+      setDebouncedQuery(exploreQuery);
+    }
+  }, [exploreQuery, debouncedQuery]);
+
+  useEffect(() => {
+    setEntity(exploreEntity);
+  }, [exploreEntity]);
 
   const fieldDescriptors = useMemo(() => fieldsForEntity(entity), [entity]);
   const activeFilters = useMemo(() => parsedAqlChips(debouncedQuery, entity), [debouncedQuery, entity]);
@@ -160,6 +184,7 @@ export default function ExploreTab() {
               type="button"
               onClick={() => {
                 setEntity(option);
+                setExploreEntity(option);
                 setExpandedId(null);
                 setVerifyStates({});
               }}
@@ -224,6 +249,23 @@ export default function ExploreTab() {
         ) : null}
       </form>
 
+      <SavedSearchPanel
+        tenantId={activeTenant}
+        entity={entity}
+        aql={debouncedQuery}
+        timeRange={timeRange}
+        onApply={(nextAql, nextEntity, nextRange) => {
+          setEntity(nextEntity);
+          setExploreEntity(nextEntity);
+          setTimeRange(nextRange);
+          setSearchQuery(nextAql);
+          setDebouncedQuery(nextAql);
+          setExploreQuery(nextAql);
+          setExpandedId(null);
+          setVerifyStates({});
+        }}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-[210px_minmax(0,1fr)] gap-4">
         <FieldSidebar
           descriptors={fieldDescriptors}
@@ -260,6 +302,52 @@ export default function ExploreTab() {
                   verifyState={verifyStates[exploreReceiptId(event) ?? event.id] ?? { status: "idle" }}
                   onToggle={() => setExpandedId(expandedId === event.id ? null : event.id)}
                   onVerify={() => triggerVerification(event)}
+                  onOpenAgent={
+                    event.agent_id
+                      ? () => {
+                          setActiveAgentId(event.agent_id!);
+                          setActiveView("agents");
+                        }
+                      : undefined
+                  }
+                  onOpenReceipt={
+                    exploreReceiptId(event)
+                      ? () => {
+                          setActiveReceiptId(exploreReceiptId(event)!);
+                          setActiveView("receipts");
+                        }
+                      : undefined
+                  }
+                  onFilterActionHash={
+                    event.action_hash
+                      ? () => {
+                          const next = exploreAqlForActionHash(event.action_hash!);
+                          setSearchQuery(next);
+                          setDebouncedQuery(next);
+                          setExploreQuery(next);
+                        }
+                      : undefined
+                  }
+                  onFilterAgent={
+                    event.agent_id
+                      ? () => {
+                          const next = exploreAqlForAgent(event.agent_id!);
+                          setSearchQuery(next);
+                          setDebouncedQuery(next);
+                          setExploreQuery(next);
+                        }
+                      : undefined
+                  }
+                  onFilterReceipt={
+                    exploreReceiptId(event)
+                      ? () => {
+                          const next = exploreAqlForReceipt(exploreReceiptId(event)!);
+                          setSearchQuery(next);
+                          setDebouncedQuery(next);
+                          setExploreQuery(next);
+                        }
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -277,6 +365,11 @@ function ExploreEventRow({
   verifyState,
   onToggle,
   onVerify,
+  onOpenAgent,
+  onOpenReceipt,
+  onFilterActionHash,
+  onFilterAgent,
+  onFilterReceipt,
 }: {
   event: ExploreEventRecord;
   entity: ExploreEntity;
@@ -284,6 +377,11 @@ function ExploreEventRow({
   verifyState: VerifyState;
   onToggle: () => void;
   onVerify: () => void;
+  onOpenAgent?: () => void;
+  onOpenReceipt?: () => void;
+  onFilterActionHash?: () => void;
+  onFilterAgent?: () => void;
+  onFilterReceipt?: () => void;
 }) {
   const label =
     event.tool_call?.name
@@ -332,11 +430,11 @@ function ExploreEventRow({
             <div className="space-y-2">
               <div>
                 <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Action Hash</span>
-                <HashChip hash={event.action_hash} kind="action" head={16} tail={8} />
+                <HashChip hash={event.action_hash} kind="action" head={16} tail={8} onDrilldown={onFilterActionHash} />
               </div>
               <div>
                 <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Receipt Hash</span>
-                <HashChip hash={event.receipt_hash} kind="receipt" head={16} tail={8} />
+                <HashChip hash={event.receipt_hash} kind="receipt" head={16} tail={8} onDrilldown={onFilterReceipt} />
               </div>
               <InspectorField
                 label="Composite Risk Score"
@@ -351,6 +449,18 @@ function ExploreEventRow({
               Redacted event document
             </span>
             <JsonViewer value={event} />
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-[var(--border-default)]">
+            {onFilterAgent ? (
+              <DrilldownButton label="Filter by agent" onClick={onFilterAgent} />
+            ) : null}
+            {onOpenAgent ? (
+              <DrilldownButton label="Open agent fleet" onClick={onOpenAgent} />
+            ) : null}
+            {onOpenReceipt ? (
+              <DrilldownButton label="Open receipt log" onClick={onOpenReceipt} />
+            ) : null}
           </div>
 
           {entity === "decision" ? (
@@ -380,6 +490,19 @@ function ExploreEventRow({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function DrilldownButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1 rounded-md border border-[var(--border-default)] px-2.5 py-1 text-[10px] uppercase tracking-wider text-[var(--text-secondary)] hover:text-[var(--brand)]"
+    >
+      <ExternalLink size={12} />
+      {label}
+    </button>
   );
 }
 
