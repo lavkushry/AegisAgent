@@ -2033,6 +2033,7 @@ pub(crate) mod test_helpers {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
