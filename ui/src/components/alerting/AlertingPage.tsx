@@ -16,12 +16,16 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/app/store";
 import {
+  createSilence,
   createWebhookSubscription,
+  deleteSilence,
   deleteWebhookSubscription,
   listPlaybooks,
+  listSilences,
   listWebhookSubscriptions,
   probeGatewayEndpoint,
   reactivateWebhookSubscription,
+  type AlertSilenceRecord,
   type WebhookSubscriptionRecord,
 } from "@/app/api";
 import { GatewayEntityDatasource } from "@/datasources/gatewayEntity";
@@ -62,6 +66,11 @@ export default function AlertingPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WebhookSubscriptionRecord | null>(null);
+  const [silenceRuleKey, setSilenceRuleKey] = useState("");
+  const [silenceAgentId, setSilenceAgentId] = useState("");
+  const [silenceHours, setSilenceHours] = useState("4");
+  const [silenceComment, setSilenceComment] = useState("");
+  const [deleteSilenceTarget, setDeleteSilenceTarget] = useState<AlertSilenceRecord | null>(null);
 
   const { data: backendSupport } = useQuery({
     queryKey: ["alertingSupport", gatewayUrl, activeTenant, authEpoch],
@@ -83,6 +92,52 @@ export default function AlertingPage() {
     enabled: support.webhooks,
   });
   const webhooks = webhooksResult?.data ?? [];
+
+  const { data: silencesResult, isLoading: loadingSilences, error: silencesError } = useQuery({
+    queryKey: ["alertSilences", gatewayUrl, activeTenant, authEpoch],
+    queryFn: ({ signal }) => listSilences({ ...apiOpts, signal }),
+    enabled: support.silences,
+  });
+  const silences = silencesResult?.data ?? [];
+
+  const createSilenceMutation = useMutation({
+    mutationFn: () => {
+      const hours = Number(silenceHours);
+      if (!Number.isFinite(hours) || hours <= 0) {
+        throw new Error("Duration must be a positive number of hours");
+      }
+      if (!silenceRuleKey.trim() && !silenceAgentId.trim()) {
+        throw new Error("Provide a rule key and/or agent id");
+      }
+      const endsAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+      return createSilence(
+        { ...apiOpts },
+        {
+          rule_key: silenceRuleKey.trim() || undefined,
+          agent_id: silenceAgentId.trim() || undefined,
+          comment: silenceComment.trim() || undefined,
+          ends_at: endsAt,
+          created_by: "console",
+        },
+      );
+    },
+    onSuccess: () => {
+      setSilenceRuleKey("");
+      setSilenceAgentId("");
+      setSilenceComment("");
+      queryClient.invalidateQueries({ queryKey: ["alertSilences"] });
+    },
+    onError: (err: unknown) => setFormError(errorMessage(err)),
+  });
+
+  const deleteSilenceMutation = useMutation({
+    mutationFn: (id: string) => deleteSilence({ ...apiOpts }, id),
+    onSuccess: () => {
+      setDeleteSilenceTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["alertSilences"] });
+    },
+    onError: (err: unknown) => setFormError(errorMessage(err)),
+  });
 
   const { data: playbooksResult, isLoading: loadingPlaybooks, error: playbooksError } = useQuery({
     queryKey: ["playbooks", gatewayUrl, activeTenant, authEpoch],
@@ -439,7 +494,77 @@ export default function AlertingPage() {
           <Ban size={14} className="text-[var(--brand)]" /> Silences
         </h3>
         {support.silences ? (
-          <p className="text-xs text-[var(--text-muted)]">Silence management API detected — UI wiring pending #1627.</p>
+          <div className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <input
+                className="input-field text-xs"
+                placeholder="Rule key (optional)"
+                value={silenceRuleKey}
+                onChange={(e) => setSilenceRuleKey(e.target.value)}
+              />
+              <input
+                className="input-field text-xs"
+                placeholder="Agent id (optional)"
+                value={silenceAgentId}
+                onChange={(e) => setSilenceAgentId(e.target.value)}
+              />
+              <input
+                className="input-field text-xs"
+                placeholder="Hours"
+                value={silenceHours}
+                onChange={(e) => setSilenceHours(e.target.value)}
+              />
+              <input
+                className="input-field text-xs sm:col-span-2 lg:col-span-1"
+                placeholder="Comment"
+                value={silenceComment}
+                onChange={(e) => setSilenceComment(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => createSilenceMutation.mutate()}
+              disabled={createSilenceMutation.isPending}
+              className="btn-primary text-xs"
+            >
+              Create silence
+            </button>
+            {loadingSilences ? (
+              <p className="text-xs text-[var(--text-muted)]">Loading silences…</p>
+            ) : silencesError ? (
+              <p className="text-xs text-red-400">{errorMessage(silencesError)}</p>
+            ) : silences.length === 0 ? (
+              <p className="text-xs text-[var(--text-muted)]">No active silences for this tenant.</p>
+            ) : (
+              <div className="space-y-2">
+                {silences.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface-app)]/20 p-3 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-mono text-[10px] text-[var(--text-primary)]">
+                        {s.rule_key ? `rule:${s.rule_key}` : "rule:*"}
+                        {" · "}
+                        {s.agent_id ? `agent:${s.agent_id}` : "agent:*"}
+                      </p>
+                      <p className="text-[10px] text-[var(--text-muted)]">
+                        until {new Date(s.ends_at).toLocaleString()}
+                        {s.comment ? ` — ${s.comment}` : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteSilenceTarget(s)}
+                      className="text-[10px] uppercase text-red-400 underline"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex items-start gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface-app)]/20 p-3 text-[11px] text-[var(--text-secondary)]">
             <Info size={14} className="mt-0.5 shrink-0 text-[var(--brand)]" />
@@ -492,6 +617,20 @@ export default function AlertingPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={deleteSilenceTarget !== null}
+        title="Delete silence?"
+        impact="Matching alerts will resume notification routing after deletion."
+        target={
+          deleteSilenceTarget
+            ? `${deleteSilenceTarget.rule_key ?? "*"} / ${deleteSilenceTarget.agent_id ?? "*"}`
+            : "—"
+        }
+        confirmLabel="Delete"
+        onConfirm={() => deleteSilenceTarget && deleteSilenceMutation.mutate(deleteSilenceTarget.id)}
+        onCancel={() => setDeleteSilenceTarget(null)}
+      />
 
       <ConfirmDialog
         open={deleteTarget !== null}

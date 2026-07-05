@@ -1435,3 +1435,52 @@ pub struct PlaybookRecord {
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
 }
+
+/// #1627: tenant-managed SOC contact point (Slack/webhook/PagerDuty/email routing).
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct ContactPointRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub name: String,
+    pub channel_type: String,
+    pub url: Option<String>,
+    /// Write-only at rest — never returned in list/get responses.
+    #[serde(skip_serializing, default)]
+    #[sqlx(default)]
+    pub secret_hash: Option<String>,
+    pub webhook_subscription_id: Option<String>,
+    pub settings_json: String,
+    pub health_status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// #1627: tenant-managed notification routing policy.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct NotificationPolicyRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub matchers_json: String,
+    pub contact_point_ids_json: String,
+    pub group_by: Option<String>,
+    pub repeat_interval_secs: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// #1627: tenant-scoped alert silence (deterministic expiry).
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct AlertSilenceRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub rule_key: Option<String>,
+    pub agent_id: Option<String>,
+    pub comment: Option<String>,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub created_by: Option<String>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}

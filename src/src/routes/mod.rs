@@ -35,6 +35,7 @@ use std::time::Instant;
 
 // Domain Sub-modules
 pub mod agents;
+pub mod alerting;
 pub mod approval;
 pub mod authorize;
 pub mod authorize_canon;
@@ -60,6 +61,7 @@ pub mod webhooks;
 
 // Re-export all handlers & types to maintain flat namespace
 pub use agents::*;
+pub use alerting::*;
 pub use approval::*;
 pub use authorize::*;
 pub use authorize_canon::*;

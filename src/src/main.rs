@@ -925,6 +925,29 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/soc/stream", get(routes::soc_stream))
         .route("/soc/query", post(routes::soc_query))
         .route("/soc/semantic-search", get(routes::semantic_search))
+        // #1627: alerting settings APIs
+        .route(
+            "/soc/contact-points",
+            get(routes::list_contact_points).post(routes::create_contact_point),
+        )
+        .route(
+            "/soc/contact-points/:id",
+            axum::routing::put(routes::update_contact_point).delete(routes::delete_contact_point),
+        )
+        .route(
+            "/soc/notification-policies",
+            get(routes::list_notification_policies).post(routes::create_notification_policy),
+        )
+        .route(
+            "/soc/notification-policies/:id",
+            axum::routing::put(routes::update_notification_policy)
+                .delete(routes::delete_notification_policy),
+        )
+        .route(
+            "/soc/silences",
+            get(routes::list_silences).post(routes::create_silence),
+        )
+        .route("/soc/silences/:id", delete(routes::delete_silence))
         // Runtime control plane (Phase 2.6): agent-cage runs + runtime-event ingest
         .route(
             "/agent-cage/runs",

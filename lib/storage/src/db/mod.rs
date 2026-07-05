@@ -405,6 +405,7 @@ macro_rules! fetch_optional_scalar {
 pub mod agent_bans;
 pub mod agent_runs;
 pub mod agents;
+pub mod alerting;
 pub mod approvals;
 pub mod broker_tools;
 pub mod control_commands;
@@ -429,6 +430,7 @@ pub mod test_utils;
 pub use agent_bans::*;
 pub use agent_runs::*;
 pub use agents::*;
+pub use alerting::*;
 pub use approvals::*;
 pub use broker_tools::*;
 pub use control_commands::*;

@@ -1048,6 +1048,98 @@ pub trait StorageBackend: Send + Sync + 'static {
         id: &str,
         enabled: bool,
     ) -> Result<bool, AegisError>;
+
+    // Alerting settings (#1627)
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_contact_point(
+        &self,
+        tenant_id: &str,
+        name: &str,
+        channel_type: &str,
+        url: Option<&str>,
+        secret_hash: Option<&str>,
+        webhook_subscription_id: Option<&str>,
+        settings_json: &str,
+        health_status: &str,
+    ) -> Result<ContactPointRecord, AegisError>;
+    async fn list_contact_points_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ContactPointRecord>, Option<i64>), AegisError>;
+    async fn get_contact_point_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<ContactPointRecord>, AegisError>;
+    async fn update_contact_point(&self, record: &ContactPointRecord) -> Result<(), AegisError>;
+    async fn delete_contact_point(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_notification_policy(
+        &self,
+        tenant_id: &str,
+        name: &str,
+        enabled: bool,
+        matchers_json: &str,
+        contact_point_ids_json: &str,
+        group_by: Option<&str>,
+        repeat_interval_secs: Option<i64>,
+    ) -> Result<NotificationPolicyRecord, AegisError>;
+    async fn list_notification_policies_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<NotificationPolicyRecord>, Option<i64>), AegisError>;
+    async fn get_notification_policy_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<NotificationPolicyRecord>, AegisError>;
+    async fn update_notification_policy(
+        &self,
+        record: &NotificationPolicyRecord,
+    ) -> Result<(), AegisError>;
+    async fn delete_notification_policy(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<bool, AegisError>;
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_alert_silence(
+        &self,
+        tenant_id: &str,
+        rule_key: Option<&str>,
+        agent_id: Option<&str>,
+        comment: Option<&str>,
+        starts_at: DateTime<Utc>,
+        ends_at: DateTime<Utc>,
+        created_by: Option<&str>,
+    ) -> Result<AlertSilenceRecord, AegisError>;
+    async fn list_alert_silences_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<AlertSilenceRecord>, Option<i64>), AegisError>;
+    async fn get_alert_silence_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<AlertSilenceRecord>, AegisError>;
+    async fn delete_alert_silence(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError>;
+    async fn is_alert_silenced(
+        &self,
+        tenant_id: &str,
+        rule_key: Option<&str>,
+        agent_id: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+
     async fn list_soc_alerts_by_source_event_ids(
         &self,
         tenant_id: &str,
