@@ -533,6 +533,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<PolicyAuditLogRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of [`list_policy_audit_log`].
+    async fn list_policy_audit_log_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<PolicyAuditLogRecord>, Option<i64>), AegisError>;
     async fn append_policy_audit_log_entry_atomic(
         &self,
         tenant_id: &str,

@@ -847,6 +847,18 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_policy_audit_log_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<PolicyAuditLogRecord>, Option<i64>), AegisError> {
+        db::list_policy_audit_log_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn append_policy_audit_log_entry_atomic(
         &self,
         tenant_id: &str,
