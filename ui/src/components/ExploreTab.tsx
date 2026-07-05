@@ -1,41 +1,21 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { searchDecisions, verifyReceipt } from "../app/api";
-import { parseAql } from "@/datasources/aql/parse";
+import { verifyReceipt } from "../app/api";
 import { fieldsForEntity } from "@/datasources/fieldCatalog";
 import { normalizeVerification } from "@/datasources/receiptVerification";
+import { SocQueryDatasource } from "@/datasources/socQuery";
 import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint } from "lucide-react";
 import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
 import HashChip from "./security/HashChip";
+import { buildExploreDecisionRequest, decisionRowsFromFrame, type DecisionRecord } from "./exploreData";
 import FieldSidebar from "./filters/FieldSidebar";
-import { formatTime, errorMessage, relativeRangeToFrom } from "@/lib/format";
+import { formatTime, errorMessage } from "@/lib/format";
 
 const DECISION_FIELD_DESCRIPTORS = fieldsForEntity("decision");
-
-// Loosely-typed decision record from the gateway. The datasource/DataFrame
-// layer (HLD/LLD section 5) will replace this with a generated type.
-interface DecisionRecord {
-  id: string;
-  decision?: string;
-  tool?: string;
-  skill?: string;
-  tool_call?: { name?: string; parameters?: Record<string, unknown> };
-  agent_id?: string;
-  root_trust_level?: string;
-  source_trust?: string;
-  created_at?: string;
-  ts?: string;
-  reason?: string;
-  matched_policies?: string[];
-  matched_policy_ids?: string[];
-  run_id?: string;
-  action_hash?: string;
-  composite_risk_score?: number;
-}
 
 export default function ExploreTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
@@ -44,7 +24,14 @@ export default function ExploreTab() {
   const exploreQuery = useAppStore((s) => s.exploreQuery);
   const setExploreQuery = useAppStore((s) => s.setExploreQuery);
   const timeRange = useAppStore((s) => s.timeRange);
-  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
+  const apiOpts = useMemo(
+    () => ({ gatewayUrl, bearerToken, tenantId: activeTenant }),
+    [gatewayUrl, bearerToken, activeTenant],
+  );
+  const decisionDatasource = useMemo(
+    () => new SocQueryDatasource(apiOpts),
+    [apiOpts],
+  );
 
   // Seed the query from a drilldown at mount (this tab remounts on switch).
   const [searchQuery, setSearchQuery] = useState(() => exploreSeed ?? exploreQuery);
@@ -61,17 +48,17 @@ export default function ExploreTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch decisions based on query
-  const { data: decisions, isLoading, error } = useQuery({
+  const { data: decisionFrame, isLoading, error } = useQuery({
     queryKey: ["decisions", gatewayUrl, activeTenant, authEpoch, debouncedQuery, timeRange],
-    queryFn: () =>
-      searchDecisions(apiOpts, {
-        limit: 50,
-        from: relativeRangeToFrom(timeRange),
-        ...parseAql(debouncedQuery),
-      }),
+    queryFn: ({ signal }) => decisionDatasource.query(
+      buildExploreDecisionRequest(debouncedQuery, timeRange, signal),
+    ),
     refetchInterval: 10000, // Poll every 10s
   });
+  const decisions = useMemo(
+    () => decisionRowsFromFrame(decisionFrame),
+    [decisionFrame],
+  );
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,7 +136,7 @@ export default function ExploreTab() {
           <p className="text-sm text-[var(--text-muted)] text-center py-12">Querying decision records...</p>
         ) : error ? (
           <p className="text-sm text-red-400 text-center py-12">Error: {errorMessage(error)}</p>
-        ) : !decisions || decisions.length === 0 ? (
+        ) : decisions.length === 0 ? (
           <p className="text-sm text-[var(--text-muted)] text-center py-12">No decisions matched the query.</p>
         ) : (
           <div className="space-y-2">
