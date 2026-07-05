@@ -6,6 +6,7 @@ export const CONSOLE_VIEWS = [
   "incidents",
   "detections",
   "rules",
+  "alerting",
   "approvals",
   "agents",
   "mcp",

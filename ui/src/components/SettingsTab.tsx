@@ -2,8 +2,11 @@
 
 import React from "react";
 import { Shield, Volume2, Database } from "lucide-react";
+import { useAppStore } from "@/app/store";
 
 export default function SettingsTab() {
+  const setActiveView = useAppStore((s) => s.setActiveView);
+
   return (
     <div className="space-y-6">
       {/* Access Control & RBAC Role Information */}
@@ -38,23 +41,17 @@ export default function SettingsTab() {
           <Volume2 size={14} className="text-[var(--brand)]" /> Notification Contact Points
         </h3>
         
-        <div className="space-y-3 text-xs">
-          <div className="flex justify-between items-center p-3 bg-[var(--surface-app)]/20 border border-[var(--border-default)] rounded-lg">
-            <div>
-              <span className="font-semibold text-[var(--text-primary)]">Slack Integrations</span>
-              <p className="text-[var(--text-muted)] mt-0.5">Route alerts to Slack channels via incoming webhooks.</p>
-            </div>
-            <span className="text-[10px] text-green-400 bg-green-950/20 border border-green-500/20 px-2 py-0.5 rounded font-mono">ENABLED</span>
-          </div>
-
-          <div className="flex justify-between items-center p-3 bg-[var(--surface-app)]/20 border border-[var(--border-default)] rounded-lg">
-            <div>
-              <span className="font-semibold text-[var(--text-primary)]">PagerDuty Incident Desk</span>
-              <p className="text-[var(--text-muted)] mt-0.5">Auto-create service incidents on critical policy violations.</p>
-            </div>
-            <span className="text-[10px] text-[var(--text-muted)] bg-[var(--border-default)]/20 border border-[var(--border-default)]/20 px-2 py-0.5 rounded font-mono">STANDBY</span>
-          </div>
-        </div>
+        <p className="text-xs text-[var(--text-muted)]">
+          Contact points, notification policies, and silences are managed in the{" "}
+          <button
+            type="button"
+            onClick={() => setActiveView("alerting")}
+            className="font-bold text-[var(--brand)] underline-offset-2 hover:underline"
+          >
+            Alerting
+          </button>{" "}
+          console. PagerDuty and email remain standby until gateway APIs ship (#1627).
+        </p>
       </div>
 
       {/* System info & Tuning parameters */}
