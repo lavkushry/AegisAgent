@@ -11,6 +11,16 @@ service SocService {
     rpc DeletePlaybook (DeletePlaybookRequest) returns (DeletePlaybookResponse);
     rpc SemanticSearch (SemanticSearchRequest) returns (SemanticSearchResponse);
     rpc Query (SocQueryRequest) returns (SocQueryResponse);
+    // #1627: alerting settings
+    rpc ListContactPoints (ListContactPointsRequest) returns (ListContactPointsResponse);
+    rpc CreateContactPoint (CreateContactPointRequest) returns (CreateContactPointResponse);
+    rpc DeleteContactPoint (DeleteContactPointRequest) returns (DeleteContactPointResponse);
+    rpc ListNotificationPolicies (ListNotificationPoliciesRequest) returns (ListNotificationPoliciesResponse);
+    rpc CreateNotificationPolicy (CreateNotificationPolicyRequest) returns (CreateNotificationPolicyResponse);
+    rpc DeleteNotificationPolicy (DeleteNotificationPolicyRequest) returns (DeleteNotificationPolicyResponse);
+    rpc ListSilences (ListSilencesRequest) returns (ListSilencesResponse);
+    rpc CreateSilence (CreateSilenceRequest) returns (CreateSilenceResponse);
+    rpc DeleteSilence (DeleteSilenceRequest) returns (DeleteSilenceResponse);
 }
 
 // Structured, tenant-scoped query contract shared by Explore and dashboards.
@@ -183,4 +193,146 @@ message SemanticSearchResult {
 
 message SemanticSearchResponse {
     repeated SemanticSearchResult results = 1;
+}
+
+// #1627: alerting settings types
+message ContactPointItem {
+    string id = 1;
+    string tenant_id = 2;
+    string name = 3;
+    string channel_type = 4;
+    string url = 5;
+    string webhook_subscription_id = 6;
+    string settings_json = 7;
+    string health_status = 8;
+    string created_at = 9;
+    string updated_at = 10;
+}
+
+message ListContactPointsRequest {
+    string tenant_id = 1;
+    int64 limit = 2;
+    string cursor = 3;
+}
+
+message ListContactPointsResponse {
+    repeated ContactPointItem items = 1;
+    string next_cursor = 2;
+}
+
+message CreateContactPointRequest {
+    string tenant_id = 1;
+    string name = 2;
+    string channel_type = 3;
+    string url = 4;
+    string secret = 5;
+    string settings_json = 6;
+}
+
+message CreateContactPointResponse {
+    ContactPointItem contact_point = 1;
+    string delivery_secret = 2;
+}
+
+message DeleteContactPointRequest {
+    string tenant_id = 1;
+    string id = 2;
+}
+
+message DeleteContactPointResponse {
+    bool success = 1;
+}
+
+message NotificationPolicyItem {
+    string id = 1;
+    string tenant_id = 2;
+    string name = 3;
+    bool enabled = 4;
+    string matchers_json = 5;
+    string contact_point_ids_json = 6;
+    string group_by = 7;
+    int64 repeat_interval_secs = 8;
+    string created_at = 9;
+    string updated_at = 10;
+}
+
+message ListNotificationPoliciesRequest {
+    string tenant_id = 1;
+    int64 limit = 2;
+    string cursor = 3;
+}
+
+message ListNotificationPoliciesResponse {
+    repeated NotificationPolicyItem items = 1;
+    string next_cursor = 2;
+}
+
+message CreateNotificationPolicyRequest {
+    string tenant_id = 1;
+    string name = 2;
+    bool enabled = 3;
+    string matchers_json = 4;
+    string contact_point_ids_json = 5;
+    string group_by = 6;
+    int64 repeat_interval_secs = 7;
+}
+
+message CreateNotificationPolicyResponse {
+    NotificationPolicyItem policy = 1;
+}
+
+message DeleteNotificationPolicyRequest {
+    string tenant_id = 1;
+    string id = 2;
+}
+
+message DeleteNotificationPolicyResponse {
+    bool success = 1;
+}
+
+message SilenceItem {
+    string id = 1;
+    string tenant_id = 2;
+    string rule_key = 3;
+    string agent_id = 4;
+    string comment = 5;
+    string starts_at = 6;
+    string ends_at = 7;
+    string created_by = 8;
+    string status = 9;
+    string created_at = 10;
+}
+
+message ListSilencesRequest {
+    string tenant_id = 1;
+    int64 limit = 2;
+    string cursor = 3;
+}
+
+message ListSilencesResponse {
+    repeated SilenceItem items = 1;
+    string next_cursor = 2;
+}
+
+message CreateSilenceRequest {
+    string tenant_id = 1;
+    string rule_key = 2;
+    string agent_id = 3;
+    string comment = 4;
+    string starts_at = 5;
+    string ends_at = 6;
+    string created_by = 7;
+}
+
+message CreateSilenceResponse {
+    SilenceItem silence = 1;
+}
+
+message DeleteSilenceRequest {
+    string tenant_id = 1;
+    string id = 2;
+}
+
+message DeleteSilenceResponse {
+    bool success = 1;
 }

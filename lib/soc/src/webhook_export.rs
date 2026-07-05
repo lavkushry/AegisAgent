@@ -47,6 +47,8 @@ pub struct WebhookExportPayload {
     pub agent_id: String,
     pub summary: String,
     pub occurred_at: String,
+    /// #1627: detection rule key for silence matching (alerts only).
+    pub rule_key: Option<String>,
 }
 
 /// `"high"` outranks `"info"`. Unrecognized severities rank as `"info"`
@@ -118,6 +120,23 @@ fn render_body(
 /// by severity, and spawn one fire-and-forget delivery task per match. Never
 /// blocks the caller (the SOC drain loop) and never panics — Law 3.
 pub async fn dispatch(pool: &DbPool, client: &reqwest::Client, payload: &WebhookExportPayload) {
+    let at = chrono::Utc::now();
+    match aegis_storage::db::is_alert_silenced(
+        pool,
+        &payload.tenant_id,
+        payload.rule_key.as_deref(),
+        Some(payload.agent_id.as_str()),
+        at,
+    )
+    .await
+    {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            warn!("#1627: failed to evaluate alert silences: {:?}", e);
+        }
+    }
+
     let subscriptions = match aegis_storage::db::list_matching_webhook_subscriptions(
         pool,
         &payload.tenant_id,
@@ -227,6 +246,7 @@ mod tests {
             agent_id: "agent_1".to_string(),
             summary: "decision=deny tool=github action=merge".to_string(),
             occurred_at: "2026-06-17T00:00:00Z".to_string(),
+            rule_key: None,
         }
     }
 

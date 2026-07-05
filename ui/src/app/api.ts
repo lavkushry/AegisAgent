@@ -722,6 +722,78 @@ export function listPlaybooks(opts: FetchOptions, limit = 50) {
   return fetchListFromGateway<PlaybookRecord[]>(opts, `/v1/playbooks?limit=${limit}`);
 }
 
+// #1627: alerting settings APIs
+export interface AlertSilenceRecord {
+  id: string;
+  tenant_id: string;
+  rule_key?: string | null;
+  agent_id?: string | null;
+  comment?: string | null;
+  starts_at: string;
+  ends_at: string;
+  created_by?: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface CreateSilencePayload {
+  rule_key?: string;
+  agent_id?: string;
+  comment?: string;
+  starts_at?: string;
+  ends_at: string;
+  created_by?: string;
+}
+
+export function listSilences(opts: FetchOptions, limit = 50) {
+  return fetchListFromGateway<AlertSilenceRecord[]>(opts, `/v1/soc/silences?limit=${limit}`);
+}
+
+export function createSilence(opts: FetchOptions, payload: CreateSilencePayload) {
+  return fetchFromGateway<{ silence: AlertSilenceRecord }>(opts, "/v1/soc/silences", "POST", payload);
+}
+
+export function deleteSilence(opts: FetchOptions, id: string) {
+  return fetchFromGateway<Record<string, unknown>>(opts, `/v1/soc/silences/${id}`, "DELETE");
+}
+
+export interface ContactPointRecord {
+  id: string;
+  tenant_id: string;
+  name: string;
+  channel_type: string;
+  url?: string | null;
+  webhook_subscription_id?: string | null;
+  settings_json: string;
+  health_status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listContactPoints(opts: FetchOptions, limit = 50) {
+  return fetchListFromGateway<ContactPointRecord[]>(opts, `/v1/soc/contact-points?limit=${limit}`);
+}
+
+export interface NotificationPolicyRecord {
+  id: string;
+  tenant_id: string;
+  name: string;
+  enabled: boolean;
+  matchers_json: string;
+  contact_point_ids_json: string;
+  group_by?: string | null;
+  repeat_interval_secs?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listNotificationPolicies(opts: FetchOptions, limit = 50) {
+  return fetchListFromGateway<NotificationPolicyRecord[]>(
+    opts,
+    `/v1/soc/notification-policies?limit=${limit}`,
+  );
+}
+
 export function getTenant(opts: FetchOptions, tenantId: string) {
   return fetchFromGateway<TenantRecord>(opts, `/v1/tenants/${encodeURIComponent(tenantId)}`);
 }

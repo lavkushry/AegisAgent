@@ -1,3 +1,4 @@
+pub mod alerting;
 pub mod backtest;
 pub mod baseline;
 pub mod correlate;

@@ -22,7 +22,7 @@ vi.mock("@/app/store", () => ({
 }));
 
 describe("AlertingPage", () => {
-  it("renders deterministic alerting sections with silences placeholder", () => {
+  it("renders deterministic alerting sections", () => {
     const html = renderToStaticMarkup(<AlertingPage />);
     expect(html).toContain("Alerting");
     expect(html).toContain("Rule Health");
@@ -31,7 +31,6 @@ describe("AlertingPage", () => {
     expect(html).toContain("Silences");
     expect(html).toContain("Active Response");
     expect(html).toContain("Secrets are redacted after creation");
-    expect(html).toContain("#1627");
     expect(html).not.toContain("super-secret");
   });
 });

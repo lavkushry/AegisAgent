@@ -4,13 +4,19 @@ use aegis_api::grpc::aegis::{
     aegis_service_server::{AegisService, AegisServiceServer},
     soc_service_server::{SocService, SocServiceServer},
     ApproveRequest, ApproveResponse, AuthorizeRequest, AuthorizeResponse, CloseIncidentRequest,
-    CloseIncidentResponse, CreatePlaybookRequest, CreatePlaybookResponse, CreateTenantRequest,
-    CreateTenantResponse, DeletePlaybookRequest, DeletePlaybookResponse, DiscoverMcpToolsRequest,
-    DiscoverMcpToolsResponse, ListAlertsRequest, ListAlertsResponse, ListIncidentsRequest,
-    ListIncidentsResponse, ListPlaybooksRequest, ListPlaybooksResponse, McpToolStatusResponse,
-    RegisterAgentRequest, RegisterAgentResponse, RegisterMcpServerRequest,
+    CloseIncidentResponse, ContactPointItem, CreateContactPointRequest, CreateContactPointResponse,
+    CreateNotificationPolicyRequest, CreateNotificationPolicyResponse, CreatePlaybookRequest,
+    CreatePlaybookResponse, CreateSilenceRequest, CreateSilenceResponse, CreateTenantRequest,
+    CreateTenantResponse, DeleteContactPointRequest, DeleteContactPointResponse,
+    DeleteNotificationPolicyRequest, DeleteNotificationPolicyResponse, DeletePlaybookRequest,
+    DeletePlaybookResponse, DeleteSilenceRequest, DeleteSilenceResponse, DiscoverMcpToolsRequest,
+    DiscoverMcpToolsResponse, ListAlertsRequest, ListAlertsResponse, ListContactPointsRequest,
+    ListContactPointsResponse, ListIncidentsRequest, ListIncidentsResponse,
+    ListNotificationPoliciesRequest, ListNotificationPoliciesResponse, ListPlaybooksRequest,
+    ListPlaybooksResponse, ListSilencesRequest, ListSilencesResponse, McpToolStatusResponse,
+    NotificationPolicyItem, RegisterAgentRequest, RegisterAgentResponse, RegisterMcpServerRequest,
     RegisterMcpServerResponse, SemanticSearchRequest, SemanticSearchResponse, SemanticSearchResult,
-    SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
+    SilenceItem, SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
 };
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
@@ -907,6 +913,341 @@ impl SocService for SocGrpcServiceImpl {
             .collect();
 
         Ok(Response::new(SemanticSearchResponse { results }))
+    }
+
+    // #1627: alerting settings gRPC (thin storage adapters)
+    async fn list_contact_points(
+        &self,
+        request: Request<ListContactPointsRequest>,
+    ) -> Result<Response<ListContactPointsResponse>, Status> {
+        let req = request.into_inner();
+        let limit = if req.limit <= 0 { 50 } else { req.limit };
+        let cursor = req
+            .cursor
+            .parse::<i64>()
+            .ok()
+            .filter(|_| !req.cursor.is_empty());
+        match self
+            ._state
+            .storage
+            .list_contact_points_cursor(&req.tenant_id, limit, 0, cursor)
+            .await
+        {
+            Ok((items, next)) => Ok(Response::new(ListContactPointsResponse {
+                items: items.into_iter().map(contact_point_to_proto).collect(),
+                next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
+            })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn create_contact_point(
+        &self,
+        request: Request<CreateContactPointRequest>,
+    ) -> Result<Response<CreateContactPointResponse>, Status> {
+        let req = request.into_inner();
+        if !aegis_soc::alerting::channel_type_is_supported(&req.channel_type) {
+            return Err(Status::invalid_argument("unsupported channel_type"));
+        }
+        if let Err(msg) = aegis_soc::alerting::validate_destination_url(&req.url) {
+            return Err(Status::invalid_argument(msg));
+        }
+        let secret_hash = if req.secret.is_empty() {
+            None
+        } else {
+            Some(crate::routes::authorize_canon::sha256_hex(
+                req.secret.as_bytes(),
+            ))
+        };
+        let mut delivery_secret = String::new();
+        let mut webhook_id = None;
+        if matches!(
+            req.channel_type.as_str(),
+            aegis_soc::alerting::CHANNEL_WEBHOOK | aegis_soc::alerting::CHANNEL_SLACK
+        ) {
+            delivery_secret = format!("whsec_{}", Uuid::new_v4().simple());
+            let sub = self
+                ._state
+                .storage
+                .insert_webhook_subscription(
+                    &req.tenant_id,
+                    &req.url,
+                    secret_hash.as_deref(),
+                    "*",
+                    &delivery_secret,
+                    "info",
+                    "json",
+                )
+                .await
+                .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            webhook_id = Some(sub.id);
+        }
+        let cp = self
+            ._state
+            .storage
+            .insert_contact_point(
+                &req.tenant_id,
+                &req.name,
+                &req.channel_type,
+                Some(&req.url),
+                secret_hash.as_deref(),
+                webhook_id.as_deref(),
+                &req.settings_json,
+                "unknown",
+            )
+            .await
+            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+        Ok(Response::new(CreateContactPointResponse {
+            contact_point: Some(contact_point_to_proto(cp)),
+            delivery_secret,
+        }))
+    }
+
+    async fn delete_contact_point(
+        &self,
+        request: Request<DeleteContactPointRequest>,
+    ) -> Result<Response<DeleteContactPointResponse>, Status> {
+        let req = request.into_inner();
+        if let Ok(Some(cp)) = self
+            ._state
+            .storage
+            .get_contact_point_by_id(&req.tenant_id, &req.id)
+            .await
+        {
+            if let Some(sub_id) = cp.webhook_subscription_id.as_deref() {
+                let _ = self
+                    ._state
+                    .storage
+                    .delete_webhook_subscription(&req.tenant_id, sub_id)
+                    .await;
+            }
+        }
+        match self
+            ._state
+            .storage
+            .delete_contact_point(&req.tenant_id, &req.id)
+            .await
+        {
+            Ok(success) => Ok(Response::new(DeleteContactPointResponse { success })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn list_notification_policies(
+        &self,
+        request: Request<ListNotificationPoliciesRequest>,
+    ) -> Result<Response<ListNotificationPoliciesResponse>, Status> {
+        let req = request.into_inner();
+        let limit = if req.limit <= 0 { 50 } else { req.limit };
+        let cursor = req
+            .cursor
+            .parse::<i64>()
+            .ok()
+            .filter(|_| !req.cursor.is_empty());
+        match self
+            ._state
+            .storage
+            .list_notification_policies_cursor(&req.tenant_id, limit, 0, cursor)
+            .await
+        {
+            Ok((items, next)) => Ok(Response::new(ListNotificationPoliciesResponse {
+                items: items
+                    .into_iter()
+                    .map(notification_policy_to_proto)
+                    .collect(),
+                next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
+            })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn create_notification_policy(
+        &self,
+        request: Request<CreateNotificationPolicyRequest>,
+    ) -> Result<Response<CreateNotificationPolicyResponse>, Status> {
+        let req = request.into_inner();
+        let policy = self
+            ._state
+            .storage
+            .insert_notification_policy(
+                &req.tenant_id,
+                &req.name,
+                req.enabled,
+                &req.matchers_json,
+                &req.contact_point_ids_json,
+                if req.group_by.is_empty() {
+                    None
+                } else {
+                    Some(req.group_by.as_str())
+                },
+                if req.repeat_interval_secs <= 0 {
+                    None
+                } else {
+                    Some(req.repeat_interval_secs)
+                },
+            )
+            .await
+            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+        Ok(Response::new(CreateNotificationPolicyResponse {
+            policy: Some(notification_policy_to_proto(policy)),
+        }))
+    }
+
+    async fn delete_notification_policy(
+        &self,
+        request: Request<DeleteNotificationPolicyRequest>,
+    ) -> Result<Response<DeleteNotificationPolicyResponse>, Status> {
+        let req = request.into_inner();
+        match self
+            ._state
+            .storage
+            .delete_notification_policy(&req.tenant_id, &req.id)
+            .await
+        {
+            Ok(success) => Ok(Response::new(DeleteNotificationPolicyResponse { success })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn list_silences(
+        &self,
+        request: Request<ListSilencesRequest>,
+    ) -> Result<Response<ListSilencesResponse>, Status> {
+        let req = request.into_inner();
+        let limit = if req.limit <= 0 { 50 } else { req.limit };
+        let cursor = req
+            .cursor
+            .parse::<i64>()
+            .ok()
+            .filter(|_| !req.cursor.is_empty());
+        match self
+            ._state
+            .storage
+            .list_alert_silences_cursor(&req.tenant_id, limit, 0, cursor)
+            .await
+        {
+            Ok((items, next)) => Ok(Response::new(ListSilencesResponse {
+                items: items.into_iter().map(silence_to_proto).collect(),
+                next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
+            })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn create_silence(
+        &self,
+        request: Request<CreateSilenceRequest>,
+    ) -> Result<Response<CreateSilenceResponse>, Status> {
+        let req = request.into_inner();
+        let starts_at = if req.starts_at.is_empty() {
+            chrono::Utc::now()
+        } else {
+            chrono::DateTime::parse_from_rfc3339(&req.starts_at)
+                .map_err(|_| Status::invalid_argument("invalid starts_at"))?
+                .with_timezone(&chrono::Utc)
+        };
+        let ends_at = chrono::DateTime::parse_from_rfc3339(&req.ends_at)
+            .map_err(|_| Status::invalid_argument("invalid ends_at"))?
+            .with_timezone(&chrono::Utc);
+        if ends_at <= starts_at {
+            return Err(Status::invalid_argument("ends_at must be after starts_at"));
+        }
+        let silence = self
+            ._state
+            .storage
+            .insert_alert_silence(
+                &req.tenant_id,
+                if req.rule_key.is_empty() {
+                    None
+                } else {
+                    Some(req.rule_key.as_str())
+                },
+                if req.agent_id.is_empty() {
+                    None
+                } else {
+                    Some(req.agent_id.as_str())
+                },
+                if req.comment.is_empty() {
+                    None
+                } else {
+                    Some(req.comment.as_str())
+                },
+                starts_at,
+                ends_at,
+                if req.created_by.is_empty() {
+                    None
+                } else {
+                    Some(req.created_by.as_str())
+                },
+            )
+            .await
+            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+        Ok(Response::new(CreateSilenceResponse {
+            silence: Some(silence_to_proto(silence)),
+        }))
+    }
+
+    async fn delete_silence(
+        &self,
+        request: Request<DeleteSilenceRequest>,
+    ) -> Result<Response<DeleteSilenceResponse>, Status> {
+        let req = request.into_inner();
+        match self
+            ._state
+            .storage
+            .delete_alert_silence(&req.tenant_id, &req.id)
+            .await
+        {
+            Ok(success) => Ok(Response::new(DeleteSilenceResponse { success })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+}
+
+fn contact_point_to_proto(cp: aegis_api::models::ContactPointRecord) -> ContactPointItem {
+    ContactPointItem {
+        id: cp.id,
+        tenant_id: cp.tenant_id,
+        name: cp.name,
+        channel_type: cp.channel_type,
+        url: cp.url.unwrap_or_default(),
+        webhook_subscription_id: cp.webhook_subscription_id.unwrap_or_default(),
+        settings_json: cp.settings_json,
+        health_status: cp.health_status,
+        created_at: cp.created_at.to_rfc3339(),
+        updated_at: cp.updated_at.to_rfc3339(),
+    }
+}
+
+fn notification_policy_to_proto(
+    p: aegis_api::models::NotificationPolicyRecord,
+) -> NotificationPolicyItem {
+    NotificationPolicyItem {
+        id: p.id,
+        tenant_id: p.tenant_id,
+        name: p.name,
+        enabled: p.enabled,
+        matchers_json: p.matchers_json,
+        contact_point_ids_json: p.contact_point_ids_json,
+        group_by: p.group_by.unwrap_or_default(),
+        repeat_interval_secs: p.repeat_interval_secs.unwrap_or(0),
+        created_at: p.created_at.to_rfc3339(),
+        updated_at: p.updated_at.to_rfc3339(),
+    }
+}
+
+fn silence_to_proto(s: aegis_api::models::AlertSilenceRecord) -> SilenceItem {
+    SilenceItem {
+        id: s.id,
+        tenant_id: s.tenant_id,
+        rule_key: s.rule_key.unwrap_or_default(),
+        agent_id: s.agent_id.unwrap_or_default(),
+        comment: s.comment.unwrap_or_default(),
+        starts_at: s.starts_at.to_rfc3339(),
+        ends_at: s.ends_at.to_rfc3339(),
+        created_by: s.created_by.unwrap_or_default(),
+        status: s.status,
+        created_at: s.created_at.to_rfc3339(),
     }
 }
 

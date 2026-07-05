@@ -2040,6 +2040,192 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Alerting settings (#1627)
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_contact_point(
+        &self,
+        tenant_id: &str,
+        name: &str,
+        channel_type: &str,
+        url: Option<&str>,
+        secret_hash: Option<&str>,
+        webhook_subscription_id: Option<&str>,
+        settings_json: &str,
+        health_status: &str,
+    ) -> Result<ContactPointRecord, AegisError> {
+        db::insert_contact_point(
+            &self.pool,
+            tenant_id,
+            name,
+            channel_type,
+            url,
+            secret_hash,
+            webhook_subscription_id,
+            settings_json,
+            health_status,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_contact_points_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ContactPointRecord>, Option<i64>), AegisError> {
+        db::list_contact_points_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_contact_point_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<ContactPointRecord>, AegisError> {
+        db::get_contact_point_by_id(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn update_contact_point(&self, record: &ContactPointRecord) -> Result<(), AegisError> {
+        db::update_contact_point(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_contact_point(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError> {
+        db::delete_contact_point(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_notification_policy(
+        &self,
+        tenant_id: &str,
+        name: &str,
+        enabled: bool,
+        matchers_json: &str,
+        contact_point_ids_json: &str,
+        group_by: Option<&str>,
+        repeat_interval_secs: Option<i64>,
+    ) -> Result<NotificationPolicyRecord, AegisError> {
+        db::insert_notification_policy(
+            &self.pool,
+            tenant_id,
+            name,
+            enabled,
+            matchers_json,
+            contact_point_ids_json,
+            group_by,
+            repeat_interval_secs,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_notification_policies_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<NotificationPolicyRecord>, Option<i64>), AegisError> {
+        db::list_notification_policies_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_notification_policy_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<NotificationPolicyRecord>, AegisError> {
+        db::get_notification_policy_by_id(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn update_notification_policy(
+        &self,
+        record: &NotificationPolicyRecord,
+    ) -> Result<(), AegisError> {
+        db::update_notification_policy(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_notification_policy(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<bool, AegisError> {
+        db::delete_notification_policy(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_alert_silence(
+        &self,
+        tenant_id: &str,
+        rule_key: Option<&str>,
+        agent_id: Option<&str>,
+        comment: Option<&str>,
+        starts_at: DateTime<Utc>,
+        ends_at: DateTime<Utc>,
+        created_by: Option<&str>,
+    ) -> Result<AlertSilenceRecord, AegisError> {
+        db::insert_alert_silence(
+            &self.pool, tenant_id, rule_key, agent_id, comment, starts_at, ends_at, created_by,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn list_alert_silences_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<AlertSilenceRecord>, Option<i64>), AegisError> {
+        db::list_alert_silences_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_alert_silence_by_id(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<AlertSilenceRecord>, AegisError> {
+        db::get_alert_silence_by_id(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_alert_silence(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError> {
+        db::delete_alert_silence(&self.pool, tenant_id, id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn is_alert_silenced(
+        &self,
+        tenant_id: &str,
+        rule_key: Option<&str>,
+        agent_id: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::is_alert_silenced(&self.pool, tenant_id, rule_key, agent_id, at)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // General & System
     async fn health_check(&self) -> Result<(), AegisError> {
         db::health_check(&self.pool)

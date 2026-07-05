@@ -252,6 +252,7 @@ async fn handle_alert(
                         agent_id: alert.agent_id.clone(),
                         summary: alert.summary.clone(),
                         occurred_at: alert.occurred_at.clone(),
+                        rule_key: Some(alert.rule.clone()),
                     },
                 )
                 .await;
@@ -365,6 +366,7 @@ pub async fn drain(
                     agent_id: ev.agent_id.clone(),
                     summary,
                     occurred_at: ev.occurred_at.clone(),
+                    rule_key: None,
                 },
             )
             .await;
@@ -526,6 +528,7 @@ pub async fn drain(
                                 agent_id: incident.agent_id.clone(),
                                 summary: incident.summary.clone(),
                                 occurred_at: incident.opened_at.clone(),
+                                rule_key: None,
                             },
                         )
                         .await;
