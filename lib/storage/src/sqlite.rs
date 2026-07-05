@@ -780,6 +780,18 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_policies_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<PolicyRecord>, Option<i64>), AegisError> {
+        db::list_policies_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_policy_by_id(
         &self,
         tenant_id: &str,

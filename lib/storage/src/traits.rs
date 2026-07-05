@@ -505,6 +505,14 @@ pub trait StorageBackend: Send + Sync + 'static {
 
     // Policies
     async fn list_policies(&self, tenant_id: &str) -> Result<Vec<PolicyRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of [`list_policies`].
+    async fn list_policies_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<PolicyRecord>, Option<i64>), AegisError>;
     async fn get_policy_by_id(
         &self,
         tenant_id: &str,
