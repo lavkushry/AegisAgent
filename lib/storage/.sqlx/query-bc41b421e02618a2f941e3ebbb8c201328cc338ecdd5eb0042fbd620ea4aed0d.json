@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE leader_lock\n                 SET holder_id = ?,\n                     lease_expires_at = ?,\n                     acquired_at = CASE WHEN holder_id = ? THEN acquired_at ELSE ? END\n                 WHERE id = ? AND (holder_id = ? OR lease_expires_at < ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "bc41b421e02618a2f941e3ebbb8c201328cc338ecdd5eb0042fbd620ea4aed0d"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT holder_id, lease_expires_at FROM leader_lock WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "holder_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "lease_expires_at",
+        "ordinal": 1,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9c055c5f10b0ebb5e24bc3595687b20413013577e1b6d95f812e129c3f700d36"
+}

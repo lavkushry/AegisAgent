@@ -9,6 +9,7 @@
 use super::retry_on_busy;
 use crate::db::DbPool;
 use chrono::{DateTime, Utc};
+use tracing::Instrument as _;
 
 /// Atomically record a `(tenant, agent, nonce)` triple. Returns `true` if this
 /// is a **replay** (the triple was already present and not yet expired), or
@@ -32,26 +33,81 @@ pub async fn check_and_insert_replay_nonce(
         // Drop an expired prior row for this exact triple so it can be re-seen.
         // (Concurrent true-duplicates are unaffected — neither is expired, so
         // this is a no-op and the insert below decides the winner.)
-        crate::execute_query!(
-            pool,
-            "DELETE FROM replay_nonces
-             WHERE tenant_id = ? AND agent_id = ? AND nonce = ? AND expires_at <= ?",
-            tenant_id,
-            agent_id,
-            nonce,
-            now
-        )?;
+        match pool {
+            DbPool::Sqlite(p) => {
+                sqlx::query!(
+                    "DELETE FROM replay_nonces
+                     WHERE tenant_id = ? AND agent_id = ? AND nonce = ? AND expires_at <= ?",
+                    tenant_id,
+                    agent_id,
+                    nonce,
+                    now
+                )
+                .execute(p)
+                .instrument(tracing::debug_span!(
+                    "db_query",
+                    sql = "DELETE FROM replay_nonces WHERE tenant_id = ? ...",
+                    backend = "sqlite"
+                ))
+                .await?;
+            }
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pools) => {
+                let pg_sql = crate::db::to_postgres_sql(
+                    "DELETE FROM replay_nonces
+                     WHERE tenant_id = ? AND agent_id = ? AND nonce = ? AND expires_at <= ?",
+                );
+                sqlx::query(&pg_sql)
+                    .bind(tenant_id)
+                    .bind(agent_id)
+                    .bind(nonce)
+                    .bind(now)
+                    .execute(pools.write_pool())
+                    .instrument(
+                        tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"),
+                    )
+                    .await?;
+            }
+        }
 
-        let inserted = crate::execute_query!(
-            pool,
-            "INSERT INTO replay_nonces (tenant_id, agent_id, nonce, expires_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT (tenant_id, agent_id, nonce) DO NOTHING",
-            tenant_id,
-            agent_id,
-            nonce,
-            expires_at
-        )?;
+        let inserted = match pool {
+            DbPool::Sqlite(p) => sqlx::query!(
+                "INSERT INTO replay_nonces (tenant_id, agent_id, nonce, expires_at)
+                     VALUES (?, ?, ?, ?)
+                     ON CONFLICT (tenant_id, agent_id, nonce) DO NOTHING",
+                tenant_id,
+                agent_id,
+                nonce,
+                expires_at
+            )
+            .execute(p)
+            .instrument(tracing::debug_span!(
+                "db_query",
+                sql = "INSERT INTO replay_nonces ... ON CONFLICT DO NOTHING",
+                backend = "sqlite"
+            ))
+            .await
+            .map(crate::db::DbQueryResult::Sqlite)?,
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pools) => {
+                let pg_sql = crate::db::to_postgres_sql(
+                    "INSERT INTO replay_nonces (tenant_id, agent_id, nonce, expires_at)
+                     VALUES (?, ?, ?, ?)
+                     ON CONFLICT (tenant_id, agent_id, nonce) DO NOTHING",
+                );
+                sqlx::query(&pg_sql)
+                    .bind(tenant_id)
+                    .bind(agent_id)
+                    .bind(nonce)
+                    .bind(expires_at)
+                    .execute(pools.write_pool())
+                    .instrument(
+                        tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"),
+                    )
+                    .await
+                    .map(crate::db::DbQueryResult::Postgres)?
+            }
+        };
 
         // Inserted exactly one row → first-seen (not a replay). Zero rows → the
         // triple already existed and is still live → replay.
@@ -68,8 +124,28 @@ pub async fn delete_expired_replay_nonces(
     pool: &DbPool,
     now: DateTime<Utc>,
 ) -> Result<u64, sqlx::Error> {
-    let result =
-        crate::execute_query!(pool, "DELETE FROM replay_nonces WHERE expires_at <= ?", now)?;
+    let result = match pool {
+        DbPool::Sqlite(p) => sqlx::query!("DELETE FROM replay_nonces WHERE expires_at <= ?", now)
+            .execute(p)
+            .instrument(tracing::debug_span!(
+                "db_query",
+                sql = "DELETE FROM replay_nonces WHERE expires_at <= ?",
+                backend = "sqlite"
+            ))
+            .await
+            .map(crate::db::DbQueryResult::Sqlite)?,
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pools) => {
+            let pg_sql =
+                crate::db::to_postgres_sql("DELETE FROM replay_nonces WHERE expires_at <= ?");
+            sqlx::query(&pg_sql)
+                .bind(now)
+                .execute(pools.write_pool())
+                .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
+                .await
+                .map(crate::db::DbQueryResult::Postgres)?
+        }
+    };
     Ok(result.rows_affected())
 }
 

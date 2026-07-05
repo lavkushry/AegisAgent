@@ -16,6 +16,8 @@ env:
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
   CARGO_TERM_COLOR: always
+  # #922: compile-time SQLx query checks use lib/storage/.sqlx offline cache.
+  SQLX_OFFLINE: "true"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -46,6 +48,17 @@ jobs:
         with:
           workspaces: .
           key: ${{ matrix.rust }}
+      - name: Install sqlx-cli (#922)
+        if: matrix.rust == 'stable'
+        run: cargo install sqlx-cli --no-default-features --features sqlite --locked
+      - name: Verify SQLx offline query cache (#922)
+        if: matrix.rust == 'stable'
+        run: |
+          export DATABASE_URL="sqlite://db/aegisagent.db"
+          mkdir -p db
+          (cd lib/storage && sqlx database create)
+          (cd lib/storage && sqlx migrate run)
+          (cd lib/storage && cargo sqlx prepare --check -- --all-targets)
       - name: Check formatting
         run: cargo fmt --all -- --check
         if: matrix.rust == 'stable'

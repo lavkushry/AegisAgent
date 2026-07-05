@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO replay_nonces (tenant_id, agent_id, nonce, expires_at)\n                     VALUES (?, ?, ?, ?)\n                     ON CONFLICT (tenant_id, agent_id, nonce) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8cd68074a6ef2ed4e10a3efb7b9e5943b239dd366fbffec412662bfdbe7bd005"
+}
