@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO leader_lock (id, holder_id, lease_expires_at, acquired_at)\n                 VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "579e9642c262ce74f4e5d85a1e9cab929d11908ecb44acee049017f596a68ee5"
+}

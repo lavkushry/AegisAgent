@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM replay_nonces\n                     WHERE tenant_id = ? AND agent_id = ? AND nonce = ? AND expires_at <= ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "7407820286dae549e6000819f7dc524e15547f01b23f25adde4383cef3bbf468"
+}
