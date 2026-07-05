@@ -18,6 +18,10 @@ interface AppState {
   theme: Theme;
   density: Density;
   role: Role;
+  /** Local UI preference: redact secret-shaped JSON fields by default. */
+  redactByDefault: boolean;
+  /** Local UI preference: enable live refresh on console load. */
+  defaultLiveMode: boolean;
   /** Current nav view (lifted so drilldowns can navigate). */
   activeView: string;
   /** Pending Explore search seeded by a drilldown; consumed by ExploreTab. */
@@ -36,6 +40,8 @@ interface AppState {
   setTheme: (theme: Theme) => void;
   setDensity: (density: Density) => void;
   setRole: (role: Role) => void;
+  setRedactByDefault: (value: boolean) => void;
+  setDefaultLiveMode: (value: boolean) => void;
   setActiveView: (view: string) => void;
   setExploreSeed: (seed: string) => void;
   setExploreQuery: (query: string) => void;
@@ -70,6 +76,14 @@ const getInitialDensity = (): Density => {
   return VALID_DENSITIES.includes(stored as Density) ? (stored as Density) : "compact";
 };
 
+const getInitialBoolean = (key: string, fallback: boolean): boolean => {
+  if (typeof window === "undefined") return fallback;
+  const stored = localStorage.getItem(key);
+  if (stored === "1") return true;
+  if (stored === "0") return false;
+  return fallback;
+};
+
 const getInitialRole = (): Role => {
   if (!DEMO_MODE) {
     if (typeof window !== "undefined") localStorage.removeItem("aegis_role");
@@ -93,11 +107,13 @@ export const useAppStore = create<AppState>((set) => ({
   activeTenant: initialConnection.activeTenant,
   timeRange: "24h",
   variables: {},
-  liveMode: false,
+  liveMode: getInitialBoolean("aegis_default_live_mode", false),
   streamStatus: "closed",
   theme: getInitialTheme(),
   density: getInitialDensity(),
   role: getInitialRole(),
+  redactByDefault: getInitialBoolean("aegis_redact_by_default", true),
+  defaultLiveMode: getInitialBoolean("aegis_default_live_mode", false),
   activeView: "overview",
   exploreSeed: null,
   exploreQuery: "",
@@ -137,6 +153,18 @@ export const useAppStore = create<AppState>((set) => ({
   setRole: (role) => {
     if (typeof window !== "undefined" && DEMO_MODE) localStorage.setItem("aegis_role", role);
     set({ role });
+  },
+  setRedactByDefault: (redactByDefault) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("aegis_redact_by_default", redactByDefault ? "1" : "0");
+    }
+    set({ redactByDefault });
+  },
+  setDefaultLiveMode: (defaultLiveMode) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("aegis_default_live_mode", defaultLiveMode ? "1" : "0");
+    }
+    set({ defaultLiveMode });
   },
   setActiveView: (view) => set({ activeView: view }),
   setExploreSeed: (seed) => set({ exploreSeed: seed, exploreQuery: seed }),
