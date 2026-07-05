@@ -653,6 +653,85 @@ pub fn wal_autocheckpoint_pages_from_env() -> i64 {
         .unwrap_or(DEFAULT_WAL_AUTOCHECKPOINT_PAGES)
 }
 
+/// Default SQLite connection-pool size (historical).
+pub const DEFAULT_SQLITE_MAX_CONNECTIONS: u32 = 5;
+
+/// Default PostgreSQL connection-pool size (#1318).
+pub const DEFAULT_POSTGRES_MAX_CONNECTIONS: u32 = 10;
+
+/// Default idle timeout before a pooled connection is closed (seconds).
+pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 30;
+
+/// Default time to wait for a free pooled connection (seconds).
+pub const DEFAULT_ACQUIRE_TIMEOUT_SECS: u64 = 5;
+
+/// Default max connection lifetime before recycling (#1318, Postgres).
+pub const DEFAULT_MAX_LIFETIME_SECS: u64 = 1800;
+
+fn parse_positive_u32(raw: &str) -> Option<u32> {
+    raw.parse::<u32>().ok().filter(|&n| n > 0)
+}
+
+fn parse_positive_u64(raw: &str) -> Option<u64> {
+    raw.parse::<u64>().ok().filter(|&n| n > 0)
+}
+
+/// Read the configured max pool size (#1318).
+///
+/// Precedence: `AEGIS_DB_POOL_SIZE` → `AEGIS_DB_MAX_CONNECTIONS` (legacy) →
+/// backend default (`10` for Postgres, `5` for SQLite).
+pub fn max_connections_from_env(postgres: bool) -> u32 {
+    std::env::var("AEGIS_DB_POOL_SIZE")
+        .ok()
+        .and_then(|v| parse_positive_u32(&v))
+        .or_else(|| {
+            std::env::var("AEGIS_DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| parse_positive_u32(&v))
+        })
+        .unwrap_or(if postgres {
+            DEFAULT_POSTGRES_MAX_CONNECTIONS
+        } else {
+            DEFAULT_SQLITE_MAX_CONNECTIONS
+        })
+}
+
+/// Read `AEGIS_DB_IDLE_TIMEOUT_SECS`, falling back to [`DEFAULT_IDLE_TIMEOUT_SECS`].
+pub fn idle_timeout_secs_from_env() -> u64 {
+    std::env::var("AEGIS_DB_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| parse_positive_u64(&v))
+        .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS)
+}
+
+/// Read `AEGIS_DB_ACQUIRE_TIMEOUT_SECS`, falling back to
+/// [`DEFAULT_ACQUIRE_TIMEOUT_SECS`].
+pub fn acquire_timeout_secs_from_env() -> u64 {
+    std::env::var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| parse_positive_u64(&v))
+        .unwrap_or(DEFAULT_ACQUIRE_TIMEOUT_SECS)
+}
+
+/// Read `AEGIS_DB_MAX_LIFETIME_SECS` (#1318), falling back to
+/// [`DEFAULT_MAX_LIFETIME_SECS`].
+pub fn max_lifetime_secs_from_env() -> u64 {
+    std::env::var("AEGIS_DB_MAX_LIFETIME_SECS")
+        .ok()
+        .and_then(|v| parse_positive_u64(&v))
+        .unwrap_or(DEFAULT_MAX_LIFETIME_SECS)
+}
+
+/// Read `AEGIS_DB_TEST_BEFORE_ACQUIRE` (#1318). Defaults to `true` for Postgres
+/// (stale-connection detection) and `false` for SQLite (no server-side liveness
+/// probe; SQLite file handles are cheap to validate on use).
+pub fn test_before_acquire_from_env(postgres: bool) -> bool {
+    std::env::var("AEGIS_DB_TEST_BEFORE_ACQUIRE")
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(postgres)
+}
+
 pub async fn init_db(db_url: &str) -> Result<DbPool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }
@@ -666,25 +745,27 @@ pub async fn init_db_with_busy_timeout(
         {
             sqlx::any::install_default_drivers();
 
-            let max_connections = std::env::var("AEGIS_DB_MAX_CONNECTIONS")
-                .ok()
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(5);
+            let max_connections = max_connections_from_env(true);
+            let idle_timeout = idle_timeout_secs_from_env();
+            let acquire_timeout = acquire_timeout_secs_from_env();
+            let max_lifetime = max_lifetime_secs_from_env();
+            let test_before_acquire = test_before_acquire_from_env(true);
 
-            let idle_timeout = std::env::var("AEGIS_DB_IDLE_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(30);
-
-            let acquire_timeout = std::env::var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(5);
+            tracing::info!(
+                max_connections,
+                idle_timeout_secs = idle_timeout,
+                acquire_timeout_secs = acquire_timeout,
+                max_lifetime_secs = max_lifetime,
+                test_before_acquire,
+                "PostgreSQL connection pool configured (#1318)"
+            );
 
             let pool = sqlx::postgres::PgPoolOptions::new()
                 .max_connections(max_connections)
                 .idle_timeout(std::time::Duration::from_secs(idle_timeout))
                 .acquire_timeout(std::time::Duration::from_secs(acquire_timeout))
+                .max_lifetime(std::time::Duration::from_secs(max_lifetime))
+                .test_before_acquire(test_before_acquire)
                 .connect(db_url)
                 .await?;
 
@@ -744,20 +825,11 @@ async fn init_sqlite_db_with_busy_timeout(
         connection_options = connection_options.pragma("key", quoted_key);
     }
 
-    let max_connections = std::env::var("AEGIS_DB_MAX_CONNECTIONS")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(5);
-
-    let idle_timeout = std::env::var("AEGIS_DB_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(30);
-
-    let acquire_timeout = std::env::var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(5);
+    let max_connections = max_connections_from_env(false);
+    let idle_timeout = idle_timeout_secs_from_env();
+    let acquire_timeout = acquire_timeout_secs_from_env();
+    let max_lifetime = max_lifetime_secs_from_env();
+    let test_before_acquire = test_before_acquire_from_env(false);
 
     // #906: each pooled connection keeps its own LRU cache of prepared
     // statements (sqlx-sqlite's default capacity is 100); the hot-path
@@ -809,6 +881,8 @@ async fn init_sqlite_db_with_busy_timeout(
         .max_connections(max_connections)
         .idle_timeout(std::time::Duration::from_secs(idle_timeout))
         .acquire_timeout(std::time::Duration::from_secs(acquire_timeout))
+        .max_lifetime(std::time::Duration::from_secs(max_lifetime))
+        .test_before_acquire(test_before_acquire)
         .connect_with(connection_options)
         .await?;
 
@@ -2559,6 +2633,69 @@ mod tests {
         verify_encryption_or_fail_closed(pool.sqlite_pool(), true)
             .await
             .unwrap();
+    }
+
+    /// #1318: Postgres default pool size is 10 when unset.
+    #[tokio::test]
+    async fn max_connections_from_env_defaults_postgres_to_ten() {
+        let _guard = crate::db::test_utils::POOL_CONFIG_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_DB_POOL_SIZE");
+        std::env::remove_var("AEGIS_DB_MAX_CONNECTIONS");
+        assert_eq!(
+            max_connections_from_env(true),
+            DEFAULT_POSTGRES_MAX_CONNECTIONS
+        );
+    }
+
+    /// #1318: `AEGIS_DB_POOL_SIZE` takes precedence over the legacy var.
+    #[tokio::test]
+    async fn max_connections_from_env_prefers_pool_size() {
+        let _guard = crate::db::test_utils::POOL_CONFIG_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_POOL_SIZE", "12");
+        std::env::set_var("AEGIS_DB_MAX_CONNECTIONS", "3");
+        assert_eq!(max_connections_from_env(true), 12);
+        std::env::remove_var("AEGIS_DB_POOL_SIZE");
+        std::env::remove_var("AEGIS_DB_MAX_CONNECTIONS");
+    }
+
+    /// #1318: SQLite default remains 5 for backward compatibility.
+    #[tokio::test]
+    async fn max_connections_from_env_defaults_sqlite_to_five() {
+        let _guard = crate::db::test_utils::POOL_CONFIG_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_DB_POOL_SIZE");
+        std::env::remove_var("AEGIS_DB_MAX_CONNECTIONS");
+        assert_eq!(
+            max_connections_from_env(false),
+            DEFAULT_SQLITE_MAX_CONNECTIONS
+        );
+    }
+
+    /// #1318: pool exhaustion surfaces as an acquire timeout, not a hang.
+    #[tokio::test]
+    async fn pool_acquire_times_out_when_exhausted() {
+        let _guard = crate::db::test_utils::POOL_CONFIG_ENV_LOCK.lock().await;
+        std::env::set_var("AEGIS_DB_POOL_SIZE", "1");
+        std::env::set_var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS", "1");
+        let pool = setup_pool("pool_exhaustion_timeout").await;
+
+        let _held = pool.acquire().await.expect("first acquire should succeed");
+        let start = std::time::Instant::now();
+        let second = pool.acquire().await;
+        assert!(
+            second.is_err(),
+            "second acquire must fail when pool is full"
+        );
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(900),
+            "acquire should wait roughly the configured timeout before failing"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "acquire should not hang past the configured timeout"
+        );
+
+        std::env::remove_var("AEGIS_DB_POOL_SIZE");
+        std::env::remove_var("AEGIS_DB_ACQUIRE_TIMEOUT_SECS");
     }
 
     // Deliberately no test exercises `init_db`/`init_db_with_busy_timeout`
