@@ -1263,6 +1263,21 @@ pub async fn set_tenant_auto_respond(
     Ok(())
 }
 
+/// #1277: set or clear the tenant's Slack approver group configuration.
+pub async fn set_tenant_slack_approver_group(
+    pool: &DbPool,
+    tenant_id: &str,
+    group: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    crate::execute_query!(
+        pool,
+        "UPDATE tenants SET slack_approver_group = ? WHERE id = ?",
+        group,
+        tenant_id
+    )?;
+    Ok(())
+}
+
 /// Set auto rotate token on leak toggle for a tenant.
 pub async fn set_tenant_auto_rotate_token_on_leak(
     pool: &DbPool,

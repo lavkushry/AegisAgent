@@ -902,6 +902,12 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         enabled: bool,
     ) -> Result<(), AegisError>;
+    /// #1277: configure Slack approver group (`None` clears restriction).
+    async fn set_tenant_slack_approver_group(
+        &self,
+        tenant_id: &str,
+        group: Option<&str>,
+    ) -> Result<(), AegisError>;
     async fn get_tenant_risk_weights(
         &self,
         tenant_id: &str,

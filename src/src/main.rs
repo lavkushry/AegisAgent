@@ -861,6 +861,11 @@ fn api_routes() -> Router<Arc<AppState>> {
                 .put(routes::put_tenant_risk_escalation_config),
         )
         .route(
+            "/tenants/slack-approver-group",
+            get(routes::get_tenant_slack_approver_group)
+                .put(routes::put_tenant_slack_approver_group),
+        )
+        .route(
             "/webhook_subscriptions",
             get(routes::list_webhook_subscriptions).post(routes::create_webhook_subscription),
         )
@@ -1824,6 +1829,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Optional Slack bot token for approver-group membership checks (#1277).
+    let slack_bot_token = std::env::var("AEGIS_SLACK_BOT_TOKEN").ok();
+    if slack_bot_token.is_none() {
+        info!(
+            "AEGIS_SLACK_BOT_TOKEN is not set. Slack usergroup approver \
+             validation will return 503 for tenants configured with an S… group."
+        );
+    }
+
     // Optional GitHub App installation token for posting deny comments on PRs
     // (#1382). When set, a background task posts a comment on GitHub PRs when
     // an agent's PR-related action is denied. When unset, PR comments are
@@ -1896,6 +1910,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         policy_signing_verifying_key,
         command_signing_key,
         slack_signing_secret,
+        slack_bot_token,
         github_pr_commenter,
         github_checks_client,
         qdrant_exporter,
@@ -2638,6 +2653,7 @@ mod tests {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -2938,6 +2954,7 @@ mod tests {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -3279,6 +3296,7 @@ mod tests {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,

@@ -102,6 +102,8 @@ use utoipa::OpenApi;
         put_tenant_risk_weights_api,
         get_tenant_risk_escalation_config_api,
         put_tenant_risk_escalation_config_api,
+        get_tenant_slack_approver_group_api,
+        put_tenant_slack_approver_group_api,
         authorize_action_api,
         list_decisions_api,
         get_decision_api,
@@ -833,6 +835,27 @@ fn get_tenant_risk_escalation_config_api() {}
     )
 )]
 fn put_tenant_risk_escalation_config_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants/slack-approver-group",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Slack approver group config", body = SlackApproverGroupRequest)
+    )
+)]
+fn get_tenant_slack_approver_group_api() {}
+
+#[utoipa::path(
+    put,
+    path = "/v1/tenants/slack-approver-group",
+    security(("bearer_auth" = [])),
+    request_body = SlackApproverGroupRequest,
+    responses(
+        (status = 200, description = "Slack approver group updated", body = SlackApproverGroupRequest)
+    )
+)]
+fn put_tenant_slack_approver_group_api() {}
 
 #[utoipa::path(
     get,

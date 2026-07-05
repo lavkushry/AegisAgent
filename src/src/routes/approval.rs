@@ -2237,9 +2237,13 @@ mod tests {
     /// Builds a Slack interactive-component callback body
     /// (`payload=<percent-encoded JSON>`) for `action_id`/`value`.
     fn slack_callback_body(action_id: &str, value: &str) -> Bytes {
+        slack_callback_body_with_user(action_id, value, "U123")
+    }
+
+    fn slack_callback_body_with_user(action_id: &str, value: &str, user_id: &str) -> Bytes {
         let payload = json!({
             "actions": [{"action_id": action_id, "value": value}],
-            "user": {"username": "reviewer", "id": "U123"},
+            "user": {"username": "reviewer", "id": user_id},
         });
         let encoded = percent_encoding::utf8_percent_encode(
             &payload.to_string(),
@@ -2498,5 +2502,80 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// #1277: when a tenant configures a Slack user allowlist, callbacks from
+    /// unlisted users are rejected with `403`/`not_in_approver_group`.
+    #[tokio::test]
+    async fn slack_callback_rejects_user_not_in_approver_allowlist() {
+        let (state, tenant_id, agent_token) =
+            setup_state_with_slack_secret("slack_group_deny", "test_secret").await;
+        state
+            .storage
+            .set_tenant_slack_approver_group(&tenant_id, Some("U999"))
+            .await
+            .unwrap();
+
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "32").await;
+
+        let value = format!("{tenant_id}:{approval_id}");
+        let body = slack_callback_body_with_user("approve", &value, "U123");
+        let ts = Utc::now().timestamp().to_string();
+        let sig = slack_signature_header("test_secret", &ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["details"]["reason"], "not_in_approver_group");
+    }
+
+    /// #1277: listed Slack user IDs may approve when an allowlist is configured.
+    #[tokio::test]
+    async fn slack_callback_allows_user_in_approver_allowlist() {
+        let (state, tenant_id, agent_token) =
+            setup_state_with_slack_secret("slack_group_allow", "test_secret").await;
+        state
+            .storage
+            .set_tenant_slack_approver_group(&tenant_id, Some("U123"))
+            .await
+            .unwrap();
+
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "33").await;
+
+        let value = format!("{tenant_id}:{approval_id}");
+        let body = slack_callback_body_with_user("approve", &value, "U123");
+        let ts = Utc::now().timestamp().to_string();
+        let sig = slack_signature_header("test_secret", &ts, &body);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Slack-Request-Timestamp",
+            axum::http::HeaderValue::from_str(&ts).unwrap(),
+        );
+        headers.insert(
+            "X-Slack-Signature",
+            axum::http::HeaderValue::from_str(&sig).unwrap(),
+        );
+
+        let response = slack_callback(State(state.clone()), headers, body)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
