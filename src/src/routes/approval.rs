@@ -810,19 +810,26 @@ pub(crate) async fn edit_approval_inner(
 ///
 /// Query params:
 ///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous page's
+///   `X-Next-Cursor` response header; takes priority over `offset` when both
+///   are supplied.
 pub async fn list_approvals(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match super::parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
 
     match state
         .storage
-        .list_pending_approvals(&tenant_id, limit, offset)
+        .list_pending_approvals_cursor(&tenant_id, limit, offset, cursor)
         .await
     {
-        Ok(approvals) => {
+        Ok((approvals, next_cursor)) => {
             // #1326: batch-fetch the originating decisions once (not one query
             // per approval) purely to surface `agent_id` — a human approver
             // needs to know which agent is asking, not just an action hash.
@@ -891,7 +898,7 @@ pub async fn list_approvals(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(mapped)).into_response()
+            super::paginated_response(&mapped, next_cursor)
         }
         Err(e) => {
             error!("Failed to list pending approvals: {:?}", e);
@@ -1981,6 +1988,44 @@ mod tests {
         let list = json.as_array().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0]["approval_id"].as_str(), Some(approval_id1.as_str()));
+    }
+
+    /// #1142: `GET /v1/approvals` emits `X-Next-Cursor` when more rows follow.
+    #[tokio::test]
+    async fn list_approvals_route_sets_next_cursor_header() {
+        let (state, tenant_id, agent_token) = setup_state("list_approvals_cursor_header").await;
+        for suffix in ["a", "b", "c"] {
+            create_pending_approval(&state, &tenant_id, &agent_token, suffix).await;
+        }
+
+        let response = list_approvals(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let next_cursor = response
+            .headers()
+            .get("x-next-cursor")
+            .expect("a second pending approval exists beyond the page")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.len(), 1);
+
+        let response2 = list_approvals(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(Some(format!("limit=1&cursor={next_cursor}"))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response2.status(), StatusCode::OK);
+        assert!(response2.headers().get("x-next-cursor").is_some());
     }
 
     /// #1326: the dashboard's Approvals queue needs to show a human approver

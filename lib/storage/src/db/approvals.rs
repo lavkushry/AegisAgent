@@ -188,6 +188,54 @@ pub async fn list_pending_approvals(
          LIMIT ? OFFSET ?", tenant_id, now, limit, offset)
 }
 
+/// #1142: cursor-paginated variant of [`list_pending_approvals`].
+pub async fn list_pending_approvals_cursor(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+) -> Result<(Vec<ApprovalRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let now = Utc::now();
+    let query = "SELECT id, tenant_id, decision_id, status, approver_group, approver_user_id, reason, original_skill_call, original_call_hash, edited_skill_call, effective_call_hash, expires_at, decided_at, callback_url, callback_secret_hash, created_at, rowid
+         FROM approvals
+         WHERE tenant_id = ?
+           AND status = 'created'
+           AND (expires_at IS NULL OR expires_at > ?)
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(now)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(now)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
+}
+
 pub async fn get_approval_by_id(
     pool: &DbPool,
     tenant_id: &str,
@@ -449,5 +497,94 @@ mod tests {
             crate::fetch_all_as!(_, pool, "SELECT id FROM approvals ORDER BY id").unwrap();
         let remaining: Vec<String> = remaining.into_iter().map(|(id,)| id).collect();
         assert_eq!(remaining, vec!["appr_new_decided", "appr_old_pending"]);
+    }
+
+    /// #1142: `list_pending_approvals_cursor` returns `next_cursor` when more
+    /// pending rows exist beyond the requested page.
+    #[tokio::test]
+    async fn list_pending_approvals_cursor_paginates_and_sets_next_cursor() {
+        let pool = setup_pool("approvals_cursor_paginate").await;
+        register_tenant(
+            &pool,
+            "tenant_appr_cursor",
+            "Approvals Cursor Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
+        crate::execute_query!(
+            pool,
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('agent_appr_cursor', 'tenant_appr_cursor', 'agent_appr_cursor', 'token', 'Agent', 'dev', 'low', 'active')"
+        )
+        .unwrap();
+
+        for i in 0..3 {
+            let decision_id = format!("dec_appr_cursor_{i}");
+            insert_decision(
+                &pool,
+                &DecisionRecord {
+                    id: decision_id.clone(),
+                    tenant_id: "tenant_appr_cursor".to_string(),
+                    agent_id: "agent_appr_cursor".to_string(),
+                    user_id: None,
+                    run_id: None,
+                    trace_id: None,
+                    skill: "github".to_string(),
+                    action: "merge".to_string(),
+                    resource: None,
+                    input_json: "{}".to_string(),
+                    decision: "require_approval".to_string(),
+                    risk_score: Some(50),
+                    reason: None,
+                    matched_policy_ids: None,
+                    request_id: None,
+                    latency_ms: None,
+                    composite_risk_score: None,
+                    root_trust_level: None,
+                    parent_run_id: None,
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+            insert_approval(
+                &pool,
+                &ApprovalRecord {
+                    id: format!("appr_cursor_{i}"),
+                    tenant_id: "tenant_appr_cursor".to_string(),
+                    decision_id,
+                    status: "created".to_string(),
+                    approver_group: None,
+                    approver_user_id: None,
+                    reason: None,
+                    original_skill_call: "{}".to_string(),
+                    original_call_hash: format!("hash-{i}"),
+                    edited_skill_call: None,
+                    effective_call_hash: None,
+                    expires_at: None,
+                    decided_at: None,
+                    callback_url: None,
+                    callback_secret_hash: None,
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let (page, next_cursor) =
+            list_pending_approvals_cursor(&pool, "tenant_appr_cursor", 2, 0, None)
+                .await
+                .unwrap();
+        assert_eq!(page.len(), 2);
+        assert!(next_cursor.is_some());
+
+        let (page2, next_cursor2) =
+            list_pending_approvals_cursor(&pool, "tenant_appr_cursor", 2, 0, next_cursor)
+                .await
+                .unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(next_cursor2, None);
     }
 }
