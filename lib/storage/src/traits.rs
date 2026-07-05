@@ -833,6 +833,22 @@ pub trait StorageBackend: Send + Sync + 'static {
         cursor: Option<i64>,
     ) -> Result<(Vec<SocAlertRecord>, Option<i64>), AegisError>;
     async fn insert_soc_alert(&self, record: &SocAlertRecord) -> Result<(), AegisError>;
+    async fn get_soc_alert_by_id(
+        &self,
+        tenant_id: &str,
+        alert_id: &str,
+    ) -> Result<Option<SocAlertRecord>, AegisError>;
+    async fn set_soc_alert_triage_recommendation(
+        &self,
+        tenant_id: &str,
+        alert_id: &str,
+        triage_json: &str,
+    ) -> Result<bool, AegisError>;
+    async fn list_soc_alerts_needing_triage(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+    ) -> Result<Vec<SocAlertRecord>, AegisError>;
     async fn get_incident_by_id(
         &self,
         tenant_id: &str,

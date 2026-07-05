@@ -933,6 +933,7 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/receipts/chain-head", get(routes::get_receipt_chain_head))
         // SOC Phase 5: Indexer Query API — paginated, tenant-scoped SOC views
         .route("/alerts", get(routes::list_alerts))
+        .route("/alerts/:id/triage", get(routes::get_alert_triage))
         .route("/incidents", get(routes::list_incidents))
         // SOC query layer: incident detail + aggregate summary
         .route("/incidents/:id", get(routes::get_incident))
@@ -1512,6 +1513,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #1393: periodic triage for HIGH/CRITICAL alerts missing recommendations.
+    let triage_poll_interval_secs: u64 = std::env::var("AEGIS_TRIAGE_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_TRIAGE_POLL_INTERVAL_SECS);
+    let triage_batch_limit: i64 = std::env::var("AEGIS_TRIAGE_BATCH_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_TRIAGE_BATCH_LIMIT);
+    let triage_abort_handle = tokio::spawn(jobs::run_triage_job(
+        pool.clone(),
+        triage_poll_interval_secs,
+        triage_batch_limit,
+        is_leader.clone(),
+    ))
+    .abort_handle();
+
     // #0106: periodically archive old audit_events rows into
     // audit_events_archive to keep the live table bounded. Gated on
     // is_leader (#1149).
@@ -1633,6 +1651,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "receipt_chain_integrity_job",
             receipt_integrity_abort_handle,
         ),
+        ("triage_job", triage_abort_handle),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
         ("vacuum_job", vacuum_abort_handle),

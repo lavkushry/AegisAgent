@@ -1513,6 +1513,79 @@ pub async fn narrate_incident(
         .into_response()
 }
 
+/// GET /v1/alerts/:id/triage — advisory triage recommendation for a SOC alert (#1393).
+///
+/// Returns the persisted `triage_recommendation` JSON for HIGH/CRITICAL alerts.
+/// If triage has not run yet, triggers the sandboxed triage agent on-demand.
+/// Low/medium alerts return 404 — triage is not applicable.
+pub async fn get_alert_triage(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(alert_id): Path<String>,
+) -> impl IntoResponse {
+    let alert = match state
+        .storage
+        .get_soc_alert_by_id(&tenant_id, &alert_id)
+        .await
+    {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return StatusError::not_found("Alert not found").into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch alert for triage: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    let sev = alert.severity.to_lowercase();
+    if sev != "high" && sev != "critical" {
+        return StatusError::not_found("Triage is only available for high/critical alerts")
+            .into_response();
+    }
+
+    if alert
+        .triage_recommendation
+        .as_ref()
+        .is_none_or(|s| s.is_empty())
+    {
+        if let Err(e) = crate::triage::triage_soc_alert(state.storage.get_pool(), &alert).await {
+            error!("On-demand triage failed for alert {}: {:?}", alert_id, e);
+            return StatusError::internal("Triage agent error").into_response();
+        }
+    }
+
+    let refreshed = match state
+        .storage
+        .get_soc_alert_by_id(&tenant_id, &alert_id)
+        .await
+    {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return StatusError::not_found("Alert not found").into_response();
+        }
+        Err(e) => {
+            error!("Failed to re-fetch alert triage: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    let json_str = match refreshed.triage_recommendation {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            return StatusError::not_found("Triage recommendation not available").into_response();
+        }
+    };
+
+    match serde_json::from_str::<TriageRecommendation>(&json_str) {
+        Ok(rec) => (StatusCode::OK, Json(rec)).into_response(),
+        Err(e) => {
+            error!("Stored triage JSON invalid for alert {}: {:?}", alert_id, e);
+            StatusError::internal("Invalid triage recommendation").into_response()
+        }
+    }
+}
+
 /// `GET /v1/incidents/:id/evidence-pack` — per-incident compliance evidence
 /// export (SOC-006, #1189). Bundles the incident, the alerts and decisions
 /// that contributed to it, the receipts/audit events tied to those
@@ -1957,6 +2030,7 @@ mod tests {
             source_event_id: "evt_route_1".to_string(),
             summary: "Route test alert".to_string(),
             created_at: "2026-06-06T10:00:00Z".to_string(),
+            triage_recommendation: None,
         };
         state.storage.insert_soc_alert(&alert).await.unwrap();
 
@@ -2094,6 +2168,7 @@ mod tests {
             source_event_id: "evt_watch_1".to_string(),
             summary: "Watch test alert".to_string(),
             created_at: Utc::now().to_rfc3339(),
+            triage_recommendation: None,
         };
         state.storage.insert_soc_alert(&alert).await.unwrap();
 
@@ -2183,6 +2258,75 @@ mod tests {
             closed_at: None,
         };
         db::insert_soc_incident(pool, &record).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_alert_triage_returns_recommendation_for_high_alert() {
+        let (state, tenant_id, _) = setup_state("alert_triage_route").await;
+
+        db::insert_soc_alert(
+            state.storage.get_pool(),
+            &SocAlertRecord {
+                id: "tri_alert_1".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "deny_storm".to_string(),
+                severity: "high".to_string(),
+                agent_id: "agent_triage".to_string(),
+                source_event_id: "evt_triage_1".to_string(),
+                summary: "Repeated deny pattern".to_string(),
+                created_at: "2026-06-06T10:00:00Z".to_string(),
+                triage_recommendation: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = get_alert_triage(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("tri_alert_1".to_string()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let rec: TriageRecommendation = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rec.agent, "template");
+        assert!(!rec.category_label.is_empty());
+        assert!(!rec.recommended_action.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_alert_triage_returns_404_for_low_severity() {
+        let (state, tenant_id, _) = setup_state("alert_triage_low").await;
+
+        db::insert_soc_alert(
+            state.storage.get_pool(),
+            &SocAlertRecord {
+                id: "tri_alert_low".to_string(),
+                tenant_id: tenant_id.clone(),
+                rule: "test_rule".to_string(),
+                severity: "low".to_string(),
+                agent_id: "agent_triage".to_string(),
+                source_event_id: "evt_triage_low".to_string(),
+                summary: "Low alert".to_string(),
+                created_at: "2026-06-06T10:00:00Z".to_string(),
+                triage_recommendation: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = get_alert_triage(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("tri_alert_low".to_string()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -2378,6 +2522,7 @@ mod tests {
             source_event_id: event_id.clone(),
             summary: "Evidence pack test alert".to_string(),
             created_at: Utc::now().to_rfc3339(),
+            triage_recommendation: None,
         };
         state.storage.insert_soc_alert(&alert).await.unwrap();
 
@@ -2720,6 +2865,7 @@ mod tests {
                 source_event_id: "evt1".to_string(),
                 summary: "High alert".to_string(),
                 created_at: "2026-06-06T10:00:00Z".to_string(),
+                triage_recommendation: None,
             },
         )
         .await
@@ -2735,6 +2881,7 @@ mod tests {
                 source_event_id: "evt2".to_string(),
                 summary: "Low alert".to_string(),
                 created_at: "2026-06-06T10:01:00Z".to_string(),
+                triage_recommendation: None,
             },
         )
         .await
@@ -2774,6 +2921,7 @@ mod tests {
                 source_event_id: "evt1".to_string(),
                 summary: "High".to_string(),
                 created_at: "2026-06-06T10:00:00Z".to_string(),
+                triage_recommendation: None,
             },
         )
         .await
@@ -2789,6 +2937,7 @@ mod tests {
                 source_event_id: "evt2".to_string(),
                 summary: "Medium".to_string(),
                 created_at: "2026-06-06T10:01:00Z".to_string(),
+                triage_recommendation: None,
             },
         )
         .await

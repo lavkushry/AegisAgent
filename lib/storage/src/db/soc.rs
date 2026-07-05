@@ -281,9 +281,118 @@ pub async fn record_known_tool_action(
 /// drain task logs errors but never panics on insert failure (design law 3).
 /// Stores ids/summary/severity only — never raw payloads (redaction invariant).
 pub async fn insert_soc_alert(pool: &DbPool, record: &SocAlertRecord) -> Result<(), sqlx::Error> {
-    crate::execute_query!(pool, "INSERT INTO soc_alerts (id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)", &record.id, &record.tenant_id, &record.rule, &record.severity, &record.agent_id, &record.source_event_id, &record.summary, &record.created_at)?;
+    crate::execute_query!(
+        pool,
+        "INSERT INTO soc_alerts (id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, triage_recommendation)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        &record.id,
+        &record.tenant_id,
+        &record.rule,
+        &record.severity,
+        &record.agent_id,
+        &record.source_event_id,
+        &record.summary,
+        &record.created_at,
+        &record.triage_recommendation
+    )?;
     Ok(())
+}
+
+/// Tenant-scoped fetch of a single alert by primary key (#1393).
+pub async fn get_soc_alert_by_id(
+    pool: &DbPool,
+    tenant_id: &str,
+    alert_id: &str,
+) -> Result<Option<SocAlertRecord>, sqlx::Error> {
+    crate::fetch_optional_as!(
+        SocAlertRecord,
+        pool,
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, triage_recommendation
+         FROM soc_alerts
+         WHERE tenant_id = ? AND id = ?",
+        tenant_id,
+        alert_id
+    )
+}
+
+/// Persist an advisory triage recommendation (#1393). Does not alter severity or
+/// trigger any enforcement — display metadata only.
+pub async fn set_soc_alert_triage_recommendation(
+    pool: &DbPool,
+    tenant_id: &str,
+    alert_id: &str,
+    triage_json: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = crate::execute_query!(
+        pool,
+        "UPDATE soc_alerts SET triage_recommendation = ?
+         WHERE tenant_id = ? AND id = ?",
+        triage_json,
+        tenant_id,
+        alert_id
+    )?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Count prior alerts with the same `(rule, agent_id)` excluding `alert_id`.
+pub async fn count_similar_soc_alerts(
+    pool: &DbPool,
+    tenant_id: &str,
+    rule: &str,
+    agent_id: &str,
+    alert_id: &str,
+) -> Result<i64, sqlx::Error> {
+    let (count,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_alerts
+         WHERE tenant_id = ? AND rule = ? AND agent_id = ? AND id != ?",
+        tenant_id,
+        rule,
+        agent_id,
+        alert_id
+    )?;
+    Ok(count)
+}
+
+/// Count alerts for `agent_id` in the trailing 24 hours (tenant-scoped).
+pub async fn count_agent_recent_soc_alerts(
+    pool: &DbPool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<i64, sqlx::Error> {
+    let (count,): (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM soc_alerts
+         WHERE tenant_id = ? AND agent_id = ?
+           AND created_at >= datetime('now', '-24 hours')",
+        tenant_id,
+        agent_id
+    )?;
+    Ok(count)
+}
+
+/// HIGH/CRITICAL alerts without a stored triage recommendation (#1393).
+pub async fn list_soc_alerts_needing_triage(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+) -> Result<Vec<SocAlertRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    crate::fetch_all_as!(
+        SocAlertRecord,
+        pool,
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, triage_recommendation
+         FROM soc_alerts
+         WHERE tenant_id = ?
+           AND severity IN ('high', 'critical')
+           AND (triage_recommendation IS NULL OR triage_recommendation = '')
+         ORDER BY created_at ASC
+         LIMIT ?",
+        tenant_id,
+        limit
+    )
 }
 
 /// Persist one correlation incident. Tenant-scoped, parameterized.
@@ -395,7 +504,7 @@ pub async fn list_soc_alerts(
     crate::fetch_all_as!(
         SocAlertRecord,
         pool,
-        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, triage_recommendation
          FROM soc_alerts
          WHERE tenant_id = ?
            AND (? IS NULL OR severity = ?)
@@ -426,7 +535,7 @@ pub async fn list_soc_alerts_cursor(
     cursor: Option<i64>,
 ) -> Result<(Vec<SocAlertRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, SOC_MAX_LIMIT);
-    let query = "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
+    let query = "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, triage_recommendation, rowid
          FROM soc_alerts
          WHERE tenant_id = ?
            AND (? IS NULL OR severity = ?)
@@ -487,7 +596,7 @@ pub async fn list_soc_alerts_by_source_event_ids(
     }
     let placeholders = event_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let query = format!(
-        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at
+        "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, triage_recommendation
          FROM soc_alerts
          WHERE tenant_id = ? AND source_event_id IN ({placeholders})"
     );
@@ -539,7 +648,7 @@ pub async fn list_soc_alerts_since(
     severity: Option<&str>,
     agent_id: Option<&str>,
 ) -> Result<Vec<(SocAlertRecord, i64)>, sqlx::Error> {
-    let query = "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, rowid
+    let query = "SELECT id, tenant_id, rule, severity, agent_id, source_event_id, summary, created_at, triage_recommendation, rowid
          FROM soc_alerts
          WHERE tenant_id = ?
            AND rowid > ?
@@ -1122,6 +1231,7 @@ mod tests {
             source_event_id: "evt_z123".to_string(),
             summary: "Critical deny detected".to_string(),
             created_at: "2026-06-06T12:00:00Z".to_string(),
+            triage_recommendation: None,
         };
         insert_soc_alert(&pool, &record).await.unwrap();
 

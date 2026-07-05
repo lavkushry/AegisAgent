@@ -95,6 +95,7 @@ pub fn make_alert(id: &str, tenant_id: &str) -> SocAlertRecord {
         source_event_id: format!("evt_{}", id),
         summary: "Test alert summary".to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
+        triage_recommendation: None,
     }
 }
 
@@ -113,6 +114,7 @@ pub fn make_alert_with(
         source_event_id: format!("evt_{}", id),
         summary: format!("Alert {} summary", id),
         created_at: chrono::Utc::now().to_rfc3339(),
+        triage_recommendation: None,
     }
 }
 

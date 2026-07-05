@@ -261,6 +261,7 @@ mod tests {
             source_event_id: "evt_1".to_string(),
             summary: "5 denials in 60s".to_string(),
             created_at: Utc::now().to_rfc3339(),
+            triage_recommendation: None,
         }
     }
 

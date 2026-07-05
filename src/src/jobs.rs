@@ -27,6 +27,12 @@ pub const DEFAULT_APPROVAL_CLEANUP_INTERVAL_SECS: u64 = 86400;
 /// Default approvals retention window before stale rows are deleted.
 pub const DEFAULT_APPROVAL_RETENTION_DAYS: i64 = 30;
 
+/// Default interval between alert triage sweeps (#1393).
+pub const DEFAULT_TRIAGE_POLL_INTERVAL_SECS: u64 = 300;
+
+/// Default batch size per tenant per triage sweep tick.
+pub const DEFAULT_TRIAGE_BATCH_LIMIT: i64 = 50;
+
 /// Default interval between leader-election renewal attempts (REL-003,
 /// #1149).
 pub const DEFAULT_LEADER_ELECTION_INTERVAL_SECS: u64 = 5;
@@ -95,6 +101,7 @@ pub async fn check_all_tenant_receipt_chains(pool: &DbPool) -> Result<(), sqlx::
                 source_event_id: "receipt_chain_integrity_check".to_string(),
                 summary: reason,
                 created_at: Utc::now().to_rfc3339(),
+                triage_recommendation: None,
             };
             db::insert_soc_alert(pool, &alert).await?;
         }
@@ -123,6 +130,43 @@ pub async fn run_receipt_chain_integrity_job(
         }
         if let Err(e) = check_all_tenant_receipt_chains(&pool).await {
             error!("receipt chain integrity job failed: {:?}", e);
+        }
+    }
+}
+
+/// #1393: periodic triage sweep for HIGH/CRITICAL alerts missing recommendations.
+/// Leader-gated like other maintenance jobs.
+pub async fn run_triage_job(
+    pool: DbPool,
+    interval_secs: u64,
+    batch_limit: i64,
+    is_leader: Arc<AtomicBool>,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("triage job: standby (not leader)");
+            continue;
+        }
+        let tenant_ids = match db::list_all_tenant_ids(&pool).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                error!("triage job: failed to list tenants: {:?}", e);
+                continue;
+            }
+        };
+        for tenant_id in tenant_ids {
+            match crate::triage::triage_pending_alerts_for_tenant(&pool, &tenant_id, batch_limit)
+                .await
+            {
+                Ok(0) => {}
+                Ok(n) => info!(
+                    "triage job: produced recommendations for {} alert(s) (tenant={})",
+                    n, tenant_id
+                ),
+                Err(e) => error!("triage job failed for tenant {}: {:?}", tenant_id, e),
+            }
         }
     }
 }

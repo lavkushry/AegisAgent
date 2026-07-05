@@ -996,6 +996,31 @@ pub struct SocAlertRecord {
     pub source_event_id: String,
     pub summary: String,
     pub created_at: String,
+    /// JSON blob produced by the sandboxed triage agent (#1393). Advisory only —
+    /// never gates enforcement. `NULL` until triage runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage_recommendation: Option<String>,
+}
+
+/// Advisory triage output for a SOC alert (#1393). Stored as JSON on
+/// `soc_alerts.triage_recommendation`; surfaced via `GET /v1/alerts/:id/triage`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct TriageRecommendation {
+    /// `maintain`, `escalate`, or `de_escalate` relative to the alert's current severity.
+    pub priority_adjustment: String,
+    /// Suggested priority label after triage (`low` | `medium` | `high` | `critical`).
+    pub suggested_priority: String,
+    /// Human-readable category for SOC queue routing.
+    pub category_label: String,
+    /// Recommended analyst action (advisory — not auto-executed).
+    pub recommended_action: String,
+    /// Count of prior alerts with the same rule for this agent (excludes current).
+    pub similar_past_alerts: u32,
+    /// Count of alerts for this agent in the last 24 hours (includes current).
+    pub agent_recent_alerts: u32,
+    pub generated_at: String,
+    /// `template` (default) or `claude` when the optional LLM path is enabled.
+    pub agent: String,
 }
 
 /// SOC Phase 5 — persisted correlation incident (multi-event pattern detected).

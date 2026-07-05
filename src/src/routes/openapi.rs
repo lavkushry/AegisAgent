@@ -49,6 +49,7 @@ use utoipa::OpenApi;
         verify_receipt_api,
         verify_receipt_chain_api,
         list_alerts_api,
+        get_alert_triage_api,
         list_incidents_api,
         get_incident_api,
         close_incident_api,
@@ -203,6 +204,7 @@ use utoipa::OpenApi;
             AuditEventRecord,
             TenantExport,
             SocAlertRecord,
+            TriageRecommendation,
             SocIncidentRecord,
             SocSummary,
             SocQueryFilters,
@@ -1234,6 +1236,20 @@ fn verify_receipt_chain_api() {}
     )
 )]
 fn list_alerts_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/alerts/{id}/triage",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Alert ID")
+    ),
+    responses(
+        (status = 200, description = "Advisory triage recommendation", body = TriageRecommendation),
+        (status = 404, description = "Alert not found or triage not applicable", body = StatusError)
+    )
+)]
+fn get_alert_triage_api() {}
 
 #[utoipa::path(
     get,
