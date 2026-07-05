@@ -12,6 +12,50 @@ pub async fn list_policies(
          ORDER BY created_at DESC", tenant_id)
 }
 
+/// #1142: cursor-paginated variant of [`list_policies`].
+pub async fn list_policies_cursor(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+) -> Result<(Vec<PolicyRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, super::SOC_MAX_LIMIT);
+    let query = "SELECT id, tenant_id, policy_key, name, language, body, version, status, created_by, created_at, rowid
+         FROM policies
+         WHERE tenant_id = ?
+           AND deleted_at IS NULL
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
+}
+
 pub async fn get_policy_by_id(
     pool: &DbPool,
     tenant_id: &str,
@@ -287,6 +331,41 @@ mod tests {
             raw.0.is_some(),
             "the row must persist with deleted_at set, not be removed"
         );
+    }
+
+    /// #1142: `list_policies_cursor` returns `next_cursor` when more rows exist.
+    #[tokio::test]
+    async fn list_policies_cursor_paginates_and_sets_next_cursor() {
+        let pool = setup_pool("policies_cursor_paginate").await;
+        register_tenant(&pool, "tenant_pol_cursor", "Policies Cursor Tenant", "developer")
+            .await
+            .unwrap();
+        for i in 0..3 {
+            insert_policy(
+                &pool,
+                &make_test_policy(
+                    &format!("pol_cursor_{i}"),
+                    "tenant_pol_cursor",
+                    &format!("policy-key-{i}"),
+                ),
+            )
+            .await
+            .unwrap();
+        }
+
+        let (page, next_cursor) =
+            list_policies_cursor(&pool, "tenant_pol_cursor", 2, 0, None)
+                .await
+                .unwrap();
+        assert_eq!(page.len(), 2);
+        assert!(next_cursor.is_some());
+
+        let (page2, next_cursor2) =
+            list_policies_cursor(&pool, "tenant_pol_cursor", 2, 0, next_cursor)
+                .await
+                .unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(next_cursor2, None);
     }
 
     /// #1193: deleting an already-deleted policy must be a no-op (affects
