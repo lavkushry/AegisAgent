@@ -204,7 +204,8 @@ pub async fn query_runtime_events(
             .await?
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(pool) => {
+        DbPool::Postgres(pools) => {
+            let pool = pools.read_pool();
             let sql = crate::db::to_postgres_sql(&sql);
             bind_runtime_filters!(
                 sqlx::query_as::<_, RuntimeEventRecord>(&sql).bind(tenant_id),
@@ -253,7 +254,8 @@ pub async fn count_runtime_events_over_time(
             .collect()
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(pool) => {
+        DbPool::Postgres(pools) => {
+            let pool = pools.read_pool();
             let sql = format!(
                 "SELECT bucket, cnt FROM (
                    SELECT to_char(date_trunc(?, observed_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket,
@@ -295,7 +297,8 @@ pub async fn count_runtime_events(
                 .get("cnt")
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(pool) => {
+        DbPool::Postgres(pools) => {
+            let pool = pools.read_pool();
             let sql = crate::db::to_postgres_sql(&sql);
             bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
                 .fetch_one(pool)
@@ -333,7 +336,8 @@ pub async fn count_runtime_events_grouped(
                 .collect()
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(pool) => {
+        DbPool::Postgres(pools) => {
+            let pool = pools.read_pool();
             let sql = crate::db::to_postgres_sql(&sql);
             bind_runtime_filters!(sqlx::query(&sql).bind(tenant_id), filters, q.as_deref())
                 .bind(limit)

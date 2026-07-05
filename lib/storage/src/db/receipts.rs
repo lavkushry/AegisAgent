@@ -78,7 +78,8 @@ pub async fn list_action_receipts_by_decision_ids(
                 .collect())
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(&query);
             let mut q = sqlx::query_as::<_, ActionReceiptRecord>(&pg_sql).bind(tenant_id);
             for id in decision_ids {
@@ -151,7 +152,8 @@ pub async fn list_action_receipts_cursor(
             super::paginate_rows(rows, limit)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)
@@ -254,7 +256,8 @@ where
             Ok(record)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.write_pool();
             let mut tx = p.begin().await?;
 
             let head: Option<(String,)> = sqlx::query_as(
@@ -477,7 +480,8 @@ pub async fn append_action_receipts_batch_atomic(
             Ok(())
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.write_pool();
             let mut tx = p.begin().await?;
             for (tenant_id, mut records) in groups {
                 let head: Option<(String,)> = sqlx::query_as(

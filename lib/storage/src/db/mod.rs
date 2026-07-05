@@ -1,11 +1,36 @@
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::str::FromStr;
 
+/// PostgreSQL write/read pool pair (#914). When `read_is_replica` is false,
+/// `read` is a cheap clone of `write` and both target the primary.
+#[cfg(feature = "postgres")]
+#[derive(Debug, Clone)]
+pub struct PostgresDbPools {
+    write: sqlx::PgPool,
+    read: sqlx::PgPool,
+    read_is_replica: bool,
+}
+
+#[cfg(feature = "postgres")]
+impl PostgresDbPools {
+    pub fn write_pool(&self) -> &sqlx::PgPool {
+        &self.write
+    }
+
+    pub fn read_pool(&self) -> &sqlx::PgPool {
+        &self.read
+    }
+
+    pub fn has_read_replica(&self) -> bool {
+        self.read_is_replica
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DbPool {
     Sqlite(SqlitePool),
     #[cfg(feature = "postgres")]
-    Postgres(sqlx::PgPool),
+    Postgres(PostgresDbPools),
 }
 
 impl DbPool {
@@ -29,7 +54,13 @@ impl DbPool {
         match self {
             Self::Sqlite(p) => p.num_idle() as u32,
             #[cfg(feature = "postgres")]
-            Self::Postgres(p) => p.num_idle() as u32,
+            Self::Postgres(pools) => {
+                let mut idle = pools.write_pool().num_idle() as u32;
+                if pools.has_read_replica() {
+                    idle += pools.read_pool().num_idle() as u32;
+                }
+                idle
+            }
         }
     }
 
@@ -37,7 +68,13 @@ impl DbPool {
         match self {
             Self::Sqlite(p) => p.size(),
             #[cfg(feature = "postgres")]
-            Self::Postgres(p) => p.size(),
+            Self::Postgres(pools) => {
+                let mut size = pools.write_pool().size();
+                if pools.has_read_replica() {
+                    size += pools.read_pool().size();
+                }
+                size
+            }
         }
     }
 
@@ -49,9 +86,13 @@ impl DbPool {
                 (idle, size.saturating_sub(idle))
             }
             #[cfg(feature = "postgres")]
-            Self::Postgres(p) => {
-                let idle = p.num_idle() as u32;
-                let size = p.size();
+            Self::Postgres(pools) => {
+                let mut idle = pools.write_pool().num_idle() as u32;
+                let mut size = pools.write_pool().size();
+                if pools.has_read_replica() {
+                    idle += pools.read_pool().num_idle() as u32;
+                    size += pools.read_pool().size();
+                }
                 (idle, size.saturating_sub(idle))
             }
         }
@@ -61,7 +102,12 @@ impl DbPool {
         match self {
             Self::Sqlite(p) => p.close().await,
             #[cfg(feature = "postgres")]
-            Self::Postgres(p) => p.close().await,
+            Self::Postgres(pools) => {
+                pools.write_pool().close().await;
+                if pools.has_read_replica() {
+                    pools.read_pool().close().await;
+                }
+            }
         }
     }
 
@@ -69,7 +115,13 @@ impl DbPool {
         match self {
             Self::Sqlite(p) => p.options().get_max_connections(),
             #[cfg(feature = "postgres")]
-            Self::Postgres(p) => p.options().get_max_connections(),
+            Self::Postgres(pools) => {
+                let mut max = pools.write_pool().options().get_max_connections();
+                if pools.has_read_replica() {
+                    max += pools.read_pool().options().get_max_connections();
+                }
+                max
+            }
         }
     }
 
@@ -77,7 +129,20 @@ impl DbPool {
         match self {
             Self::Sqlite(p) => p.acquire().await.map(DbPoolConnection::Sqlite),
             #[cfg(feature = "postgres")]
-            Self::Postgres(p) => p.acquire().await.map(DbPoolConnection::Postgres),
+            Self::Postgres(pools) => pools
+                .write_pool()
+                .acquire()
+                .await
+                .map(DbPoolConnection::Postgres),
+        }
+    }
+
+    /// Returns true when a dedicated read-replica pool is configured (#914).
+    pub fn has_read_replica(&self) -> bool {
+        match self {
+            Self::Sqlite(_) => false,
+            #[cfg(feature = "postgres")]
+            Self::Postgres(pools) => pools.has_read_replica(),
         }
     }
 }
@@ -158,6 +223,45 @@ pub fn to_postgres_sql(sql: &str) -> String {
     result
 }
 
+/// Returns `true` when a read-replica query failure is transient enough to
+/// retry on the primary (#914).
+#[cfg(feature = "postgres")]
+pub fn is_retryable_read_replica_error(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::PoolClosed | sqlx::Error::PoolTimedOut => true,
+        sqlx::Error::Io(_) | sqlx::Error::Tls(_) => true,
+        sqlx::Error::Database(db_err) => matches!(
+            db_err.code().as_deref(),
+            Some("08000") | Some("08003") | Some("08006") | Some("57P01") | Some("57P03")
+        ),
+        _ => false,
+    }
+}
+
+/// Run a read against the replica pool, falling back to the primary on
+/// transient replica errors when a dedicated replica is configured (#914).
+#[cfg(feature = "postgres")]
+pub async fn postgres_read_with_failover<T, F, Fut>(
+    pools: &PostgresDbPools,
+    run: F,
+) -> Result<T, sqlx::Error>
+where
+    F: Fn(&sqlx::PgPool) -> Fut,
+    Fut: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    match run(pools.read_pool()).await {
+        Ok(v) => Ok(v),
+        Err(e) if pools.has_read_replica() && is_retryable_read_replica_error(&e) => {
+            tracing::warn!(
+                error = %e,
+                "read replica query failed; retrying on primary (#914)"
+            );
+            run(pools.write_pool()).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
 // #900: every db::*query* macro below wraps the sqlx future with a
 // `db_query` tracing span (sql text + backend) via `.instrument(...)`. This
 // is the single point all ~170 query functions across lib/storage/src/db/
@@ -179,12 +283,12 @@ macro_rules! execute_query {
                     .map($crate::db::DbQueryResult::Sqlite)
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 sqlx::query(&pg_sql)
                     $(.bind($bind))*
-                    .execute(p)
+                    .execute(pools.write_pool())
                     .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
                     .await
                     .map($crate::db::DbQueryResult::Postgres)
@@ -206,14 +310,19 @@ macro_rules! fetch_optional {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_optional(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_optional(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -232,14 +341,19 @@ macro_rules! fetch_all {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_all(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_all(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -258,14 +372,19 @@ macro_rules! fetch_one {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_one(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_one(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -284,14 +403,19 @@ macro_rules! fetch_one_as {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query_as::<_, $ty>(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_one(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query_as::<_, $ty>(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_one(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -310,14 +434,19 @@ macro_rules! fetch_optional_as {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query_as::<_, $ty>(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_optional(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query_as::<_, $ty>(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_optional(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -336,14 +465,19 @@ macro_rules! fetch_all_as {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query_as::<_, $ty>(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_all(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query_as::<_, $ty>(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_all(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -362,14 +496,19 @@ macro_rules! fetch_one_scalar {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query_scalar::<_, $ty>(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_one(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query_scalar::<_, $ty>(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_one(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -388,14 +527,19 @@ macro_rules! fetch_optional_scalar {
                     .await
             }
             #[cfg(feature = "postgres")]
-            $crate::db::DbPool::Postgres(p) => {
+            $crate::db::DbPool::Postgres(pools) => {
                 use tracing::Instrument as _;
                 let pg_sql = $crate::db::to_postgres_sql($sql);
-                sqlx::query_scalar::<_, $ty>(&pg_sql)
-                    $(.bind($bind))*
-                    .fetch_optional(p)
-                    .instrument(tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres"))
-                    .await
+                let span =
+                    tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
+                $crate::db::postgres_read_with_failover(pools, |p| async {
+                    sqlx::query_scalar::<_, $ty>(&pg_sql)
+                        $(.bind($bind))*
+                        .fetch_optional(p)
+                        .instrument(span)
+                        .await
+                })
+                .await
             }
         }
     };
@@ -462,9 +606,25 @@ pub const CURRENT_SCHEMA_VERSION: i64 = 1;
 
 /// Liveness/readiness ping for the `/health` endpoint: a trivial `SELECT 1`
 /// that confirms the pool can acquire a connection and the store answers.
-/// Returns `Err` (fail-closed) on any pool/query failure.
+/// When a read replica is configured (#914), both the primary and replica
+/// pools are pinged. Returns `Err` (fail-closed) on any pool/query failure.
 pub async fn health_check(pool: &DbPool) -> Result<(), sqlx::Error> {
-    fetch_one_scalar!(i64, pool, "SELECT 1").map(|_| ())
+    match pool {
+        DbPool::Sqlite(_) => fetch_one_scalar!(i64, pool, "SELECT 1").map(|_| ()),
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(pools) => {
+            sqlx::query_scalar::<_, i64>("SELECT 1")
+                .fetch_one(pools.write_pool())
+                .await?;
+            if pools.has_read_replica() {
+                postgres_read_with_failover(pools, |p| async {
+                    sqlx::query_scalar::<_, i64>("SELECT 1").fetch_one(p).await
+                })
+                .await?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Returns `true` if `err` is a transient SQLite "database is locked"
@@ -732,6 +892,33 @@ pub fn test_before_acquire_from_env(postgres: bool) -> bool {
         .unwrap_or(postgres)
 }
 
+/// Optional PostgreSQL read-replica URL (#914). Unset means all reads use the
+/// primary pool. SQLite ignores this — there is no replica semantics.
+pub fn read_replica_url_from_env() -> Option<String> {
+    std::env::var("AEGIS_DB_READ_REPLICA_URL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+#[cfg(feature = "postgres")]
+async fn connect_postgres_pool(db_url: &str) -> Result<sqlx::PgPool, sqlx::Error> {
+    let max_connections = max_connections_from_env(true);
+    let idle_timeout = idle_timeout_secs_from_env();
+    let acquire_timeout = acquire_timeout_secs_from_env();
+    let max_lifetime = max_lifetime_secs_from_env();
+    let test_before_acquire = test_before_acquire_from_env(true);
+
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(max_connections)
+        .idle_timeout(std::time::Duration::from_secs(idle_timeout))
+        .acquire_timeout(std::time::Duration::from_secs(acquire_timeout))
+        .max_lifetime(std::time::Duration::from_secs(max_lifetime))
+        .test_before_acquire(test_before_acquire)
+        .connect(db_url)
+        .await
+}
+
 pub async fn init_db(db_url: &str) -> Result<DbPool, sqlx::Error> {
     init_db_with_busy_timeout(db_url, std::time::Duration::from_secs(5)).await
 }
@@ -757,30 +944,38 @@ pub async fn init_db_with_busy_timeout(
                 acquire_timeout_secs = acquire_timeout,
                 max_lifetime_secs = max_lifetime,
                 test_before_acquire,
-                "PostgreSQL connection pool configured (#1318)"
+                read_replica = read_replica_url_from_env().is_some(),
+                "PostgreSQL connection pool configured (#1318, #914)"
             );
 
-            let pool = sqlx::postgres::PgPoolOptions::new()
-                .max_connections(max_connections)
-                .idle_timeout(std::time::Duration::from_secs(idle_timeout))
-                .acquire_timeout(std::time::Duration::from_secs(acquire_timeout))
-                .max_lifetime(std::time::Duration::from_secs(max_lifetime))
-                .test_before_acquire(test_before_acquire)
-                .connect(db_url)
-                .await?;
+            let write_pool = connect_postgres_pool(db_url).await?;
 
             sqlx::migrate!("./migrations_postgres")
-                .run(&pool)
+                .run(&write_pool)
                 .await
                 .map_err(|e| sqlx::Error::Protocol(format!("migration failed: {e}")))?;
 
             // Initialize schema version
             sqlx::query("INSERT INTO schema_meta (version) VALUES ($1) ON CONFLICT DO NOTHING")
                 .bind(CURRENT_SCHEMA_VERSION)
-                .execute(&pool)
+                .execute(&write_pool)
                 .await?;
 
-            Ok(DbPool::Postgres(pool))
+            let (read_pool, read_is_replica) = match read_replica_url_from_env() {
+                Some(replica_url) => {
+                    tracing::info!(
+                        "PostgreSQL read-replica pool configured (#914); SELECT queries route to replica with primary failover"
+                    );
+                    (connect_postgres_pool(&replica_url).await?, true)
+                }
+                None => (write_pool.clone(), false),
+            };
+
+            Ok(DbPool::Postgres(PostgresDbPools {
+                write: write_pool,
+                read: read_pool,
+                read_is_replica,
+            }))
         }
         #[cfg(not(feature = "postgres"))]
         {
@@ -1829,9 +2024,9 @@ pub async fn get_database_size_bytes(pool: &DbPool) -> Result<i64, sqlx::Error> 
             Ok(page_count * page_size)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
             let (size,): (i64,) = sqlx::query_as("SELECT pg_database_size(current_database())")
-                .fetch_one(p)
+                .fetch_one(pools.read_pool())
                 .await?;
             Ok(size)
         }
@@ -1863,19 +2058,20 @@ pub async fn get_table_row_counts(
             Ok(counts)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let read_pool = pools.read_pool();
             let tables: Vec<(String,)> = sqlx::query_as(
                 "SELECT table_name FROM information_schema.tables 
                  WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
                  ORDER BY table_name",
             )
-            .fetch_all(p)
+            .fetch_all(read_pool)
             .await?;
 
             let mut counts = Vec::with_capacity(tables.len());
             for (table,) in tables {
                 let query = format!("SELECT COUNT(*) FROM \"{}\"", table);
-                let (row_count,): (i64,) = sqlx::query_as(&query).fetch_one(p).await?;
+                let (row_count,): (i64,) = sqlx::query_as(&query).fetch_one(read_pool).await?;
                 counts.push(aegis_api::models::TableRowCount { table, row_count });
             }
             Ok(counts)
@@ -2668,6 +2864,55 @@ mod tests {
             max_connections_from_env(false),
             DEFAULT_SQLITE_MAX_CONNECTIONS
         );
+    }
+
+    /// #914: unset/blank read-replica URL means no replica routing.
+    #[tokio::test]
+    async fn read_replica_url_from_env_returns_none_when_unset_or_blank() {
+        let _guard = crate::db::test_utils::POOL_CONFIG_ENV_LOCK.lock().await;
+        std::env::remove_var("AEGIS_DB_READ_REPLICA_URL");
+        assert_eq!(read_replica_url_from_env(), None);
+        std::env::set_var("AEGIS_DB_READ_REPLICA_URL", "   ");
+        assert_eq!(read_replica_url_from_env(), None);
+        std::env::remove_var("AEGIS_DB_READ_REPLICA_URL");
+    }
+
+    /// #914: a configured read-replica URL is trimmed and returned.
+    #[tokio::test]
+    async fn read_replica_url_from_env_returns_trimmed_value() {
+        let _guard = crate::db::test_utils::POOL_CONFIG_ENV_LOCK.lock().await;
+        std::env::set_var(
+            "AEGIS_DB_READ_REPLICA_URL",
+            "  postgresql://replica.example/aegis  ",
+        );
+        assert_eq!(
+            read_replica_url_from_env().as_deref(),
+            Some("postgresql://replica.example/aegis")
+        );
+        std::env::remove_var("AEGIS_DB_READ_REPLICA_URL");
+    }
+
+    /// #914: SQLite pools never advertise a read replica.
+    #[tokio::test]
+    async fn sqlite_pool_has_no_read_replica() {
+        let pool = setup_pool("sqlite_no_read_replica").await;
+        assert!(!pool.has_read_replica());
+    }
+
+    /// #914: transient replica connection errors are retryable on the primary.
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn is_retryable_read_replica_error_classifies_transient_failures() {
+        use crate::db::test_utils::MockDbError;
+
+        assert!(is_retryable_read_replica_error(&sqlx::Error::PoolTimedOut));
+        assert!(is_retryable_read_replica_error(&sqlx::Error::PoolClosed));
+        assert!(is_retryable_read_replica_error(&sqlx::Error::Database(
+            Box::new(MockDbError { code: "08006" })
+        )));
+        assert!(!is_retryable_read_replica_error(&sqlx::Error::Database(
+            Box::new(MockDbError { code: "23505" })
+        )));
     }
 
     /// #1318: pool exhaustion surfaces as an acquire timeout, not a hang.

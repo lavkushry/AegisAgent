@@ -67,7 +67,8 @@ pub async fn list_playbooks_cursor(
             super::paginate_rows(rows, limit)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)

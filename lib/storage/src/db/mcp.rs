@@ -303,7 +303,8 @@ pub async fn list_mcp_servers_cursor(
             super::paginate_rows(rows, limit)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)
@@ -448,7 +449,8 @@ pub async fn update_mcp_server(
             Ok(result.rows_affected() > 0)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.write_pool();
             let pg_sql = crate::db::to_postgres_sql(&query_str);
             let mut q = sqlx::query(&pg_sql);
             for val in bindings {

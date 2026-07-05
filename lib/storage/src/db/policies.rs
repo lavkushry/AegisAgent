@@ -41,7 +41,8 @@ pub async fn list_policies_cursor(
             super::paginate_rows(rows, limit)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)
@@ -215,7 +216,8 @@ where
             Ok(record)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.write_pool();
             let mut tx = p.begin().await?;
 
             let head: Option<(String,)> = sqlx::query_as(
@@ -298,7 +300,8 @@ pub async fn list_policy_audit_log_cursor(
             super::paginate_rows(rows, limit)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)

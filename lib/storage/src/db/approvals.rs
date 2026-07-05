@@ -149,7 +149,8 @@ pub async fn list_approvals_by_decision_ids(
                 .collect())
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(&query);
             let mut q = sqlx::query_as::<_, ApprovalRecord>(&pg_sql).bind(tenant_id);
             for id in decision_ids {
@@ -220,7 +221,8 @@ pub async fn list_pending_approvals_cursor(
             super::paginate_rows(rows, limit)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)
