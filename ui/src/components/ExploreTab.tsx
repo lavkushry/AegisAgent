@@ -6,15 +6,31 @@ import { useAppStore } from "../app/store";
 import { fieldsForEntity } from "@/datasources/fieldCatalog";
 import { ReceiptDatasource } from "@/datasources/receipt";
 import { SocQueryDatasource } from "@/datasources/socQuery";
-import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint } from "lucide-react";
+import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Fingerprint } from "lucide-react";
 import DecisionBadge from "./security/DecisionBadge";
 import TrustBadge from "./security/TrustBadge";
 import HashChip from "./security/HashChip";
-import { buildExploreDecisionRequest, decisionRowsFromFrame, type DecisionRecord } from "./exploreData";
+import JsonViewer from "@/components/primitives/JsonViewer";
+import {
+  appendAqlFilter,
+  buildExploreRequest,
+  decisionRowsFromFrame,
+  exploreEventTime,
+  exploreReceiptId,
+  exploreResultCount,
+  parsedAqlChips,
+  type ExploreEntity,
+  type ExploreEventRecord,
+} from "./exploreData";
 import FieldSidebar from "./filters/FieldSidebar";
 import { formatTime, errorMessage } from "@/lib/format";
 
-const DECISION_FIELD_DESCRIPTORS = fieldsForEntity("decision");
+type VerifyState =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "verified"; message: string }
+  | { status: "failed"; message: string }
+  | { status: "unknown"; message: string };
 
 export default function ExploreTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
@@ -36,227 +52,343 @@ export default function ExploreTab() {
     [apiOpts],
   );
 
-  // Seed the query from a drilldown at mount (this tab remounts on switch).
+  const [entity, setEntity] = useState<ExploreEntity>("decision");
   const [searchQuery, setSearchQuery] = useState(() => exploreSeed ?? exploreQuery);
   const [debouncedQuery, setDebouncedQuery] = useState(() => exploreSeed ?? exploreQuery);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [verificationResult, setVerificationResult] = useState<
-    Record<string, { status: "verified" | "failed" | "unknown"; msg: string; loading: boolean }>
-  >({});
+  const [verifyStates, setVerifyStates] = useState<Record<string, VerifyState>>({});
 
-  // Clear the one-time seed after the initializers above have consumed it.
   useEffect(() => {
     if (exploreSeed) consumeExploreSeed();
-    // Mount-only: the seed is read once via the useState initializers.
+    // Mount-only seed consumption.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { data: decisionFrame, isLoading, error } = useQuery({
-    queryKey: ["decisions", gatewayUrl, activeTenant, authEpoch, debouncedQuery, timeRange],
+  const fieldDescriptors = useMemo(() => fieldsForEntity(entity), [entity]);
+  const activeFilters = useMemo(() => parsedAqlChips(debouncedQuery), [debouncedQuery]);
+
+  const { data: decisionFrame, isLoading, error, isFetching } = useQuery({
+    queryKey: ["explore", entity, gatewayUrl, activeTenant, authEpoch, debouncedQuery, timeRange],
     queryFn: ({ signal }) => decisionDatasource.query(
-      buildExploreDecisionRequest(debouncedQuery, timeRange, signal),
+      buildExploreRequest(entity, debouncedQuery, timeRange, signal),
     ),
-    refetchInterval: 10000, // Poll every 10s
+    refetchInterval: 10000,
   });
-  const decisions = useMemo(
-    () => decisionRowsFromFrame(decisionFrame),
-    [decisionFrame],
-  );
+  const events = useMemo(() => decisionRowsFromFrame(decisionFrame), [decisionFrame]);
+  const resultCount = exploreResultCount(decisionFrame);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setDebouncedQuery(searchQuery);
-    setExploreQuery(searchQuery);
+    setDebouncedQuery(searchQuery.trim());
+    setExploreQuery(searchQuery.trim());
+    setExpandedId(null);
+    setVerifyStates({});
+  };
+
+  const applyFacetFilter = (field: string, value: string) => {
+    const next = appendAqlFilter(searchQuery, field, value);
+    setSearchQuery(next);
+    setDebouncedQuery(next);
+    setExploreQuery(next);
+    setExpandedId(null);
+    setVerifyStates({});
   };
 
   const verifyMutation = useMutation({
     mutationFn: (receiptId: string) => receiptDatasource.verifyReceipt!(receiptId),
     onSuccess: (result, receiptId) => {
-      setVerificationResult((prev) => ({
+      setVerifyStates((prev) => ({
         ...prev,
-        [receiptId]: { status: result.status, msg: result.message, loading: false },
+        [receiptId]: {
+          status: result.status === "verified" ? "verified" : result.status === "unknown" ? "unknown" : "failed",
+          message: result.message,
+        },
       }));
     },
     onError: (err: unknown, receiptId) => {
-      setVerificationResult((prev) => ({
+      setVerifyStates((prev) => ({
         ...prev,
-        [receiptId]: { status: "failed", msg: `Verification failed: ${errorMessage(err)}`, loading: false },
+        [receiptId]: { status: "failed", message: errorMessage(err) },
       }));
     },
   });
 
-  const triggerVerification = (receiptId: string) => {
-    setVerificationResult((prev) => ({
-      ...prev,
-      [receiptId]: { status: "unknown", msg: "", loading: true },
-    }));
+  const triggerVerification = (row: ExploreEventRecord) => {
+    const receiptId = exploreReceiptId(row);
+    if (!receiptId) {
+      setVerifyStates((prev) => ({
+        ...prev,
+        [row.id]: { status: "unknown", message: "No receipt_id is linked to this event." },
+      }));
+      return;
+    }
+    setVerifyStates((prev) => ({ ...prev, [receiptId]: { status: "running" } }));
     verifyMutation.mutate(receiptId);
   };
 
   return (
     <div className="space-y-4">
-      {/* Query Bar */}
-      <form onSubmit={handleSearch} className="flex gap-2">
-        <div className="relative flex-1">
-          <input
-            type="text"
-            placeholder="AQL: agent_id:coding-agent AND decision:deny untrusted   (field:value + keywords)"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-lg pl-10 pr-4 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none"
-          />
-          <Search className="absolute left-3 top-2.5 text-[var(--text-muted)]" size={16} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">Explore / Discover</h2>
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">
+            Structured AQL filters over gateway-backed {entity === "ase" ? "Agent Security Events" : "authorization decisions"}.
+          </p>
         </div>
-        <button
-          type="submit"
-          className="bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-white font-medium text-sm rounded-lg px-6 py-2 transition-colors cursor-pointer"
-        >
-          Search
-        </button>
+        <div className="flex items-center gap-1 rounded-lg border border-[var(--border-default)] p-1 text-xs">
+          {(["decision", "ase"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => {
+                setEntity(option);
+                setExpandedId(null);
+                setVerifyStates({});
+              }}
+              className={`rounded-md px-3 py-1.5 cursor-pointer transition-colors ${
+                entity === option
+                  ? "bg-[var(--brand)] text-white"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              {option === "decision" ? "Decisions" : "ASE"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <form onSubmit={handleSearch} className="space-y-2">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              placeholder="AQL: agent_id:coding-agent AND decision:deny AND tool:github"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-lg pl-10 pr-4 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none"
+              aria-label="Explore AQL query"
+            />
+            <Search className="absolute left-3 top-2.5 text-[var(--text-muted)]" size={16} />
+          </div>
+          <button
+            type="submit"
+            className="bg-[var(--brand)] hover:bg-[var(--brand-emphasis)] text-white font-medium text-sm rounded-lg px-6 py-2 transition-colors cursor-pointer"
+          >
+            Search
+          </button>
+        </div>
+        {activeFilters.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 text-[10px]">
+            <span className="text-[var(--text-muted)] uppercase tracking-wider font-semibold">Active filters</span>
+            {activeFilters.map((chip) => (
+              <span
+                key={`${chip.field}:${chip.value}`}
+                className="rounded border border-[var(--border-default)] px-2 py-0.5 font-mono text-[var(--text-secondary)]"
+              >
+                {chip.field}:{chip.value}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </form>
 
       <div className="grid grid-cols-1 lg:grid-cols-[210px_minmax(0,1fr)] gap-4">
-        {/* Field facet sidebar (computed from loaded results) */}
         <FieldSidebar
-          descriptors={DECISION_FIELD_DESCRIPTORS}
-          rows={(decisions ?? []) as Array<Record<string, unknown>>}
-          onSelect={(field, value) => {
-            const q = `${field}:${value}`;
-            setSearchQuery(q);
-            setDebouncedQuery(q);
-            setExploreQuery(q);
-          }}
+          descriptors={fieldDescriptors}
+          rows={events as Array<Record<string, unknown>>}
+          onSelect={applyFacetFilter}
         />
 
-        {/* Decisions Results List */}
         <div className="panel-card min-w-0">
-          <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-4">
-            FTS5 Decision Index Explorer
-          </h3>
-
-        {isLoading ? (
-          <p className="text-sm text-[var(--text-muted)] text-center py-12">Querying decision records...</p>
-        ) : error ? (
-          <p className="text-sm text-red-400 text-center py-12">Error: {errorMessage(error)}</p>
-        ) : decisions.length === 0 ? (
-          <p className="text-sm text-[var(--text-muted)] text-center py-12">No decisions matched the query.</p>
-        ) : (
-          <div className="space-y-2">
-            {decisions.map((dec: DecisionRecord) => {
-              const isExpanded = expandedId === dec.id;
-              const vResult = verificationResult[dec.id];
-              return (
-                <div
-                  key={dec.id}
-                  className="border border-[var(--border-default)] hover:border-[var(--border-default)] rounded-lg overflow-hidden bg-[var(--surface-app)]/50"
-                >
-                  {/* Row Header */}
-                  <div
-                    onClick={() => setExpandedId(isExpanded ? null : dec.id)}
-                    className="flex flex-wrap md:flex-nowrap justify-between items-center gap-4 p-4 cursor-pointer select-none hover:bg-[var(--surface-panel)]/40 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <DecisionBadge decision={dec.decision} />
-                      <div className="flex flex-col">
-                        <span className="text-xs font-mono font-bold text-[var(--brand)]">
-                          {dec.tool_call?.name || dec.skill || dec.tool || "generic_action"}
-                        </span>
-                        <span className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">
-                          Agent: {dec.agent_id}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-4">
-                      <TrustBadge trust={dec.root_trust_level || dec.source_trust} />
-                      <span className="text-xs text-[var(--text-muted)]">
-                        {formatTime(dec.created_at || dec.ts)}
-                      </span>
-                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </div>
-                  </div>
-
-                  {/* Expanded Inspector View */}
-                  {isExpanded && (
-                    <div className="p-4 bg-[var(--surface-panel)]/60 border-t border-[var(--border-default)] space-y-4 text-xs">
-                      {/* Grid Properties */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <div>
-                            <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Reason</span>
-                            <span className="text-[var(--text-primary)] font-medium">{dec.reason || "N/A"}</span>
-                          </div>
-                          <div>
-                            <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Matched Policies</span>
-                            <span className="text-[var(--text-primary)] font-mono">{dec.matched_policies?.join(", ") || dec.matched_policy_ids?.join(", ") || "none"}</span>
-                          </div>
-                          <div>
-                            <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Run ID</span>
-                            <span className="text-[var(--text-primary)] font-mono">{dec.run_id || "N/A"}</span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <div>
-                            <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Action Hash</span>
-                            <HashChip hash={dec.action_hash} kind="action" head={16} tail={8} />
-                          </div>
-                          <div>
-                            <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Composite Risk Score</span>
-                            <span className="text-[var(--text-primary)] font-bold text-amber-500">{dec.composite_risk_score ?? "N/A"}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Tool Parameters JSON Inspector */}
-                      {dec.tool_call?.parameters && (
-                        <div className="bg-[var(--surface-app)] rounded-lg p-3 border border-[var(--border-default)] max-h-40 overflow-y-auto custom-scrollbar">
-                          <span className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider block mb-2">Parameters</span>
-                          <pre className="text-[11px] font-mono text-[var(--brand)] whitespace-pre-wrap">
-                            {JSON.stringify(dec.tool_call.parameters, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-
-                      {/* Cryptographic Verification Action */}
-                      <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[var(--border-default)]">
-                        <div className="flex items-center gap-1.5">
-                          <Fingerprint size={16} className="text-[var(--text-secondary)]" />
-                          <span className="text-[var(--text-secondary)]">Verifiable receipt available for this transaction.</span>
-                        </div>
-                        
-                        <div className="flex items-center gap-3">
-                          {vResult && (
-                            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${vResult.loading || vResult.status === "unknown" ? "bg-amber-950/20 border-amber-500/30 text-amber-400" : vResult.status === "verified" ? "bg-green-950/20 border-green-500/30 text-green-400" : "bg-red-950/20 border-red-500/30 text-red-400"}`}>
-                              {vResult.loading ? (
-                                <Cpu size={14} className="animate-spin" />
-                              ) : vResult.status === "verified" ? (
-                                <Check size={14} />
-                              ) : (
-                                <AlertTriangle size={14} />
-                              )}
-                              <span>{vResult.loading ? "Verifying signature..." : vResult.msg}</span>
-                            </div>
-                          )}
-                          
-                          <button
-                            onClick={() => triggerVerification(dec.id)}
-                            disabled={vResult?.loading}
-                            className="bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-white border border-[var(--border-default)] px-3.5 py-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                          >
-                            Verify Cryptographic Receipt
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">
+              {entity === "ase" ? "Agent Security Events" : "Authorization Decisions"}
+            </h3>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              {isFetching ? "Refreshing…" : resultCount !== undefined ? `${resultCount} result${resultCount === 1 ? "" : "s"}` : ""}
+            </span>
           </div>
-        )}
+
+          {isLoading ? (
+            <p className="text-sm text-[var(--text-muted)] text-center py-12">Querying gateway records…</p>
+          ) : error ? (
+            <p className="text-sm text-center py-12" style={{ color: "var(--state-failed)" }} role="alert">
+              Query failed: {errorMessage(error)}
+            </p>
+          ) : events.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)] text-center py-12">No events matched the query.</p>
+          ) : (
+            <div className="space-y-2">
+              {events.map((event) => (
+                <ExploreEventRow
+                  key={event.id}
+                  event={event}
+                  entity={entity}
+                  expanded={expandedId === event.id}
+                  verifyState={verifyStates[exploreReceiptId(event) ?? event.id] ?? { status: "idle" }}
+                  onToggle={() => setExpandedId(expandedId === event.id ? null : event.id)}
+                  onVerify={() => triggerVerification(event)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+function ExploreEventRow({
+  event,
+  entity,
+  expanded,
+  verifyState,
+  onToggle,
+  onVerify,
+}: {
+  event: ExploreEventRecord;
+  entity: ExploreEntity;
+  expanded: boolean;
+  verifyState: VerifyState;
+  onToggle: () => void;
+  onVerify: () => void;
+}) {
+  const label =
+    event.tool_call?.name
+    || event.tool
+    || event.skill
+    || event.event_type
+    || "event";
+  const receiptId = exploreReceiptId(event);
+
+  return (
+    <div className="border border-[var(--border-default)] hover:border-[var(--border-default)] rounded-lg overflow-hidden bg-[var(--surface-app)]/50">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex flex-wrap md:flex-nowrap justify-between items-center gap-4 p-4 cursor-pointer select-none hover:bg-[var(--surface-panel)]/40 transition-colors text-left"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          {event.decision ? <DecisionBadge decision={event.decision} /> : null}
+          <div className="flex flex-col min-w-0">
+            <span className="text-xs font-mono font-bold text-[var(--brand)] truncate">{label}</span>
+            <span className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono truncate">
+              Agent: {event.agent_id || "—"}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 shrink-0">
+          <TrustBadge trust={event.root_trust_level || event.source_trust} />
+          <span className="text-xs text-[var(--text-muted)]">{formatTime(exploreEventTime(event))}</span>
+          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </div>
+      </button>
+
+      {expanded ? (
+        <div className="p-4 bg-[var(--surface-panel)]/60 border-t border-[var(--border-default)] space-y-4 text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <InspectorField label="Reason" value={event.reason || "N/A"} />
+              <InspectorField
+                label="Matched Policies"
+                value={event.matched_policies?.join(", ") || event.matched_policy_ids?.join(", ") || "none"}
+              />
+              <InspectorField label="Run ID" value={event.run_id || "N/A"} mono />
+              <InspectorField label="Trace ID" value={event.trace_id || "N/A"} mono />
+            </div>
+            <div className="space-y-2">
+              <div>
+                <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Action Hash</span>
+                <HashChip hash={event.action_hash} kind="action" head={16} tail={8} />
+              </div>
+              <div>
+                <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">Receipt Hash</span>
+                <HashChip hash={event.receipt_hash} kind="receipt" head={16} tail={8} />
+              </div>
+              <InspectorField
+                label="Composite Risk Score"
+                value={event.composite_risk_score ?? "N/A"}
+                advisory
+              />
+            </div>
+          </div>
+
+          <div>
+            <span className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider block mb-2">
+              Redacted event document
+            </span>
+            <JsonViewer value={event} />
+          </div>
+
+          {entity === "decision" ? (
+            <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[var(--border-default)]">
+              <div className="flex items-center gap-1.5 text-[var(--text-secondary)]">
+                <Fingerprint size={16} />
+                <span>
+                  {receiptId
+                    ? "Receipt linked — verify cryptographic integrity before trusting this row."
+                    : "No receipt_id linked — verification unavailable for this row."}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {verifyState.status !== "idle" ? <VerifyStatusBadge state={verifyState} /> : null}
+                <button
+                  type="button"
+                  onClick={onVerify}
+                  disabled={verifyState.status === "running" || !receiptId}
+                  className="bg-[var(--interactive-bg)] hover:bg-[var(--interactive-bg-hover)] text-[var(--text-primary)] border border-[var(--border-default)] px-3.5 py-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Verify receipt
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InspectorField({
+  label,
+  value,
+  mono = false,
+  advisory = false,
+}: {
+  label: string;
+  value: string | number;
+  mono?: boolean;
+  advisory?: boolean;
+}) {
+  return (
+    <div>
+      <span className="text-[var(--text-muted)] block uppercase text-[10px] tracking-wider font-semibold">{label}</span>
+      <span
+        className={`text-[var(--text-primary)] ${mono ? "font-mono" : "font-medium"}`}
+        style={advisory ? { color: "var(--state-pending)" } : undefined}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function VerifyStatusBadge({ state }: { state: VerifyState }) {
+  if (state.status === "running") {
+    return <span className="text-[var(--state-pending)]">Verifying…</span>;
+  }
+  const color =
+    state.status === "verified"
+      ? "var(--state-verified)"
+      : state.status === "unknown"
+        ? "var(--state-pending)"
+        : "var(--state-failed)";
+  return (
+    <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs" style={{ color, borderColor: `color-mix(in oklab, ${color} 40%, transparent)` }}>
+      {state.status === "verified" ? <Check size={14} /> : <AlertTriangle size={14} />}
+      <span>{state.message}</span>
+    </span>
   );
 }
