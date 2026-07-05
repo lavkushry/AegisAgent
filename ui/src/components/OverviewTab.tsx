@@ -1,52 +1,91 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { getSocSummary, getStats, getAlerts, getIncidents, getAgentScoreboard } from "../app/api";
+import { GatewayEntityDatasource } from "@/datasources/gatewayEntity";
+import {
+  agentScoreboardFromFrame,
+  alertRowsFromFrame,
+  incidentRowsFromFrame,
+  socSummaryFromFrame,
+  tenantStatsFromFrame,
+} from "@/datasources/entityData";
 import { Shield, ShieldAlert, CheckCircle, Clock, AlertTriangle, UserCheck, Flame } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useChartColors } from "@/hooks/useChartColors";
 
+const DEFAULT_TIME_RANGE = { from: "now-24h", to: "now" } as const;
+
 export default function OverviewTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
+  const entityDatasource = useMemo(
+    () => new GatewayEntityDatasource({ gatewayUrl, bearerToken, tenantId: activeTenant }),
+    [gatewayUrl, bearerToken, activeTenant],
+  );
   const chart = useChartColors();
 
-  // Fetch summary counters
-  const { data: summary, isLoading: isSummaryLoading, error: summaryError } = useQuery({
+  const { data: summaryFrame, isLoading: isSummaryLoading, error: summaryError } = useQuery({
     queryKey: ["socSummary", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getSocSummary(apiOpts),
-    refetchInterval: 5000, // Poll every 5s
+    queryFn: ({ signal }) => entityDatasource.query({
+      snapshot: "soc-summary",
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
+    refetchInterval: 5000,
   });
+  const summary = socSummaryFromFrame(summaryFrame);
 
-  // Fetch tenant decisions/receipts stats
-  const { data: stats, isLoading: isStatsLoading } = useQuery({
+  const { data: statsFrame, isLoading: isStatsLoading } = useQuery({
     queryKey: ["tenantStats", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getStats(apiOpts),
+    queryFn: ({ signal }) => entityDatasource.query({
+      snapshot: "tenant-stats",
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
     refetchInterval: 5000,
   });
+  const stats = tenantStatsFromFrame(statsFrame);
 
-  // Fetch top risky agents scoreboard
-  const { data: scoreboard, isLoading: isScoreboardLoading } = useQuery({
+  const { data: scoreboardFrame, isLoading: isScoreboardLoading } = useQuery({
     queryKey: ["scoreboard", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getAgentScoreboard(apiOpts),
+    queryFn: ({ signal }) => entityDatasource.query({
+      snapshot: "agent-scoreboard",
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
     refetchInterval: 5000,
   });
+  const scoreboard = agentScoreboardFromFrame(scoreboardFrame);
 
-  // Fetch recent alerts
-  const { data: recentAlerts } = useQuery({
+  const { data: recentAlertsFrame } = useQuery({
     queryKey: ["recentAlerts", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getAlerts(apiOpts, 5),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "alert",
+      limit: 5,
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
     refetchInterval: 5000,
   });
+  const recentAlerts = alertRowsFromFrame(recentAlertsFrame);
 
-  // Fetch recent incidents
-  const { data: recentIncidents } = useQuery({
+  const { data: recentIncidentsFrame } = useQuery({
     queryKey: ["recentIncidents", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getIncidents(apiOpts, 5),
+    queryFn: ({ signal }) => entityDatasource.query({
+      entity: "incident",
+      limit: 5,
+      timeRange: DEFAULT_TIME_RANGE,
+      variables: {},
+      signal,
+    }),
     refetchInterval: 5000,
   });
+  const recentIncidents = incidentRowsFromFrame(recentIncidentsFrame);
 
   const isLoading = isSummaryLoading || isStatsLoading;
 

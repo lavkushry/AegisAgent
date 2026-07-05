@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { frameRows, rowsToFrame } from "./frame";
 import { fieldsForEntity } from "./fieldCatalog";
 import { receiptRowsFromFrame } from "./receiptData";
+import { socSummaryFromFrame, tenantStatsFromFrame } from "./entityData";
 import { decisionRowsFromFrame } from "../components/exploreData";
+import { objectToSingleRowFrame } from "./frame";
 
 /** Representative gateway shapes used to guard datasource normalization contracts. */
 const FIXTURES = {
@@ -69,5 +71,23 @@ describe("datasource contract fixtures", () => {
     const receipts = receiptRowsFromFrame(rowsToFrame([FIXTURES.receipt]));
     expect(decisions[0]?.id).toBe("decision-1");
     expect(receipts[0]?.receipt_hash).toBe("hash-1");
+  });
+
+  it("round-trips snapshot objects through single-row frame extractors", () => {
+    const stats = {
+      total_decisions: 128,
+      decisions_allow: 121,
+      decisions_deny: 7,
+      total_receipts: 64,
+      receipt_chain_verified: true,
+    };
+    const summary = {
+      approvals_pending: 3,
+      incidents_open: 1,
+      hourly_decisions_24h: [1, 2, 3],
+    };
+
+    expect(tenantStatsFromFrame(objectToSingleRowFrame(stats))).toMatchObject(stats);
+    expect(socSummaryFromFrame(objectToSingleRowFrame(summary))).toMatchObject(summary);
   });
 });
