@@ -1,7 +1,8 @@
 "use client";
 
-import { AlertOctagon, BarChart3, Bell, Clock, FileCheck2, Fingerprint, LayoutDashboard, LayoutGrid, PencilRuler, Search, Server, Settings, Shield, ShieldAlert, Terminal, Users } from "lucide-react";
+import { AlertOctagon, BarChart3, Beaker, Bell, Clock, FileCheck2, Fingerprint, LayoutDashboard, LayoutGrid, PencilRuler, Search, Server, Settings, Shield, ShieldAlert, Terminal, Users } from "lucide-react";
 import { useAppStore } from "@/app/store";
+import { DEV_HARNESS_ENABLED, DEV_HARNESS_VIEW } from "@/dev/guard";
 import { useSocSummary } from "@/hooks/useSocSummary";
 import type { ConsoleView } from "@/state/consoleUrl";
 
@@ -22,6 +23,8 @@ const NAV_ITEMS = [
   ["dashboard-editor", "Dashboard editor", PencilRuler, null],
   ["settings", "Settings", Settings, null],
 ] as const;
+
+const DEV_NAV_ITEM = [DEV_HARNESS_VIEW, "Panel harness", Beaker, null] as const;
 
 type BadgeField = "approvals_pending" | "alerts_total" | "incidents_open";
 
@@ -86,7 +89,7 @@ export default function SidebarNav() {
         ) : null}
       </div>
       <nav className="grid grid-cols-2 gap-1 md:block md:space-y-1.5" aria-label="SOC console">
-        {NAV_ITEMS.map(([id, label, Icon, badgeField]) => (
+        {[...NAV_ITEMS, ...(DEV_HARNESS_ENABLED ? [DEV_NAV_ITEM] : [])].map(([id, label, Icon, badgeField]) => (
           <button
             key={id}
             type="button"

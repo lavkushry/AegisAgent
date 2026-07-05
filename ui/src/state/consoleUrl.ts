@@ -1,4 +1,6 @@
-export const CONSOLE_VIEWS = [
+import { DEV_HARNESS_ENABLED, DEV_HARNESS_VIEW } from "@/dev/guard";
+
+const BASE_CONSOLE_VIEWS = [
   "overview",
   "dashboards",
   "integrity",
@@ -14,6 +16,11 @@ export const CONSOLE_VIEWS = [
   "analytics",
   "dashboard-editor",
   "settings",
+] as const;
+
+export const CONSOLE_VIEWS = [
+  ...BASE_CONSOLE_VIEWS,
+  ...(DEV_HARNESS_ENABLED ? [DEV_HARNESS_VIEW] : []),
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
