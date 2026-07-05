@@ -1,5 +1,5 @@
 import { GatewayRequestError, fetchFromGateway, type FetchOptions } from "../app/api";
-import { parseAql } from "./aql/parse";
+import { aqlToCompiledRequest, gatewayFiltersToLegacy, type LegacyParsedQuery } from "./aql/compile";
 import { fieldsForEntity } from "./fieldCatalog";
 import { rowsToFrame } from "./frame";
 import { resolveTimeToken } from "../lib/format";
@@ -56,34 +56,23 @@ export class SocQueryDatasource implements Datasource {
   constructor(private readonly opts: FetchOptions) {}
 
   async query(req: QueryRequest): Promise<DataFrame> {
-    const filters = parseAql(req.aql ?? req.search ?? "");
+    const entity = req.entity ?? "decision";
+    const compiled = aqlToCompiledRequest(req.aql ?? req.search ?? "", entity);
     const gatewayFilters = {
-      event_type: filters.eventType,
-      severity: filters.severity,
-      source_component: filters.sourceComponent,
-      agent_id: filters.agentId,
-      decision: filters.decision,
-      source_trust: filters.sourceTrust,
-      tool: filters.skill,
-      action: filters.action,
-      resource: filters.resource,
-      run_id: filters.runId,
-      trace_id: filters.traceId,
-      action_hash: filters.actionHash,
-      receipt_hash: filters.receiptHash,
-      q: filters.q,
-      from: resolveTimeToken(req.timeRange.from),
-      to: resolveTimeToken(req.timeRange.to),
+      ...compiled.filters,
+      from: compiled.filters.from ?? resolveTimeToken(req.timeRange.from),
+      to: compiled.filters.to ?? resolveTimeToken(req.timeRange.to),
     };
+    const aggregate = req.aggregate ?? compiled.aggregate;
     const body = {
       version: 1,
-      entity: req.entity ?? "decision",
+      entity,
       filters: Object.fromEntries(
         Object.entries(gatewayFilters).filter(([, value]) => value !== undefined && value !== ""),
       ),
-      aggregate: req.aggregate,
-      interval: req.aggregate === "count_over_time" ? req.interval ?? "hour" : undefined,
-      group_by: req.aggregate === "count_by" ? req.groupBy : undefined,
+      aggregate,
+      interval: aggregate === "count_over_time" ? req.interval ?? compiled.interval ?? "hour" : undefined,
+      group_by: aggregate === "count_by" ? req.groupBy ?? compiled.groupBy : undefined,
       limit: req.limit ?? 50,
       cursor: req.cursor,
     };
@@ -105,7 +94,7 @@ export class SocQueryDatasource implements Datasource {
       ) {
         throw error;
       }
-      return this.queryDecisionsFallback(req, filters);
+      return this.queryDecisionsFallback(req, gatewayFiltersToLegacy(compiled.filters));
     }
   }
 
@@ -115,7 +104,7 @@ export class SocQueryDatasource implements Datasource {
 
   private async queryDecisionsFallback(
     req: QueryRequest,
-    filters: ReturnType<typeof parseAql>,
+    filters: LegacyParsedQuery,
   ): Promise<DataFrame> {
     const params = new URLSearchParams({ limit: String(req.limit ?? 50) });
     if (filters.agentId) params.set("agent_id", filters.agentId);
