@@ -1274,6 +1274,72 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Broker tools (Phase 6.2)
+    async fn insert_broker_tool(
+        &self,
+        tenant_id: &str,
+        tool_name: &str,
+        connector_type: &str,
+        credential_ref: &str,
+        allowed_scopes_json: &str,
+        now: DateTime<Utc>,
+    ) -> Result<String, AegisError> {
+        db::insert_broker_tool(
+            &self.pool,
+            tenant_id,
+            tool_name,
+            connector_type,
+            credential_ref,
+            allowed_scopes_json,
+            now,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn get_broker_tool(
+        &self,
+        tenant_id: &str,
+        tool_id: &str,
+    ) -> Result<Option<BrokerToolRecord>, AegisError> {
+        db::get_broker_tool(&self.pool, tenant_id, tool_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_broker_tool_by_name(
+        &self,
+        tenant_id: &str,
+        tool_name: &str,
+    ) -> Result<Option<BrokerToolRecord>, AegisError> {
+        db::get_broker_tool_by_name(&self.pool, tenant_id, tool_name)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_broker_tools(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<BrokerToolRecord>, AegisError> {
+        db::list_broker_tools(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn set_broker_tool_status(
+        &self,
+        tenant_id: &str,
+        tool_id: &str,
+        status: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::set_broker_tool_status(&self.pool, tenant_id, tool_id, status, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

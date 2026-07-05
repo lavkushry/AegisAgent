@@ -748,6 +748,40 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: i64,
     ) -> Result<Vec<SensorRecord>, AegisError>;
 
+    // Broker tools (Phase 6.2: tool broker registrations)
+    async fn insert_broker_tool(
+        &self,
+        tenant_id: &str,
+        tool_name: &str,
+        connector_type: &str,
+        credential_ref: &str,
+        allowed_scopes_json: &str,
+        now: DateTime<Utc>,
+    ) -> Result<String, AegisError>;
+    async fn get_broker_tool(
+        &self,
+        tenant_id: &str,
+        tool_id: &str,
+    ) -> Result<Option<BrokerToolRecord>, AegisError>;
+    async fn get_broker_tool_by_name(
+        &self,
+        tenant_id: &str,
+        tool_name: &str,
+    ) -> Result<Option<BrokerToolRecord>, AegisError>;
+    async fn list_broker_tools(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<BrokerToolRecord>, AegisError>;
+    async fn set_broker_tool_status(
+        &self,
+        tenant_id: &str,
+        tool_id: &str,
+        status: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+
     // SOC (alerts, incidents, baseline, hourly counts)
     async fn list_soc_alerts(
         &self,

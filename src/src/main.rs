@@ -970,6 +970,17 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/sensors", get(routes::list_sensors))
         .route("/sensors/:id", get(routes::get_sensor))
         .route("/sensors/:id/heartbeat", post(routes::sensor_heartbeat))
+        // Tool broker (Phase 6.2): broker tool registrations — opaque
+        // credential refs only; secrets never transit these routes
+        .route(
+            "/broker/tools",
+            post(routes::register_broker_tool).get(routes::list_broker_tools),
+        )
+        .route("/broker/tools/:id", get(routes::get_broker_tool))
+        .route(
+            "/broker/tools/:id/status",
+            post(routes::set_broker_tool_status),
+        )
         // SOC Phase 6: Incident lifecycle — close an open incident
         .route("/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator
