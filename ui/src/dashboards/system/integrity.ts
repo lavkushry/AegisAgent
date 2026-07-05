@@ -42,7 +42,13 @@ export const integrityDashboard: DashboardSchema = {
             title: "Recent decisions — verify the receipt chain",
             datasourceId: DEFAULT_DATASOURCE_ID,
             entity: "decision",
-            options: { labelField: "tool", receiptHashField: "action_hash" },
+            options: {
+              labelField: "tool",
+              timeField: "timestamp",
+              receiptIdField: "receipt_id",
+              receiptHashField: "receipt_hash",
+              prevHashField: "prev_receipt_hash",
+            },
             drilldowns: [
               { label: "Explore agent", target: { kind: "explore", aqlTemplate: "${agent_id}" } },
             ],
