@@ -749,12 +749,29 @@ pub async fn upsert_detection_rule(
 }
 
 /// TASK-0088 (#934): list this tenant's detection rules.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous page's
+///   `X-Next-Cursor` response header; takes priority over `offset` when both
+///   are supplied.
 pub async fn list_detection_rules(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    match state.storage.list_detection_rules(&tenant_id).await {
-        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+    let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
+
+    match state
+        .storage
+        .list_detection_rules_cursor(&tenant_id, limit, offset, cursor)
+        .await
+    {
+        Ok((rules, next_cursor)) => paginated_response(&rules, next_cursor),
         Err(e) => {
             error!("Failed to list detection rules: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -2826,9 +2843,13 @@ mod tests {
         let (state, tenant_id, _) = setup_state("detection_rule_crud").await;
 
         // 1. List (initially empty)
-        let response = list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response = list_detection_rules(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
@@ -2860,9 +2881,13 @@ mod tests {
         assert!(record.enabled);
 
         // 3. List (should contain 1 rule)
-        let response_list = list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
-            .await
-            .into_response();
+        let response_list = list_detection_rules(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         assert_eq!(response_list.status(), StatusCode::OK);
         let body_list = to_bytes(response_list.into_body(), usize::MAX)
             .await
@@ -2897,10 +2922,13 @@ mod tests {
         assert!(!record_update.enabled);
 
         // List should still contain exactly 1 rule (upsert, not duplicate)
-        let response_list2 =
-            list_detection_rules(State(state.clone()), TenantId(tenant_id.clone()))
-                .await
-                .into_response();
+        let response_list2 = list_detection_rules(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let body_list2 = to_bytes(response_list2.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -2928,14 +2956,73 @@ mod tests {
         assert_eq!(response_delete_404.status(), StatusCode::NOT_FOUND);
 
         // 7. List (empty again)
-        let response_list3 = list_detection_rules(State(state), TenantId(tenant_id))
-            .await
-            .into_response();
+        let response_list3 = list_detection_rules(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let body_list3 = to_bytes(response_list3.into_body(), usize::MAX)
             .await
             .unwrap();
         let rules3: Vec<DetectionRuleRecord> = serde_json::from_slice(&body_list3).unwrap();
         assert!(rules3.is_empty());
+    }
+
+    /// #1142: `GET /v1/detection_rules` emits `X-Next-Cursor` when more rows follow.
+    #[tokio::test]
+    async fn list_detection_rules_route_sets_next_cursor_header() {
+        let (state, tenant_id, _) = setup_state("list_detection_rules_cursor_header").await;
+        for i in 0..2 {
+            let payload = UpsertDetectionRuleRequest {
+                rule_key: format!("cursor-rule-{i}"),
+                name: format!("Cursor Rule {i}"),
+                severity: "high".to_string(),
+                condition: "decision == 'deny'".to_string(),
+                summary_template: format!("Rule {i} fired").to_string(),
+                enabled: true,
+            };
+            let _ = upsert_detection_rule(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Json(payload),
+            )
+            .await
+            .into_response();
+        }
+
+        let response = list_detection_rules(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let next_cursor = response
+            .headers()
+            .get("x-next-cursor")
+            .expect("a second detection rule exists beyond the page")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: Vec<DetectionRuleRecord> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.len(), 1);
+
+        let response2 = list_detection_rules(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(Some(format!("limit=1&cursor={next_cursor}"))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response2.status(), StatusCode::OK);
+        assert!(response2.headers().get("x-next-cursor").is_none());
+        let body2 = to_bytes(response2.into_body(), usize::MAX).await.unwrap();
+        let page2: Vec<DetectionRuleRecord> = serde_json::from_slice(&body2).unwrap();
+        assert_eq!(page2.len(), 1);
     }
 
     /// #1282: `GET /v1/soc/rules` returns the embedded default rule set when a
@@ -2982,9 +3069,13 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let response_list = list_detection_rules(State(state), TenantId(tenant_id))
-            .await
-            .into_response();
+        let response_list = list_detection_rules(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(None),
+        )
+        .await
+        .into_response();
         let body_list = to_bytes(response_list.into_body(), usize::MAX)
             .await
             .unwrap();

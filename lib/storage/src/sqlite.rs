@@ -1920,6 +1920,18 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_detection_rules_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<DetectionRuleRecord>, Option<i64>), AegisError> {
+        db::list_detection_rules_cursor(&self.pool, tenant_id, limit, offset, cursor)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn delete_detection_rule(&self, tenant_id: &str, id: &str) -> Result<bool, AegisError> {
         db::delete_detection_rule(&self.pool, tenant_id, id)
             .await
