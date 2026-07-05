@@ -218,7 +218,8 @@ pub async fn list_decisions_cursor(
             super::paginate_rows(rows, limit)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)
@@ -333,7 +334,8 @@ pub async fn list_decisions_by_ids(
             Ok(rows.into_iter().map(|r| (r.id.clone(), r)).collect())
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(&query);
             let mut q = sqlx::query_as::<_, DecisionRecord>(&pg_sql).bind(tenant_id);
             for id in decision_ids {
@@ -406,7 +408,8 @@ pub async fn list_decisions_since(
                 .collect()
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)
@@ -474,7 +477,8 @@ pub async fn list_audit_events_by_decision_ids(
             q.fetch_all(p).await
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(&query);
             let mut q = sqlx::query_as::<_, AuditEventRecord>(&pg_sql).bind(tenant_id);
             for id in decision_ids {
@@ -552,7 +556,8 @@ pub async fn insert_audit_events_batch(
             Ok(())
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.write_pool();
             let mut tx = p.begin().await?;
             let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
                 "INSERT INTO audit_events (id, tenant_id, event_type, agent_id, user_id, run_id, trace_id, span_id, skill, action, resource, event_json, input_hash, output_hash, decision_id, approval_id, created_at) "
@@ -616,7 +621,8 @@ pub async fn archive_audit_events_older_than(
             Ok(result.rows_affected())
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.write_pool();
             let mut tx = p.begin().await?;
 
             sqlx::query(
@@ -707,7 +713,8 @@ pub async fn get_all_audit_events_cursor(
             super::paginate_rows(rows, AUDIT_EVENTS_PAGE_LIMIT)
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(query);
             let rows = sqlx::query(&pg_sql)
                 .bind(tenant_id)
@@ -859,7 +866,8 @@ pub async fn count_decisions_over_time(
                 .collect())
         }
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(p) => {
+        DbPool::Postgres(pools) => {
+            let p = pools.read_pool();
             let pg_sql = crate::db::to_postgres_sql(
                 "SELECT to_char(date_trunc(?, created_at), 'YYYY-MM-DD HH24:MI:SS') AS bucket, COUNT(*) AS cnt
                  FROM decisions
@@ -1049,7 +1057,8 @@ pub async fn count_decisions_grouped(
                 .await?
         ),
         #[cfg(feature = "postgres")]
-        DbPool::Postgres(pool) => {
+        DbPool::Postgres(pools) => {
+            let pool = pools.read_pool();
             let query = query.replace(
                 "searchable_text MATCH ?",
                 "to_tsvector('simple', searchable_text) @@ plainto_tsquery('simple', ?)",

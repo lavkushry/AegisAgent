@@ -19,6 +19,7 @@ level on boot, and require a restart to change.
 | `AEGIS_DB_MAX_LIFETIME_SECS` | `1800` | Recycle pooled connections after this lifetime (#1318). |
 | `AEGIS_DB_TEST_BEFORE_ACQUIRE` | `true` (Postgres) / `false` (SQLite) | Run a liveness check before handing out a pooled connection (#1318). |
 | `DATABASE_URL` | `sqlite://aegis.db` | `sqlite://...` or (with the `postgres` feature) a Postgres URL. |
+| `AEGIS_DB_READ_REPLICA_URL` | *(unset)* | Optional Postgres read-replica URL (#914). When set, all `fetch_*` query macros and list/read handlers route `SELECT`s to this pool; writes and transactions stay on `DATABASE_URL`. Transient replica failures fail over to the primary. Ignored for SQLite. |
 
 Not configurable via env (intentional, baked-in safe defaults — see
 [`sqlite_usage.md`](https://github.com/lavkushry/AegisAgent/blob/main/.claude/rules/sqlite_usage.md)):
