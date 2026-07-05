@@ -7,7 +7,8 @@ import ExploreTab from "../components/ExploreTab";
 import IncidentsTab from "../components/IncidentsTab";
 import McpTab from "../components/McpTab";
 import SettingsTab from "../components/SettingsTab";
-import DetectionsTab from "../components/DetectionsTab";
+import DetectionsPage from "../components/detections/DetectionsPage";
+import RulesPage from "../components/rules/RulesPage";
 import DashboardLoader from "../dashboards/DashboardLoader";
 import { overviewDashboard } from "../dashboards/system/overview";
 import { integrityDashboard } from "../dashboards/system/integrity";
@@ -16,7 +17,7 @@ import { approvalsDashboard } from "../dashboards/system/approvals";
 import { receiptsDashboard } from "../dashboards/system/receipts";
 
 
-type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
+type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "rules" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
 
 export default function Home() {
   const activeTab = useAppStore((s) => s.activeView) as ActiveTab;
@@ -25,7 +26,8 @@ export default function Home() {
     dashboards: <DashboardLoader schema={overviewDashboard} />,
     integrity: <DashboardLoader schema={integrityDashboard} />, explore: <ExploreTab />,
     incidents: <IncidentsTab />,
-    detections: <DetectionsTab />,
+    detections: <DetectionsPage />,
+    rules: <RulesPage />,
     approvals: <DashboardLoader schema={approvalsDashboard} />,
     agents: <DashboardLoader schema={fleetDashboard} />, mcp: <McpTab />, receipts: <DashboardLoader schema={receiptsDashboard} />,
     settings: <SettingsTab />,

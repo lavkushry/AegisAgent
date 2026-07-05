@@ -15,7 +15,7 @@ describe("dangerous console action confirmation inventory", () => {
 
   it("does not use browser-native confirm dialogs in React SOC console components", () => {
     const componentSources = [
-      "src/components/DetectionsTab.tsx",
+      "src/components/rules/RulesPage.tsx",
       "src/components/IncidentsTab.tsx",
       "src/components/McpTab.tsx",
       "src/panels/standard/AgentTablePanel.tsx",
@@ -30,7 +30,7 @@ describe("dangerous console action confirmation inventory", () => {
 
   it.each([
     ["src/panels/differentiators/ApprovalCard.tsx", ["approveApproval", "rejectApproval", "editApproval"]],
-    ["src/components/DetectionsTab.tsx", ["deleteDetectionRule"]],
+    ["src/components/rules/RulesPage.tsx", ["deleteDetectionRule"]],
     ["src/components/IncidentsTab.tsx", ["/close", "evidence-pack"]],
     ["src/components/McpTab.tsx", ["quarantineMcpServer", "restoreMcpServer"]],
     ["src/panels/standard/AgentTablePanel.tsx", ["freezeAgent", "unfreezeAgent"]],
