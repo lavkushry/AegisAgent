@@ -1,13 +1,14 @@
 "use client";
 
-import { AlertOctagon, Clock, FileCheck2, Fingerprint, LayoutDashboard, LayoutGrid, Search, Server, Settings, Shield, ShieldAlert, Users } from "lucide-react";
+import { AlertOctagon, Clock, FileCheck2, Fingerprint, LayoutDashboard, LayoutGrid, Search, Server, Settings, Shield, ShieldAlert, Terminal, Users } from "lucide-react";
 import { useAppStore } from "@/app/store";
 import type { ConsoleView } from "@/state/consoleUrl";
 
 const NAV_ITEMS = [
   ["overview", "Overview", LayoutDashboard], ["dashboards", "Dashboards", LayoutGrid],
   ["integrity", "Integrity Console", Fingerprint], ["explore", "Explore", Search],
-  ["incidents", "Incidents", AlertOctagon], ["detections", "Detections & Rules", ShieldAlert],
+  ["incidents", "Incidents", AlertOctagon], ["detections", "Detections", ShieldAlert],
+  ["rules", "Rules", Terminal],
   ["approvals", "Approvals", Clock], ["agents", "Agents Fleet", Users],
   ["mcp", "MCP Servers", Server], ["receipts", "Receipts Log", FileCheck2],
   ["settings", "Settings", Settings],

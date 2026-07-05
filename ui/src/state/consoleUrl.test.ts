@@ -28,4 +28,12 @@ describe("console URL state", () => {
     const search = serializeConsoleUrl({ view: "overview", timeRange: "24h", liveMode: false, variables: {} });
     expect(search).not.toMatch(/token|authorization|tenant_123/i);
   });
+
+  it("accepts split detections and rules console views for deep links", () => {
+    expect(parseConsoleUrl("?view=detections&range=24h")).toMatchObject({ view: "detections", timeRange: "24h" });
+    expect(parseConsoleUrl("?view=rules&range=7d")).toMatchObject({ view: "rules", timeRange: "7d" });
+    expect(serializeConsoleUrl({ view: "rules", timeRange: "7d", liveMode: false, variables: {} })).toContain(
+      "view=rules",
+    );
+  });
 });
