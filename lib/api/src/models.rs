@@ -703,6 +703,28 @@ pub struct SensorRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Phase 6.2 (tool broker): a registered broker tool. Binds a
+/// tenant-visible `tool_name` to a connector type and an *opaque*
+/// `credential_ref` — the credential itself is never stored here and never
+/// leaves the broker (Phase 6.1 `CredentialResolver` resolves the ref at
+/// execution time). `allowed_scopes` is a raw JSON-array string. Execution
+/// fails closed on any `status` other than `active`. Tenant-scoped;
+/// `(tenant_id, tool_name)` is unique.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct BrokerToolRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub tool_name: String,
+    pub connector_type: String,
+    /// Opaque reference (e.g. `env:GITHUB_TOKEN`) — never a secret value.
+    pub credential_ref: String,
+    pub allowed_scopes: String,
+    /// `active` | `disabled`.
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct DecisionRecord {
     pub id: String,
