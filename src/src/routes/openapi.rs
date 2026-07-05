@@ -13,6 +13,18 @@ use utoipa::OpenApi;
         version_api,
         register_agent_api,
         register_tool_api,
+        list_mcp_servers_api,
+        create_mcp_server_api,
+        get_mcp_server_api,
+        update_mcp_server_api,
+        get_mcp_server_tools_api,
+        discover_mcp_tools_api,
+        approve_mcp_tool_api,
+        disable_mcp_tool_api,
+        inspect_mcp_response_api,
+        get_mcp_server_manifest_history_api,
+        quarantine_mcp_server_api,
+        restore_mcp_server_api,
         list_agents_api,
         get_agent_api,
         patch_agent_api,
@@ -74,6 +86,61 @@ use utoipa::OpenApi;
         get_tenant_risk_escalation_config_api,
         put_tenant_risk_escalation_config_api,
         authorize_action_api,
+        list_decisions_api,
+        get_decision_api,
+        list_policies_api,
+        create_policy_api,
+        update_policy_api,
+        delete_policy_api,
+        rollback_policy_api,
+        reload_global_policies_api,
+        get_timeline_api,
+        get_audit_events_api,
+        get_evidence_pack_api,
+        ws_events_api,
+        list_agent_cage_runs_api,
+        get_agent_cage_run_api,
+        kill_agent_cage_run_api,
+        pause_agent_cage_run_api,
+        quarantine_agent_cage_run_api,
+        resume_agent_cage_run_api,
+        get_agent_risk_scoreboard_api,
+        list_bans_api,
+        get_ban_api,
+        revoke_ban_api,
+        list_broker_tools_api,
+        get_broker_tool_api,
+        set_broker_tool_status_api,
+        slack_callback_api,
+        list_control_commands_api,
+        get_control_command_api,
+        update_control_command_status_api,
+        decision_timeseries_api,
+        block_egress_api,
+        check_egress_api,
+        list_egress_events_api,
+        unblock_egress_api,
+        ingest_event_api,
+        ingest_runtime_event_api,
+        get_openapi_json_api,
+        list_playbooks_api,
+        delete_playbook_api,
+        test_playbook_api,
+        list_policy_audit_log_api,
+        upload_policy_bundle_api,
+        compile_policy_api,
+        list_policy_templates_api,
+        list_quarantine_api,
+        get_quarantine_api,
+        release_quarantine_api,
+        get_receipt_chain_head_api,
+        verify_receipt_range_api,
+        list_run_events_api,
+        list_sensors_api,
+        register_sensor_api,
+        get_sensor_api,
+        sensor_heartbeat_api,
+        receive_github_webhook_api,
     ),
     components(
         schemas(
@@ -1327,3 +1394,435 @@ fn get_db_stats_api() {}
     )
 )]
 fn create_db_backup_api() {}
+
+// #1607: routes added after the initial OpenAPI snapshot — kept in parity with api_routes().
+
+#[utoipa::path(
+    get,
+    path = "/v1/agent-cage/runs",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List agent cage runs")
+    )
+)]
+fn list_agent_cage_runs_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/agent-cage/runs/{id}",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Get agent cage run")
+    )
+)]
+fn get_agent_cage_run_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agent-cage/runs/{id}/kill",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Kill agent cage run")
+    )
+)]
+fn kill_agent_cage_run_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agent-cage/runs/{id}/pause",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Pause agent cage run")
+    )
+)]
+fn pause_agent_cage_run_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agent-cage/runs/{id}/quarantine",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Quarantine agent cage run")
+    )
+)]
+fn quarantine_agent_cage_run_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agent-cage/runs/{id}/resume",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Resume agent cage run")
+    )
+)]
+fn resume_agent_cage_run_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/agents/risk-scoreboard",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Agent risk scoreboard")
+    )
+)]
+fn get_agent_risk_scoreboard_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/bans",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List bans")
+    )
+)]
+fn list_bans_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/bans/{id}",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Get ban")
+    )
+)]
+fn get_ban_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/bans/{id}/revoke",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Revoke ban")
+    )
+)]
+fn revoke_ban_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/broker/tools",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List broker tools")
+    )
+)]
+fn list_broker_tools_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/broker/tools/{id}",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Get broker tool")
+    )
+)]
+fn get_broker_tool_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/broker/tools/{id}/status",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Set broker tool status")
+    )
+)]
+fn set_broker_tool_status_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/callbacks/slack",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Slack interactive callback")
+    )
+)]
+fn slack_callback_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/control/commands",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List control commands")
+    )
+)]
+fn list_control_commands_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/control/commands/{id}",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Get control command")
+    )
+)]
+fn get_control_command_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/control/commands/{id}/status",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Update control command status")
+    )
+)]
+fn update_control_command_status_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/decisions/timeseries",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Decision timeseries")
+    )
+)]
+fn decision_timeseries_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/egress/block",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Block egress")
+    )
+)]
+fn block_egress_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/egress/check",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Check egress policy")
+    )
+)]
+fn check_egress_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/egress/events",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List egress events")
+    )
+)]
+fn list_egress_events_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/egress/unblock",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Unblock egress")
+    )
+)]
+fn unblock_egress_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/ingest",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Ingest external event")
+    )
+)]
+fn ingest_event_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/ingest/runtime-events",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Ingest runtime event")
+    )
+)]
+fn ingest_runtime_event_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/openapi.json",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "OpenAPI specification")
+    )
+)]
+fn get_openapi_json_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/playbooks",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List playbooks")
+    )
+)]
+fn list_playbooks_api() {}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/playbooks/{id}",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Delete playbook")
+    )
+)]
+fn delete_playbook_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/playbooks/{id}/test",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Test playbook")
+    )
+)]
+fn test_playbook_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/policies/audit-log",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Policy audit log")
+    )
+)]
+fn list_policy_audit_log_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/policies/bundles",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Upload policy bundle")
+    )
+)]
+fn upload_policy_bundle_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/policies/compile",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Compile policy")
+    )
+)]
+fn compile_policy_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/policies/templates",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List policy templates")
+    )
+)]
+fn list_policy_templates_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/quarantine",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List quarantine records")
+    )
+)]
+fn list_quarantine_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/quarantine/{id}",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Get quarantine record")
+    )
+)]
+fn get_quarantine_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/quarantine/{id}/release",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Release quarantine")
+    )
+)]
+fn release_quarantine_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/receipts/chain-head",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Receipt chain head")
+    )
+)]
+fn get_receipt_chain_head_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/receipts/verify-range",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Verify receipt range")
+    )
+)]
+fn verify_receipt_range_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/runtime/runs/{id}/events",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List run runtime events")
+    )
+)]
+fn list_run_events_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/sensors",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List sensors")
+    )
+)]
+fn list_sensors_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/sensors/register",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Register sensor")
+    )
+)]
+fn register_sensor_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/sensors/{id}",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Get sensor")
+    )
+)]
+fn get_sensor_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/sensors/{id}/heartbeat",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Sensor heartbeat")
+    )
+)]
+fn sensor_heartbeat_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/webhooks/github",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "GitHub App webhook")
+    )
+)]
+fn receive_github_webhook_api() {}
