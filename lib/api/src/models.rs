@@ -319,6 +319,18 @@ pub struct TenantRecord {
     /// existing token valid. Defaults to `true` (additive migration).
     #[serde(default = "default_true")]
     pub auto_rotate_token_on_leak_enabled: bool,
+    /// #1277: Slack approver group for interactive callbacks. `None` = any
+    /// Slack user may approve. Comma-separated `U…` IDs = static allowlist.
+    /// `S…` prefix = Slack usergroup (requires `AEGIS_SLACK_BOT_TOKEN`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slack_approver_group: Option<String>,
+}
+
+/// #1277: tenant Slack approver-group configuration payload.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SlackApproverGroupRequest {
+    /// `null` clears the restriction (any Slack user may approve).
+    pub slack_approver_group: Option<String>,
 }
 
 fn default_true() -> bool {

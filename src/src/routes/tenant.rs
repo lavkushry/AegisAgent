@@ -72,6 +72,47 @@ pub async fn put_tenant_risk_weights(
     }
 }
 
+/// #1277: returns this tenant's Slack approver-group configuration (`null` =
+/// any Slack user may approve via interactive callback).
+pub async fn get_tenant_slack_approver_group(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match state.storage.get_tenant_by_id(&tenant_id).await {
+        Ok(Some(tenant)) => (
+            StatusCode::OK,
+            Json(SlackApproverGroupRequest {
+                slack_approver_group: tenant.slack_approver_group,
+            }),
+        )
+            .into_response(),
+        Ok(None) => StatusError::not_found("Tenant not found").into_response(),
+        Err(e) => {
+            error!("Failed to get tenant slack approver group: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// #1277: upserts this tenant's Slack approver-group configuration.
+pub async fn put_tenant_slack_approver_group(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(body): Json<SlackApproverGroupRequest>,
+) -> impl IntoResponse {
+    match state
+        .storage
+        .set_tenant_slack_approver_group(&tenant_id, body.slack_approver_group.as_deref())
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(body)).into_response(),
+        Err(e) => {
+            error!("Failed to set tenant slack approver group: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 /// #1296: returns this tenant's risk-escalation thresholds (DB override if
 /// present, otherwise the built-in default of 5 denials / 60-minute window).
 pub async fn get_tenant_risk_escalation_config(
@@ -497,6 +538,7 @@ pub async fn create_tenant(
         created_at: Utc::now(),
         auto_respond_enabled: false,
         auto_rotate_token_on_leak_enabled: true,
+        slack_approver_group: None,
     };
     match state.storage.insert_tenant(&record).await {
         Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),

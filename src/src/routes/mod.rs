@@ -993,6 +993,10 @@ pub struct AppState {
     /// request with `404` — fail closed, since an unconfigured secret means
     /// no valid signature can ever be verified.
     pub slack_signing_secret: Option<String>,
+    /// Slack bot token for usergroup membership checks on interactive callbacks
+    /// (#1277). Required when `tenants.slack_approver_group` is a usergroup ID
+    /// (`S…`). When unset, usergroup-mode tenants return `503` on callback.
+    pub slack_bot_token: Option<String>,
     /// Optional GitHub App PR commenter (#1382). When `Some`, a background
     /// task posts a deny comment on GitHub PRs when an agent's PR-related
     /// action is denied. Configured via `AEGIS_GITHUB_APP_TOKEN`. When
@@ -1651,6 +1655,7 @@ pub mod benchutil {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -1876,6 +1881,7 @@ pub(crate) mod test_helpers {
                 plan: plan.to_string(),
                 auto_respond_enabled: false,
                 auto_rotate_token_on_leak_enabled: true,
+                slack_approver_group: None,
                 created_at: chrono::Utc::now(),
             })
             .await
@@ -1955,6 +1961,7 @@ pub(crate) mod test_helpers {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -2010,6 +2017,7 @@ pub(crate) mod test_helpers {
             policy_signing_verifying_key: Some(verifying_key_hex.to_string()),
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -2065,6 +2073,7 @@ pub(crate) mod test_helpers {
             policy_signing_verifying_key: None,
             command_signing_key: Some(signing_key_hex.to_string()),
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -2122,6 +2131,7 @@ pub(crate) mod test_helpers {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -2181,6 +2191,7 @@ pub(crate) mod test_helpers {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: Some(secret.to_string()),
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -2291,6 +2302,7 @@ pub(crate) mod test_helpers {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,
@@ -2422,6 +2434,7 @@ pub(crate) mod test_helpers {
             policy_signing_verifying_key: None,
             command_signing_key: None,
             slack_signing_secret: None,
+            slack_bot_token: None,
             github_pr_commenter: None,
             github_checks_client: None,
             qdrant_exporter: None,

@@ -145,6 +145,7 @@ mod tests {
                 created_at: Utc::now(),
                 auto_respond_enabled: false,
                 auto_rotate_token_on_leak_enabled: true,
+                slack_approver_group: None,
             },
         )
         .await

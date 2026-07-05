@@ -196,11 +196,17 @@ pub async fn slack_callback(
         .and_then(|a| a.get("action_id"))
         .and_then(|v| v.as_str());
     let value = action.and_then(|a| a.get("value")).and_then(|v| v.as_str());
+    let slack_user_id = payload
+        .get("user")
+        .and_then(|u| u.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
     let approver_user_id = payload
         .get("user")
         .and_then(|u| u.get("username").or_else(|| u.get("id")))
         .and_then(|v| v.as_str())
-        .unwrap_or("slack_user")
+        .unwrap_or(slack_user_id)
         .to_string();
 
     let (tenant_id, approval_id) = match value.and_then(|v| v.split_once(':')) {
@@ -215,6 +221,43 @@ pub async fn slack_callback(
             return StatusError::bad_request("missing or malformed callback value").into_response();
         }
     };
+
+    let tenant = match state.storage.get_tenant_by_id(&tenant_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return StatusError::not_found("tenant not found").into_response();
+        }
+        Err(e) => {
+            tracing::error!("slack callback tenant lookup failed: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    match crate::slack_approver_gate::slack_user_authorized_for_approval(
+        tenant.slack_approver_group.as_deref(),
+        slack_user_id,
+        state.slack_bot_token.as_deref(),
+    )
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return StatusError::forbidden("not in approver group")
+                .with_details(serde_json::json!({"reason": "not_in_approver_group"}))
+                .into_response();
+        }
+        Err(crate::slack_approver_gate::SlackApproverGateError::BotTokenRequired) => {
+            return StatusError::service_unavailable(
+                "Slack usergroup validation requires AEGIS_SLACK_BOT_TOKEN",
+            )
+            .into_response();
+        }
+        Err(e) => {
+            tracing::warn!("Slack approver group check failed: {:?}", e);
+            return StatusError::service_unavailable("Slack approver group validation failed")
+                .into_response();
+        }
+    }
 
     let decision_payload = ApproveRequest {
         approver_user_id,

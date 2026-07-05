@@ -1597,6 +1597,16 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn set_tenant_slack_approver_group(
+        &self,
+        tenant_id: &str,
+        group: Option<&str>,
+    ) -> Result<(), AegisError> {
+        db::set_tenant_slack_approver_group(&self.pool, tenant_id, group)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_tenant_risk_weights(
         &self,
         tenant_id: &str,
@@ -2422,6 +2432,7 @@ mod tests {
             created_at: Utc::now(),
             auto_respond_enabled: false,
             auto_rotate_token_on_leak_enabled: true,
+            slack_approver_group: None,
         };
         db::insert_tenant(&storage.pool, &record).await.unwrap();
 
@@ -2461,6 +2472,7 @@ mod tests {
             created_at: Utc::now(),
             auto_respond_enabled: false,
             auto_rotate_token_on_leak_enabled: true,
+            slack_approver_group: None,
         };
         storage.insert_tenant(&record).await.unwrap();
 
