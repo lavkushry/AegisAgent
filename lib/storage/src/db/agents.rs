@@ -124,6 +124,57 @@ pub async fn list_agents(
     )
 }
 
+/// #1142: cursor-paginated variant of [`list_agents`].
+pub async fn list_agents_cursor(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+    status_filter: Option<&str>,
+) -> Result<(Vec<AgentRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, crate::db::SOC_MAX_LIMIT);
+    let query = "SELECT *, rowid FROM agents
+         WHERE tenant_id = ?
+           AND (
+             (? IS NULL AND status != 'deleted')
+             OR status = ?
+           )
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(status_filter)
+                .bind(status_filter)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(status_filter)
+                .bind(status_filter)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
+}
+
 pub async fn get_agent_by_id(
     pool: &DbPool,
     tenant_id: &str,
@@ -824,5 +875,40 @@ mod tests {
                 .is_none(),
             "a deleted agent's mTLS CN must not resolve to an agent"
         );
+    }
+
+    /// #1142: `list_agents_cursor` returns `next_cursor` when more rows exist.
+    #[tokio::test]
+    async fn list_agents_cursor_paginates_and_sets_next_cursor() {
+        let pool = setup_pool("agents_cursor_paginate").await;
+        let tenant_id = "tenant_agents_cursor_paginate";
+        register_tenant(&pool, tenant_id, "Agents Cursor Tenant", "developer")
+            .await
+            .unwrap();
+        for i in 0..3 {
+            insert_agent(
+                &pool,
+                &make_test_agent(
+                    &format!("agent_cursor_{i}"),
+                    tenant_id,
+                    &format!("agent-key-{i}"),
+                    &format!("token-{i}"),
+                ),
+            )
+            .await
+            .unwrap();
+        }
+
+        let (page, next_cursor) = list_agents_cursor(&pool, tenant_id, 2, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 2);
+        assert!(next_cursor.is_some());
+
+        let (page2, next_cursor2) = list_agents_cursor(&pool, tenant_id, 2, 0, next_cursor, None)
+            .await
+            .unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(next_cursor2, None);
     }
 }

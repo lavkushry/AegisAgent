@@ -161,6 +161,13 @@ pub async fn register_agent(
         .into_response()
 }
 
+/// GET /v1/agents — list agents for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0), `status` (optional).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous page's
+///   `X-Next-Cursor` response header; takes priority over `offset` when both
+///   are supplied.
 pub async fn list_agents(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -168,13 +175,17 @@ pub async fn list_agents(
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
     let status_filter = super::parse_filter(raw_query.as_deref(), "status");
+    let cursor = match super::parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
 
     match state
         .storage
-        .list_agents(&tenant_id, limit, offset, status_filter.as_deref())
+        .list_agents_cursor(&tenant_id, limit, offset, cursor, status_filter.as_deref())
         .await
     {
-        Ok(agents) => (StatusCode::OK, Json(agents)).into_response(),
+        Ok((agents, next_cursor)) => super::paginated_response(&agents, next_cursor),
         Err(e) => {
             error!("Failed to list agents: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -1067,6 +1078,76 @@ mod tests {
         let json_deleted: serde_json::Value = serde_json::from_slice(&body_deleted).unwrap();
         assert_eq!(json_deleted.as_array().unwrap().len(), 1);
         assert_eq!(json_deleted.as_array().unwrap()[0]["status"], "deleted");
+    }
+
+    /// #1142: `GET /v1/agents` emits `X-Next-Cursor` when more rows follow.
+    #[tokio::test]
+    async fn list_agents_route_sets_next_cursor_header() {
+        let (state, tenant_id, _) = setup_state("list_agents_cursor_header").await;
+        // One extra agent on top of the setup-state default → two pages at limit=1.
+        for idx in 1..=1 {
+            state
+                .storage
+                .insert_agent(&AgentRecord {
+                    id: format!("cursor_agent_{idx}"),
+                    tenant_id: tenant_id.clone(),
+                    agent_key: format!("cursor-key-{idx}"),
+                    agent_token: format!("cursor-token-{idx}"),
+                    name: format!("Cursor Agent {idx}"),
+                    owner_team: None,
+                    owner_email: None,
+                    environment: "production".to_string(),
+                    framework: None,
+                    model_provider: None,
+                    model_name: None,
+                    purpose: None,
+                    risk_tier: "low".to_string(),
+                    status: "active".to_string(),
+                    last_seen_at: None,
+                    frozen_reason: None,
+                    force_approval: false,
+                    quarantined_at: None,
+                    signing_key: None,
+                    allowed_environments: None,
+                    mtls_cn: None,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let response = list_agents(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let next_cursor = response
+            .headers()
+            .get("x-next-cursor")
+            .expect("a second row exists beyond the page")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: Vec<AgentRecord> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.len(), 1);
+
+        let response2 = list_agents(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(Some(format!("limit=1&cursor={next_cursor}"))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response2.status(), StatusCode::OK);
+        assert!(response2.headers().get("x-next-cursor").is_none());
+        let body2 = to_bytes(response2.into_body(), usize::MAX).await.unwrap();
+        let page2: Vec<AgentRecord> = serde_json::from_slice(&body2).unwrap();
+        assert_eq!(page2.len(), 1);
     }
 
     /// #1290: `GET /v1/agents/risk-scoreboard` returns the same data as

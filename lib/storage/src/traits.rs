@@ -186,6 +186,15 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: i64,
         status_filter: Option<&str>,
     ) -> Result<Vec<AgentRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of [`list_agents`].
+    async fn list_agents_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+        status_filter: Option<&str>,
+    ) -> Result<(Vec<AgentRecord>, Option<i64>), AegisError>;
     async fn get_agent_by_id(
         &self,
         tenant_id: &str,
@@ -303,6 +312,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ApprovalRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of [`list_pending_approvals`].
+    async fn list_pending_approvals_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ApprovalRecord>, Option<i64>), AegisError>;
     async fn get_approval_by_id(
         &self,
         tenant_id: &str,

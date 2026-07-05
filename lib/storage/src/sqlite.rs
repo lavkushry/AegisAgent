@@ -96,6 +96,19 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_agents_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+        status_filter: Option<&str>,
+    ) -> Result<(Vec<AgentRecord>, Option<i64>), AegisError> {
+        db::list_agents_cursor(&self.pool, tenant_id, limit, offset, cursor, status_filter)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_agent_by_id(
         &self,
         tenant_id: &str,
@@ -374,6 +387,18 @@ impl StorageBackend for SqlDbStorage {
         offset: i64,
     ) -> Result<Vec<ApprovalRecord>, AegisError> {
         db::list_pending_approvals(&self.pool, tenant_id, limit, offset)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_pending_approvals_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<ApprovalRecord>, Option<i64>), AegisError> {
+        db::list_pending_approvals_cursor(&self.pool, tenant_id, limit, offset, cursor)
             .await
             .map_err(AegisError::Database)
     }
