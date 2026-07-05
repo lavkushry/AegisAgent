@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { parseConsoleUrl, serializeConsoleUrl } from "./consoleUrl";
+import { DEV_HARNESS_ENABLED, DEV_HARNESS_VIEW } from "@/dev/guard";
+import { parseConsoleUrl, serializeConsoleUrl, CONSOLE_VIEWS } from "./consoleUrl";
 
 describe("console URL state", () => {
   it("round-trips shareable investigation context", () => {
@@ -81,5 +82,18 @@ describe("console URL state", () => {
     expect(
       serializeConsoleUrl({ view: "dashboard-editor", timeRange: "24h", liveMode: false, variables: {} }),
     ).toContain("view=dashboard-editor");
+  });
+
+  it("guards the dev harness route behind the compile-time flag", () => {
+    if (DEV_HARNESS_ENABLED) {
+      expect(CONSOLE_VIEWS).toContain(DEV_HARNESS_VIEW);
+      expect(parseConsoleUrl("?view=dev-harness&range=24h")).toMatchObject({
+        view: "dev-harness",
+        timeRange: "24h",
+      });
+    } else {
+      expect(CONSOLE_VIEWS).not.toContain(DEV_HARNESS_VIEW);
+      expect(parseConsoleUrl("?view=dev-harness&range=24h")).not.toHaveProperty("view");
+    }
   });
 });

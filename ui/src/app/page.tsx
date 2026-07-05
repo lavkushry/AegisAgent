@@ -18,13 +18,15 @@ import { approvalsDashboard } from "../dashboards/system/approvals";
 import { receiptsDashboard } from "../dashboards/system/receipts";
 import { analyticsDashboard } from "../dashboards/system/analytics";
 import DashboardEditorPage from "../components/dashboards/DashboardEditorPage";
+import PanelHarnessPage from "../dev/PanelHarnessPage";
+import { DEV_HARNESS_ENABLED, DEV_HARNESS_VIEW } from "../dev/guard";
 
 
-type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "rules" | "alerting" | "approvals" | "agents" | "mcp" | "receipts" | "analytics" | "dashboard-editor" | "settings";
+type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "rules" | "alerting" | "approvals" | "agents" | "mcp" | "receipts" | "analytics" | "dashboard-editor" | "dev-harness" | "settings";
 
 export default function Home() {
   const activeTab = useAppStore((s) => s.activeView) as ActiveTab;
-  const views: Record<ActiveTab, React.ReactNode> = {
+  const views: Partial<Record<ActiveTab, React.ReactNode>> = {
     overview: <DashboardLoader schema={overviewDashboard} />,
     dashboards: <DashboardLoader schema={overviewDashboard} />,
     integrity: <DashboardLoader schema={integrityDashboard} />, explore: <ExploreTab />,
@@ -36,10 +38,11 @@ export default function Home() {
     agents: <AgentsFleetTab />, mcp: <McpTab />, receipts: <DashboardLoader schema={receiptsDashboard} />,
     analytics: <DashboardLoader schema={analyticsDashboard} />,
     "dashboard-editor": <DashboardEditorPage />,
+    [DEV_HARNESS_VIEW]: DEV_HARNESS_ENABLED ? <PanelHarnessPage /> : null,
     settings: <SettingsTab />,
   };
 
   return (
-    <AppShell>{views[activeTab] ?? views.overview}</AppShell>
+    <AppShell>{views[activeTab] ?? views.overview ?? null}</AppShell>
   );
 }
