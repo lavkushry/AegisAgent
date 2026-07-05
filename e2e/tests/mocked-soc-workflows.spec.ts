@@ -15,10 +15,26 @@ test.describe("mocked SOC console workflows (#1638)", () => {
   test("Overview loads tenant posture from fixtures", async ({ page }) => {
     const mock = await installMockGateway(page, { role: "viewer" });
     await openMockedConsole(page);
-    const panel = page.locator("section.panel-card").filter({
+    const protectedPanel = page.locator("section.panel-card").filter({
       has: page.getByRole("heading", { name: "Protected actions" }),
     });
-    await expect(panel.locator(".tabular-nums")).toHaveText("42", { timeout: 10_000 });
+    await expect(protectedPanel.locator(".tabular-nums")).toHaveText("42", { timeout: 10_000 });
+
+    const blockedPanel = page.locator("section.panel-card").filter({
+      has: page.getByRole("heading", { name: "Blocked actions" }),
+    });
+    await expect(blockedPanel.locator(".tabular-nums")).toHaveText("7");
+
+    const receiptPanel = page.locator("section.panel-card").filter({
+      has: page.getByRole("heading", { name: "Receipt chain" }),
+    });
+    await expect(receiptPanel.getByText(/unknown/i)).toBeVisible();
+
+    const untrustedPanel = page.locator("section.panel-card").filter({
+      has: page.getByRole("heading", { name: "Untrusted source decisions" }),
+    });
+    await expect(untrustedPanel.locator(".tabular-nums")).toHaveText("4");
+
     await mock.dispose();
     expect(mock.unhandled).toEqual([]);
   });

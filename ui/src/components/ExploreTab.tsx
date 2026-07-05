@@ -376,6 +376,9 @@ function InspectorField({
 }
 
 function VerifyStatusBadge({ state }: { state: VerifyState }) {
+  if (state.status === "idle") {
+    return null;
+  }
   if (state.status === "running") {
     return <span className="text-[var(--state-pending)]">Verifying…</span>;
   }

@@ -77,14 +77,21 @@ function tenantAgents(tenantId: string, runtime?: MockRuntimeState) {
 
 function tenantStats(tenantId: string) {
   return tenantId === MOCK_TENANT_B
-    ? { total_decisions: 3, trust_level_breakdown: { trusted_internal_signed: 3 } }
+    ? {
+        total_decisions: 3,
+        decisions_allow: 3,
+        decisions_deny: 0,
+        trust_level_breakdown: [{ trust_level: "trusted_internal_signed", count: 3 }],
+      }
     : {
         total_decisions: 42,
-        trust_level_breakdown: {
-          trusted_internal_signed: 30,
-          semi_trusted_customer: 8,
-          untrusted_external: 4,
-        },
+        decisions_allow: 35,
+        decisions_deny: 7,
+        trust_level_breakdown: [
+          { trust_level: "trusted_internal_signed", count: 30 },
+          { trust_level: "semi_trusted_customer", count: 8 },
+          { trust_level: "untrusted_external", count: 4 },
+        ],
       };
 }
 
@@ -352,6 +359,12 @@ export function resolveMockResponse(
     if (path.startsWith("/v1/receipts")) return { status: 200, body: tenantReceipts(tenantId) };
   }
 
+  if (method === "POST" && path === "/v1/soc/query") {
+    return {
+      status: 200,
+      body: tenantId === MOCK_TENANT_A ? [{ agent_id: AGENT_ID, count: 3 }] : [],
+    };
+  }
   if (path.startsWith("/v1/decisions")) return { status: 200, body: tenantDecisions(tenantId) };
   if (path === "/v1/alerts" || path.startsWith("/v1/alerts?")) return { status: 200, body: tenantAlerts(tenantId) };
   if (path === "/v1/incidents" || path.startsWith("/v1/incidents?")) return { status: 200, body: tenantIncidents(tenantId) };
