@@ -419,6 +419,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<McpServerRecord>, AegisError>;
+    /// #1142: cursor-paginated variant of [`list_mcp_servers`].
+    async fn list_mcp_servers_cursor(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        cursor: Option<i64>,
+    ) -> Result<(Vec<McpServerRecord>, Option<i64>), AegisError>;
     /// #1193: soft delete (sets `deleted_at`) — see `db::mcp::delete_mcp_server`.
     async fn delete_mcp_server(
         &self,

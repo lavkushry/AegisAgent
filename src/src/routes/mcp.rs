@@ -635,19 +635,30 @@ pub(crate) async fn update_mcp_server_quarantine(
     }
 }
 
+/// GET /v1/mcp/servers — list MCP servers for the authenticated tenant.
+///
+/// Query params:
+///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous page's
+///   `X-Next-Cursor` response header; takes priority over `offset` when both
+///   are supplied.
 pub async fn list_mcp_servers(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match super::parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
 
     match state
         .storage
-        .list_mcp_servers(&tenant_id, limit, offset)
+        .list_mcp_servers_cursor(&tenant_id, limit, offset, cursor)
         .await
     {
-        Ok(servers) => (StatusCode::OK, Json(servers)).into_response(),
+        Ok((servers, next_cursor)) => super::paginated_response(&servers, next_cursor),
         Err(e) => {
             error!("Failed to list MCP servers: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -2180,6 +2191,56 @@ mod tests {
         let other_body = to_bytes(other.into_body(), usize::MAX).await.unwrap();
         let other_servers: Vec<serde_json::Value> = serde_json::from_slice(&other_body).unwrap();
         assert!(other_servers.is_empty());
+    }
+
+    /// #1142: `GET /v1/mcp/servers` emits `X-Next-Cursor` when more rows follow.
+    #[tokio::test]
+    async fn list_mcp_servers_route_sets_next_cursor_header() {
+        let (state, tenant_id, _) = setup_state("list_mcp_servers_cursor_header").await;
+        for i in 0..2 {
+            db::upsert_mcp_server(
+                state.storage.get_pool(),
+                &tenant_id,
+                &format!("cursor-mcp-{i}"),
+                &format!("Cursor Server {i}"),
+                None,
+                "http",
+                None,
+                "trusted_internal_signed",
+                "http://127.0.0.1:9001/mcp",
+            )
+            .await
+            .unwrap();
+        }
+
+        let response = list_mcp_servers(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let next_cursor = response
+            .headers()
+            .get("x-next-cursor")
+            .expect("a second MCP server exists beyond the page")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.len(), 1);
+
+        let response2 = list_mcp_servers(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(Some(format!("limit=1&cursor={next_cursor}"))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response2.status(), StatusCode::OK);
+        assert!(response2.headers().get("x-next-cursor").is_none());
     }
 
     // ---- #899: skill_action read-through LRU cache ----
