@@ -906,6 +906,11 @@ pub struct AppState {
     /// Per-`approval_id` failed-attempt tracker for approval-decision
     /// callbacks (#1307, AC#2). See [`ApprovalAttemptTracker`].
     pub approval_attempt_tracker: ApprovalAttemptTracker,
+    /// Per-source-IP+tenant failed agent-token auth tracker for
+    /// `/v1/authorize` (#1604). Keys are `"{ip}|{tenant_id}"`; independent of
+    /// the per-tenant `rate_limiter` (which only applies after a valid agent
+    /// is resolved).
+    pub auth_failure_tracker: ApprovalAttemptTracker,
     /// Read-through cache for registered-action metadata (#899).
     pub skill_cache: SkillActionCache,
     /// Bounded LRU cache for MCP server records (#1337).
@@ -1617,6 +1622,7 @@ pub mod benchutil {
             quota_manager: QuotaManager::new(0, 86400), // 0 == quota disabled
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -1919,6 +1925,7 @@ pub(crate) mod test_helpers {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -1972,6 +1979,7 @@ pub(crate) mod test_helpers {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -2080,6 +2088,7 @@ pub(crate) mod test_helpers {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -2137,6 +2146,7 @@ pub(crate) mod test_helpers {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -2244,6 +2254,7 @@ pub(crate) mod test_helpers {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -2374,6 +2385,7 @@ pub(crate) mod test_helpers {
             quota_manager: QuotaManager::new(0, 86400),
             approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
             approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
             skill_cache: SkillActionCache::new(1024),
             mcp_server_cache: McpServerCache::new(1024),
             mcp_tool_cache: McpToolCache::new(1024),
@@ -2460,13 +2472,13 @@ pub(crate) mod test_helpers {
         agent_token: &str,
         request: AuthorizeRequest,
     ) -> AuthorizeResponse {
-        let response = authorize_action(
-            State(state),
+        let response = authorize_action_impl(
+            state,
             agent_headers(agent_token, tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
+            test_conn_info(),
         )
-        .await
-        .into_response();
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();

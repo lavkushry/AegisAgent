@@ -109,7 +109,7 @@ fn authorize_allow_benchmark(c: &mut Criterion) {
             async move {
                 let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
                 let response =
-                    routes::authorize_action(axum::extract::State(state), headers, body).await;
+                    routes::authorize_action_impl(state, headers, body, std::net::SocketAddr::from(([127, 0, 0, 1], 0))).await;
                 // Force evaluation of the response (criterion's async iter
                 // already awaits it, but `into_response()` mirrors what Axum
                 // does on the wire and avoids the compiler optimizing away
@@ -235,7 +235,7 @@ fn authorize_mcp_allow_benchmark(c: &mut Criterion) {
         let state: Arc<routes::AppState> = state.clone();
         let headers = headers.clone();
         let body = axum::body::Bytes::from(serde_json::to_vec(&warm_request).unwrap());
-        let _ = routes::authorize_action(axum::extract::State(state), headers, body).await;
+        let _ = routes::authorize_action_impl(state, headers, body, std::net::SocketAddr::from(([127, 0, 0, 1], 0))).await;
     });
 
     let mut group = c.benchmark_group("authorize_mcp_action");
@@ -249,7 +249,7 @@ fn authorize_mcp_allow_benchmark(c: &mut Criterion) {
             async move {
                 let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
                 let response =
-                    routes::authorize_action(axum::extract::State(state), headers, body).await;
+                    routes::authorize_action_impl(state, headers, body, std::net::SocketAddr::from(([127, 0, 0, 1], 0))).await;
                 let _ = axum::response::IntoResponse::into_response(response);
             }
         });
