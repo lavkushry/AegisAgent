@@ -60,8 +60,8 @@ test.describe("mocked SOC security controls (#1638)", () => {
     const mock = await installMockGateway(page, { role: "viewer" });
     await openMockedConsole(page);
     await page.getByRole("button", { name: "Settings" }).click();
-    await expect(page.getByText("Role-Based Access Control (RBAC)")).toBeVisible();
-    const tokenInput = page.getByLabel("Bearer Token");
+    await expect(page.getByRole("heading", { name: "RBAC Matrix" })).toBeVisible();
+    const tokenInput = page.getByPlaceholder(/Enter bearer token|Bearer token/i);
     await expect(tokenInput).toHaveAttribute("type", "password");
     await assertNoSecrets(page, [FAKE_SECRET]);
     await mock.dispose();
