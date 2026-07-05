@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "cd ../e2e && npm ci && npx playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.1",

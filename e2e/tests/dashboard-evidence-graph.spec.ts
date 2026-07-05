@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../fixtures/guardedTest";
 import { openConfiguredConsole, registerTestAgent } from "./helpers";
 
 test.describe("evidence-linked fleet surface", () => {
@@ -7,6 +7,6 @@ test.describe("evidence-linked fleet surface", () => {
     await openConfiguredConsole(page);
     await page.getByRole("button", { name: "Agents Fleet" }).click();
     await expect(page).toHaveURL(/[?&]view=agents(?:&|$)/);
-    await expect(page.getByRole("row").filter({ hasText: agent.id })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("row").filter({ hasText: agent.agentKey })).toBeVisible({ timeout: 10_000 });
   });
 });

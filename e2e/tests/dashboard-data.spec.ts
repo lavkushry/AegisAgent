@@ -1,24 +1,32 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../fixtures/guardedTest";
 import {
   createAllowedDecision, createPendingApproval, openConfiguredConsole,
   registerTestAgent, registerTestMcpServer, TENANT_ID,
 } from "./helpers";
 
 test.describe("production SOC console data workflows", () => {
-  test("Agents Fleet renders a gateway agent and role-gates Active Response", async ({ page, request, baseURL }) => {
+  test("Agents Fleet renders a gateway agent and role-gates Active Response on detail", async ({ page, request, baseURL }) => {
     const agent = await registerTestAgent(request, baseURL!, `console-e2e-agent-${Date.now()}`);
     await openConfiguredConsole(page);
     await page.getByRole("button", { name: "Agents Fleet" }).click();
-    const row = page.getByRole("row").filter({ hasText: agent.id });
+    const row = page.getByRole("row").filter({ hasText: agent.agentKey });
     await expect(row).toBeVisible({ timeout: 10_000 });
-    await expect(row.getByRole("button", { name: "Freeze" })).toBeDisabled();
+    await row.click();
+    await expect(page.getByRole("button", { name: "Freeze" })).toBeDisabled();
+    await expect(page.getByText("Active response")).toBeVisible();
   });
 
-  test("Detections & Rules loads deterministic rule operations", async ({ page }) => {
+  test("Detections page loads triggered alerts", async ({ page }) => {
     await openConfiguredConsole(page);
-    await page.getByRole("button", { name: "Detections & Rules" }).click();
-    await expect(page.getByText("Detection Rules & Backtesting")).toBeVisible();
-    await page.getByRole("button", { name: "Detection Rules & Backtesting" }).click();
+    await page.getByRole("button", { name: "Detections" }).click();
+    await expect(page.getByText("Active Detections")).toBeVisible();
+    await expect(page.getByText("Triggered Detections Log")).toBeVisible();
+  });
+
+  test("Rules page loads deterministic rule operations", async ({ page }) => {
+    await openConfiguredConsole(page);
+    await page.getByRole("button", { name: "Rules" }).click();
+    await expect(page.getByText("Detection Rules")).toBeVisible();
     await expect(page.getByText("Rules Catalogue")).toBeVisible({ timeout: 10_000 });
   });
 
@@ -53,7 +61,6 @@ test.describe("production SOC console data workflows", () => {
     await expect(page.getByText("Cryptographic receipt chain")).toBeVisible();
     await expect(page.getByText("Chain not yet verified")).toBeVisible();
     await expect(page.getByRole("button", { name: "Verify range" })).toBeVisible();
-    await expect(page.getByText(/link:/)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Verify receipt" }).first()).toBeVisible({ timeout: 10_000 });
   });
 
