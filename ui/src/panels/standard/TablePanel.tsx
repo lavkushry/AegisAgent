@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useMemo } from "react";
 import type { Field } from "@/datasources/types";
 import { frameRows } from "@/datasources/frame";
 import { formatRelative } from "@/lib/format";
 import DecisionBadge from "@/components/security/DecisionBadge";
 import TrustBadge from "@/components/security/TrustBadge";
 import HashChip from "@/components/security/HashChip";
+import VirtualTable, { type VirtualTableColumn } from "@/components/primitives/VirtualTable";
 import type { PanelProps } from "../types";
 
 export interface TableOptions {
@@ -34,9 +35,9 @@ function renderCell(field: Field, value: unknown): React.ReactNode {
 }
 
 /**
- * Tabular panel. A plain table for now; the high-row-count north star is
- * TanStack Table + virtualization (HLD/LLD section 6.3), swappable without
- * changing this component's PanelProps contract.
+ * Tabular panel with TanStack Virtual windowing for 10k+ gateway pages (#1317).
+ * Server-side filters/pagination stay in datasources; this only renders the
+ * returned page efficiently.
  */
 export default function TablePanel(props: PanelProps<TableOptions>) {
   const { data, definition, onDrilldown } = props;
@@ -52,37 +53,28 @@ export default function TablePanel(props: PanelProps<TableOptions>) {
   const max = definition.options?.maxRows ?? rows.length;
   const visibleRows = rows.slice(0, max);
 
+  const tableColumns = useMemo<VirtualTableColumn<Record<string, unknown>>[]>(
+    () =>
+      columns.map((field) => ({
+        key: field.name,
+        header: field.name,
+        cell: (row) => renderCell(field, row[field.name]),
+      })),
+    [columns],
+  );
+
   return (
-    <div className="overflow-auto custom-scrollbar -mx-1">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
-            {columns.map((f) => (
-              <th key={f.name} className="font-semibold px-1 pb-2">
-                {f.name}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {visibleRows.map((row, i) => (
-            <tr
-              key={String(row.id ?? i)}
-              onClick={drilldown ? () => onDrilldown(drilldown, row) : undefined}
-              className={`border-t border-[var(--border-default)] ${
-                drilldown ? "cursor-pointer hover:bg-[var(--surface-elevated)]" : ""
-              }`}
-              style={{ height: "var(--row-height, 28px)" }}
-            >
-              {columns.map((f) => (
-                <td key={f.name} className="px-1 align-middle">
-                  {renderCell(f, row[f.name])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <VirtualTable
+      rows={visibleRows}
+      columns={tableColumns}
+      getRowKey={(row, index) => String(row.id ?? index)}
+      onRowClick={
+        drilldown
+          ? (row) => {
+              onDrilldown(drilldown, row);
+            }
+          : undefined
+      }
+    />
   );
 }
