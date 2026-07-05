@@ -271,6 +271,48 @@ pub async fn list_policy_audit_log(
     )
 }
 
+/// #1142: cursor-paginated variant of [`list_policy_audit_log`].
+pub async fn list_policy_audit_log_cursor(
+    pool: &DbPool,
+    tenant_id: &str,
+    limit: i64,
+    offset: i64,
+    cursor: Option<i64>,
+) -> Result<(Vec<PolicyAuditLogRecord>, Option<i64>), sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let query = "SELECT *, rowid FROM policy_audit_log
+         WHERE tenant_id = ?
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC
+         LIMIT ? OFFSET ?";
+    match pool {
+        DbPool::Sqlite(p) => {
+            let rows = sqlx::query(query)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(p) => {
+            let pg_sql = crate::db::to_postgres_sql(query);
+            let rows = sqlx::query(&pg_sql)
+                .bind(tenant_id)
+                .bind(cursor)
+                .bind(cursor)
+                .bind(limit + 1)
+                .bind(if cursor.is_some() { 0 } else { offset })
+                .fetch_all(p)
+                .await?;
+            super::paginate_rows(rows, limit)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +373,69 @@ mod tests {
             raw.0.is_some(),
             "the row must persist with deleted_at set, not be removed"
         );
+    }
+
+    fn make_test_audit_entry(
+        tenant_id: &str,
+        policy_id: &str,
+        policy_key: &str,
+        action: &str,
+        prev_hash: String,
+    ) -> PolicyAuditLogRecord {
+        PolicyAuditLogRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            policy_id: policy_id.to_string(),
+            policy_key: policy_key.to_string(),
+            action: action.to_string(),
+            changed_by: None,
+            body_hash: "sha256:abc".to_string(),
+            diff_summary: "test entry".to_string(),
+            prev_hash,
+            entry_hash: uuid::Uuid::new_v4().to_string(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    /// #1142: `list_policy_audit_log_cursor` returns `next_cursor` when more rows exist.
+    #[tokio::test]
+    async fn list_policy_audit_log_cursor_paginates_and_sets_next_cursor() {
+        let pool = setup_pool("policy_audit_log_cursor_paginate").await;
+        register_tenant(
+            &pool,
+            "tenant_audit_cursor",
+            "Audit Log Cursor Tenant",
+            "developer",
+        )
+        .await
+        .unwrap();
+        for i in 0..3 {
+            append_policy_audit_log_entry_atomic(&pool, "tenant_audit_cursor", |prev_hash| {
+                make_test_audit_entry(
+                    "tenant_audit_cursor",
+                    &format!("pol_{i}"),
+                    &format!("policy-key-{i}"),
+                    "created",
+                    prev_hash,
+                )
+            })
+            .await
+            .unwrap();
+        }
+
+        let (page, next_cursor) =
+            list_policy_audit_log_cursor(&pool, "tenant_audit_cursor", 2, 0, None)
+                .await
+                .unwrap();
+        assert_eq!(page.len(), 2);
+        assert!(next_cursor.is_some());
+
+        let (page2, next_cursor2) =
+            list_policy_audit_log_cursor(&pool, "tenant_audit_cursor", 2, 0, next_cursor)
+                .await
+                .unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(next_cursor2, None);
     }
 
     /// #1142: `list_policies_cursor` returns `next_cursor` when more rows exist.

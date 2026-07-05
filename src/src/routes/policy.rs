@@ -456,19 +456,26 @@ pub async fn delete_policy(
 ///
 /// Query params:
 ///   `limit` (default 50, max 200), `offset` (default 0).
+///   `cursor` (#1142) — opaque keyset-pagination token from a previous page's
+///   `X-Next-Cursor` response header; takes priority over `offset` when both
+///   are supplied.
 pub async fn list_policy_audit_log(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
+    let cursor = match super::parse_cursor(raw_query.as_deref()) {
+        Ok(c) => c,
+        Err(resp) => return *resp,
+    };
 
     match state
         .storage
-        .list_policy_audit_log(&tenant_id, limit, offset)
+        .list_policy_audit_log_cursor(&tenant_id, limit, offset, cursor)
         .await
     {
-        Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
+        Ok((entries, next_cursor)) => super::paginated_response(&entries, next_cursor),
         Err(e) => {
             error!("Failed to list policy audit log: {:?}", e);
             StatusError::internal("Database error").into_response()
@@ -1736,6 +1743,58 @@ spec: {}
             "a signed bundle's policy, once uploaded and hot-reloaded, must \
              evaluate identically to loading the same Cedar text directly"
         );
+    }
+
+    /// #1142: `GET /v1/policies/audit-log` emits `X-Next-Cursor` when more rows follow.
+    #[tokio::test]
+    async fn list_policy_audit_log_route_sets_next_cursor_header() {
+        let (state, tenant_id, _) = setup_state("list_policy_audit_log_cursor_header").await;
+        for i in 0..2 {
+            let payload = CreatePolicyRequest {
+                policy_key: format!("audit-cursor-policy-{i}"),
+                name: format!("Audit Cursor Policy {i}"),
+                body: "permit (principal, action, resource);".to_string(),
+            };
+            let _ = create_policy(
+                State(state.clone()),
+                TenantId(tenant_id.clone()),
+                Json(payload),
+            )
+            .await
+            .into_response();
+        }
+
+        let response = list_policy_audit_log(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let next_cursor = response
+            .headers()
+            .get("x-next-cursor")
+            .expect("a second audit-log entry exists beyond the page")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: Vec<PolicyAuditLogRecord> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.len(), 1);
+
+        let response2 = list_policy_audit_log(
+            State(state),
+            TenantId(tenant_id),
+            axum::extract::RawQuery(Some(format!("limit=1&cursor={next_cursor}"))),
+        )
+        .await
+        .into_response();
+        assert_eq!(response2.status(), StatusCode::OK);
+        assert!(response2.headers().get("x-next-cursor").is_none());
+        let body2 = to_bytes(response2.into_body(), usize::MAX).await.unwrap();
+        let page2: Vec<PolicyAuditLogRecord> = serde_json::from_slice(&body2).unwrap();
+        assert_eq!(page2.len(), 1);
     }
 
     /// #1142: `GET /v1/policies` emits `X-Next-Cursor` when more rows follow.
