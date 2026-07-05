@@ -63,6 +63,11 @@ export const integrityDashboard: DashboardSchema = {
             title: "Per-tenant hash chain",
             datasourceId: RECEIPT_DATASOURCE_ID,
             entity: "receipt",
+            limit: 50,
+            options: {
+              timeField: "ts",
+              prevHashField: "prev_receipt_hash",
+            },
           },
           w: 12,
           h: 4,

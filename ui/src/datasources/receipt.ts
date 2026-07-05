@@ -2,6 +2,7 @@ import {
   GatewayRequestError,
   downloadFromGateway,
   fetchFromGateway,
+  fetchListFromGateway,
   type FetchOptions,
 } from "../app/api";
 import { fieldsForEntity } from "./fieldCatalog";
@@ -37,11 +38,12 @@ export class ReceiptDatasource implements Datasource {
   async query(req: QueryRequest): Promise<DataFrame> {
     const params = new URLSearchParams({ limit: String(req.limit ?? 50) });
     if (req.cursor) params.set("cursor", req.cursor);
-    const rows = await fetchFromGateway<Array<Record<string, unknown>>>(
+    const { data: rows, nextCursor } = await fetchListFromGateway<Array<Record<string, unknown>>>(
       withSignal(this.opts, req.signal),
       `/v1/receipts?${params.toString()}`,
     );
-    return rowsToFrame(Array.isArray(rows) ? rows : []);
+    const frame = rowsToFrame(Array.isArray(rows) ? rows : []);
+    return nextCursor ? { ...frame, meta: { ...frame.meta, cursor: nextCursor } } : frame;
   }
 
   fields(): Promise<ReadonlyArray<FieldDescriptor>> {

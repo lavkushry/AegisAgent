@@ -212,27 +212,7 @@ export function buildGatewayHeaders(options: FetchOptions, hasBody = false) {
   return headers;
 }
 
-export async function fetchFromGateway<T>(
-  options: FetchOptions,
-  path: string,
-  method = "GET",
-  body?: unknown,
-): Promise<T> {
-  const url = `${options.gatewayUrl.replace(/\/+$/, "")}${path}`;
-  const hasBody = body !== undefined;
-  
-  const config: RequestInit = {
-    method,
-    headers: buildGatewayHeaders(options, hasBody),
-    signal: options.signal,
-  };
-
-  if (hasBody) {
-    config.body = JSON.stringify(body);
-  }
-
-  const response = await fetch(url, config);
-
+async function readGatewayJson<T>(response: Response): Promise<T> {
   if (response.status === 204) {
     return {} as T;
   }
@@ -256,6 +236,58 @@ export async function fetchFromGateway<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+async function gatewayRequest(
+  options: FetchOptions,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<Response> {
+  const url = `${options.gatewayUrl.replace(/\/+$/, "")}${path}`;
+  const hasBody = body !== undefined;
+
+  const config: RequestInit = {
+    method,
+    headers: buildGatewayHeaders(options, hasBody),
+    signal: options.signal,
+  };
+
+  if (hasBody) {
+    config.body = JSON.stringify(body);
+  }
+
+  return fetch(url, config);
+}
+
+export async function fetchFromGateway<T>(
+  options: FetchOptions,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<T> {
+  const response = await gatewayRequest(options, path, method, body);
+  return readGatewayJson<T>(response);
+}
+
+export interface GatewayListResult<T> {
+  data: T;
+  nextCursor?: string;
+}
+
+/** Like fetchFromGateway, but surfaces cursor-pagination via X-Next-Cursor. */
+export async function fetchListFromGateway<T>(
+  options: FetchOptions,
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<GatewayListResult<T>> {
+  const response = await gatewayRequest(options, path, method, body);
+  const nextCursor = response.headers.get("x-next-cursor")?.trim() || undefined;
+  return {
+    data: await readGatewayJson<T>(response),
+    nextCursor,
+  };
 }
 
 export async function downloadFromGateway(
