@@ -3,59 +3,122 @@
 import React, { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { quarantineMcpServer, restoreMcpServer } from "../app/api";
+import {
+  getMcpServers,
+  getMcpManifestHistory,
+  getMcpTools,
+  quarantineMcpServer,
+  restoreMcpServer,
+} from "../app/api";
 import { GatewayEntityDatasource } from "@/datasources/gatewayEntity";
-import { mcpManifestRowsFromFrame, mcpServerRowsFromFrame } from "@/datasources/entityData";
-import { Server, Lock, Unlock, History, Clock } from "lucide-react";
-import StatusBadge from "./security/StatusBadge";
+import { alertRowsFromFrame, incidentRowsFromFrame } from "@/datasources/entityData";
 import { errorMessage } from "@/lib/format";
 import { ConfirmDialog } from "@/components/primitives";
+import { useEffectiveRole } from "@/hooks/useSessionRole";
+import McpRegistry, { type McpRegistryEntry } from "@/components/mcp/McpRegistry";
+import McpDetail from "@/components/mcp/McpDetail";
+import { resolveMcpIntegrityStatus } from "@/components/mcp/driftState";
+import { alertsForMcpServer, incidentsForMcpServer } from "@/components/mcp/linkedSoc";
+import {
+  mcpControlConfirmLabel,
+  mcpControlDisabledReason,
+  mcpControlImpact,
+  mcpControlTitle,
+  type McpControlKind,
+} from "@/components/mcp/mcpControls";
+import { History } from "lucide-react";
 
 type PendingMcpAction = {
-  kind: "quarantine" | "restore";
+  kind: McpControlKind;
   serverKey: string;
 };
 
 const DEFAULT_TIME_RANGE = { from: "now-24h", to: "now" } as const;
 
 export default function McpTab() {
-  const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
+  const { gatewayUrl, bearerToken, activeTenant, authEpoch, setActiveView } = useAppStore();
   const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
   const entityDatasource = useMemo(
     () => new GatewayEntityDatasource({ gatewayUrl, bearerToken, tenantId: activeTenant }),
     [gatewayUrl, bearerToken, activeTenant],
   );
   const queryClient = useQueryClient();
+  const { role } = useEffectiveRole();
 
   const [selectedServerKey, setSelectedServerKey] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingMcpAction | null>(null);
   const [auditReason, setAuditReason] = useState("");
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
-  const { data: serversFrame, isLoading, error } = useQuery({
+  const { data: servers = [], isLoading, error } = useQuery({
     queryKey: ["mcpServers", gatewayUrl, activeTenant, authEpoch],
-    queryFn: ({ signal }) => entityDatasource.query({
-      entity: "mcp_server",
-      timeRange: DEFAULT_TIME_RANGE,
-      variables: {},
-      signal,
-    }),
+    queryFn: () => getMcpServers(apiOpts),
     refetchInterval: 5000,
   });
-  const servers = mcpServerRowsFromFrame(serversFrame);
 
-  const { data: historyFrame, isLoading: isHistoryLoading } = useQuery({
+  const { data: history = [], isLoading: isHistoryLoading } = useQuery({
     queryKey: ["mcpHistory", gatewayUrl, activeTenant, authEpoch, selectedServerKey],
-    queryFn: ({ signal }) => entityDatasource.query({
-      entity: "mcp_server",
-      entityId: selectedServerKey!,
-      subResource: "manifest-history",
-      timeRange: DEFAULT_TIME_RANGE,
-      variables: {},
-      signal,
-    }),
-    enabled: !!selectedServerKey,
+    queryFn: () => getMcpManifestHistory(apiOpts, selectedServerKey!),
+    enabled: Boolean(selectedServerKey),
   });
-  const history = mcpManifestRowsFromFrame(historyFrame);
+
+  const { data: tools = [], isLoading: isToolsLoading } = useQuery({
+    queryKey: ["mcpTools", gatewayUrl, activeTenant, authEpoch, selectedServerKey],
+    queryFn: () => getMcpTools(apiOpts, selectedServerKey!),
+    enabled: Boolean(selectedServerKey),
+  });
+
+  const { data: alertsFrame } = useQuery({
+    queryKey: ["mcpLinkedAlerts", gatewayUrl, activeTenant, authEpoch],
+    queryFn: ({ signal }) =>
+      entityDatasource.query({
+        entity: "alert",
+        limit: 100,
+        timeRange: DEFAULT_TIME_RANGE,
+        variables: {},
+        signal,
+      }),
+  });
+
+  const { data: incidentsFrame } = useQuery({
+    queryKey: ["mcpLinkedIncidents", gatewayUrl, activeTenant, authEpoch],
+    queryFn: ({ signal }) =>
+      entityDatasource.query({
+        entity: "incident",
+        limit: 50,
+        timeRange: DEFAULT_TIME_RANGE,
+        variables: {},
+        signal,
+      }),
+  });
+
+  const selectedServer = useMemo(
+    () => servers.find((srv) => srv.server_key === selectedServerKey) ?? null,
+    [servers, selectedServerKey],
+  );
+
+  const registryEntries: McpRegistryEntry[] = useMemo(
+    () =>
+      servers.map((srv) => ({
+        ...srv,
+        toolCount: srv.server_key === selectedServerKey ? tools.length : undefined,
+        integrity: resolveMcpIntegrityStatus(
+          srv,
+          srv.server_key === selectedServerKey ? history : [],
+        ),
+      })),
+    [servers, selectedServerKey, tools.length, history],
+  );
+
+  const linkedAlerts = useMemo(() => {
+    if (!selectedServerKey) return [];
+    return alertsForMcpServer(alertRowsFromFrame(alertsFrame), selectedServerKey);
+  }, [alertsFrame, selectedServerKey]);
+
+  const linkedIncidents = useMemo(() => {
+    if (!selectedServerKey) return [];
+    return incidentsForMcpServer(incidentRowsFromFrame(incidentsFrame), selectedServerKey);
+  }, [incidentsFrame, selectedServerKey]);
 
   const quarantineMutation = useMutation({
     mutationFn: ({ key, reason }: { key: string; reason: string }) =>
@@ -63,8 +126,10 @@ export default function McpTab() {
     onSuccess: () => {
       setPendingAction(null);
       setAuditReason("");
+      setMutationError(null);
       queryClient.invalidateQueries({ queryKey: ["mcpServers"] });
     },
+    onError: (err: unknown) => setMutationError(errorMessage(err) || "Quarantine failed."),
   });
 
   const restoreMutation = useMutation({
@@ -73,13 +138,22 @@ export default function McpTab() {
     onSuccess: () => {
       setPendingAction(null);
       setAuditReason("");
+      setMutationError(null);
       queryClient.invalidateQueries({ queryKey: ["mcpServers"] });
     },
+    onError: (err: unknown) => setMutationError(errorMessage(err) || "Restore failed."),
   });
 
-  const handleToggleQuarantine = (key: string, isQuarantined: boolean) => {
-    setPendingAction({ kind: isQuarantined ? "restore" : "quarantine", serverKey: key });
+  const openControl = (kind: McpControlKind, serverKey: string) => {
+    const server = servers.find((srv) => srv.server_key === serverKey);
+    const disabled = mcpControlDisabledReason(kind, server?.status ?? "", role);
+    if (disabled) {
+      setMutationError(disabled);
+      return;
+    }
+    setPendingAction({ kind, serverKey });
     setAuditReason("");
+    setMutationError(null);
   };
 
   const confirmMcpAction = () => {
@@ -91,141 +165,79 @@ export default function McpTab() {
     }
   };
 
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* MCP Servers List */}
-      <div className="panel-card lg:col-span-1 space-y-4">
-        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1.5">
-          <Server size={14} className="text-[var(--brand)]" /> MCP Servers Registry
-        </h3>
+  const roleDisabledReason = selectedServer
+    ? mcpControlDisabledReason(
+        selectedServer.status === "quarantined" ? "restore" : "quarantine",
+        selectedServer.status ?? "",
+        role,
+      )
+    : null;
 
-        {isLoading ? (
-          <p className="text-xs text-[var(--text-muted)] text-center py-8">Loading MCP servers...</p>
-        ) : error ? (
-          <p className="text-xs text-red-400 text-center py-8">Error: {errorMessage(error)}</p>
-        ) : !servers || servers.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center text-[var(--text-muted)]">
-            <Server size={36} className="mb-4" />
-            <h4 className="text-xs font-semibold">No Registered Servers</h4>
-            <p className="text-[10px] max-w-xs mt-1">MCP servers will appear here once registered with the gateway daemon.</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {servers.map((srv) => (
-              <div
-                key={srv.server_key}
-                role="button"
-                tabIndex={0}
-                aria-label={`Select MCP server ${srv.server_key}`}
-                onClick={() => setSelectedServerKey(srv.server_key)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setSelectedServerKey(srv.server_key);
-                  }
-                }}
-                className={`p-3 border rounded-lg cursor-pointer transition-colors text-xs ${
-                  selectedServerKey === srv.server_key
-                    ? "bg-[var(--brand)]/10 border-[var(--border-active)]"
-                    : "bg-[var(--surface-app)]/40 border-[var(--border-default)] hover:border-[var(--border-default)]"
-                }`}
-              >
-                <div className="flex justify-between items-start">
-                  <span className="font-bold text-[var(--brand)] font-mono truncate max-w-[120px]">{srv.server_key}</span>
-                  <StatusBadge status={srv.status || "healthy"} size="sm" />
-                </div>
-                <div className="flex flex-col gap-1 mt-2 text-[10px] text-[var(--text-secondary)] font-mono">
-                  <span className="truncate">Manifest Hash: {srv.manifest_hash ? srv.manifest_hash.slice(0, 16) : "N/A"}</span>
-                  <span>Transport: {srv.transport || "stdio"}</span>
-                </div>
-                <div className="text-right mt-3">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleQuarantine(srv.server_key, srv.status === "quarantined");
-                    }}
-                    disabled={quarantineMutation.isPending || restoreMutation.isPending}
-                    className={`inline-flex items-center gap-0.5 text-[9px] font-semibold border rounded px-2 py-0.5 cursor-pointer ${
-                      srv.status === "quarantined"
-                        ? "bg-green-950/20 border-green-500/30 text-green-400"
-                        : "bg-rose-950/20 border-rose-500/30 text-rose-400"
-                    }`}
-                  >
-                    {srv.status === "quarantined" ? (
-                      <>
-                        <Unlock size={10} /> Restore
-                      </>
-                    ) : (
-                      <>
-                        <Lock size={10} /> Quarantine
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <h2 className="text-sm font-bold uppercase tracking-wider text-[var(--text-primary)]">
+          MCP Governance
+        </h2>
+        <p className="text-[11px] text-[var(--text-muted)]">
+          Registry, manifest integrity, tool approval state, and tenant-scoped containment. Unknown
+          verification never renders as healthy.
+        </p>
       </div>
 
-      {/* Manifest Drift History Details */}
-      <div className="panel-card lg:col-span-2 space-y-4">
-        {!selectedServerKey ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)]">
+      {mutationError ? (
+        <p className="rounded border border-red-500/30 bg-red-950/20 px-3 py-2 text-xs text-red-300">
+          {mutationError}
+        </p>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <McpRegistry
+          servers={registryEntries}
+          selectedServerKey={selectedServerKey}
+          onSelect={setSelectedServerKey}
+          isLoading={isLoading}
+          error={error ? errorMessage(error) : null}
+        />
+
+        {!selectedServer ? (
+          <div className="panel-card flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)] lg:col-span-2">
             <History size={36} className="mb-4 animate-pulse" />
             <h4 className="text-xs font-semibold">Select an MCP Server</h4>
-            <p className="text-[10px] max-w-xs mt-1">Select a server to view its manifest drift history and logs.</p>
+            <p className="mt-1 max-w-xs text-[10px]">
+              Inspect manifest hashes, tool states, drift timeline, and linked SOC evidence.
+            </p>
           </div>
         ) : (
-          <>
-            <div className="border-b border-[var(--border-default)] pb-3 flex justify-between items-center">
-              <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1.5">
-                <History size={14} className="text-[var(--brand)]" /> Manifest Drift History &middot; <code className="text-[var(--brand)] font-bold">{selectedServerKey}</code>
-              </h3>
-            </div>
-
-            {isHistoryLoading ? (
-              <p className="text-xs text-[var(--text-muted)] text-center py-8">Loading manifest history...</p>
-            ) : !history || history.length === 0 ? (
-              <p className="text-xs text-[var(--text-muted)] text-center py-8">No drift history logs available for this server.</p>
-            ) : (
-              <div className="space-y-3 max-h-[350px] overflow-y-auto custom-scrollbar">
-                {history.map((record, idx: number) => (
-                  <div key={idx} className="p-3 bg-[var(--surface-app)]/40 border border-[var(--border-default)] rounded-lg text-xs flex justify-between items-start gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold ${record.event_type === "drift" ? "bg-amber-500/20 text-amber-400" : "bg-green-500/20 text-green-400"}`}>
-                          {record.event_type ? record.event_type.toUpperCase() : "LOG"}
-                        </span>
-                        <code className="text-[var(--brand)] font-mono text-[10px]">{record.manifest_hash ? record.manifest_hash.slice(0, 16) : "N/A"}</code>
-                      </div>
-                      <p className="text-[var(--text-secondary)] text-[11px] font-sans mt-1">
-                        {record.description || record.details || "Manifest check processed successfully."}
-                      </p>
-                    </div>
-                    <span className="text-[10px] text-[var(--text-muted)] font-mono whitespace-nowrap flex items-center gap-1">
-                      <Clock size={10} /> {new Date(record.created_at || record.ts || 0).toLocaleTimeString()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+          <McpDetail
+            server={selectedServer}
+            tools={tools}
+            history={history}
+            linkedAlerts={linkedAlerts}
+            linkedIncidents={linkedIncidents}
+            isToolsLoading={isToolsLoading}
+            isHistoryLoading={isHistoryLoading}
+            roleDisabledReason={roleDisabledReason}
+            onQuarantine={() => openControl("quarantine", selectedServer.server_key)}
+            onRestore={() => openControl("restore", selectedServer.server_key)}
+            onViewDetections={() => setActiveView("detections")}
+            onViewIncidents={() => setActiveView("incidents")}
+            mutationsPending={quarantineMutation.isPending || restoreMutation.isPending}
+          />
         )}
       </div>
+
       <ConfirmDialog
         open={pendingAction !== null}
-        title={pendingAction?.kind === "quarantine" ? "Quarantine this MCP server?" : "Restore this MCP server?"}
-        impact={
-          pendingAction?.kind === "quarantine"
-            ? "All tool calls routed through this MCP server will be denied until it is restored. Use this for manifest drift or suspected compromise."
-            : "This restores the MCP server to active status. Only continue if manifest drift has been investigated and the server is trusted."
-        }
+        title={pendingAction ? mcpControlTitle(pendingAction.kind) : "Confirm MCP action"}
+        impact={pendingAction ? mcpControlImpact(pendingAction.kind) : ""}
         target={pendingAction?.serverKey ?? ""}
         reason={auditReason}
         onReasonChange={setAuditReason}
-        confirmLabel={pendingAction?.kind === "quarantine" ? "Quarantine server" : "Restore server"}
-        confirmDisabled={!auditReason.trim() || quarantineMutation.isPending || restoreMutation.isPending}
+        confirmLabel={pendingAction ? mcpControlConfirmLabel(pendingAction.kind) : "Confirm"}
+        confirmDisabled={
+          !auditReason.trim() || quarantineMutation.isPending || restoreMutation.isPending
+        }
         onConfirm={confirmMcpAction}
         onCancel={() => {
           setPendingAction(null);

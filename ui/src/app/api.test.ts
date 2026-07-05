@@ -12,6 +12,7 @@ import {
   getMcpManifestHistory,
   quarantineMcpServer,
   normalizeMcpManifestHistory,
+  normalizeMcpTools,
   rejectApproval,
   restoreMcpServer,
   unfreezeAgent,
@@ -137,6 +138,17 @@ describe("gateway transport", () => {
       { manifest_hash: "sha256:def" },
     ]);
     expect(normalizeMcpManifestHistory({ server_key: "missing-snapshots" })).toEqual([]);
+  });
+
+  it("normalizes MCP tools envelopes from the gateway", () => {
+    expect(
+      normalizeMcpTools({
+        server_key: "github-mcp",
+        tools: [{ tool_key: "merge", status: "approved" }],
+      }),
+    ).toEqual([{ tool_key: "merge", status: "approved" }]);
+    expect(normalizeMcpTools([{ tool_key: "read_file" }])).toEqual([{ tool_key: "read_file" }]);
+    expect(normalizeMcpTools({ server_key: "empty" })).toEqual([]);
   });
 
   it("fetches encoded MCP manifest history and returns snapshots", async () => {
