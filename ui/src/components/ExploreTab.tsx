@@ -3,9 +3,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { verifyReceipt } from "../app/api";
 import { fieldsForEntity } from "@/datasources/fieldCatalog";
-import { normalizeVerification } from "@/datasources/receiptVerification";
+import { ReceiptDatasource } from "@/datasources/receipt";
 import { SocQueryDatasource } from "@/datasources/socQuery";
 import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint } from "lucide-react";
 import DecisionBadge from "./security/DecisionBadge";
@@ -30,6 +29,10 @@ export default function ExploreTab() {
   );
   const decisionDatasource = useMemo(
     () => new SocQueryDatasource(apiOpts),
+    [apiOpts],
+  );
+  const receiptDatasource = useMemo(
+    () => new ReceiptDatasource(apiOpts),
     [apiOpts],
   );
 
@@ -67,9 +70,8 @@ export default function ExploreTab() {
   };
 
   const verifyMutation = useMutation({
-    mutationFn: (receiptId: string) => verifyReceipt(apiOpts, receiptId),
-    onSuccess: (data, receiptId) => {
-      const result = normalizeVerification(data);
+    mutationFn: (receiptId: string) => receiptDatasource.verifyReceipt!(receiptId),
+    onSuccess: (result, receiptId) => {
       setVerificationResult((prev) => ({
         ...prev,
         [receiptId]: { status: result.status, msg: result.message, loading: false },

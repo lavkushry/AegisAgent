@@ -66,6 +66,30 @@ describe("GatewayEntityDatasource", () => {
     expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
   });
 
+  it("forwards cursor pagination to entity list endpoints", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const datasource = new GatewayEntityDatasource({
+      gatewayUrl: "http://gateway.test",
+      bearerToken: "token",
+      tenantId: "tenant-a",
+    });
+
+    await datasource.query({
+      entity: "approval",
+      cursor: "cursor-42",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toContain("cursor=cursor-42");
+  });
+
   it("returns shared field catalogs for non-decision gateway entities", async () => {
     const datasource = new GatewayEntityDatasource({
       gatewayUrl: "http://gateway.test",

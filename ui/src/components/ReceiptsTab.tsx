@@ -1,16 +1,19 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { getReceipts, verifyReceipt } from "../app/api";
-import { normalizeVerification } from "@/datasources/receiptVerification";
+import { ReceiptDatasource } from "@/datasources/receipt";
+import { receiptRowsFromFrame } from "@/datasources/receiptData";
 import { ShieldCheck, ShieldAlert, Cpu, Fingerprint, Activity } from "lucide-react";
 import { errorMessage } from "@/lib/format";
 
 export default function ReceiptsTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
+  const receiptDatasource = useMemo(
+    () => new ReceiptDatasource({ gatewayUrl, bearerToken, tenantId: activeTenant }),
+    [gatewayUrl, bearerToken, activeTenant],
+  );
 
   const expandedId = useAppStore((state) => state.activeReceiptId);
   const setExpandedId = useAppStore((state) => state.setActiveReceiptId);
@@ -19,16 +22,21 @@ export default function ReceiptsTab() {
   >({});
 
   // Fetch receipts list
-  const { data: receipts, isLoading, error } = useQuery({
+  const { data: receiptFrame, isLoading, error } = useQuery({
     queryKey: ["receipts", gatewayUrl, activeTenant, authEpoch],
-    queryFn: () => getReceipts(apiOpts),
+    queryFn: ({ signal }) => receiptDatasource.query({
+      entity: "receipt",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+      signal,
+    }),
     refetchInterval: 5000,
   });
+  const receipts = receiptRowsFromFrame(receiptFrame);
 
   const verifyMutation = useMutation({
-    mutationFn: (receiptId: string) => verifyReceipt(apiOpts, receiptId),
-    onSuccess: (data, receiptId) => {
-      const result = normalizeVerification(data);
+    mutationFn: (receiptId: string) => receiptDatasource.verifyReceipt!(receiptId),
+    onSuccess: (result, receiptId) => {
       setVerificationResult((prev) => ({
         ...prev,
         [receiptId]: { status: result.status, msg: result.message, loading: false },

@@ -26,7 +26,7 @@ function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
 export class ReceiptDatasource implements Datasource {
   readonly id = RECEIPT_DATASOURCE_ID;
   readonly capabilities: DatasourceCapabilities = {
-    query: false,
+    query: true,
     stream: false,
     fields: true,
     verify: true,
