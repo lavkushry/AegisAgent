@@ -9,9 +9,16 @@ interface StatusPanelOptions {
   failedValues?: string[];
 }
 
+function formatStatusValue(raw: unknown): string {
+  if (raw === true) return "verified";
+  if (raw === false) return "unverified";
+  if (raw === null || raw === undefined) return "unknown";
+  return String(raw);
+}
+
 export default function StatusPanel({ data, definition }: PanelProps<StatusPanelOptions>) {
   const options = definition.options ?? {};
-  const value = String(cell(data, options.field ?? "status", 0) ?? "unknown");
+  const value = formatStatusValue(cell(data, options.field ?? "status", 0));
   const normalized = value.toLowerCase();
   const healthy = (options.healthyValues ?? ["ok", "healthy", "verified", "active"]).includes(normalized);
   const failed = (options.failedValues ?? ["failed", "broken", "tampered", "error"]).includes(normalized);

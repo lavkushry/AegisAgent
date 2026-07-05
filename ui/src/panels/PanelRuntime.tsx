@@ -47,6 +47,8 @@ export default function PanelRuntime({
       definition.id,
       definition.datasourceId,
       definition.entity,
+      definition.snapshot,
+      definition.limit,
       definition.search,
       definition.query,
       definition.aggregate,
@@ -63,6 +65,8 @@ export default function PanelRuntime({
       if (!datasource) throw new Error(`Unknown datasource: ${definition.datasourceId}`);
       return datasource.query({
         entity: definition.entity,
+        snapshot: definition.snapshot,
+        limit: definition.limit,
         aql: definition.query,
         search: definition.search,
         aggregate: definition.aggregate,

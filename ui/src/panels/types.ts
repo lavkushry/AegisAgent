@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import type {
   DataFrame,
   EntityKind,
+  GatewaySnapshot,
   TimeRange,
   VariableValues,
 } from "@/datasources/types";
@@ -33,7 +34,7 @@ export interface DrilldownLink {
   readonly label: string;
   readonly target:
     | { kind: "verify-receipt"; receiptIdField: string }
-    | { kind: "dashboard"; uid: string; mapVars: Record<string, string> }
+    | { kind: "dashboard"; uid: string; mapVars?: Record<string, string> }
     | { kind: "explore"; aqlTemplate: string }
     | { kind: "incident"; incidentIdField: string };
 }
@@ -45,6 +46,8 @@ export interface PanelDefinition<TOptions = Record<string, unknown>> {
   readonly title: string;
   readonly datasourceId: string;
   readonly entity?: EntityKind;
+  readonly snapshot?: GatewaySnapshot;
+  readonly limit?: number;
   readonly query?: string;
   readonly search?: string;
   readonly aggregate?: "count_over_time";

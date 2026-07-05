@@ -69,7 +69,7 @@ test.describe("production SOC console data workflows", () => {
     await expect(page.getByText(/Read-only as viewer/)).toBeVisible();
   });
 
-  test("Overview Protected Actions reflects the gateway total", async ({ page, request, baseURL }) => {
+  test("Overview protected actions reflects the gateway total", async ({ page, request, baseURL }) => {
     const agentKey = `console-e2e-stats-${Date.now()}`;
     const agent = await registerTestAgent(request, baseURL!, agentKey);
     await createAllowedDecision(request, baseURL!, agent.agentToken, agentKey);
@@ -79,8 +79,12 @@ test.describe("production SOC console data workflows", () => {
     expect(response.ok()).toBe(true);
     const stats = await response.json();
     await openConfiguredConsole(page);
-    const tile = page.getByText("PROTECTED ACTIONS").locator("../..");
-    await expect.poll(async () => Number((await tile.locator(".text-3xl").textContent()) ?? 0), { timeout: 10_000 })
-      .toBeGreaterThanOrEqual(stats.total_decisions);
+    const panel = page.locator("section.panel-card").filter({
+      has: page.getByRole("heading", { name: "Protected actions" }),
+    });
+    await expect.poll(
+      async () => Number((await panel.locator(".tabular-nums").textContent())?.replace(/,/g, "") ?? 0),
+      { timeout: 10_000 },
+    ).toBeGreaterThanOrEqual(stats.total_decisions);
   });
 });

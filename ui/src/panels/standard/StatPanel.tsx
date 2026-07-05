@@ -11,15 +11,21 @@ export interface StatOptions {
 
 function resolveValue(props: PanelProps<StatOptions>): number | null {
   const { data, definition } = props;
+  const valueField = definition.options?.valueField;
+  if (valueField) {
+    const field = data.fields.find((f) => f.name === valueField);
+    if (!field || field.values.length === 0) return null;
+    const sample = field.values[0];
+    if (sample === null || sample === undefined) return null;
+    return typeof sample === "number" ? sample : Number(sample) || 0;
+  }
   const field =
-    data.fields.find((f) => f.name === definition.options?.valueField) ??
     data.fields.find((f) => f.type === "number");
   if (field && field.values.length > 0) {
     const last = field.values[field.values.length - 1];
     return typeof last === "number" ? last : Number(last) || 0;
   }
-  // No value field: fall back to row count (e.g. "open incidents").
-  return data.length;
+  return data.length > 0 ? data.length : null;
 }
 
 function thresholdColor(value: number, thresholds?: [number, number]): string {
