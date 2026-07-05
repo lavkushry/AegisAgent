@@ -922,6 +922,7 @@ fn api_routes() -> Router<Arc<AppState>> {
         // SOC query layer: incident detail + aggregate summary
         .route("/incidents/:id", get(routes::get_incident))
         .route("/soc/summary", get(routes::soc_summary))
+        .route("/soc/stream", get(routes::soc_stream))
         .route("/soc/query", post(routes::soc_query))
         .route("/soc/semantic-search", get(routes::semantic_search))
         // Runtime control plane (Phase 2.6): agent-cage runs + runtime-event ingest
