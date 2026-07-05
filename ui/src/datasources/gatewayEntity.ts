@@ -35,7 +35,7 @@ function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
 export class GatewayEntityDatasource implements Datasource {
   readonly id = "gateway-entity";
   readonly capabilities: DatasourceCapabilities = {
-    query: false,
+    query: true,
     stream: false,
     fields: true,
     verify: true,
@@ -58,6 +58,7 @@ export class GatewayEntityDatasource implements Datasource {
     const limit = req.limit ?? 50;
     const params = new URLSearchParams({ limit: String(limit) });
     if (req.search) params.set("q", req.search);
+    if (req.cursor) params.set("cursor", req.cursor);
     const path = `${entityPath}?${params.toString()}`;
     const rows = await fetchFromGateway<Array<Record<string, unknown>>>(withSignal(this.opts, req.signal), path);
     return rowsToFrame(Array.isArray(rows) ? rows : []);
@@ -89,10 +90,10 @@ export class GatewayEntityDatasource implements Datasource {
     return fieldsForEntity(entity);
   }
 
-  async verifyReceipt(receiptId: string): Promise<VerifyResult> {
+  async verifyReceipt(receiptId: string, signal?: AbortSignal): Promise<VerifyResult> {
     const data = await fetchFromGateway<Record<string, unknown>>(
-      this.opts,
-      `/v1/receipts/${receiptId}/verify`,
+      withSignal(this.opts, signal),
+      `/v1/receipts/${encodeURIComponent(receiptId)}/verify`,
     );
     return normalizeVerification(data);
   }

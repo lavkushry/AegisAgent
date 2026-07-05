@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
-import { downloadFromGateway, getIncidents, getIncidentDetail, fetchFromGateway, getIncidentGraph, verifyReceipt, type IncidentNarration } from "../app/api";
-import { normalizeVerification } from "@/datasources/receiptVerification";
+import { downloadFromGateway, getIncidents, getIncidentDetail, fetchFromGateway, getIncidentGraph, type IncidentNarration } from "../app/api";
+import { ReceiptDatasource } from "@/datasources/receipt";
 import { AlertOctagon, CheckSquare, FileText, Download, ShieldCheck, Activity, ShieldAlert, AlertTriangle } from "lucide-react";
 import SeverityTag from "./security/SeverityTag";
 import { errorMessage } from "@/lib/format";
@@ -17,7 +17,14 @@ type PendingIncidentAction = {
 
 export default function IncidentsTab() {
   const { gatewayUrl, bearerToken, activeTenant, authEpoch } = useAppStore();
-  const apiOpts = { gatewayUrl, bearerToken, tenantId: activeTenant };
+  const apiOpts = useMemo(
+    () => ({ gatewayUrl, bearerToken, tenantId: activeTenant }),
+    [gatewayUrl, bearerToken, activeTenant],
+  );
+  const receiptDatasource = useMemo(
+    () => new ReceiptDatasource(apiOpts),
+    [apiOpts],
+  );
   const queryClient = useQueryClient();
 
   const selectedIncidentId = useAppStore((state) => state.activeIncidentId);
@@ -124,8 +131,7 @@ export default function IncidentsTab() {
       let allOk = true;
       let checkedCount = 0;
       for (const node of receiptNodes) {
-        const verifyRes = await verifyReceipt(apiOpts, node.id);
-        const result = normalizeVerification(verifyRes);
+        const result = await receiptDatasource.verifyReceipt!(node.id);
         if (result.status !== "verified") {
           allOk = false;
           setVerificationOutput({ status: result.status, msg: result.message });
