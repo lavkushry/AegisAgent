@@ -4,6 +4,7 @@ import {
   fetchFromGateway,
   type FetchOptions,
 } from "../app/api";
+import { fieldsForEntity } from "./fieldCatalog";
 import { rowsToFrame } from "./frame";
 import { normalizeVerification } from "./receiptVerification";
 import type {
@@ -17,17 +18,6 @@ import type {
 } from "./types";
 
 export const RECEIPT_DATASOURCE_ID = "receipt";
-
-const RECEIPT_FIELDS: ReadonlyArray<FieldDescriptor> = [
-  { name: "created_at", type: "time", facetable: false },
-  { name: "tenant_id", type: "string", facetable: false },
-  { name: "agent_id", type: "string", facetable: true },
-  { name: "decision", type: "decision", facetable: true },
-  { name: "source_trust", type: "trust", facetable: true },
-  { name: "action_hash", type: "hash", facetable: false },
-  { name: "prev_receipt_hash", type: "hash", facetable: false },
-  { name: "receipt_hash", type: "hash", facetable: false },
-];
 
 function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
   return signal ? { ...opts, signal } : opts;
@@ -55,7 +45,7 @@ export class ReceiptDatasource implements Datasource {
   }
 
   fields(): Promise<ReadonlyArray<FieldDescriptor>> {
-    return Promise.resolve(RECEIPT_FIELDS);
+    return Promise.resolve(fieldsForEntity("receipt"));
   }
 
   async verifyReceipt(receiptId: string, signal?: AbortSignal): Promise<VerifyResult> {

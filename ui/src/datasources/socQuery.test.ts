@@ -164,4 +164,21 @@ describe("SocQueryDatasource", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("returns ASE field descriptors by default and entity descriptors when requested", async () => {
+    const datasource = new SocQueryDatasource(options);
+
+    await expect(datasource.fields()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "event_type", type: "string", facetable: true }),
+        expect.objectContaining({ name: "action_hash", type: "hash", facetable: false }),
+      ]),
+    );
+    await expect(datasource.fields("incident")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "kind", type: "string", facetable: true }),
+        expect.objectContaining({ name: "opened_at", type: "time", facetable: false }),
+      ]),
+    );
+  });
 });

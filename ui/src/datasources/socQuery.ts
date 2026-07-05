@@ -1,31 +1,19 @@
 import { GatewayRequestError, fetchFromGateway, type FetchOptions } from "../app/api";
 import { parseAql } from "./aql/parse";
+import { fieldsForEntity } from "./fieldCatalog";
 import { rowsToFrame } from "./frame";
 import { resolveTimeToken } from "../lib/format";
 import type {
   DataFrame,
   Datasource,
   DatasourceCapabilities,
+  EntityKind,
   Field,
   FieldDescriptor,
   QueryRequest,
 } from "./types";
 
 export const SOC_QUERY_DATASOURCE_ID = "soc-query";
-
-const EVENT_FIELDS: ReadonlyArray<FieldDescriptor> = [
-  { name: "timestamp", type: "time", facetable: false },
-  { name: "event_type", type: "string", facetable: true },
-  { name: "agent_id", type: "string", facetable: true },
-  { name: "tool", type: "string", facetable: true },
-  { name: "action", type: "string", facetable: true },
-  { name: "decision", type: "decision", facetable: true, examples: ["allow", "deny", "require_approval"] },
-  { name: "source_trust", type: "trust", facetable: true },
-  { name: "action_hash", type: "hash", facetable: false },
-  { name: "receipt_hash", type: "hash", facetable: false },
-  { name: "run_id", type: "string", facetable: true },
-  { name: "trace_id", type: "string", facetable: true },
-];
 
 function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
   return signal ? { ...opts, signal } : opts;
@@ -121,8 +109,8 @@ export class SocQueryDatasource implements Datasource {
     }
   }
 
-  fields(): Promise<ReadonlyArray<FieldDescriptor>> {
-    return Promise.resolve(EVENT_FIELDS);
+  fields(entity: EntityKind = "ase"): Promise<ReadonlyArray<FieldDescriptor>> {
+    return Promise.resolve(fieldsForEntity(entity));
   }
 
   private async queryDecisionsFallback(

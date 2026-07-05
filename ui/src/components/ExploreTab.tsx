@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
 import { searchDecisions, verifyReceipt } from "../app/api";
 import { parseAql } from "@/datasources/aql/parse";
+import { fieldsForEntity } from "@/datasources/fieldCatalog";
 import { normalizeVerification } from "@/datasources/receiptVerification";
 import { Search, ChevronDown, ChevronUp, Check, AlertTriangle, Cpu, Fingerprint } from "lucide-react";
 import DecisionBadge from "./security/DecisionBadge";
@@ -12,6 +13,8 @@ import TrustBadge from "./security/TrustBadge";
 import HashChip from "./security/HashChip";
 import FieldSidebar from "./filters/FieldSidebar";
 import { formatTime, errorMessage, relativeRangeToFrom } from "@/lib/format";
+
+const DECISION_FIELD_DESCRIPTORS = fieldsForEntity("decision");
 
 // Loosely-typed decision record from the gateway. The datasource/DataFrame
 // layer (HLD/LLD section 5) will replace this with a generated type.
@@ -126,6 +129,7 @@ export default function ExploreTab() {
       <div className="grid grid-cols-1 lg:grid-cols-[210px_minmax(0,1fr)] gap-4">
         {/* Field facet sidebar (computed from loaded results) */}
         <FieldSidebar
+          descriptors={DECISION_FIELD_DESCRIPTORS}
           rows={(decisions ?? []) as Array<Record<string, unknown>>}
           onSelect={(field, value) => {
             const q = `${field}:${value}`;

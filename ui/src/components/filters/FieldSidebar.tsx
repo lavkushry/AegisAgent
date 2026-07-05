@@ -2,30 +2,50 @@
 
 import React, { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { fieldsForEntity } from "../../datasources/fieldCatalog";
+import type { FieldDescriptor } from "../../datasources/types";
 import DecisionBadge from "../security/DecisionBadge";
 import TrustBadge from "../security/TrustBadge";
 
 type FacetType = "decision" | "trust" | "string";
 
-interface FacetField {
+export interface FacetField {
   key: string;
   label: string;
   type: FacetType;
   /** Alternate keys to read the value from, in order. */
-  altKeys?: string[];
+  altKeys?: ReadonlyArray<string>;
 }
 
-const FACETS: FacetField[] = [
-  { key: "decision", label: "decision", type: "decision" },
-  { key: "source_trust", label: "source_trust", type: "trust", altKeys: ["root_trust_level"] },
-  { key: "tool", label: "tool", type: "string", altKeys: ["skill", "tool_name"] },
-  { key: "agent_id", label: "agent_id", type: "string" },
-  { key: "event_type", label: "event_type", type: "string" },
-];
+const DEFAULT_DESCRIPTORS = fieldsForEntity("decision");
+const FACET_ALIASES: Readonly<Record<string, ReadonlyArray<string>>> = {
+  source_trust: ["root_trust_level"],
+  tool: ["skill", "tool_name"],
+};
 
 const TOP_N = 6;
 
 type Row = Record<string, unknown>;
+
+function facetType(field: FieldDescriptor): FacetType | null {
+  if (field.type === "decision" || field.type === "trust" || field.type === "string") {
+    return field.type;
+  }
+  return null;
+}
+
+export function descriptorFacets(descriptors: ReadonlyArray<FieldDescriptor>): ReadonlyArray<FacetField> {
+  return descriptors.flatMap((descriptor) => {
+    const type = facetType(descriptor);
+    if (!descriptor.facetable || type === null) return [];
+    return [{
+      key: descriptor.name,
+      label: descriptor.name,
+      type,
+      altKeys: FACET_ALIASES[descriptor.name],
+    }];
+  });
+}
 
 function readValue(row: Row, facet: FacetField): string {
   const keys = [facet.key, ...(facet.altKeys ?? [])];
@@ -56,15 +76,17 @@ function countFacet(rows: ReadonlyArray<Row>, facet: FacetField): Array<[string,
 
 type Props = {
   rows: ReadonlyArray<Row>;
+  descriptors?: ReadonlyArray<FieldDescriptor>;
   onSelect: (field: string, value: string) => void;
 };
 
 /** Kibana-Discover-style facet sidebar computed from the loaded results. */
-export default function FieldSidebar({ rows, onSelect }: Props) {
+export default function FieldSidebar({ rows, descriptors = DEFAULT_DESCRIPTORS, onSelect }: Props) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const facets = useMemo(() => descriptorFacets(descriptors), [descriptors]);
   const facetData = useMemo(
-    () => FACETS.map((facet) => ({ facet, values: countFacet(rows, facet) })),
-    [rows],
+    () => facets.map((facet) => ({ facet, values: countFacet(rows, facet) })),
+    [facets, rows],
   );
 
   return (

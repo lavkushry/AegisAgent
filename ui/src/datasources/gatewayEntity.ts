@@ -1,4 +1,5 @@
 import { fetchFromGateway, type FetchOptions } from "../app/api";
+import { fieldsForEntity } from "./fieldCatalog";
 import { normalizeVerification } from "./receiptVerification";
 import { resolveTimeToken } from "../lib/format";
 import { rowsToFrame } from "./frame";
@@ -7,7 +8,6 @@ import type {
   Datasource,
   DatasourceCapabilities,
   EntityKind,
-  FieldDescriptor,
   QueryRequest,
   VerifyResult,
 } from "./types";
@@ -21,19 +21,6 @@ const ENTITY_PATHS: Record<Exclude<EntityKind, "ase">, string> = {
   receipt: "/v1/receipts",
   decision: "/v1/decisions",
   rule: "/v1/detection_rules",
-};
-
-// Minimal field catalogs for the Explore sidebar / autocomplete. Extended
-// as the event-query datasource (POST /v1/soc/query) lands.
-const ENTITY_FIELDS: Partial<Record<EntityKind, ReadonlyArray<FieldDescriptor>>> = {
-  decision: [
-    { name: "decision", type: "decision", facetable: true, examples: ["allow", "deny", "require_approval"] },
-    { name: "source_trust", type: "trust", facetable: true, examples: ["untrusted_external", "trusted_internal_signed"] },
-    { name: "tool", type: "string", facetable: true },
-    { name: "agent_id", type: "string", facetable: true },
-    { name: "action_hash", type: "hash", facetable: false },
-    { name: "created_at", type: "time", facetable: false },
-  ],
 };
 
 function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
@@ -98,8 +85,8 @@ export class GatewayEntityDatasource implements Datasource {
     };
   }
 
-  async fields(entity: EntityKind): Promise<ReadonlyArray<FieldDescriptor>> {
-    return ENTITY_FIELDS[entity] ?? [];
+  async fields(entity: EntityKind) {
+    return fieldsForEntity(entity);
   }
 
   async verifyReceipt(receiptId: string): Promise<VerifyResult> {
