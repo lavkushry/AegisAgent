@@ -133,25 +133,62 @@ export interface AgentToolPermission {
 }
 
 export interface McpServerRecord {
+  id?: string;
+  tenant_id?: string;
   server_key: string;
-  status?: string;
-  manifest_hash?: string;
+  name?: string;
+  owner_team?: string | null;
   transport?: string;
+  source?: string | null;
+  trust_level?: string;
+  endpoint?: string;
+  version?: string | null;
+  status?: string;
+  /** Pinned mcp-manifest-1 hash from gateway discovery. */
+  manifest_hash?: string;
+  last_discovery_at?: string | null;
+  inspection_enabled?: boolean;
+  created_at?: string;
 }
 
-export interface McpManifestRecord {
-  event_type?: string;
+export interface McpManifestSnapshot {
+  id?: string;
+  tenant_id?: string;
+  server_key?: string;
   manifest_hash?: string;
   manifest_json?: string;
+  created_at?: string;
+}
+
+/** @deprecated Use McpManifestSnapshot — kept for datasource frame compatibility. */
+export type McpManifestRecord = McpManifestSnapshot & {
+  event_type?: string;
   description?: string;
   details?: string;
-  created_at?: string;
   ts?: string;
+};
+
+export interface McpToolRecord {
+  id?: string;
+  tool_key: string;
+  name?: string;
+  description?: string | null;
+  risk?: string;
+  mutates_state?: boolean;
+  approval_required?: boolean;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 interface McpManifestHistoryEnvelope {
   server_key?: string;
-  snapshots?: McpManifestRecord[];
+  snapshots?: McpManifestSnapshot[];
+}
+
+interface McpToolsEnvelope {
+  server_key?: string;
+  tools?: McpToolRecord[];
 }
 
 export interface ReceiptRecord {
@@ -451,13 +488,25 @@ export function getMcpServers(opts: FetchOptions) {
 }
 
 export function normalizeMcpManifestHistory(
-  response: McpManifestRecord[] | McpManifestHistoryEnvelope | null | undefined,
-): McpManifestRecord[] {
+  response: McpManifestSnapshot[] | McpManifestHistoryEnvelope | null | undefined,
+): McpManifestSnapshot[] {
   if (Array.isArray(response)) {
     return response;
   }
   if (response && Array.isArray(response.snapshots)) {
     return response.snapshots;
+  }
+  return [];
+}
+
+export function normalizeMcpTools(
+  response: McpToolRecord[] | McpToolsEnvelope | null | undefined,
+): McpToolRecord[] {
+  if (Array.isArray(response)) {
+    return response;
+  }
+  if (response && Array.isArray(response.tools)) {
+    return response.tools;
   }
   return [];
 }
@@ -471,9 +520,13 @@ export async function getMcpManifestHistory(opts: FetchOptions, serverKey: strin
   return normalizeMcpManifestHistory(response);
 }
 
-export function getMcpTools(opts: FetchOptions, serverKey: string) {
+export async function getMcpTools(opts: FetchOptions, serverKey: string) {
   const encodedServerKey = encodeURIComponent(serverKey);
-  return fetchFromGateway<Array<Record<string, unknown>>>(opts, `/v1/mcp/servers/${encodedServerKey}/tools`);
+  const response = await fetchFromGateway<McpToolRecord[] | McpToolsEnvelope>(
+    opts,
+    `/v1/mcp/servers/${encodedServerKey}/tools`,
+  );
+  return normalizeMcpTools(response);
 }
 
 export function quarantineMcpServer(opts: FetchOptions, serverKey: string, reason?: string) {
