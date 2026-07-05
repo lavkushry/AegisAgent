@@ -15,6 +15,7 @@ import { fleetDashboard } from "../dashboards/system/fleet";
 import { approvalsDashboard } from "../dashboards/system/approvals";
 import { receiptsDashboard } from "../dashboards/system/receipts";
 
+
 type ActiveTab = "overview" | "dashboards" | "integrity" | "explore" | "incidents" | "detections" | "approvals" | "agents" | "mcp" | "receipts" | "settings";
 
 export default function Home() {
@@ -23,7 +24,9 @@ export default function Home() {
     overview: <DashboardLoader schema={overviewDashboard} />,
     dashboards: <DashboardLoader schema={overviewDashboard} />,
     integrity: <DashboardLoader schema={integrityDashboard} />, explore: <ExploreTab />,
-    incidents: <IncidentsTab />, detections: <DetectionsTab />, approvals: <DashboardLoader schema={approvalsDashboard} />,
+    incidents: <IncidentsTab />,
+    detections: <DetectionsTab />,
+    approvals: <DashboardLoader schema={approvalsDashboard} />,
     agents: <DashboardLoader schema={fleetDashboard} />, mcp: <McpTab />, receipts: <DashboardLoader schema={receiptsDashboard} />,
     settings: <SettingsTab />,
   };
