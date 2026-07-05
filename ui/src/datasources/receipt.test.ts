@@ -111,4 +111,14 @@ describe("ReceiptDatasource", () => {
     );
     expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
   });
+
+  it("returns receipt integrity field descriptors from the shared catalog", async () => {
+    await expect(new ReceiptDatasource(options).fields()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "receipt_hash", type: "hash", facetable: false }),
+        expect.objectContaining({ name: "prev_receipt_hash", type: "hash", facetable: false }),
+        expect.objectContaining({ name: "agent_id", type: "string", facetable: true }),
+      ]),
+    );
+  });
 });

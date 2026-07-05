@@ -65,4 +65,22 @@ describe("GatewayEntityDatasource", () => {
 
     expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
   });
+
+  it("returns shared field catalogs for non-decision gateway entities", async () => {
+    const datasource = new GatewayEntityDatasource({
+      gatewayUrl: "http://gateway.test",
+      bearerToken: "token",
+      tenantId: "tenant-a",
+    });
+
+    const approvalFields = await datasource.fields("approval");
+
+    expect(approvalFields.map((field) => field.name)).toEqual(
+      expect.arrayContaining(["status", "tool_name", "action_hash", "effective_action_hash", "expires_at"]),
+    );
+    expect(approvalFields.find((field) => field.name === "action_hash")).toMatchObject({
+      type: "hash",
+      facetable: false,
+    });
+  });
 });
