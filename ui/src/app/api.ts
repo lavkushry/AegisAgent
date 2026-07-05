@@ -774,6 +774,47 @@ export function listContactPoints(opts: FetchOptions, limit = 50) {
   return fetchListFromGateway<ContactPointRecord[]>(opts, `/v1/soc/contact-points?limit=${limit}`);
 }
 
+// #1634: tenant-owned dashboard schemas
+export interface SocDashboardRecord {
+  id: string;
+  tenant_id: string;
+  uid: string;
+  title: string;
+  schema_version: number;
+  schema_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listSocDashboards(opts: FetchOptions) {
+  return fetchFromGateway<SocDashboardRecord[]>(opts, "/v1/soc/dashboards");
+}
+
+export function getSocDashboard(opts: FetchOptions, uid: string) {
+  return fetchFromGateway<SocDashboardRecord>(opts, `/v1/soc/dashboards/${encodeURIComponent(uid)}`);
+}
+
+export function createSocDashboard(opts: FetchOptions, schema: unknown) {
+  return fetchFromGateway<SocDashboardRecord>(opts, "/v1/soc/dashboards", "POST", schema);
+}
+
+export function updateSocDashboard(opts: FetchOptions, uid: string, schema: unknown) {
+  return fetchFromGateway<SocDashboardRecord>(
+    opts,
+    `/v1/soc/dashboards/${encodeURIComponent(uid)}`,
+    "PUT",
+    schema,
+  );
+}
+
+export function deleteSocDashboard(opts: FetchOptions, uid: string) {
+  return fetchFromGateway<Record<string, unknown>>(
+    opts,
+    `/v1/soc/dashboards/${encodeURIComponent(uid)}`,
+    "DELETE",
+  );
+}
+
 export interface NotificationPolicyRecord {
   id: string;
   tenant_id: string;

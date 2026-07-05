@@ -1436,6 +1436,19 @@ pub struct PlaybookRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// #1634: tenant-owned dashboard schema persisted by `/v1/soc/dashboards`.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct SocDashboardRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub uid: String,
+    pub title: String,
+    pub schema_version: i64,
+    pub schema_json: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// #1627: tenant-managed SOC contact point (Slack/webhook/PagerDuty/email routing).
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
 pub struct ContactPointRecord {

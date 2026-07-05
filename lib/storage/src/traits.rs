@@ -1140,6 +1140,34 @@ pub trait StorageBackend: Send + Sync + 'static {
         at: DateTime<Utc>,
     ) -> Result<bool, AegisError>;
 
+    // Dashboard editor (#1634)
+    async fn insert_soc_dashboard(
+        &self,
+        tenant_id: &str,
+        uid: &str,
+        title: &str,
+        schema_version: i64,
+        schema_json: &str,
+    ) -> Result<SocDashboardRecord, AegisError>;
+    async fn update_soc_dashboard(
+        &self,
+        tenant_id: &str,
+        uid: &str,
+        title: &str,
+        schema_version: i64,
+        schema_json: &str,
+    ) -> Result<Option<SocDashboardRecord>, AegisError>;
+    async fn list_soc_dashboards(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<SocDashboardRecord>, AegisError>;
+    async fn get_soc_dashboard_by_uid(
+        &self,
+        tenant_id: &str,
+        uid: &str,
+    ) -> Result<Option<SocDashboardRecord>, AegisError>;
+    async fn delete_soc_dashboard(&self, tenant_id: &str, uid: &str) -> Result<bool, AegisError>;
+
     async fn list_soc_alerts_by_source_event_ids(
         &self,
         tenant_id: &str,

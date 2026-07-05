@@ -56,6 +56,7 @@ pub mod route_parity;
 pub mod runtime;
 pub mod sensors;
 pub mod soc;
+pub mod soc_dashboards;
 pub mod tenant;
 pub mod webhooks;
 
@@ -80,6 +81,7 @@ pub use receipts::*;
 pub use runtime::*;
 pub use sensors::*;
 pub use soc::*;
+pub use soc_dashboards::*;
 pub use tenant::*;
 pub use webhooks::*;
 #[derive(Debug, Clone)]

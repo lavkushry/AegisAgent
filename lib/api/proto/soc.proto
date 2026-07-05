@@ -21,6 +21,12 @@ service SocService {
     rpc ListSilences (ListSilencesRequest) returns (ListSilencesResponse);
     rpc CreateSilence (CreateSilenceRequest) returns (CreateSilenceResponse);
     rpc DeleteSilence (DeleteSilenceRequest) returns (DeleteSilenceResponse);
+    // #1634: tenant-owned dashboard schemas
+    rpc ListSocDashboards (ListSocDashboardsRequest) returns (ListSocDashboardsResponse);
+    rpc GetSocDashboard (GetSocDashboardRequest) returns (GetSocDashboardResponse);
+    rpc CreateSocDashboard (CreateSocDashboardRequest) returns (CreateSocDashboardResponse);
+    rpc UpdateSocDashboard (UpdateSocDashboardRequest) returns (UpdateSocDashboardResponse);
+    rpc DeleteSocDashboard (DeleteSocDashboardRequest) returns (DeleteSocDashboardResponse);
 }
 
 // Structured, tenant-scoped query contract shared by Explore and dashboards.
@@ -334,5 +340,62 @@ message DeleteSilenceRequest {
 }
 
 message DeleteSilenceResponse {
+    bool success = 1;
+}
+
+// #1634: dashboard editor persistence
+message SocDashboardItem {
+    string id = 1;
+    string tenant_id = 2;
+    string uid = 3;
+    string title = 4;
+    int64 schema_version = 5;
+    string schema_json = 6;
+    string created_at = 7;
+    string updated_at = 8;
+}
+
+message ListSocDashboardsRequest {
+    string tenant_id = 1;
+}
+
+message ListSocDashboardsResponse {
+    repeated SocDashboardItem items = 1;
+}
+
+message GetSocDashboardRequest {
+    string tenant_id = 1;
+    string uid = 2;
+}
+
+message GetSocDashboardResponse {
+    SocDashboardItem dashboard = 1;
+}
+
+message CreateSocDashboardRequest {
+    string tenant_id = 1;
+    string schema_json = 2;
+}
+
+message CreateSocDashboardResponse {
+    SocDashboardItem dashboard = 1;
+}
+
+message UpdateSocDashboardRequest {
+    string tenant_id = 1;
+    string uid = 2;
+    string schema_json = 3;
+}
+
+message UpdateSocDashboardResponse {
+    SocDashboardItem dashboard = 1;
+}
+
+message DeleteSocDashboardRequest {
+    string tenant_id = 1;
+    string uid = 2;
+}
+
+message DeleteSocDashboardResponse {
     bool success = 1;
 }

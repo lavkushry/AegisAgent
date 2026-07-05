@@ -6,17 +6,21 @@ use aegis_api::grpc::aegis::{
     ApproveRequest, ApproveResponse, AuthorizeRequest, AuthorizeResponse, CloseIncidentRequest,
     CloseIncidentResponse, ContactPointItem, CreateContactPointRequest, CreateContactPointResponse,
     CreateNotificationPolicyRequest, CreateNotificationPolicyResponse, CreatePlaybookRequest,
-    CreatePlaybookResponse, CreateSilenceRequest, CreateSilenceResponse, CreateTenantRequest,
-    CreateTenantResponse, DeleteContactPointRequest, DeleteContactPointResponse,
-    DeleteNotificationPolicyRequest, DeleteNotificationPolicyResponse, DeletePlaybookRequest,
-    DeletePlaybookResponse, DeleteSilenceRequest, DeleteSilenceResponse, DiscoverMcpToolsRequest,
-    DiscoverMcpToolsResponse, ListAlertsRequest, ListAlertsResponse, ListContactPointsRequest,
-    ListContactPointsResponse, ListIncidentsRequest, ListIncidentsResponse,
-    ListNotificationPoliciesRequest, ListNotificationPoliciesResponse, ListPlaybooksRequest,
-    ListPlaybooksResponse, ListSilencesRequest, ListSilencesResponse, McpToolStatusResponse,
+    CreatePlaybookResponse, CreateSilenceRequest, CreateSilenceResponse, CreateSocDashboardRequest,
+    CreateSocDashboardResponse, CreateTenantRequest, CreateTenantResponse,
+    DeleteContactPointRequest, DeleteContactPointResponse, DeleteNotificationPolicyRequest,
+    DeleteNotificationPolicyResponse, DeletePlaybookRequest, DeletePlaybookResponse,
+    DeleteSilenceRequest, DeleteSilenceResponse, DeleteSocDashboardRequest,
+    DeleteSocDashboardResponse, DiscoverMcpToolsRequest, DiscoverMcpToolsResponse,
+    GetSocDashboardRequest, GetSocDashboardResponse, ListAlertsRequest, ListAlertsResponse,
+    ListContactPointsRequest, ListContactPointsResponse, ListIncidentsRequest,
+    ListIncidentsResponse, ListNotificationPoliciesRequest, ListNotificationPoliciesResponse,
+    ListPlaybooksRequest, ListPlaybooksResponse, ListSilencesRequest, ListSilencesResponse,
+    ListSocDashboardsRequest, ListSocDashboardsResponse, McpToolStatusResponse,
     NotificationPolicyItem, RegisterAgentRequest, RegisterAgentResponse, RegisterMcpServerRequest,
     RegisterMcpServerResponse, SemanticSearchRequest, SemanticSearchResponse, SemanticSearchResult,
-    SilenceItem, SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
+    SilenceItem, SocDashboardItem, SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
+    UpdateSocDashboardRequest, UpdateSocDashboardResponse,
 };
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
@@ -1202,6 +1206,133 @@ impl SocService for SocGrpcServiceImpl {
             Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
         }
     }
+
+    // #1634: dashboard editor gRPC (thin storage adapters)
+    async fn list_soc_dashboards(
+        &self,
+        request: Request<ListSocDashboardsRequest>,
+    ) -> Result<Response<ListSocDashboardsResponse>, Status> {
+        let req = request.into_inner();
+        match self
+            ._state
+            .storage
+            .list_soc_dashboards(&req.tenant_id)
+            .await
+        {
+            Ok(items) => Ok(Response::new(ListSocDashboardsResponse {
+                items: items.into_iter().map(soc_dashboard_to_proto).collect(),
+            })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn get_soc_dashboard(
+        &self,
+        request: Request<GetSocDashboardRequest>,
+    ) -> Result<Response<GetSocDashboardResponse>, Status> {
+        let req = request.into_inner();
+        match self
+            ._state
+            .storage
+            .get_soc_dashboard_by_uid(&req.tenant_id, &req.uid)
+            .await
+        {
+            Ok(Some(record)) => Ok(Response::new(GetSocDashboardResponse {
+                dashboard: Some(soc_dashboard_to_proto(record)),
+            })),
+            Ok(None) => Err(Status::not_found("Dashboard not found")),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn create_soc_dashboard(
+        &self,
+        request: Request<CreateSocDashboardRequest>,
+    ) -> Result<Response<CreateSocDashboardResponse>, Status> {
+        let req = request.into_inner();
+        let schema =
+            aegis_api::dashboard_schema::parse_and_validate_dashboard_json(&req.schema_json)
+                .map_err(Status::invalid_argument)?;
+        if let Ok(Some(_)) = self
+            ._state
+            .storage
+            .get_soc_dashboard_by_uid(&req.tenant_id, &schema.uid)
+            .await
+        {
+            return Err(Status::already_exists(format!(
+                "Dashboard uid '{}' already exists",
+                schema.uid
+            )));
+        }
+        let schema_json = serde_json::to_string(&schema)
+            .map_err(|e| Status::internal(format!("serialize dashboard: {e}")))?;
+        let record = self
+            ._state
+            .storage
+            .insert_soc_dashboard(
+                &req.tenant_id,
+                &schema.uid,
+                &schema.title,
+                i64::from(schema.schema_version),
+                &schema_json,
+            )
+            .await
+            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+        Ok(Response::new(CreateSocDashboardResponse {
+            dashboard: Some(soc_dashboard_to_proto(record)),
+        }))
+    }
+
+    async fn update_soc_dashboard(
+        &self,
+        request: Request<UpdateSocDashboardRequest>,
+    ) -> Result<Response<UpdateSocDashboardResponse>, Status> {
+        let req = request.into_inner();
+        let schema =
+            aegis_api::dashboard_schema::parse_and_validate_dashboard_json(&req.schema_json)
+                .map_err(Status::invalid_argument)?;
+        if schema.uid != req.uid {
+            return Err(Status::invalid_argument(
+                "uid in schema_json must match request uid",
+            ));
+        }
+        let schema_json = serde_json::to_string(&schema)
+            .map_err(|e| Status::internal(format!("serialize dashboard: {e}")))?;
+        match self
+            ._state
+            .storage
+            .update_soc_dashboard(
+                &req.tenant_id,
+                &req.uid,
+                &schema.title,
+                i64::from(schema.schema_version),
+                &schema_json,
+            )
+            .await
+        {
+            Ok(Some(record)) => Ok(Response::new(UpdateSocDashboardResponse {
+                dashboard: Some(soc_dashboard_to_proto(record)),
+            })),
+            Ok(None) => Err(Status::not_found("Dashboard not found")),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
+
+    async fn delete_soc_dashboard(
+        &self,
+        request: Request<DeleteSocDashboardRequest>,
+    ) -> Result<Response<DeleteSocDashboardResponse>, Status> {
+        let req = request.into_inner();
+        match self
+            ._state
+            .storage
+            .delete_soc_dashboard(&req.tenant_id, &req.uid)
+            .await
+        {
+            Ok(success) => Ok(Response::new(DeleteSocDashboardResponse { success })),
+            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+        }
+    }
 }
 
 fn contact_point_to_proto(cp: aegis_api::models::ContactPointRecord) -> ContactPointItem {
@@ -1233,6 +1364,19 @@ fn notification_policy_to_proto(
         repeat_interval_secs: p.repeat_interval_secs.unwrap_or(0),
         created_at: p.created_at.to_rfc3339(),
         updated_at: p.updated_at.to_rfc3339(),
+    }
+}
+
+fn soc_dashboard_to_proto(d: aegis_api::models::SocDashboardRecord) -> SocDashboardItem {
+    SocDashboardItem {
+        id: d.id,
+        tenant_id: d.tenant_id,
+        uid: d.uid,
+        title: d.title,
+        schema_version: d.schema_version,
+        schema_json: d.schema_json,
+        created_at: d.created_at.to_rfc3339(),
+        updated_at: d.updated_at.to_rfc3339(),
     }
 }
 

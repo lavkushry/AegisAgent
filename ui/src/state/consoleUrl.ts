@@ -12,6 +12,7 @@ export const CONSOLE_VIEWS = [
   "mcp",
   "receipts",
   "analytics",
+  "dashboard-editor",
   "settings",
 ] as const;
 

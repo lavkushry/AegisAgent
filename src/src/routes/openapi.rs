@@ -69,6 +69,11 @@ use utoipa::OpenApi;
         list_silences_api,
         create_silence_api,
         delete_silence_api,
+        list_soc_dashboards_api,
+        get_soc_dashboard_api,
+        create_soc_dashboard_api,
+        update_soc_dashboard_api,
+        delete_soc_dashboard_api,
         create_tenant_api,
         get_tenant_api,
         delete_tenant_api,
@@ -1398,6 +1403,46 @@ fn create_silence_api() {}
     responses((status = 200, description = "Silence deleted"))
 )]
 fn delete_silence_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/dashboards",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "List tenant dashboards"))
+)]
+fn list_soc_dashboards_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/dashboards/{uid}",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Get dashboard by uid"))
+)]
+fn get_soc_dashboard_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/soc/dashboards",
+    security(("bearer_auth" = [])),
+    responses((status = 201, description = "Dashboard created"))
+)]
+fn create_soc_dashboard_api() {}
+
+#[utoipa::path(
+    put,
+    path = "/v1/soc/dashboards/{uid}",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Dashboard updated"))
+)]
+fn update_soc_dashboard_api() {}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/soc/dashboards/{uid}",
+    security(("bearer_auth" = [])),
+    responses((status = 204, description = "Dashboard deleted"))
+)]
+fn delete_soc_dashboard_api() {}
 
 #[utoipa::path(
     post,
