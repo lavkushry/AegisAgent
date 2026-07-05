@@ -3,6 +3,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAppStore } from "../app/store";
+import { aqlAutocomplete } from "@/datasources/aql/autocomplete";
+import { aqlToCompiledRequest } from "@/datasources/aql/compile";
+import { AqlCompileError, AqlParseError } from "@/datasources/aql/types";
 import { fieldsForEntity } from "@/datasources/fieldCatalog";
 import { ReceiptDatasource } from "@/datasources/receipt";
 import { SocQueryDatasource } from "@/datasources/socQuery";
@@ -65,7 +68,22 @@ export default function ExploreTab() {
   }, []);
 
   const fieldDescriptors = useMemo(() => fieldsForEntity(entity), [entity]);
-  const activeFilters = useMemo(() => parsedAqlChips(debouncedQuery), [debouncedQuery]);
+  const activeFilters = useMemo(() => parsedAqlChips(debouncedQuery, entity), [debouncedQuery, entity]);
+  const queryIssue = useMemo(() => {
+    try {
+      if (debouncedQuery.trim()) aqlToCompiledRequest(debouncedQuery, entity);
+      return null;
+    } catch (error) {
+      if (error instanceof AqlParseError || error instanceof AqlCompileError) {
+        return error.message;
+      }
+      return "Invalid AQL query";
+    }
+  }, [debouncedQuery, entity]);
+  const suggestions = useMemo(
+    () => aqlAutocomplete(searchQuery, searchQuery.length, fieldDescriptors),
+    [searchQuery, fieldDescriptors],
+  );
 
   const { data: decisionFrame, isLoading, error, isFetching } = useQuery({
     queryKey: ["explore", entity, gatewayUrl, activeTenant, authEpoch, debouncedQuery, timeRange],
@@ -165,10 +183,19 @@ export default function ExploreTab() {
               placeholder="AQL: agent_id:coding-agent AND decision:deny AND tool:github"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              list="explore-aql-suggestions"
               className="w-full bg-[var(--surface-panel)] border border-[var(--border-default)] rounded-lg pl-10 pr-4 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-active)] focus:outline-none"
               aria-label="Explore AQL query"
+              aria-invalid={queryIssue ? true : undefined}
             />
             <Search className="absolute left-3 top-2.5 text-[var(--text-muted)]" size={16} />
+            <datalist id="explore-aql-suggestions">
+              {suggestions.map((item) => (
+                <option key={`${item.kind}:${item.label}`} value={item.insertText}>
+                  {item.detail ? `${item.label} (${item.detail})` : item.label}
+                </option>
+              ))}
+            </datalist>
           </div>
           <button
             type="submit"
@@ -177,6 +204,11 @@ export default function ExploreTab() {
             Search
           </button>
         </div>
+        {queryIssue ? (
+          <p className="text-xs font-mono" style={{ color: "var(--state-failed)" }} role="alert">
+            {queryIssue}
+          </p>
+        ) : null}
         {activeFilters.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2 text-[10px]">
             <span className="text-[var(--text-muted)] uppercase tracking-wider font-semibold">Active filters</span>

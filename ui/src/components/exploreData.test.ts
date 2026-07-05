@@ -61,7 +61,7 @@ describe("Explore datasource helpers", () => {
   });
 
   it("renders parsed AQL chips for inline filter visibility", () => {
-    expect(parsedAqlChips("agent_id:agent-1 decision:deny hash")).toEqual([
+    expect(parsedAqlChips("agent_id:agent-1 AND decision:deny AND hash")).toEqual([
       { field: "agent_id", value: "agent-1" },
       { field: "decision", value: "deny" },
       { field: "q", value: "hash" },

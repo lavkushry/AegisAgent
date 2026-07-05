@@ -1,3 +1,4 @@
+import { aqlChipsFromNode } from "@/datasources/aql/chips";
 import { parseAql } from "@/datasources/aql/parse";
 import { frameRows } from "../datasources/frame";
 import type { DataFrame, EntityKind, QueryRequest } from "../datasources/types";
@@ -64,27 +65,11 @@ export function appendAqlFilter(query: string, field: string, value: string): st
   return `${trimmed} AND ${clause}`;
 }
 
-export function parsedAqlChips(input: string): Array<{ field: string; value: string }> {
-  const parsed = parseAql(input);
-  const chips: Array<{ field: string; value: string }> = [];
-  const push = (field: string, value: string | undefined) => {
-    if (value) chips.push({ field, value });
-  };
-  push("event_type", parsed.eventType);
-  push("severity", parsed.severity);
-  push("source_component", parsed.sourceComponent);
-  push("agent_id", parsed.agentId);
-  push("decision", parsed.decision);
-  push("source_trust", parsed.sourceTrust);
-  push("tool", parsed.skill);
-  push("action", parsed.action);
-  push("resource", parsed.resource);
-  push("run_id", parsed.runId);
-  push("trace_id", parsed.traceId);
-  push("action_hash", parsed.actionHash);
-  push("receipt_hash", parsed.receiptHash);
-  if (parsed.q) chips.push({ field: "q", value: parsed.q });
-  return chips;
+export function parsedAqlChips(
+  input: string,
+  entity: ExploreEntity = "decision",
+): Array<{ field: string; value: string }> {
+  return aqlChipsFromNode(parseAql(input, { entity }).filter);
 }
 
 export function exploreReceiptId(row: ExploreEventRecord): string | undefined {
