@@ -1,0 +1,17 @@
+[package]
+name = "aegis-tool-broker-connectors"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "AegisAgent Phase 6.3 initial connectors (GitHub mock/real, HTTP, scoped filesystem, scoped cage shell) plus the broker execution engine: writes gated behind hash-bound approvals, credentials resolved fail-closed and never exported to the cage, only sanitized output ever leaves."
+
+[dependencies]
+aegis-tool-broker-core = { path = "../tool-broker-core" }
+async-trait = "0.1.89"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"
