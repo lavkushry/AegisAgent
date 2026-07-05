@@ -115,6 +115,68 @@ describe("GatewayEntityDatasource", () => {
     expect(frame.fields.find((field) => field.name === "total_decisions")?.values[0]).toBe(42);
   });
 
+  it("derives untrusted_source_count from tenant stats trust breakdown", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          total_decisions: 42,
+          trust_level_breakdown: [
+            { trust_level: "trusted_internal_signed", count: 30 },
+            { trust_level: "untrusted_external", count: 4 },
+            { trust_level: "malicious_suspected", count: 2 },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const datasource = new GatewayEntityDatasource({
+      gatewayUrl: "http://gateway.test",
+      bearerToken: "token",
+      tenantId: "tenant-a",
+    });
+
+    const frame = await datasource.query({
+      snapshot: "tenant-stats",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+    });
+
+    expect(frame.fields.find((field) => field.name === "untrusted_source_count")?.values[0]).toBe(6);
+  });
+
+  it("expands trust breakdown snapshots into row frames", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          trust_level_breakdown: [
+            { trust_level: "trusted_internal_signed", count: 10 },
+            { trust_level: "unknown", count: 1 },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const datasource = new GatewayEntityDatasource({
+      gatewayUrl: "http://gateway.test",
+      bearerToken: "token",
+      tenantId: "tenant-a",
+    });
+
+    const frame = await datasource.query({
+      snapshot: "trust-breakdown",
+      timeRange: { from: "now-24h", to: "now" },
+      variables: {},
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toContain("/v1/stats");
+    expect(frame.length).toBe(2);
+    expect(frame.fields.find((field) => field.name === "trust_level")?.values[0]).toBe(
+      "trusted_internal_signed",
+    );
+  });
+
   it("fetches agent scoreboard snapshots as row frames", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify([{ agent_id: "agent-1", avg_risk_score: 0.9 }]), {

@@ -50,7 +50,8 @@ export interface PanelDefinition<TOptions = Record<string, unknown>> {
   readonly limit?: number;
   readonly query?: string;
   readonly search?: string;
-  readonly aggregate?: "count_over_time";
+  readonly aggregate?: "count_over_time" | "count_by";
+  readonly groupBy?: "agent_id" | "decision" | "source_trust" | "tool" | "action";
   readonly interval?: string;
   readonly options?: TOptions;
   readonly drilldowns?: ReadonlyArray<DrilldownLink>;

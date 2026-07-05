@@ -24,11 +24,36 @@ const ENTITY_PATHS: Record<Exclude<EntityKind, "ase">, string> = {
   rule: "/v1/detection_rules",
 };
 
-const SNAPSHOT_PATHS: Record<GatewaySnapshot, string> = {
+const SNAPSHOT_PATHS: Record<Exclude<GatewaySnapshot, "trust-breakdown">, string> = {
   "tenant-stats": "/v1/stats",
   "soc-summary": "/v1/soc/summary",
   "agent-scoreboard": "/v1/agents/risk-scoreboard",
 };
+
+const UNTRUSTED_TRUST_LEVELS = new Set(["untrusted_external", "malicious_suspected"]);
+
+function untrustedSourceCount(breakdown: unknown): number {
+  if (!Array.isArray(breakdown)) return 0;
+  return breakdown.reduce((sum, row) => {
+    if (!row || typeof row !== "object") return sum;
+    const trustLevel = String((row as Record<string, unknown>).trust_level ?? "");
+    const count = Number((row as Record<string, unknown>).count ?? 0);
+    return UNTRUSTED_TRUST_LEVELS.has(trustLevel) ? sum + count : sum;
+  }, 0);
+}
+
+function trustBreakdownRows(breakdown: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(breakdown)) return [];
+  return breakdown
+    .filter((row) => row && typeof row === "object")
+    .map((row) => {
+      const record = row as Record<string, unknown>;
+      return {
+        trust_level: record.trust_level ?? "unknown",
+        count: record.count ?? 0,
+      };
+    });
+}
 
 function withSignal(opts: FetchOptions, signal?: AbortSignal): FetchOptions {
   return signal ? { ...opts, signal } : opts;
@@ -94,7 +119,15 @@ export class GatewayEntityDatasource implements Datasource {
 
   private async querySnapshot(req: QueryRequest): Promise<DataFrame> {
     const snapshot = req.snapshot!;
-    const path = SNAPSHOT_PATHS[snapshot];
+    if (snapshot === "trust-breakdown") {
+      const stats = await fetchFromGateway<Record<string, unknown>>(
+        withSignal(this.opts, req.signal),
+        SNAPSHOT_PATHS["tenant-stats"],
+      );
+      return rowsToFrame(trustBreakdownRows(stats?.trust_level_breakdown), ["trust_level", "count"]);
+    }
+
+    const path = SNAPSHOT_PATHS[snapshot as Exclude<GatewaySnapshot, "trust-breakdown">];
     const data = await fetchFromGateway<Record<string, unknown> | Array<Record<string, unknown>>>(
       withSignal(this.opts, req.signal),
       path,
@@ -103,6 +136,12 @@ export class GatewayEntityDatasource implements Datasource {
       return rowsToFrame(Array.isArray(data) ? data : []);
     }
     const obj = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+    if (snapshot === "tenant-stats") {
+      return objectToSingleRowFrame({
+        ...obj,
+        untrusted_source_count: untrustedSourceCount(obj.trust_level_breakdown),
+      });
+    }
     return objectToSingleRowFrame(obj);
   }
 

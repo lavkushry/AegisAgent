@@ -22,23 +22,32 @@ describe("overview stat and status panels", () => {
     expect(html).toContain("42");
   });
 
-  it("maps receipt_chain_verified booleans to explicit status labels", () => {
-    const verified = objectToSingleRowFrame({ receipt_chain_verified: true });
-    const unverified = objectToSingleRowFrame({ receipt_chain_verified: false });
+  it("maps explicit receipt verify states and defaults missing data to unknown", () => {
+    const verified = objectToSingleRowFrame({ receipt_verify_state: "verified" });
+    const broken = objectToSingleRowFrame({ receipt_verify_state: "broken" });
+    const unknown = objectToSingleRowFrame({});
     const definition: PanelDefinition = {
       id: "status-test",
       type: "status",
       title: "Receipt chain",
       datasourceId: "gateway-entity",
-      options: { field: "receipt_chain_verified", healthyValues: ["true", "verified"] },
+      options: {
+        field: "receipt_verify_state",
+        healthyValues: ["verified"],
+        failedValues: ["broken", "tampered", "failed"],
+      },
     };
     const verifiedHtml = renderToStaticMarkup(
       <StatusPanel definition={definition} data={verified} timeRange={{ from: "now-24h", to: "now" }} variables={{}} onDrilldown={() => {}} />,
     );
-    const unverifiedHtml = renderToStaticMarkup(
-      <StatusPanel definition={definition} data={unverified} timeRange={{ from: "now-24h", to: "now" }} variables={{}} onDrilldown={() => {}} />,
+    const brokenHtml = renderToStaticMarkup(
+      <StatusPanel definition={definition} data={broken} timeRange={{ from: "now-24h", to: "now" }} variables={{}} onDrilldown={() => {}} />,
+    );
+    const unknownHtml = renderToStaticMarkup(
+      <StatusPanel definition={definition} data={unknown} timeRange={{ from: "now-24h", to: "now" }} variables={{}} onDrilldown={() => {}} />,
     );
     expect(verifiedHtml.toLowerCase()).toContain("verified");
-    expect(unverifiedHtml.toLowerCase()).toContain("unverified");
+    expect(brokenHtml.toLowerCase()).toContain("broken");
+    expect(unknownHtml.toLowerCase()).toContain("unknown");
   });
 });

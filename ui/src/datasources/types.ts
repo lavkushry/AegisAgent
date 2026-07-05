@@ -44,7 +44,11 @@ export type FieldFormat =
   | "raw";
 
 /** Single-object gateway reads surfaced as one-row DataFrames. */
-export type GatewaySnapshot = "tenant-stats" | "soc-summary" | "agent-scoreboard";
+export type GatewaySnapshot =
+  | "tenant-stats"
+  | "soc-summary"
+  | "agent-scoreboard"
+  | "trust-breakdown";
 
 /** Optional sub-path under an entity resource (detail, graph, manifest history, etc.). */
 export type GatewaySubResource = "detail" | "graph" | "narrate" | "manifest-history";
