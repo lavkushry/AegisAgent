@@ -249,15 +249,44 @@ fn authorize_mcp_allow_benchmark(c: &mut Criterion) {
         .await;
     });
 
+    let server_cache_key = routes::McpServerCache::cache_key(&tenant_id, "github-mcp");
+    let tool_cache_key = routes::McpToolCache::cache_key(&tenant_id, "github-mcp", "create_issue");
+
     let mut group = c.benchmark_group("authorize_mcp_action");
     group.sample_size(30);
 
+    // #1337: steady-state MCP authorize path with warm metadata caches.
     group.bench_function("allow_mcp_create_issue_cached", |b| {
         b.to_async(&rt).iter(|| {
             let state: Arc<routes::AppState> = state.clone();
             let headers = headers.clone();
             let request = warm_request.clone();
             async move {
+                let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
+                let response = routes::authorize_action_impl(
+                    state,
+                    headers,
+                    body,
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )
+                .await;
+                let _ = axum::response::IntoResponse::into_response(response);
+            }
+        });
+    });
+
+    // #1337: cold metadata caches — two indexed SQLite reads per call (server +
+    // tool), fetched concurrently on cache miss.
+    group.bench_function("allow_mcp_create_issue_cold", |b| {
+        b.to_async(&rt).iter(|| {
+            let state: Arc<routes::AppState> = state.clone();
+            let headers = headers.clone();
+            let request = warm_request.clone();
+            let server_cache_key = server_cache_key.clone();
+            let tool_cache_key = tool_cache_key.clone();
+            async move {
+                state.mcp_server_cache.invalidate(&server_cache_key);
+                state.mcp_tool_cache.invalidate(&tool_cache_key);
                 let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
                 let response = routes::authorize_action_impl(
                     state,

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Performance
+
+- **#1337: MCP authorize-path latency** — bounded LRU caches for MCP server/tool
+  metadata (`McpServerCache` / `McpToolCache`, env-tunable via
+  `AEGIS_MCP_*_CACHE_CAPACITY`), concurrent server+tool DB reads on cache miss,
+  criterion benchmarks (`authorize_mcp_action/{cached,cold}`), and
+  `docs/performance-baseline.md#mcp-authorize-path-overhead-1337` documenting
+  <0.2 ms cold-cache metadata overhead (well under the 5 ms target).
+
 ## [0.1.0-beta.1] - 2026-06-22
 
 ### Fixed
