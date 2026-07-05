@@ -114,7 +114,7 @@ These guarantees are the product. A PR that weakens any of them will not be merg
 
 ## Architecture rules
 
-All code changes must follow [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):
+All code changes must follow [`docs/architecture.md`](docs/architecture.md):
 
 - **Dependencies flow downward only** — `common` ← `api` ← `storage`/`policy` ← `soc` ← `src/`.
 - **`src/` handlers are thin**: parse → service call → respond. No business logic.

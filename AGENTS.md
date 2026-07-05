@@ -2,20 +2,20 @@
 
 AegisAgent uses path-scoped AI developer personas so automated agents can work safely on a security-sensitive codebase.
 
-> **MANDATORY:** All agents MUST read and follow [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing code.
+> **MANDATORY:** All agents MUST read and follow [`docs/architecture.md`](docs/architecture.md) before writing code.
 > It defines the Qdrant-inspired workspace layout, dependency flow rules, trait-based storage pattern, dual-protocol (REST + gRPC) conventions, and handler patterns.
 
 ---
 
 ## Current Context (June 2026)
 
-AegisAgent is the **integrity layer for AI agent actions** (Rust + SQLite + Python + Cedar). The codebase follows a **Qdrant-inspired layered architecture**: Cargo workspace with independent `lib/` crates (`aegis-common`, `aegis-api`, `aegis-storage`, `aegis-policy`, `aegis-soc`), a thin `src/` binary for route wiring, and **dual-protocol serving** (REST via Axum on port 8080 + gRPC via tonic on port 6334). Protobuf definitions in `lib/api/proto/` are the source of truth for all API types. See `docs/ARCHITECTURE.md` for the full patterns.
+AegisAgent is the **integrity layer for AI agent actions** (Rust + SQLite + Python + Cedar). The codebase follows a **Qdrant-inspired layered architecture**: Cargo workspace with independent `lib/` crates (`aegis-common`, `aegis-api`, `aegis-storage`, `aegis-policy`, `aegis-soc`), a thin `src/` binary for route wiring, and **dual-protocol serving** (REST via Axum on port 8080 + gRPC via tonic on port 6334). Protobuf definitions in `lib/api/proto/` are the source of truth for all API types. See `docs/architecture.md` for the full patterns.
 
 Active work is on the workspace restructuring. The defensive work is **approval integrity** (frozen-action `action_hash` + fail-closed SDK + expiry), **deterministic trust-provenance gating**, and **verifiable hash-chained receipts**. Motto: *make the approval trustworthy; trust the source, not the text.*
 
 ---
 
-## Architecture Rules (from docs/ARCHITECTURE.md)
+## Architecture Rules (from docs/architecture.md)
 
 ```
 Dependencies flow DOWNWARD only — never upward, never circular:
@@ -61,7 +61,7 @@ Defines system boundaries, crate structure, API routes, and documentation.
 
 - **Primary Directories:** `/docs`, `/`, `config/`, `.claude/`
 - **Key Responsibilities:**
-  - Keep `docs/ARCHITECTURE.md`, `README.md`, `CLAUDE.md`, `AGENTS.md` up to date.
+  - Keep `docs/architecture.md`, `README.md`, `CLAUDE.md`, `AGENTS.md` up to date.
   - Define crate boundaries in the workspace layout. Enforce the downward-only dependency rule.
   - Specify API contracts via protobuf definitions (`lib/api/proto/*.proto`) and REST model mirrors.
   - Maintain config schema (`config/config.yaml`) including `rest_port` and `grpc_port`.
@@ -92,7 +92,7 @@ Implements gateway logic, SDKs, and tests — always within the correct lib/ cra
   - Write unit tests inside each lib crate (`#[cfg(test)] mod tests`).
   - Write gRPC integration tests using `tonic::transport::Channel`.
 - **Rules of Conduct:**
-  - Follow `docs/ARCHITECTURE.md` patterns without exception.
+  - Follow `docs/architecture.md` patterns without exception.
   - Use TDD for functional changes.
   - Keep gateway local binding to `127.0.0.1` for security testing.
   - Parallelize independent DB reads with `tokio::join!` (performance rule).

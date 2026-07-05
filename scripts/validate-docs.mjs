@@ -19,6 +19,7 @@
  *
  * Exit code 0 = pass (warnings allowed), 1 = errors found.
  */
+import { execSync } from "node:child_process";
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve, relative } from "node:path";
 
@@ -72,7 +73,7 @@ const REQUIRED_DOCS = [
   "production-hardening.md", "AegisAgent_Debugging_Guide.md",
   "runbooks/index.md",
   // Level 6: maintainer
-  "Repo_Knowledge_Map.md", "Implementation_Status.md",
+  "architecture.md", "Repo_Knowledge_Map.md", "Implementation_Status.md",
   "AegisAgent_Diagram_Index.md",
   // onboarding personas
   "onboarding/For_New_Engineer.md", "onboarding/For_Security_Architect.md",
@@ -83,6 +84,26 @@ const REQUIRED_DOCS = [
 ];
 for (const f of REQUIRED_DOCS) {
   if (!existsSync(join(DOCS, f))) errors.push(`missing required doc: docs/${f}`);
+}
+
+// Only the lowercase canonical code-patterns doc may be tracked. The uppercase
+// path collides on case-insensitive filesystems and leaves git status permanently dirty.
+try {
+  const trackedArchitecture = execSync(
+    "git ls-files docs/ARCHITECTURE.md docs/architecture.md",
+    { cwd: ROOT, encoding: "utf8" },
+  )
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  if (trackedArchitecture.includes("docs/ARCHITECTURE.md")) {
+    errors.push("docs/ARCHITECTURE.md must not be tracked; keep docs/architecture.md only");
+  }
+  if (!trackedArchitecture.includes("docs/architecture.md")) {
+    errors.push("missing tracked doc: docs/architecture.md");
+  }
+} catch (e) {
+  errors.push(`architecture doc tracking check failed: ${e.message}`);
 }
 
 // Docs owned by this system → broken links here are errors, not warnings.
@@ -222,6 +243,11 @@ const HYGIENE_RULES = [
     pattern: /docker\s+compose(?:\s+-f\s+\S+)?\s+up\s+--build(?!\s+-d\b)/,
     hint: "use `docker compose up --build -d` before follow-on seed/demo commands",
   },
+  {
+    name: "uppercase architecture doc path",
+    pattern: /docs\/ARCHITECTURE\.md\b/,
+    hint: "use docs/architecture.md; uppercase tracking collides on case-insensitive filesystems",
+  },
 ];
 
 function isHygieneExempt(relFile, line) {
@@ -241,6 +267,12 @@ for (const file of HYGIENE_SCAN_FILES) {
   lines.forEach((line, idx) => {
     if (isHygieneExempt(relFile, line)) return;
     for (const rule of HYGIENE_RULES) {
+      if (
+        relFile === "scripts/validate-docs.mjs" &&
+        rule.name === "uppercase architecture doc path"
+      ) {
+        continue;
+      }
       if (rule.pattern.test(line)) {
         errors.push(
           `${rule.name} in ${relFile}:${idx + 1}: ${line.trim()} (${rule.hint})`
