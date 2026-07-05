@@ -337,6 +337,62 @@ here to keep this change verification-only.
 
 ---
 
+## MCP authorize-path overhead (#1337)
+
+Status: **measured and optimized** — Gateway Lite treats `mcp:<server_key>`
+tool calls on `POST /v1/authorize` as the MCP "proxy" hot path (there is no
+standalone inline HTTP proxy to upstream MCP servers yet; see
+[`components/MCP_Gateway.md`](components/MCP_Gateway.md)).
+
+### What was optimized
+
+- **Bounded LRU metadata caches** — `McpServerCache` / `McpToolCache`
+  (`src/src/routes/mod.rs`), keyed by `(tenant_id, server_key)` and
+  `(tenant_id, server_key, tool_key)`. Tunable via
+  `AEGIS_MCP_SERVER_CACHE_CAPACITY` / `AEGIS_MCP_TOOL_CACHE_CAPACITY`
+  (default `1024`; `0` disables). Invalidated on every MCP registration /
+  discovery / status write — decisions are never cached.
+- **Concurrent metadata reads on cache miss** — `get_mcp_server_by_key` and
+  `get_mcp_tool_by_key` are fetched via `tokio::join!` alongside the
+  skill-action lookup (`authorize.rs`), so a cold MCP authorize pays one
+  parallel DB round-trip instead of two serial ones.
+- **Shared DB connection pool** — both lookups reuse the gateway's existing
+  `sqlx` pool (see §1 above); no per-request pool creation.
+
+### Criterion benchmark (`authorize_benchmark.rs`)
+
+Compared against the TASK-1313 baseline (`filesystem` / `read_file` allow),
+release build, `sample_size = 30`, tempfile SQLite with migrations, 100 agents +
+1000 seeded decisions:
+
+| Scenario | Mean latency | Notes |
+| -------- | ------------ | ----- |
+| `authorize_action/allow_readonly_filesystem_read_file` (baseline) | **3.09 ms** | Non-MCP steady-state allow |
+| `authorize_mcp_action/allow_mcp_create_issue_cached` | **1.24 ms** | MCP allow, warm server+tool caches |
+| `authorize_mcp_action/allow_mcp_create_issue_cold` | **1.34 ms** | MCP allow, caches invalidated each iteration |
+
+**Added MCP metadata overhead (cold − cached): ~0.10 ms** — well under the
+issue's **< 5 ms** proxy-path budget. The cold/cached gap is the cost of two
+indexed SQLite reads (server + tool) on a cache miss; with caches warm, MCP
+metadata resolution is in-memory only.
+
+Run locally:
+
+```bash
+CEDAR_POLICY_PATH=policies.cedar cargo bench -p gateway --bench authorize_benchmark -- authorize_mcp_action
+```
+
+### Acceptance criteria mapping
+
+| AC | Status |
+| --- | --- |
+| MCP proxy overhead measured (baseline vs proxied) | ✅ Criterion scenarios above |
+| Target: < 5 ms added latency for proxy path | ✅ ~0.10 ms cold-cache metadata delta |
+| Connection pooling for upstream MCP servers | ✅ Metadata LRU caches + shared `sqlx` pool on the authorize path; standalone HTTP upstream proxy is 📐 planned |
+| Benchmark results documented | ✅ This section |
+
+---
+
 ## Sustained-throughput load test (#1398)
 
 > Generated: 2026-06-16

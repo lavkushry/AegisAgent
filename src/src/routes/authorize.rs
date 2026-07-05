@@ -696,7 +696,9 @@ pub async fn authorize_action_impl(
         .as_ref()
         .and_then(|key| state.mcp_tool_cache.get(key));
 
-    let (skill_action_result, mcp_server_result) = tokio::join!(
+    // #1337: on an MCP authorize call, fetch server + tool metadata concurrently
+    // when either cache is cold — same pattern as the skill-action join above.
+    let (skill_action_result, mcp_server_result, mcp_tool_result) = tokio::join!(
         async {
             if cached_action_meta.is_some() {
                 return Ok(None);
@@ -718,6 +720,17 @@ pub async fn authorize_action_impl(
                         .await
                 }
                 None => Ok(None),
+            }
+        },
+        async {
+            match mcp_server_key.as_deref() {
+                Some(server_key) if cached_mcp_tool.is_none() => {
+                    state
+                        .storage
+                        .get_mcp_tool_by_key(&tenant_id, server_key, &normalized_action)
+                        .await
+                }
+                _ => Ok(None),
             }
         }
     );
@@ -835,14 +848,10 @@ pub async fn authorize_action_impl(
             }
         }
 
-        // Get the tool record, checking the cache first
+        // Tool record: cache hit, or the concurrent fetch started above.
         let mcp_tool = match cached_mcp_tool {
             Some(t) => Some(t),
-            None => match state
-                .storage
-                .get_mcp_tool_by_key(&tenant_id, server_key, &normalized_action)
-                .await
-            {
+            None => match mcp_tool_result {
                 Ok(Some(tool)) => {
                     if let Some(ref key) = mcp_tool_cache_key {
                         state.mcp_tool_cache.insert(key.clone(), tool.clone());
@@ -6283,6 +6292,100 @@ mod tests {
         assert_eq!(disabled.get(&k1), None);
     }
 
+    #[test]
+    fn mcp_server_cache_hit_evict_invalidate_and_disabled() {
+        let now = Utc::now();
+        let record = |status: &str| McpServerRecord {
+            id: "srv-1".to_string(),
+            tenant_id: "t1".to_string(),
+            server_key: "github-mcp".to_string(),
+            name: "GitHub".to_string(),
+            owner_team: None,
+            transport: "http".to_string(),
+            source: None,
+            trust_level: "trusted_internal_signed".to_string(),
+            endpoint: "http://127.0.0.1:9001/mcp".to_string(),
+            version: None,
+            status: status.to_string(),
+            manifest_hash: String::new(),
+            last_discovery_at: None,
+            inspection_enabled: false,
+            created_at: now,
+        };
+        let cache = McpServerCache::new(2);
+        let k1 = McpServerCache::cache_key("t1", "srv-a");
+        let k2 = McpServerCache::cache_key("t1", "srv-b");
+        let k3 = McpServerCache::cache_key("t1", "srv-c");
+
+        cache.insert(k1.clone(), record("active"));
+        assert_eq!(cache.get(&k1).map(|r| r.status), Some("active".to_string()));
+        assert!(cache
+            .get(&McpServerCache::cache_key("t2", "srv-a"))
+            .is_none());
+
+        cache.insert(k2.clone(), record("active"));
+        let _ = cache.get(&k1);
+        cache.insert(k3.clone(), record("quarantined"));
+        assert!(cache.get(&k2).is_none());
+        assert_eq!(
+            cache.get(&k3).map(|r| r.status),
+            Some("quarantined".to_string())
+        );
+
+        cache.invalidate(&k1);
+        assert!(cache.get(&k1).is_none());
+
+        let disabled = McpServerCache::new(0);
+        disabled.insert(k1.clone(), record("active"));
+        assert!(disabled.get(&k1).is_none());
+    }
+
+    #[test]
+    fn mcp_tool_cache_hit_evict_invalidate_and_disabled() {
+        let now = Utc::now();
+        let record = |status: &str| McpToolRecord {
+            id: "tool-1".to_string(),
+            tenant_id: "t1".to_string(),
+            server_id: "srv-1".to_string(),
+            tool_key: "create_issue".to_string(),
+            name: "Create issue".to_string(),
+            description: None,
+            input_schema: None,
+            risk: "medium".to_string(),
+            mutates_state: false,
+            approval_required: false,
+            status: status.to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+        let cache = McpToolCache::new(2);
+        let k1 = McpToolCache::cache_key("t1", "github-mcp", "create_issue");
+        let k2 = McpToolCache::cache_key("t1", "github-mcp", "merge_pr");
+        let k3 = McpToolCache::cache_key("t1", "github-mcp", "close_issue");
+
+        cache.insert(k1.clone(), record("approved"));
+        assert_eq!(
+            cache.get(&k1).map(|r| r.status),
+            Some("approved".to_string())
+        );
+
+        cache.insert(k2.clone(), record("approved"));
+        let _ = cache.get(&k1);
+        cache.insert(k3.clone(), record("pending"));
+        assert!(cache.get(&k2).is_none());
+        assert_eq!(
+            cache.get(&k3).map(|r| r.status),
+            Some("pending".to_string())
+        );
+
+        cache.invalidate(&k1);
+        assert!(cache.get(&k1).is_none());
+
+        let disabled = McpToolCache::new(0);
+        disabled.insert(k1.clone(), record("approved"));
+        assert!(disabled.get(&k1).is_none());
+    }
+
     /// #1510: the agent-tool-permission check and the idempotency lookup now
     /// run concurrently via `tokio::join!`. A permission-denied call must
     /// still return FORBIDDEN immediately — and must not write any decision
@@ -6342,11 +6445,12 @@ mod tests {
         .is_none());
     }
 
-    /// #1510: the skill-action lookup (on a cache miss) and the MCP-server
-    /// lookup now run concurrently via `tokio::join!`. A quarantined MCP
-    /// server must still deny the call even when the skill-action cache is
-    /// cold for this exact (tenant, tool, action) — exercising both joined
-    /// futures together, not just the MCP-server one in isolation.
+    /// #1510 / #1337: the skill-action lookup (on a cache miss), the MCP-server
+    /// lookup, and the MCP-tool lookup run concurrently via `tokio::join!`. A
+    /// quarantined MCP server must still deny the call even when the
+    /// skill-action cache is cold for this exact (tenant, tool, action) —
+    /// exercising the joined futures together, not just the MCP-server one in
+    /// isolation.
     #[tokio::test]
     async fn authorize_denies_mcp_call_when_server_quarantined_and_skill_cache_cold() {
         let (state, tenant_id, agent_token) = setup_state("mcp_quarantine_concurrent_skill").await;
