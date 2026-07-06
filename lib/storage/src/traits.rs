@@ -849,6 +849,12 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         limit: i64,
     ) -> Result<Vec<SocAlertRecord>, AegisError>;
+    async fn list_policy_recommendations(
+        &self,
+        tenant_id: &str,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<PolicyRecommendationRecord>, AegisError>;
     async fn get_incident_by_id(
         &self,
         tenant_id: &str,

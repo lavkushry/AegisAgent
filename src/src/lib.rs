@@ -28,6 +28,7 @@ pub use aegis_soc::ingest;
 pub use aegis_soc::mcp_inspect;
 pub use aegis_soc::narrate;
 pub use aegis_soc::notify;
+pub use aegis_soc::policy_advisor;
 pub use aegis_soc::qdrant;
 pub use aegis_soc::respond;
 pub use aegis_soc::rule_dsl;

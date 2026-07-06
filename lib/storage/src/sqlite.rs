@@ -1452,6 +1452,17 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_policy_recommendations(
+        &self,
+        tenant_id: &str,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<PolicyRecommendationRecord>, AegisError> {
+        db::list_policy_recommendations(&self.pool, tenant_id, status, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_incident_by_id(
         &self,
         tenant_id: &str,
