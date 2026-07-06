@@ -1421,6 +1421,37 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn get_soc_alert_by_id(
+        &self,
+        tenant_id: &str,
+        alert_id: &str,
+    ) -> Result<Option<SocAlertRecord>, AegisError> {
+        db::get_soc_alert_by_id(&self.pool, tenant_id, alert_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn set_soc_alert_triage_recommendation(
+        &self,
+        tenant_id: &str,
+        alert_id: &str,
+        triage_json: &str,
+    ) -> Result<bool, AegisError> {
+        db::set_soc_alert_triage_recommendation(&self.pool, tenant_id, alert_id, triage_json)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_soc_alerts_needing_triage(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+    ) -> Result<Vec<SocAlertRecord>, AegisError> {
+        db::list_soc_alerts_needing_triage(&self.pool, tenant_id, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_incident_by_id(
         &self,
         tenant_id: &str,

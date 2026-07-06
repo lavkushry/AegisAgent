@@ -1470,14 +1470,14 @@ async fn bootstrap_legacy_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Stores ids/summaries/hashes only — never raw payloads or secrets.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS soc_alerts (
-            id              TEXT PRIMARY KEY,
-            tenant_id       TEXT NOT NULL,
-            rule            TEXT NOT NULL,
-            severity        TEXT NOT NULL,
-            agent_id        TEXT NOT NULL,
-            source_event_id TEXT NOT NULL,
-            summary         TEXT NOT NULL,
-            created_at      TEXT NOT NULL
+            id                    TEXT PRIMARY KEY,
+            tenant_id             TEXT NOT NULL,
+            rule                  TEXT NOT NULL,
+            severity              TEXT NOT NULL,
+            agent_id              TEXT NOT NULL,
+            source_event_id       TEXT NOT NULL,
+            summary               TEXT NOT NULL,
+            created_at            TEXT NOT NULL
         );",
     )
     .execute(pool)

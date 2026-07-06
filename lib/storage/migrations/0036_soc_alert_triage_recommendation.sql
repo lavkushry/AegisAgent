@@ -1,0 +1,2 @@
+-- #1393: advisory triage recommendations for SOC alerts (sandboxed agent output).
+ALTER TABLE soc_alerts ADD COLUMN triage_recommendation TEXT;

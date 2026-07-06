@@ -820,6 +820,7 @@ pub async fn inspect_mcp_response(
                     server_key, payload.tool_key, finding.category, finding.count
                 ),
                 created_at: now.clone(),
+                triage_recommendation: None,
             };
             if let Err(e) = state.storage.insert_soc_alert(&alert).await {
                 error!("Failed to persist MCP response inspection alert: {:?}", e);

@@ -7093,6 +7093,7 @@ mod tests {
                     source_event_id: Uuid::new_v4().to_string(),
                     summary: format!("Iso alert for {tid}"),
                     created_at: Utc::now().to_rfc3339(),
+                    triage_recommendation: None,
                 })
                 .await
                 .unwrap();

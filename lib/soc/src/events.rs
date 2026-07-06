@@ -280,12 +280,28 @@ async fn handle_alert(
         source_event_id: alert.source_event_id.clone(),
         summary: alert.summary.clone(),
         created_at: alert.occurred_at.clone(),
+        triage_recommendation: None,
     };
     if let Err(e) = db::insert_soc_alert(pool, &alert_record).await {
         error!(
             alert_id = %alert.alert_id,
             "Phase 5: failed to persist SOC alert: {:?}", e
         );
+    } else {
+        let sev = alert.severity.to_lowercase();
+        if sev == "high" || sev == "critical" {
+            let pool = pool.clone();
+            let record = alert_record.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::triage::triage_soc_alert(&pool, &record).await {
+                    warn!(
+                        alert_id = %record.id,
+                        "triage agent failed for new alert: {:?}",
+                        e
+                    );
+                }
+            });
+        }
     }
 }
 
