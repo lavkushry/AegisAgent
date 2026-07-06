@@ -10,6 +10,7 @@ pub mod narrate;
 pub mod notify;
 pub mod playbook;
 pub mod policy_advisor;
+pub mod prompt_injection;
 pub mod qdrant;
 pub mod query;
 pub mod respond;

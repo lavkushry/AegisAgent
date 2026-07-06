@@ -1229,6 +1229,7 @@ pub async fn authorize_action_impl(
                     redacted_fields: vec![],
                     schema_version: 1,
                     evidence: None,
+                    prompt_injection: None,
                 });
             }
             Err(e) => {
@@ -1389,6 +1390,7 @@ pub async fn authorize_action_impl(
                     redacted_fields: vec![],
                     schema_version: 1,
                     evidence: None,
+                    prompt_injection: None,
                 });
             }
             Ok(None) => {}
@@ -6140,6 +6142,7 @@ mod tests {
             redacted_fields: vec![],
             schema_version: 1,
             evidence: None,
+            prompt_injection: None,
         };
 
         sink.emit(event.clone());
@@ -7481,6 +7484,7 @@ mod tests {
             redacted_fields: vec![],
             schema_version: 1,
             evidence: None,
+            prompt_injection: None,
         });
         assert!(!state.events.has_capacity());
 

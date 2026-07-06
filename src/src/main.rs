@@ -2632,6 +2632,7 @@ mod tests {
             redacted_fields: vec![],
             schema_version: 1,
             evidence: None,
+            prompt_injection: None,
         };
         events_sink.emit(event);
 

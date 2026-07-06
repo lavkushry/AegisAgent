@@ -672,6 +672,7 @@ pub async fn report_leaked_agent_token(
         redacted_fields: vec![],
         schema_version: 1,
         evidence: None,
+        prompt_injection: None,
     });
 
     (

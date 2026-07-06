@@ -96,6 +96,10 @@ pub struct AseEvent {
     /// (e.g. lifecycle events); `Some` for `authorize_decision` events.
     #[serde(default)]
     pub evidence: Option<EventEvidence>,
+    /// #1396: prompt-injection scan metadata for `agent_input` events. Carries
+    /// pattern hit counts and composite score only — never raw input text.
+    #[serde(default)]
+    pub prompt_injection: Option<crate::prompt_injection::PromptInjectionScan>,
 }
 
 /// Non-blocking handle the authorize hot path holds to feed the SOC stream.
@@ -434,6 +438,20 @@ pub async fn drain(
             .await;
         }
 
+        // #1396: prompt-injection detection on ingested agent inputs (async
+        // drain only — never blocks authorize).
+        for alert in crate::prompt_injection::evaluate(&ev) {
+            handle_alert(
+                &alert,
+                sink.as_ref(),
+                &pool,
+                &webhook_export_client,
+                notify_enabled,
+                &metrics,
+            )
+            .await;
+        }
+
         // SOC-007 (#1190): per-agent behavioral baselining (rate anomaly +
         // first-use-of-tool). Runs after Phase 1 — out-of-band (Law 3).
         match baseline::evaluate(&pool, &ev).await {
@@ -664,6 +682,7 @@ mod tests {
             redacted_fields: vec![],
             schema_version: 1,
             evidence: None,
+            prompt_injection: None,
         }
     }
 

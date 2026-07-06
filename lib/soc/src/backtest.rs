@@ -47,6 +47,7 @@ pub fn decision_to_ase_event(decision: &DecisionRecord, tenant_id: &str) -> AseE
         redacted_fields: vec![],
         schema_version: 1,
         evidence: None,
+        prompt_injection: None,
     }
 }
 

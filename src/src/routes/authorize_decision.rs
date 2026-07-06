@@ -273,6 +273,7 @@ pub(crate) async fn write_decision_and_audit(
             root_trust_level: Some(root_trust_level.to_string()),
             ..Default::default()
         }),
+        prompt_injection: None,
     });
 
     Ok(composite_risk_score)
