@@ -56,6 +56,7 @@ use utoipa::OpenApi;
         narrate_incident_api,
         get_incident_evidence_pack_api,
         soc_summary_api,
+        list_policy_recommendations_api,
         soc_stream_api,
         soc_query_api,
         semantic_search_api,
@@ -205,6 +206,7 @@ use utoipa::OpenApi;
             TenantExport,
             SocAlertRecord,
             TriageRecommendation,
+            PolicyRecommendationRecord,
             SocIncidentRecord,
             SocSummary,
             SocQueryFilters,
@@ -1326,6 +1328,21 @@ fn get_incident_evidence_pack_api() {}
     )
 )]
 fn soc_summary_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/policy-recommendations",
+    security(("bearer_auth" = [])),
+    params(
+        ("status" = Option<String>, Query, description = "Filter by status (pending|approved|rejected)"),
+        ("limit" = Option<i64>, Query, description = "Max results (default 50)"),
+        ("refresh" = Option<bool>, Query, description = "Run policy advisor before listing")
+    ),
+    responses(
+        (status = 200, description = "Advisory Cedar policy recommendations", body = Vec<PolicyRecommendationRecord>)
+    )
+)]
+fn list_policy_recommendations_api() {}
 
 #[utoipa::path(
     post,
