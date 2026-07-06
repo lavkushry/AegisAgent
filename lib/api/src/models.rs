@@ -413,6 +413,22 @@ pub struct GrantToolPermissionRequest {
     pub tool_key: String,
 }
 
+/// A single agent-to-MCP-server permission binding (#1766).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
+pub struct AgentMcpServerPermission {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: String,
+    pub server_key: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Request body for `POST /v1/agents/:id/mcp-permissions` (#1766).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct GrantMcpServerPermissionRequest {
+    pub server_key: String,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow, ToSchema)]
 pub struct SkillRecord {

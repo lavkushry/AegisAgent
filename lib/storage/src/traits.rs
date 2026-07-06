@@ -276,6 +276,29 @@ pub trait StorageBackend: Send + Sync + 'static {
         agent_id: &str,
         tool_key: &str,
     ) -> Result<bool, AegisError>;
+    async fn grant_agent_mcp_server_permission(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<AgentMcpServerPermission, AegisError>;
+    async fn get_agent_mcp_server_permissions(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+    ) -> Result<Vec<AgentMcpServerPermission>, AegisError>;
+    async fn revoke_agent_mcp_server_permission(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<bool, AegisError>;
+    async fn agent_mcp_server_permission_status(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<bool, AegisError>;
 
     // Approvals
     async fn consume_approval(
