@@ -1467,6 +1467,107 @@ pub async fn close_incident(
 
 // ── SOC Phase 6: RCA Narrator ────────────────────────────────────────────────
 
+/// Query parameters for `GET /v1/incidents/:id/investigation` (#1392).
+#[derive(Debug, serde::Deserialize)]
+pub struct IncidentInvestigationQuery {
+    /// When true, regenerate the playbook even if one already exists.
+    pub refresh: Option<bool>,
+}
+
+/// GET /v1/incidents/:id/investigation — advisory investigation playbook (#1392).
+///
+/// Playbooks suggest analyst steps and evidence API entry points — never
+/// enforcement. Returns a persisted playbook or generates one on-demand.
+pub async fn get_incident_investigation(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(incident_id): Path<String>,
+    Query(params): Query<IncidentInvestigationQuery>,
+) -> impl IntoResponse {
+    let incident = match state
+        .storage
+        .get_incident_by_id(&tenant_id, &incident_id)
+        .await
+    {
+        Ok(Some(inc)) => inc,
+        Ok(None) => {
+            return StatusError::not_found("Incident not found").into_response();
+        }
+        Err(e) => {
+            error!("Failed to fetch incident for investigation: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    let playbook = if params.refresh == Some(true) {
+        match crate::investigation::generate_investigation_playbook(
+            state.storage.get_pool(),
+            &incident,
+            true,
+        )
+        .await
+        {
+            Ok(pb) => pb,
+            Err(e) => {
+                error!(
+                    "On-demand investigation failed for incident {}: {:?}",
+                    incident_id, e
+                );
+                return StatusError::internal("Investigation agent error").into_response();
+            }
+        }
+    } else {
+        match state
+            .storage
+            .get_investigation_playbook(&tenant_id, &incident_id)
+            .await
+        {
+            Ok(Some(pb)) => pb,
+            Ok(None) => {
+                match crate::investigation::generate_investigation_playbook(
+                    state.storage.get_pool(),
+                    &incident,
+                    false,
+                )
+                .await
+                {
+                    Ok(pb) => pb,
+                    Err(e) => {
+                        error!(
+                            "Investigation generation failed for incident {}: {:?}",
+                            incident_id, e
+                        );
+                        return StatusError::internal("Investigation agent error").into_response();
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch investigation playbook: {:?}", e);
+                return StatusError::internal("Database error").into_response();
+            }
+        }
+    };
+
+    let steps: serde_json::Value =
+        serde_json::from_str(&playbook.steps_json).unwrap_or_else(|_| serde_json::json!([]));
+    let evidence_hints: serde_json::Value = serde_json::from_str(&playbook.evidence_hints_json)
+        .unwrap_or_else(|_| serde_json::json!({}));
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "incident_id": playbook.incident_id,
+            "playbook_id": playbook.id,
+            "summary": playbook.summary,
+            "steps": steps,
+            "evidence_hints": evidence_hints,
+            "investigator_agent": playbook.investigator_agent,
+            "generated_at": playbook.generated_at,
+        })),
+    )
+        .into_response()
+}
+
 /// GET /v1/incidents/:id/narrate — on-demand RCA narrative for a closed incident.
 ///
 /// # LAW-2 compliance
@@ -2610,6 +2711,66 @@ mod tests {
             StatusCode::NOT_FOUND,
             "must not expose another tenant's incident"
         );
+    }
+
+    #[tokio::test]
+    async fn get_incident_investigation_returns_playbook_for_own_incident() {
+        let (state, tenant_id, _agent_token) = setup_state("investigation_own").await;
+
+        insert_test_incident(
+            state.storage.get_pool(),
+            &tenant_id,
+            "inc_inv_1",
+            "deny_storm",
+        )
+        .await;
+
+        let response = get_incident_investigation(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("inc_inv_1".to_string()),
+            Query(IncidentInvestigationQuery { refresh: None }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["incident_id"], "inc_inv_1");
+        assert_eq!(json["investigator_agent"], "template");
+        let steps = json["steps"].as_array().unwrap();
+        assert!(!steps.is_empty());
+        let summary = json["summary"].as_str().unwrap();
+        assert!(summary.contains("deny_storm"));
+    }
+
+    #[tokio::test]
+    async fn get_incident_investigation_returns_404_for_cross_tenant() {
+        let (state, tenant_id, _agent_token) = setup_state("investigation_isolation").await;
+
+        let other_tenant = "tenant_other_investigation";
+        register_tenant_helper(state.storage.as_ref(), other_tenant, "Other", "developer").await;
+        insert_test_incident(
+            state.storage.get_pool(),
+            other_tenant,
+            "inc_other_inv",
+            "deny_storm",
+        )
+        .await;
+
+        let response = get_incident_investigation(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Path("inc_other_inv".to_string()),
+            Query(IncidentInvestigationQuery { refresh: None }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     // ── get_incident_evidence_pack route tests (#1189) ─────────────────────────

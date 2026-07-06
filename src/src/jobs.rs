@@ -45,6 +45,12 @@ pub const DEFAULT_THREAT_HUNT_POLL_INTERVAL_SECS: u64 = 3600;
 /// Default batch size per tenant per threat hunt sweep tick.
 pub const DEFAULT_THREAT_HUNT_BATCH_LIMIT: i64 = 20;
 
+/// Default interval between investigation playbook sweeps (#1392).
+pub const DEFAULT_INVESTIGATION_POLL_INTERVAL_SECS: u64 = 3600;
+
+/// Default batch size per tenant per investigation sweep tick.
+pub const DEFAULT_INVESTIGATION_BATCH_LIMIT: i64 = 20;
+
 /// Default interval between leader-election renewal attempts (REL-003,
 /// #1149).
 pub const DEFAULT_LEADER_ELECTION_INTERVAL_SECS: u64 = 5;
@@ -226,6 +232,47 @@ pub async fn run_policy_advisor_job(
                     "policy advisor job failed for tenant {}: {:?}",
                     tenant_id, e
                 ),
+            }
+        }
+    }
+}
+
+/// #1392: periodic investigation playbook sweep for open incidents.
+/// Leader-gated like other maintenance jobs.
+pub async fn run_investigation_job(
+    pool: DbPool,
+    interval_secs: u64,
+    batch_limit: i64,
+    is_leader: Arc<AtomicBool>,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("investigation job: standby (not leader)");
+            continue;
+        }
+        let tenant_ids = match db::list_all_tenant_ids(&pool).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                error!("investigation job: failed to list tenants: {:?}", e);
+                continue;
+            }
+        };
+        for tenant_id in tenant_ids {
+            match crate::investigation::generate_investigations_for_tenant(
+                &pool,
+                &tenant_id,
+                batch_limit,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(n) => info!(
+                    "investigation job: created {} playbook(s) (tenant={})",
+                    n, tenant_id
+                ),
+                Err(e) => error!("investigation job failed for tenant {}: {:?}", tenant_id, e),
             }
         }
     }

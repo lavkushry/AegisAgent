@@ -1073,6 +1073,29 @@ pub struct PolicyRecommendationRecord {
     pub created_at: String,
 }
 
+/// Advisory investigation playbook for a SOC incident (#1392).
+/// Stored in `investigation_playbooks`; never triggers enforcement actions.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct InvestigationPlaybookRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub incident_id: String,
+    pub kind: String,
+    pub severity: String,
+    pub agent_id: String,
+    pub summary: String,
+    /// JSON array of ordered investigation steps (title, action, api_hint).
+    pub steps_json: String,
+    /// JSON object of suggested evidence API endpoints and graph entry points.
+    pub evidence_hints_json: String,
+    /// `active` — one playbook per incident.
+    pub status: String,
+    /// `template` (default) or `claude` when the optional LLM path is enabled.
+    pub investigator_agent: String,
+    pub generated_at: String,
+    pub created_at: String,
+}
+
 /// SOC Phase 5 — persisted correlation incident (multi-event pattern detected).
 /// `source_event_ids` is a JSON array of contributing event IDs. Stores identifiers
 /// and summary only — never payloads or secrets (redaction invariant). Tenant-scoped.

@@ -1474,6 +1474,16 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn get_investigation_playbook(
+        &self,
+        tenant_id: &str,
+        incident_id: &str,
+    ) -> Result<Option<InvestigationPlaybookRecord>, AegisError> {
+        db::get_investigation_playbook(&self.pool, tenant_id, incident_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_incident_by_id(
         &self,
         tenant_id: &str,

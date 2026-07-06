@@ -861,6 +861,11 @@ pub trait StorageBackend: Send + Sync + 'static {
         status: Option<&str>,
         limit: i64,
     ) -> Result<Vec<ThreatHuntFindingRecord>, AegisError>;
+    async fn get_investigation_playbook(
+        &self,
+        tenant_id: &str,
+        incident_id: &str,
+    ) -> Result<Option<InvestigationPlaybookRecord>, AegisError>;
     async fn get_incident_by_id(
         &self,
         tenant_id: &str,
