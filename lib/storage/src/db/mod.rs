@@ -567,6 +567,7 @@ pub mod runtime_events;
 pub mod sensors;
 pub mod soc;
 pub mod tenant;
+pub mod threat_hunt_findings;
 pub mod webhooks;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -594,6 +595,7 @@ pub use runtime_events::*;
 pub use sensors::*;
 pub use soc::*;
 pub use tenant::*;
+pub use threat_hunt_findings::*;
 pub use webhooks::*;
 
 /// The schema version this binary expects (DB-005, #1195).

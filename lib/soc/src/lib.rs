@@ -14,5 +14,6 @@ pub mod qdrant;
 pub mod query;
 pub mod respond;
 pub mod rule_dsl;
+pub mod threat_hunter;
 pub mod triage;
 pub mod webhook_export;
