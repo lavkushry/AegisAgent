@@ -274,6 +274,7 @@ pub(crate) async fn write_decision_and_audit(
             ..Default::default()
         }),
         prompt_injection: None,
+        rag_poisoning: None,
     });
 
     Ok(composite_risk_score)

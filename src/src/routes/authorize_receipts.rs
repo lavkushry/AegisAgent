@@ -290,5 +290,6 @@ pub(crate) async fn emit_tamper_attempt_receipt(
         schema_version: 1,
         evidence: None,
         prompt_injection: None,
+        rag_poisoning: None,
     });
 }

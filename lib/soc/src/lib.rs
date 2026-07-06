@@ -14,6 +14,7 @@ pub mod policy_advisor;
 pub mod prompt_injection;
 pub mod qdrant;
 pub mod query;
+pub mod rag_poisoning;
 pub mod respond;
 pub mod rule_dsl;
 pub mod threat_hunter;

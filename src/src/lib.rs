@@ -31,6 +31,7 @@ pub use aegis_soc::narrate;
 pub use aegis_soc::notify;
 pub use aegis_soc::policy_advisor;
 pub use aegis_soc::qdrant;
+pub use aegis_soc::rag_poisoning;
 pub use aegis_soc::respond;
 pub use aegis_soc::rule_dsl;
 pub use aegis_soc::threat_hunter;

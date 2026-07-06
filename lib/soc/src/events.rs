@@ -100,6 +100,10 @@ pub struct AseEvent {
     /// pattern hit counts and composite score only — never raw input text.
     #[serde(default)]
     pub prompt_injection: Option<crate::prompt_injection::PromptInjectionScan>,
+    /// #1397: RAG/memory poisoning scan metadata. Carries trust label and hit
+    /// counts only — never raw document or memory content.
+    #[serde(default)]
+    pub rag_poisoning: Option<crate::rag_poisoning::RagPoisoningScan>,
 }
 
 /// Non-blocking handle the authorize hot path holds to feed the SOC stream.
@@ -452,6 +456,19 @@ pub async fn drain(
             .await;
         }
 
+        // #1397: RAG/memory poisoning detection on ingested documents and writes.
+        for alert in crate::rag_poisoning::evaluate(&ev) {
+            handle_alert(
+                &alert,
+                sink.as_ref(),
+                &pool,
+                &webhook_export_client,
+                notify_enabled,
+                &metrics,
+            )
+            .await;
+        }
+
         // SOC-007 (#1190): per-agent behavioral baselining (rate anomaly +
         // first-use-of-tool). Runs after Phase 1 — out-of-band (Law 3).
         match baseline::evaluate(&pool, &ev).await {
@@ -683,6 +700,7 @@ mod tests {
             schema_version: 1,
             evidence: None,
             prompt_injection: None,
+            rag_poisoning: None,
         }
     }
 

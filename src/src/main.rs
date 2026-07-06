@@ -2656,6 +2656,7 @@ mod tests {
             schema_version: 1,
             evidence: None,
             prompt_injection: None,
+            rag_poisoning: None,
         };
         events_sink.emit(event);
 
