@@ -9,6 +9,7 @@ pub mod mcp_inspect;
 pub mod narrate;
 pub mod notify;
 pub mod playbook;
+pub mod policy_advisor;
 pub mod qdrant;
 pub mod query;
 pub mod respond;

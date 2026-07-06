@@ -1586,6 +1586,58 @@ pub async fn get_alert_triage(
     }
 }
 
+/// Query parameters for `GET /v1/soc/policy-recommendations` (#1394).
+#[derive(Debug, serde::Deserialize)]
+pub struct PolicyRecommendationsQuery {
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+    /// When true, run the sandboxed policy advisor before listing.
+    pub refresh: Option<bool>,
+}
+
+/// GET /v1/soc/policy-recommendations — list advisory Cedar policy drafts (#1394).
+///
+/// Recommendations are never auto-applied. Pass `?refresh=true` to trigger an
+/// on-demand analysis sweep for the tenant before returning results.
+pub async fn list_policy_recommendations(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Query(params): Query<PolicyRecommendationsQuery>,
+) -> impl IntoResponse {
+    if params.refresh == Some(true) {
+        let batch_limit = std::env::var("AEGIS_POLICY_ADVISOR_BATCH_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20);
+        if let Err(e) = crate::policy_advisor::generate_policy_recommendations_for_tenant(
+            state.storage.get_pool(),
+            &tenant_id,
+            batch_limit,
+        )
+        .await
+        {
+            error!(
+                "On-demand policy advisor failed for tenant {}: {:?}",
+                tenant_id, e
+            );
+            return StatusError::internal("Policy advisor error").into_response();
+        }
+    }
+
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    match state
+        .storage
+        .list_policy_recommendations(&tenant_id, params.status.as_deref(), limit)
+        .await
+    {
+        Ok(recs) => (StatusCode::OK, Json(json!({ "recommendations": recs }))).into_response(),
+        Err(e) => {
+            error!("Failed to list policy recommendations: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 /// `GET /v1/incidents/:id/evidence-pack` — per-incident compliance evidence
 /// export (SOC-006, #1189). Bundles the incident, the alerts and decisions
 /// that contributed to it, the receipts/audit events tied to those
@@ -2295,6 +2347,57 @@ mod tests {
         assert_eq!(rec.agent, "template");
         assert!(!rec.category_label.is_empty());
         assert!(!rec.recommended_action.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_policy_recommendations_returns_draft_after_refresh() {
+        let (state, tenant_id, _) = setup_state("policy_rec_route").await;
+        let pool = state.storage.get_pool();
+        let now_str = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+        aegis_storage::execute_query!(
+            pool,
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('ag_policy', ?, 'key_policy', 'tok_policy', 'Agent Policy', 'prod', 'high', 'active')",
+            &tenant_id
+        )
+        .unwrap();
+
+        for i in 0..3 {
+            aegis_storage::execute_query!(
+                pool,
+                "INSERT INTO decisions (id, tenant_id, agent_id, skill, action, input_json, decision, reason, created_at)
+                 VALUES (?, ?, 'ag_policy', 'github', 'merge', '{}', 'deny', 'forbidden', ?)",
+                format!("dec-policy-{i}"),
+                &tenant_id,
+                &now_str
+            )
+            .unwrap();
+        }
+
+        let response = list_policy_recommendations(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Query(PolicyRecommendationsQuery {
+                status: None,
+                limit: Some(10),
+                refresh: Some(true),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let recs = json["recommendations"].as_array().unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0]["tool_key"], "github");
+        assert_eq!(recs[0]["status"], "pending");
+        assert!(recs[0]["draft_cedar"]
+            .as_str()
+            .unwrap()
+            .contains("require_approval"));
     }
 
     #[tokio::test]

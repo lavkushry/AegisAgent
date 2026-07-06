@@ -1023,6 +1023,31 @@ pub struct TriageRecommendation {
     pub agent: String,
 }
 
+/// Advisory policy recommendation from denied-action analysis (#1394).
+/// Stored in `policy_recommendations`; never auto-applied to Cedar.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct PolicyRecommendationRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: String,
+    pub tool_key: String,
+    pub action_key: String,
+    pub deny_count: i64,
+    pub window_days: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_reason: Option<String>,
+    pub draft_cedar: String,
+    pub rationale: String,
+    /// `pending` | `approved` | `rejected`
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_note: Option<String>,
+    pub generated_at: String,
+    /// `template` (default) or `claude` when the optional LLM path is enabled.
+    pub advisor_agent: String,
+    pub created_at: String,
+}
+
 /// SOC Phase 5 — persisted correlation incident (multi-event pattern detected).
 /// `source_event_ids` is a JSON array of contributing event IDs. Stores identifiers
 /// and summary only — never payloads or secrets (redaction invariant). Tenant-scoped.

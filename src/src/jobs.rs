@@ -33,6 +33,12 @@ pub const DEFAULT_TRIAGE_POLL_INTERVAL_SECS: u64 = 300;
 /// Default batch size per tenant per triage sweep tick.
 pub const DEFAULT_TRIAGE_BATCH_LIMIT: i64 = 50;
 
+/// Default interval between policy advisor sweeps (#1394).
+pub const DEFAULT_POLICY_ADVISOR_POLL_INTERVAL_SECS: u64 = 3600;
+
+/// Default batch size per tenant per policy advisor sweep tick.
+pub const DEFAULT_POLICY_ADVISOR_BATCH_LIMIT: i64 = 20;
+
 /// Default interval between leader-election renewal attempts (REL-003,
 /// #1149).
 pub const DEFAULT_LEADER_ELECTION_INTERVAL_SECS: u64 = 5;
@@ -130,6 +136,50 @@ pub async fn run_receipt_chain_integrity_job(
         }
         if let Err(e) = check_all_tenant_receipt_chains(&pool).await {
             error!("receipt chain integrity job failed: {:?}", e);
+        }
+    }
+}
+
+/// #1394: periodic policy advisor sweep analyzing denied-action patterns.
+/// Leader-gated like other maintenance jobs.
+pub async fn run_policy_advisor_job(
+    pool: DbPool,
+    interval_secs: u64,
+    batch_limit: i64,
+    is_leader: Arc<AtomicBool>,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("policy advisor job: standby (not leader)");
+            continue;
+        }
+        let tenant_ids = match db::list_all_tenant_ids(&pool).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                error!("policy advisor job: failed to list tenants: {:?}", e);
+                continue;
+            }
+        };
+        for tenant_id in tenant_ids {
+            match crate::policy_advisor::generate_policy_recommendations_for_tenant(
+                &pool,
+                &tenant_id,
+                batch_limit,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(n) => info!(
+                    "policy advisor job: created {} recommendation(s) (tenant={})",
+                    n, tenant_id
+                ),
+                Err(e) => error!(
+                    "policy advisor job failed for tenant {}: {:?}",
+                    tenant_id, e
+                ),
+            }
         }
     }
 }
