@@ -1023,6 +1023,31 @@ pub struct TriageRecommendation {
     pub agent: String,
 }
 
+/// Advisory threat hunt finding from proactive anomaly search (#1395).
+/// Stored in `threat_hunt_findings`; informational only — never enforcement.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct ThreatHuntFindingRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: String,
+    /// `off_hours_activity` | `unusual_tool_combo` | `privilege_escalation`
+    pub finding_type: String,
+    /// Dedup key (e.g. run_id or window label) while status is `open`.
+    pub fingerprint: String,
+    /// `info` | `medium` | `high`
+    pub severity: String,
+    pub title: String,
+    pub summary: String,
+    /// JSON evidence links: decision_ids, run_ids, metrics (no secrets).
+    pub evidence_json: String,
+    /// `open` | `acknowledged` | `dismissed`
+    pub status: String,
+    /// `template` (default) or `claude` when the optional LLM path is enabled.
+    pub hunter_agent: String,
+    pub generated_at: String,
+    pub created_at: String,
+}
+
 /// Advisory policy recommendation from denied-action analysis (#1394).
 /// Stored in `policy_recommendations`; never auto-applied to Cedar.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema, PartialEq, Eq)]

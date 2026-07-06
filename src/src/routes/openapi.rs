@@ -57,6 +57,7 @@ use utoipa::OpenApi;
         get_incident_evidence_pack_api,
         soc_summary_api,
         list_policy_recommendations_api,
+        list_hunt_findings_api,
         soc_stream_api,
         soc_query_api,
         semantic_search_api,
@@ -207,6 +208,7 @@ use utoipa::OpenApi;
             SocAlertRecord,
             TriageRecommendation,
             PolicyRecommendationRecord,
+            ThreatHuntFindingRecord,
             SocIncidentRecord,
             SocSummary,
             SocQueryFilters,
@@ -1343,6 +1345,21 @@ fn soc_summary_api() {}
     )
 )]
 fn list_policy_recommendations_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/soc/hunt-findings",
+    security(("bearer_auth" = [])),
+    params(
+        ("status" = Option<String>, Query, description = "Filter by status (open|acknowledged|dismissed)"),
+        ("limit" = Option<i64>, Query, description = "Max results (default 50)"),
+        ("refresh" = Option<bool>, Query, description = "Run threat hunter before listing")
+    ),
+    responses(
+        (status = 200, description = "Advisory threat hunt findings", body = Vec<ThreatHuntFindingRecord>)
+    )
+)]
+fn list_hunt_findings_api() {}
 
 #[utoipa::path(
     post,

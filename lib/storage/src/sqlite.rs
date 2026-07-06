@@ -1463,6 +1463,17 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_threat_hunt_findings(
+        &self,
+        tenant_id: &str,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<ThreatHuntFindingRecord>, AegisError> {
+        db::list_threat_hunt_findings(&self.pool, tenant_id, status, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn get_incident_by_id(
         &self,
         tenant_id: &str,

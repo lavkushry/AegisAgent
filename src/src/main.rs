@@ -943,6 +943,7 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/soc/policy-recommendations",
             get(routes::list_policy_recommendations),
         )
+        .route("/soc/hunt-findings", get(routes::list_hunt_findings))
         .route("/soc/stream", get(routes::soc_stream))
         .route("/soc/query", post(routes::soc_query))
         .route("/soc/semantic-search", get(routes::semantic_search))
@@ -1557,6 +1558,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #1395: periodic threat hunt for anomalous agent behavior patterns.
+    let threat_hunt_poll_interval_secs: u64 = std::env::var("AEGIS_THREAT_HUNT_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_THREAT_HUNT_POLL_INTERVAL_SECS);
+    let threat_hunt_batch_limit: i64 = std::env::var("AEGIS_THREAT_HUNT_BATCH_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_THREAT_HUNT_BATCH_LIMIT);
+    let threat_hunt_abort_handle = tokio::spawn(jobs::run_threat_hunt_job(
+        pool.clone(),
+        threat_hunt_poll_interval_secs,
+        threat_hunt_batch_limit,
+        is_leader.clone(),
+    ))
+    .abort_handle();
+
     // #0106: periodically archive old audit_events rows into
     // audit_events_archive to keep the live table bounded. Gated on
     // is_leader (#1149).
@@ -1680,6 +1698,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         ("triage_job", triage_abort_handle),
         ("policy_advisor_job", policy_advisor_abort_handle),
+        ("threat_hunt_job", threat_hunt_abort_handle),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
         ("vacuum_job", vacuum_abort_handle),

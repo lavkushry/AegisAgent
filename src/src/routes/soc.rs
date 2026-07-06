@@ -1638,6 +1638,58 @@ pub async fn list_policy_recommendations(
     }
 }
 
+/// Query parameters for `GET /v1/soc/hunt-findings` (#1395).
+#[derive(Debug, serde::Deserialize)]
+pub struct HuntFindingsQuery {
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+    /// When true, run the sandboxed threat hunter before listing.
+    pub refresh: Option<bool>,
+}
+
+/// GET /v1/soc/hunt-findings — list advisory threat hunt findings (#1395).
+///
+/// Findings are informational only — never enforcement. Pass `?refresh=true`
+/// to trigger an on-demand hunt sweep for the tenant before returning results.
+pub async fn list_hunt_findings(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Query(params): Query<HuntFindingsQuery>,
+) -> impl IntoResponse {
+    if params.refresh == Some(true) {
+        let batch_limit = std::env::var("AEGIS_THREAT_HUNT_BATCH_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20);
+        if let Err(e) = crate::threat_hunter::generate_threat_hunt_findings_for_tenant(
+            state.storage.get_pool(),
+            &tenant_id,
+            batch_limit,
+        )
+        .await
+        {
+            error!(
+                "On-demand threat hunter failed for tenant {}: {:?}",
+                tenant_id, e
+            );
+            return StatusError::internal("Threat hunter error").into_response();
+        }
+    }
+
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    match state
+        .storage
+        .list_threat_hunt_findings(&tenant_id, params.status.as_deref(), limit)
+        .await
+    {
+        Ok(findings) => (StatusCode::OK, Json(json!({ "findings": findings }))).into_response(),
+        Err(e) => {
+            error!("Failed to list threat hunt findings: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 /// `GET /v1/incidents/:id/evidence-pack` — per-incident compliance evidence
 /// export (SOC-006, #1189). Bundles the incident, the alerts and decisions
 /// that contributed to it, the receipts/audit events tied to those
@@ -2398,6 +2450,56 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("require_approval"));
+    }
+
+    #[tokio::test]
+    async fn list_hunt_findings_returns_finding_after_refresh() {
+        let (state, tenant_id, _) = setup_state("hunt_findings_route").await;
+        let pool = state.storage.get_pool();
+        let now_str = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+        aegis_storage::execute_query!(
+            pool,
+            "INSERT INTO agents (id, tenant_id, agent_key, agent_token, name, environment, risk_tier, status)
+             VALUES ('ag_hunt_route', ?, 'key_hunt', 'tok_hunt', 'Agent Hunt', 'prod', 'high', 'active')",
+            &tenant_id
+        )
+        .unwrap();
+
+        let tools = ["github", "aws", "slack", "jira"];
+        for (i, tool) in tools.iter().enumerate() {
+            aegis_storage::execute_query!(
+                pool,
+                "INSERT INTO decisions (id, tenant_id, agent_id, run_id, skill, action, input_json, decision, created_at)
+                 VALUES (?, ?, 'ag_hunt_route', 'run_hunt_1', ?, 'read', '{}', 'allow', ?)",
+                format!("dec-hunt-{i}"),
+                &tenant_id,
+                tool,
+                &now_str
+            )
+            .unwrap();
+        }
+
+        let response = list_hunt_findings(
+            State(state),
+            TenantId(tenant_id.clone()),
+            Query(HuntFindingsQuery {
+                status: None,
+                limit: Some(10),
+                refresh: Some(true),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let findings = json["findings"].as_array().unwrap();
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0]["finding_type"], "unusual_tool_combo");
+        assert_eq!(findings[0]["status"], "open");
+        assert_eq!(findings[0]["hunter_agent"], "template");
     }
 
     #[tokio::test]
