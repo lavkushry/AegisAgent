@@ -259,6 +259,7 @@ mod tests {
             schema_version: 1,
             evidence: None,
             prompt_injection: Some(scan),
+            rag_poisoning: None,
         }
     }
 

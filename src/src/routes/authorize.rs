@@ -1230,6 +1230,7 @@ pub async fn authorize_action_impl(
                     schema_version: 1,
                     evidence: None,
                     prompt_injection: None,
+                    rag_poisoning: None,
                 });
             }
             Err(e) => {
@@ -1391,6 +1392,7 @@ pub async fn authorize_action_impl(
                     schema_version: 1,
                     evidence: None,
                     prompt_injection: None,
+                    rag_poisoning: None,
                 });
             }
             Ok(None) => {}
@@ -6143,6 +6145,7 @@ mod tests {
             schema_version: 1,
             evidence: None,
             prompt_injection: None,
+            rag_poisoning: None,
         };
 
         sink.emit(event.clone());
@@ -7485,6 +7488,7 @@ mod tests {
             schema_version: 1,
             evidence: None,
             prompt_injection: None,
+            rag_poisoning: None,
         });
         assert!(!state.events.has_capacity());
 
