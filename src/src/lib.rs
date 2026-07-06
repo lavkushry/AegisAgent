@@ -50,6 +50,7 @@ pub mod gh_comment;
 pub mod graph;
 pub mod grpc;
 pub mod jobs;
+pub mod kms_receipt_signer;
 pub mod mtls;
 pub mod otel;
 pub mod policy_watcher;

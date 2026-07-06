@@ -1,153 +1,20 @@
 //! Optional Ed25519 signing of action receipts — third-party-verifiable evidence.
 //!
-//! The signature is computed **over the final `receipt_hash` string** (its UTF-8
-//! bytes) and stored ALONGSIDE the receipt as additive metadata. It is NEVER an
-//! input to `compute_receipt_hash` and NEVER part of the canonicalized receipt
-//! body, so the byte-parity-locked `aegis-jcs-1` hash chain is untouched
-//! (`tests/receipt_chain_vectors.json` stays green). A third party who holds the
-//! signer's public key can verify a receipt independently of this gateway:
-//!
-//! ```text
-//! verify_signature(signer_public_key, receipt_hash, signature) == true
-//! ```
-//!
-//! Signing is OPTIONAL and the hermetic default is **unsigned**: with no key
-//! configured, `global_signer()` returns `None`, receipts carry NULL signature
-//! fields, and everything still works. We sign hashes, never payloads (redaction).
+//! Receipt signing backends live in `aegis_common::receipt_signer` (#1311 adds
+//! KMS-backed signing via `kms_receipt_signer`). This module retains
+//! [`CommandSigner`] for cage-run control commands and re-exports receipt helpers.
 
-use std::sync::OnceLock;
+pub use aegis_common::receipt_signer::{
+    global_signer, init_global_signer, init_global_signer_from_env_key, verify_signature,
+    LocalReceiptSigner, ReceiptSignBackend,
+};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
-use tracing::warn;
+/// Backward-compatible alias used throughout gateway tests and policy bundles.
+pub type ReceiptSigner = LocalReceiptSigner;
 
-/// Holds an Ed25519 signing key derived from a 32-byte secret. Constructed from a
-/// hex-encoded secret (provisioned out-of-band — never logged, never hashed).
-pub struct ReceiptSigner {
-    signing_key: SigningKey,
-    key_id: Option<String>,
-}
+use ed25519_dalek::{Signature, Signer, SigningKey, SECRET_KEY_LENGTH};
 
-impl ReceiptSigner {
-    /// Parse a 32-byte Ed25519 secret key from a hex string. Returns `Err` on any
-    /// malformed input (bad hex, wrong length) — never panics.
-    pub fn from_secret_hex(secret_hex: &str) -> Result<Self, String> {
-        let bytes = hex::decode(secret_hex.trim())
-            .map_err(|e| format!("secret key is not valid hex: {e}"))?;
-        let arr: [u8; SECRET_KEY_LENGTH] = bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| format!("secret key must be {SECRET_KEY_LENGTH} bytes"))?;
-        Ok(Self {
-            signing_key: SigningKey::from_bytes(&arr),
-            key_id: None,
-        })
-    }
-
-    /// Parse `AEGIS_RECEIPT_SIGNING_KEY`'s value, which may optionally carry a
-    /// human-readable key identifier as a `"key_id:hex_secret"` prefix (#1211 —
-    /// rotation audit trail; verification itself never depends on this, since
-    /// `signer_public_key` is embedded per-receipt). Splits on the FIRST `:`
-    /// only, which is unambiguous since hex secrets never contain one. Plain
-    /// `"hex_secret"` with no colon stays backward-compatible (`key_id: None`).
-    pub fn from_env_value(value: &str) -> Result<Self, String> {
-        match value.trim().split_once(':') {
-            Some((key_id, hex_secret)) if !key_id.is_empty() => {
-                let mut signer = Self::from_secret_hex(hex_secret)?;
-                signer.key_id = Some(key_id.to_string());
-                Ok(signer)
-            }
-            _ => Self::from_secret_hex(value),
-        }
-    }
-
-    /// Sign the UTF-8 bytes of a `receipt_hash` string; return a lowercase-hex
-    /// Ed25519 signature (64 bytes → 128 hex chars).
-    pub fn sign_hash(&self, receipt_hash: &str) -> String {
-        let signature: Signature = self.signing_key.sign(receipt_hash.as_bytes());
-        hex::encode(signature.to_bytes())
-    }
-
-    /// Lowercase-hex of the verifying (public) key, persisted with each signed
-    /// receipt so a third party can verify without contacting the gateway.
-    pub fn public_key_hex(&self) -> String {
-        hex::encode(self.signing_key.verifying_key().to_bytes())
-    }
-
-    /// The optional human-readable key identifier parsed from a `"key_id:"`
-    /// prefix on `AEGIS_RECEIPT_SIGNING_KEY` (#1211). `None` when no prefix was
-    /// supplied.
-    pub fn key_id(&self) -> Option<&str> {
-        self.key_id.as_deref()
-    }
-}
-
-/// Verify an Ed25519 signature over a `receipt_hash`. Returns `false` on ANY
-/// parse or verification error (bad hex, wrong length, signature mismatch, wrong
-/// key) — never panics. This is the function a third-party auditor runs.
-pub fn verify_signature(public_key_hex: &str, receipt_hash: &str, signature_hex: &str) -> bool {
-    let pk_bytes = match hex::decode(public_key_hex.trim()) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-    let pk_arr: [u8; 32] = match pk_bytes.as_slice().try_into() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
-    let verifying_key = match VerifyingKey::from_bytes(&pk_arr) {
-        Ok(k) => k,
-        Err(_) => return false,
-    };
-
-    let sig_bytes = match hex::decode(signature_hex.trim()) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-    let sig_arr: [u8; 64] = match sig_bytes.as_slice().try_into() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
-    let signature = Signature::from_bytes(&sig_arr);
-
-    verifying_key
-        .verify_strict(receipt_hash.as_bytes(), &signature)
-        .is_ok()
-}
-
-static GLOBAL_SIGNER: OnceLock<Option<ReceiptSigner>> = OnceLock::new();
-
-/// Process-wide receipt signer, initialized once from the `AEGIS_RECEIPT_SIGNING_KEY`
-/// environment variable (hex-encoded 32-byte Ed25519 secret). Returns `None` when
-/// the variable is unset or invalid (a warning is logged on invalid) — the
-/// hermetic default is unsigned. Idempotent and thread-safe via `OnceLock`.
-pub fn global_signer() -> Option<&'static ReceiptSigner> {
-    GLOBAL_SIGNER
-        .get_or_init(|| match std::env::var("AEGIS_RECEIPT_SIGNING_KEY") {
-            Ok(hex_key) if !hex_key.trim().is_empty() => {
-                match ReceiptSigner::from_env_value(&hex_key) {
-                    Ok(signer) => Some(signer),
-                    Err(e) => {
-                        warn!(
-                            "AEGIS_RECEIPT_SIGNING_KEY is set but invalid ({e}); \
-                             receipts will be emitted UNSIGNED"
-                        );
-                        None
-                    }
-                }
-            }
-            _ => None,
-        })
-        .as_ref()
-}
-
-/// Phase 4.3 (Agent Cage): Ed25519 signing of gateway-initiated control
-/// commands (`pause_run`/`resume_run`/`kill_run`/`quarantine_run`, issued by
-/// the run-control routes rather than supplied by a caller). Structurally
-/// identical to [`ReceiptSigner`] but kept as its own type rather than
-/// generalizing the two: they sign different things for different reasons
-/// (a receipt hash for third-party audit vs. a command's canonical bytes for
-/// a sensor to verify before executing), and conflating them would make an
-/// accidental cross-use (signing a command with the receipt key or vice
-/// versa) a type error instead of a silent bug.
+/// Phase 4.3 (Agent Cage): Ed25519 signing of gateway-initiated control commands.
 pub struct CommandSigner {
     signing_key: SigningKey,
     key_id: Option<String>,
@@ -167,7 +34,6 @@ impl CommandSigner {
         })
     }
 
-    /// Same `"key_id:hex_secret"` convention as [`ReceiptSigner::from_env_value`].
     pub fn from_env_value(value: &str) -> Result<Self, String> {
         match value.trim().split_once(':') {
             Some((key_id, hex_secret)) if !key_id.is_empty() => {
@@ -179,8 +45,6 @@ impl CommandSigner {
         }
     }
 
-    /// Sign the canonical bytes of a control command (see
-    /// `canonical_command_bytes`). Returns a lowercase-hex Ed25519 signature.
     pub fn sign(&self, canonical_bytes: &[u8]) -> String {
         let signature: Signature = self.signing_key.sign(canonical_bytes);
         hex::encode(signature.to_bytes())
@@ -195,13 +59,7 @@ impl CommandSigner {
     }
 }
 
-/// Canonical, sorted-key, compact-JSON byte representation of a control
-/// command's signable fields — everything except `signature` and `status`,
-/// which aren't part of what's signed. Must stay byte-for-byte identical to
-/// `aegis-node-sensor`'s `command_receiver::canonical_bytes`
-/// (`bins/aegis-node-sensor/src/command_receiver.rs`), which is what
-/// verifies a command signed here. If one side's field set or serialization
-/// ever drifts from the other, every command silently fails verification.
+/// Canonical byte representation of a control command's signable fields.
 pub fn canonical_command_bytes(record: &crate::models::ControlCommandRecord) -> Vec<u8> {
     use std::collections::BTreeMap;
 
@@ -234,8 +92,6 @@ pub fn canonical_command_bytes(record: &crate::models::ControlCommandRecord) -> 
 mod tests {
     use super::*;
 
-    // Fixed 32-byte test secret in hex (bytes 0x01..0x20). Deterministic so the
-    // round-trip is stable. Test-only material — not a real key.
     const TEST_SECRET_HEX: &str =
         "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 
@@ -249,92 +105,24 @@ mod tests {
         let hash = "a84bcc5881e29fe1da822f50fe7458e7e942f2dd3c6df2b9ce1ca85d716dc603";
         let sig = signer.sign_hash(hash);
         let pk = signer.public_key_hex();
-        assert!(
-            verify_signature(&pk, hash, &sig),
-            "valid signature must verify"
-        );
+        assert!(verify_signature(&pk, hash, &sig));
     }
 
     #[test]
-    fn tampered_hash_fails() {
-        let signer = test_signer();
-        let hash = "a84bcc5881e29fe1da822f50fe7458e7e942f2dd3c6df2b9ce1ca85d716dc603";
-        let sig = signer.sign_hash(hash);
-        let pk = signer.public_key_hex();
-        let tampered = "b84bcc5881e29fe1da822f50fe7458e7e942f2dd3c6df2b9ce1ca85d716dc603";
-        assert!(
-            !verify_signature(&pk, tampered, &sig),
-            "a tampered hash must not verify"
-        );
-    }
+    fn command_signer_sign_verify_round_trip() {
+        let signer = CommandSigner::from_secret_hex(TEST_SECRET_HEX).unwrap();
+        let record = sample_command_record();
+        let bytes = canonical_command_bytes(&record);
+        let sig_hex = signer.sign(&bytes);
 
-    #[test]
-    fn wrong_public_key_fails() {
-        let signer = test_signer();
-        let hash = "a84bcc5881e29fe1da822f50fe7458e7e942f2dd3c6df2b9ce1ca85d716dc603";
-        let sig = signer.sign_hash(hash);
-        // A different key.
-        let other = ReceiptSigner::from_secret_hex(
-            "2020202020202020202020202020202020202020202020202020202020202020",
-        )
-        .unwrap();
-        assert!(
-            !verify_signature(&other.public_key_hex(), hash, &sig),
-            "a wrong public key must not verify"
-        );
-    }
-
-    #[test]
-    fn malformed_inputs_never_panic_and_return_false() {
-        let signer = test_signer();
-        let hash = "a84bcc5881e29fe1da822f50fe7458e7e942f2dd3c6df2b9ce1ca85d716dc603";
-        let sig = signer.sign_hash(hash);
-        let pk = signer.public_key_hex();
-
-        assert!(!verify_signature("not-hex", hash, &sig));
-        assert!(!verify_signature(&pk, hash, "not-hex"));
-        assert!(!verify_signature("aabb", hash, &sig)); // too short pubkey
-        assert!(!verify_signature(&pk, hash, "aabb")); // too short sig
-        assert!(!verify_signature("", hash, &sig));
-        assert!(!verify_signature(&pk, hash, ""));
-    }
-
-    #[test]
-    fn from_secret_hex_rejects_bad_input() {
-        assert!(ReceiptSigner::from_secret_hex("zzzz").is_err()); // bad hex
-        assert!(ReceiptSigner::from_secret_hex("aabb").is_err()); // wrong length
-                                                                  // The fixed test secret IS valid 32-byte hex.
-        assert!(ReceiptSigner::from_secret_hex(TEST_SECRET_HEX).is_ok());
-    }
-
-    #[test]
-    fn from_env_value_without_prefix_has_no_key_id() {
-        let signer = ReceiptSigner::from_env_value(TEST_SECRET_HEX).unwrap();
-        assert_eq!(signer.key_id(), None);
-    }
-
-    #[test]
-    fn from_env_value_parses_key_id_prefix() {
-        let value = format!("v2:{TEST_SECRET_HEX}");
-        let signer = ReceiptSigner::from_env_value(&value).unwrap();
-        assert_eq!(signer.key_id(), Some("v2"));
-        // The key material itself is unaffected by the prefix.
-        let plain = ReceiptSigner::from_secret_hex(TEST_SECRET_HEX).unwrap();
-        assert_eq!(signer.public_key_hex(), plain.public_key_hex());
-    }
-
-    #[test]
-    fn from_env_value_rejects_bad_hex_after_key_id_prefix() {
-        assert!(ReceiptSigner::from_env_value("v2:not-hex").is_err());
-    }
-
-    #[test]
-    fn from_env_value_treats_leading_colon_as_no_key_id() {
-        // An empty key_id before the colon falls back to plain hex parsing,
-        // so a bare value that happens to start with ":" doesn't silently
-        // succeed with a nonsensical empty key_id.
-        let value = format!(":{TEST_SECRET_HEX}");
-        assert!(ReceiptSigner::from_env_value(&value).is_err());
+        let sig_bytes = hex::decode(&sig_hex).unwrap();
+        let sig_arr: [u8; 64] = sig_bytes.try_into().unwrap();
+        let signature = Signature::from_bytes(&sig_arr);
+        let pk_bytes = hex::decode(signer.public_key_hex()).unwrap();
+        let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
+        use ed25519_dalek::VerifyingKey;
+        let verifying_key = VerifyingKey::from_bytes(&pk_arr).unwrap();
+        assert!(verifying_key.verify_strict(&bytes, &signature).is_ok());
     }
 
     fn sample_command_record() -> crate::models::ControlCommandRecord {
@@ -357,50 +145,5 @@ mod tests {
             status: "issued".to_string(),
             created_at: issued_at,
         }
-    }
-
-    #[test]
-    fn command_signer_sign_verify_round_trip() {
-        let signer = CommandSigner::from_secret_hex(TEST_SECRET_HEX).unwrap();
-        let record = sample_command_record();
-        let bytes = canonical_command_bytes(&record);
-        let sig_hex = signer.sign(&bytes);
-
-        let sig_bytes = hex::decode(&sig_hex).unwrap();
-        let sig_arr: [u8; 64] = sig_bytes.try_into().unwrap();
-        let signature = Signature::from_bytes(&sig_arr);
-        let pk_bytes = hex::decode(signer.public_key_hex()).unwrap();
-        let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
-        let verifying_key = VerifyingKey::from_bytes(&pk_arr).unwrap();
-        assert!(verifying_key.verify_strict(&bytes, &signature).is_ok());
-    }
-
-    #[test]
-    fn canonical_command_bytes_changes_if_any_signable_field_changes() {
-        let base = sample_command_record();
-        let base_bytes = canonical_command_bytes(&base);
-
-        let mut tampered = sample_command_record();
-        tampered.action = "kill_all".to_string();
-        assert_ne!(base_bytes, canonical_command_bytes(&tampered));
-
-        let mut tampered_nonce = sample_command_record();
-        tampered_nonce.nonce = "different-nonce".to_string();
-        assert_ne!(base_bytes, canonical_command_bytes(&tampered_nonce));
-    }
-
-    #[test]
-    fn canonical_command_bytes_is_stable_sorted_key_compact_json() {
-        // A pinned golden value: if this ever changes, aegis-node-sensor's
-        // command_receiver::canonical_bytes (which this must stay
-        // byte-for-byte identical to) needs the same change, or every
-        // command signed by the gateway silently fails sensor verification.
-        let record = sample_command_record();
-        let bytes = canonical_command_bytes(&record);
-        let json_str = String::from_utf8(bytes).unwrap();
-        assert_eq!(
-            json_str,
-            r#"{"action":"kill_run","command_id":"cmd-1","expires_at":"2026-01-01T00:05:00+00:00","issued_at":"2026-01-01T00:00:00+00:00","issued_by":"user:admin@example.com","nonce":"nonce-1","reason":"exfil detected","receipt_required":true,"requires_ack":true,"target_id":"run-1","target_type":"run","tenant_id":"tenant_a"}"#
-        );
     }
 }

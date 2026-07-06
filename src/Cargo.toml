@@ -44,7 +44,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 tower-http = { version = "0.5", features = ["cors", "request-id", "propagate-header", "set-header", "util", "compression-full", "limit", "timeout", "catch-panic"] }
 tower = { version = "0.4", features = ["util", "load-shed", "limit"] }
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
@@ -95,10 +95,16 @@ tracing-opentelemetry = "0.33.0"
 # Cedar policy hot-reload (#883), gated on AEGIS_POLICY_HOT_RELOAD=true —
 # unset, no watcher thread is started and this dependency is otherwise idle.
 notify-debouncer-mini = "0.7.0"
+# GCP KMS asymmetricSign request/response encoding (#1311).
+base64 = "0.22"
+# AWS KMS Ed25519 signing (#1311), optional — enable with --features kms-aws.
+aws-config = { version = "1.5", optional = true, default-features = false, features = ["behavior-version-latest", "rustls"] }
+aws-sdk-kms = { version = "1.51", optional = true, default-features = false, features = ["rustls"] }
 
 
 [features]
 default = []
+kms-aws = ["dep:aws-config", "dep:aws-sdk-kms"]
 local-embeddings = ["dep:fastembed"]
 # #1192: database encryption at rest (SQLCipher). Compile-time, since it
 # swaps the linked SQLite library for the SQLCipher amalgamation — see

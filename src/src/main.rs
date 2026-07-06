@@ -26,6 +26,7 @@ use gateway::events;
 use gateway::gh_checks;
 use gateway::gh_comment;
 use gateway::jobs;
+use gateway::kms_receipt_signer;
 use gateway::metrics;
 use gateway::mtls;
 use gateway::otel;
@@ -1328,6 +1329,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::error!("Failed to initialize database pool at {}: {:?}", db_url, e);
         e
     })?;
+
+    // #1311: KMS-backed receipt signing (AEGIS_KMS_KEY_URI) with fallback to
+    // file-based AEGIS_RECEIPT_SIGNING_KEY. Must run before any receipt writes.
+    kms_receipt_signer::init_receipt_signer_from_env();
 
     // Load Cedar Policy engine from file
     let policy_path =
