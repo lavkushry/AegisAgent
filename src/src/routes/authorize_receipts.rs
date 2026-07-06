@@ -289,5 +289,6 @@ pub(crate) async fn emit_tamper_attempt_receipt(
         redacted_fields: vec![],
         schema_version: 1,
         evidence: None,
+        prompt_injection: None,
     });
 }

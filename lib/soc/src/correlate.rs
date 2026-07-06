@@ -586,6 +586,7 @@ mod tests {
             redacted_fields: vec![],
             schema_version: 1,
             evidence: None,
+            prompt_injection: None,
         }
     }
 
@@ -616,6 +617,7 @@ mod tests {
             redacted_fields: vec![],
             schema_version: 1,
             evidence: None,
+            prompt_injection: None,
         }
     }
 
@@ -1483,6 +1485,7 @@ mod tests {
             redacted_fields: vec![],
             schema_version: 1,
             evidence: None,
+            prompt_injection: None,
         }
     }
 
