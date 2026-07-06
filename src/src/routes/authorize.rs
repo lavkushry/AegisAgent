@@ -5289,7 +5289,8 @@ mod tests {
             state,
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(
-                serde_json::to_vec(&mcp_authorize_request("mcp:slack-mcp", "post_message")).unwrap(),
+                serde_json::to_vec(&mcp_authorize_request("mcp:slack-mcp", "post_message"))
+                    .unwrap(),
             ),
             test_conn_info(),
         )
@@ -5300,10 +5301,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["decision"], "deny");
         assert!(
-            json["reason"]
-                .as_str()
-                .unwrap()
-                .contains("slack-mcp"),
+            json["reason"].as_str().unwrap().contains("slack-mcp"),
             "reason should name the rejected MCP server"
         );
     }
@@ -5380,7 +5378,8 @@ mod tests {
             state,
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(
-                serde_json::to_vec(&mcp_authorize_request("mcp:github-mcp", "unknown_tool")).unwrap(),
+                serde_json::to_vec(&mcp_authorize_request("mcp:github-mcp", "unknown_tool"))
+                    .unwrap(),
             ),
             test_conn_info(),
         )

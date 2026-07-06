@@ -1787,9 +1787,7 @@ mod tests {
                 e.event_type == "admin_action"
                     && e.action.as_deref() == Some("agent_mcp_server_permission_revoked")
             })
-            .expect(
-                "expected an admin_action audit event for agent_mcp_server_permission_revoked",
-            );
+            .expect("expected an admin_action audit event for agent_mcp_server_permission_revoked");
         assert_eq!(admin_event.agent_id.as_deref(), Some(agent.id.as_str()));
         assert_eq!(admin_event.resource.as_deref(), Some("github-mcp"));
     }
