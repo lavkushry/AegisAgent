@@ -321,6 +321,50 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn grant_agent_mcp_server_permission(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<AgentMcpServerPermission, AegisError> {
+        db::grant_agent_mcp_server_permission(&self.pool, tenant_id, agent_id, server_key)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_agent_mcp_server_permissions(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+    ) -> Result<Vec<AgentMcpServerPermission>, AegisError> {
+        db::get_agent_mcp_server_permissions(&self.pool, tenant_id, agent_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn revoke_agent_mcp_server_permission(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<bool, AegisError> {
+        db::revoke_agent_mcp_server_permission(&self.pool, tenant_id, agent_id, server_key)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn agent_mcp_server_permission_status(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<bool, AegisError> {
+        db::agent_mcp_server_permission_status(&self.pool, tenant_id, agent_id, server_key)
+            .await
+            .map(|opt| opt.unwrap_or(true))
+            .map_err(AegisError::Database)
+    }
+
     // Approvals
     async fn consume_approval(
         &self,

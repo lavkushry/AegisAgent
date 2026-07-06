@@ -769,6 +769,38 @@ pub async fn authorize_action_impl(
     }
 
     if let Some(server_key) = mcp_server_key.as_deref() {
+        // Agent-to-MCP-server permission check (#1766, opt-in fail-closed): if the
+        // agent has any explicit MCP server bindings, only those servers may be
+        // called. No bindings = unrestricted (backwards-compatible).
+        match state
+            .storage
+            .agent_mcp_server_permission_status(&tenant_id, &agent_id, server_key)
+            .await
+        {
+            Ok(false) => {
+                warn!(
+                    "MCP server permission denied: agent={} tenant={} server={}",
+                    agent_id, tenant_id, server_key
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "decision": "deny",
+                        "reason": format!(
+                            "agent not permitted to call MCP server '{}'",
+                            server_key
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Failed to check MCP server permission: {:?}", e);
+                return StatusError::from(e).into_response();
+            }
+            Ok(true) => {}
+        }
+
         let mcp_server = match cached_mcp_server {
             Some(s) => Some(s),
             None => match mcp_server_result {
@@ -5199,6 +5231,172 @@ mod tests {
         assert!(
             resp.decision == "allow" || resp.decision == "require_approval",
             "unrestricted agent must pass tool permission check"
+        );
+    }
+
+    // ── Agent-to-MCP-server permission binding tests (#1766) ───────────────
+
+    #[tokio::test]
+    async fn grant_and_list_mcp_server_permissions() {
+        let (state, tenant_id, _agent_token) = setup_state("mcp_perm_grant_list").await;
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &_agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+
+        state
+            .storage
+            .grant_agent_mcp_server_permission(&tenant_id, &agent_id, "github-mcp")
+            .await
+            .unwrap();
+        state
+            .storage
+            .grant_agent_mcp_server_permission(&tenant_id, &agent_id, "slack-mcp")
+            .await
+            .unwrap();
+
+        let perms = state
+            .storage
+            .get_agent_mcp_server_permissions(&tenant_id, &agent_id)
+            .await
+            .unwrap();
+        assert_eq!(perms.len(), 2);
+        let keys: Vec<&str> = perms.iter().map(|p| p.server_key.as_str()).collect();
+        assert!(keys.contains(&"github-mcp"));
+        assert!(keys.contains(&"slack-mcp"));
+    }
+
+    #[tokio::test]
+    async fn authorize_action_denies_mcp_server_not_in_permission_list() {
+        let (state, tenant_id, agent_token) = setup_state("mcp_perm_deny_server").await;
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        state
+            .storage
+            .grant_agent_mcp_server_permission(&tenant_id, &agent_id, "github-mcp")
+            .await
+            .unwrap();
+
+        let response = authorize_action_impl(
+            state,
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(
+                serde_json::to_vec(&mcp_authorize_request("mcp:slack-mcp", "post_message")).unwrap(),
+            ),
+            test_conn_info(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["decision"], "deny");
+        assert!(
+            json["reason"]
+                .as_str()
+                .unwrap()
+                .contains("slack-mcp"),
+            "reason should name the rejected MCP server"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorize_action_allows_mcp_server_in_permission_list() {
+        let (state, tenant_id, agent_token) = setup_state("mcp_perm_allow_server").await;
+        let agent_id = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        state
+            .storage
+            .grant_agent_mcp_server_permission(&tenant_id, &agent_id, "github-mcp")
+            .await
+            .unwrap();
+
+        let server_id = db::upsert_mcp_server(
+            state.storage.get_pool(),
+            &tenant_id,
+            "github-mcp",
+            "GitHub MCP",
+            Some("platform"),
+            "http",
+            Some("internal-registry"),
+            "trusted_internal_signed",
+            "http://127.0.0.1:9001/mcp",
+        )
+        .await
+        .unwrap();
+        let tool = McpToolManifestItem {
+            tool_key: "create_issue".to_string(),
+            name: "Create issue".to_string(),
+            description: None,
+            input_schema: None,
+            risk: "medium".to_string(),
+            mutates_state: false,
+            approval_required: false,
+        };
+        db::upsert_mcp_tool(state.storage.get_pool(), &tenant_id, &server_id, &tool)
+            .await
+            .unwrap();
+        db::set_mcp_tool_status(
+            state.storage.get_pool(),
+            &tenant_id,
+            "github-mcp",
+            "create_issue",
+            "approved",
+        )
+        .await
+        .unwrap();
+
+        let resp = call_authorize(
+            state,
+            &tenant_id,
+            &agent_token,
+            mcp_authorize_request("mcp:github-mcp", "create_issue"),
+        )
+        .await;
+        assert!(
+            resp.decision == "allow" || resp.decision == "require_approval",
+            "expected allow or require_approval, got: {}",
+            resp.decision
+        );
+    }
+
+    #[tokio::test]
+    async fn authorize_action_unrestricted_agent_allows_any_mcp_server() {
+        let (state, tenant_id, agent_token) = setup_state("mcp_perm_unrestricted").await;
+        let response = authorize_action_impl(
+            state,
+            agent_headers(&agent_token, &tenant_id),
+            Bytes::from(
+                serde_json::to_vec(&mcp_authorize_request("mcp:github-mcp", "unknown_tool")).unwrap(),
+            ),
+            test_conn_info(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["decision"], "deny");
+        assert!(
+            json["matched_policies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "mcp_unknown_tool"),
+            "unrestricted MCP permission must still hit unknown-tool policy, not permission gate"
         );
     }
 

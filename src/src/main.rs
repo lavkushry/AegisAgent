@@ -1071,6 +1071,15 @@ fn api_routes() -> Router<Arc<AppState>> {
             delete(routes::revoke_agent_tool_permission),
         )
         .route(
+            "/agents/:id/mcp-permissions",
+            get(routes::list_agent_mcp_server_permissions)
+                .post(routes::grant_agent_mcp_server_permission),
+        )
+        .route(
+            "/agents/:id/mcp-permissions/:server_key",
+            delete(routes::revoke_agent_mcp_server_permission),
+        )
+        .route(
             "/mcp/servers/:server_key/quarantine",
             post(routes::quarantine_mcp_server),
         )

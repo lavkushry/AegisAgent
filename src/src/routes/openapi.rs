@@ -38,6 +38,9 @@ use utoipa::OpenApi;
         list_agent_tool_permissions_api,
         grant_agent_tool_permission_api,
         revoke_agent_tool_permission_api,
+        list_agent_mcp_server_permissions_api,
+        grant_agent_mcp_server_permission_api,
+        revoke_agent_mcp_server_permission_api,
         list_approvals_api,
         get_approval_api,
         approve_approval_api,
@@ -194,6 +197,8 @@ use utoipa::OpenApi;
             AgentRecord,
             AgentToolPermission,
             GrantToolPermissionRequest,
+            AgentMcpServerPermission,
+            GrantMcpServerPermissionRequest,
             McpServerRecord,
             McpToolRecord,
             PolicyRecord,
@@ -510,6 +515,50 @@ fn grant_agent_tool_permission_api() {}
     )
 )]
 fn revoke_agent_tool_permission_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/agents/{id}/mcp-permissions",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 200, description = "List of MCP server permissions", body = Vec<AgentMcpServerPermission>),
+        (status = 404, description = "Agent not found", body = StatusError)
+    )
+)]
+fn list_agent_mcp_server_permissions_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{id}/mcp-permissions",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Agent ID")
+    ),
+    request_body = GrantMcpServerPermissionRequest,
+    responses(
+        (status = 200, description = "MCP server permission granted"),
+        (status = 404, description = "Agent not found", body = StatusError)
+    )
+)]
+fn grant_agent_mcp_server_permission_api() {}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/agents/{id}/mcp-permissions/{server_key}",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Agent ID"),
+        ("server_key" = String, Path, description = "MCP server key")
+    ),
+    responses(
+        (status = 200, description = "MCP server permission revoked"),
+        (status = 404, description = "Agent or permission not found", body = StatusError)
+    )
+)]
+fn revoke_agent_mcp_server_permission_api() {}
 
 #[utoipa::path(
     post,

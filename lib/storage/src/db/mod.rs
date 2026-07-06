@@ -184,6 +184,12 @@ pub fn to_postgres_sql(sql: &str) -> String {
             "INSERT INTO agent_tool_permissions",
         );
         sql_str.push_str(" ON CONFLICT (tenant_id, agent_id, tool_key) DO NOTHING");
+    } else if sql_str.contains("INSERT OR IGNORE INTO agent_mcp_server_permissions") {
+        sql_str = sql_str.replace(
+            "INSERT OR IGNORE INTO agent_mcp_server_permissions",
+            "INSERT INTO agent_mcp_server_permissions",
+        );
+        sql_str.push_str(" ON CONFLICT (tenant_id, agent_id, server_key) DO NOTHING");
     }
 
     // Convert datetime functions

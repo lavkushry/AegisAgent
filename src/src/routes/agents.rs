@@ -863,6 +863,112 @@ pub async fn revoke_agent_tool_permission(
     }
 }
 
+// ── Agent-to-MCP-server permission bindings (#1766) ───────────────────────────
+
+/// `POST /v1/agents/:id/mcp-permissions` — grant an MCP server permission.
+pub async fn grant_agent_mcp_server_permission(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<crate::models::GrantMcpServerPermissionRequest>,
+) -> impl IntoResponse {
+    match state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
+        Ok(None) => return StatusError::not_found("Agent not found").into_response(),
+        Err(e) => {
+            error!("DB error checking agent for MCP permission grant: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+        Ok(Some(_)) => {}
+    }
+
+    match state
+        .storage
+        .grant_agent_mcp_server_permission(&tenant_id, &agent_id, &payload.server_key)
+        .await
+    {
+        Ok(_permission) => (
+            StatusCode::OK,
+            Json(json!({
+                "agent_id": agent_id,
+                "server_key": payload.server_key,
+                "granted": true
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to grant MCP server permission: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// `GET /v1/agents/:id/mcp-permissions` — list MCP server permissions.
+pub async fn list_agent_mcp_server_permissions(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    match state.storage.get_agent_by_id(&tenant_id, &agent_id).await {
+        Ok(None) => return StatusError::not_found("Agent not found").into_response(),
+        Err(e) => {
+            error!("DB error checking agent for MCP permission list: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+        Ok(Some(_)) => {}
+    }
+
+    match state
+        .storage
+        .get_agent_mcp_server_permissions(&tenant_id, &agent_id)
+        .await
+    {
+        Ok(perms) => (StatusCode::OK, Json(json!({ "permissions": perms }))).into_response(),
+        Err(e) => {
+            error!("Failed to list MCP server permissions: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// `DELETE /v1/agents/:id/mcp-permissions/:server_key` — revoke MCP server access.
+pub async fn revoke_agent_mcp_server_permission(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path((agent_id, server_key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state
+        .storage
+        .revoke_agent_mcp_server_permission(&tenant_id, &agent_id, &server_key)
+        .await
+    {
+        Ok(true) => {
+            write_admin_action_audit_event(
+                state.storage.as_ref(),
+                &tenant_id,
+                "agent_mcp_server_permission_revoked",
+                Some(&agent_id),
+                Some(&server_key),
+                json!({"agent_id": agent_id, "server_key": server_key}),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "agent_id": agent_id,
+                    "server_key": server_key,
+                    "revoked": true
+                })),
+            )
+                .into_response()
+        }
+        Ok(false) => StatusError::not_found("Permission not found").into_response(),
+        Err(e) => {
+            error!("Failed to revoke MCP server permission: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
@@ -1621,6 +1727,71 @@ mod tests {
             .expect("expected an admin_action audit event for agent_tool_permission_revoked");
         assert_eq!(admin_event.agent_id.as_deref(), Some(agent.id.as_str()));
         assert_eq!(admin_event.resource.as_deref(), Some("github"));
+    }
+
+    #[tokio::test]
+    async fn revoke_agent_mcp_server_permission_route_writes_admin_action_audit_event() {
+        let (state, tenant_id, _agent_token) =
+            setup_state("revoke_mcp_permission_audit_trail").await;
+
+        let agent = AgentRecord {
+            id: "revoke_mcp_permission_agent_id".to_string(),
+            tenant_id: tenant_id.clone(),
+            agent_key: "revoke-mcp-permission-agent-key".to_string(),
+            agent_token: "revoke-mcp-permission-agent-token".to_string(),
+            name: "Revoke MCP Permission Test Agent".to_string(),
+            owner_team: Some("platform".to_string()),
+            owner_email: None,
+            environment: "production".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "high".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            force_approval: false,
+            quarantined_at: None,
+            signing_key: None,
+            allowed_environments: None,
+            mtls_cn: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        state.storage.insert_agent(&agent).await.unwrap();
+        state
+            .storage
+            .grant_agent_mcp_server_permission(&tenant_id, &agent.id, "github-mcp")
+            .await
+            .unwrap();
+
+        let response = revoke_agent_mcp_server_permission(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path((agent.id.clone(), "github-mcp".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let events = state
+            .storage
+            .get_audit_events(&tenant_id, None, None, None)
+            .await
+            .unwrap()
+            .0;
+        let admin_event = events
+            .iter()
+            .find(|e| {
+                e.event_type == "admin_action"
+                    && e.action.as_deref() == Some("agent_mcp_server_permission_revoked")
+            })
+            .expect(
+                "expected an admin_action audit event for agent_mcp_server_permission_revoked",
+            );
+        assert_eq!(admin_event.agent_id.as_deref(), Some(agent.id.as_str()));
+        assert_eq!(admin_event.resource.as_deref(), Some("github-mcp"));
     }
 
     /// `POST /v1/agents/:id/restore` sets a quarantined agent back to `active`

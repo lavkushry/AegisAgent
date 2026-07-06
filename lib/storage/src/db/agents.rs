@@ -594,6 +594,113 @@ pub async fn agent_tool_permission_status(
     Ok(Some(row.0 > 0))
 }
 
+// ── Agent-to-MCP-server permission bindings (#1766) ───────────────────────────
+
+/// Grant an MCP server permission for an agent. Idempotent — a duplicate
+/// (tenant_id, agent_id, server_key) triple is silently ignored (UNIQUE).
+pub async fn grant_agent_mcp_server_permission(
+    pool: &DbPool,
+    tenant_id: &str,
+    agent_id: &str,
+    server_key: &str,
+) -> Result<aegis_api::models::AgentMcpServerPermission, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now_str = chrono::Utc::now().to_rfc3339();
+    crate::execute_query!(
+        pool,
+        "INSERT OR IGNORE INTO agent_mcp_server_permissions (id, tenant_id, agent_id, server_key, created_at)
+         VALUES (?, ?, ?, ?, ?)",
+        &id,
+        tenant_id,
+        agent_id,
+        server_key,
+        &now_str
+    )?;
+
+    crate::fetch_one_as!(
+        aegis_api::models::AgentMcpServerPermission,
+        pool,
+        "SELECT id, tenant_id, agent_id, server_key, created_at
+         FROM agent_mcp_server_permissions
+         WHERE tenant_id = ? AND agent_id = ? AND server_key = ?",
+        tenant_id,
+        agent_id,
+        server_key
+    )
+}
+
+/// Return all MCP server permissions for `agent_id` within `tenant_id`.
+pub async fn get_agent_mcp_server_permissions(
+    pool: &DbPool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<Vec<aegis_api::models::AgentMcpServerPermission>, sqlx::Error> {
+    crate::fetch_all_as!(
+        aegis_api::models::AgentMcpServerPermission,
+        pool,
+        "SELECT id, tenant_id, agent_id, server_key, created_at
+         FROM agent_mcp_server_permissions
+         WHERE tenant_id = ? AND agent_id = ?
+         ORDER BY created_at ASC",
+        tenant_id,
+        agent_id
+    )
+}
+
+/// Revoke a single MCP server permission. Returns `true` if a row was deleted.
+pub async fn revoke_agent_mcp_server_permission(
+    pool: &DbPool,
+    tenant_id: &str,
+    agent_id: &str,
+    server_key: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = crate::execute_query!(
+        pool,
+        "DELETE FROM agent_mcp_server_permissions
+         WHERE tenant_id = ? AND agent_id = ? AND server_key = ?",
+        tenant_id,
+        agent_id,
+        server_key
+    )?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Check whether `agent_id` is permitted to call `server_key` in `tenant_id`.
+///
+/// - `None` — no MCP permissions configured; unrestricted.
+/// - `Some(true)` — the server is in the agent's allow-list.
+/// - `Some(false)` — permissions exist but this server is not allowed.
+pub async fn agent_mcp_server_permission_status(
+    pool: &DbPool,
+    tenant_id: &str,
+    agent_id: &str,
+    server_key: &str,
+) -> Result<Option<bool>, sqlx::Error> {
+    let count: (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM agent_mcp_server_permissions WHERE tenant_id = ? AND agent_id = ?",
+        tenant_id,
+        agent_id
+    )?;
+
+    if count.0 == 0 {
+        return Ok(None);
+    }
+
+    let row: (i64,) = crate::fetch_one_as!(
+        _,
+        pool,
+        "SELECT COUNT(*) FROM agent_mcp_server_permissions
+         WHERE tenant_id = ? AND agent_id = ? AND server_key = ?",
+        tenant_id,
+        agent_id,
+        server_key
+    )?;
+
+    Ok(Some(row.0 > 0))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::db::test_utils::*;
