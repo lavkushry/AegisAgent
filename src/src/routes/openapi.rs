@@ -54,6 +54,7 @@ use utoipa::OpenApi;
         get_incident_api,
         close_incident_api,
         narrate_incident_api,
+        get_incident_investigation_api,
         get_incident_evidence_pack_api,
         soc_summary_api,
         list_policy_recommendations_api,
@@ -209,6 +210,7 @@ use utoipa::OpenApi;
             TriageRecommendation,
             PolicyRecommendationRecord,
             ThreatHuntFindingRecord,
+            InvestigationPlaybookRecord,
             SocIncidentRecord,
             SocSummary,
             SocQueryFilters,
@@ -1306,6 +1308,21 @@ fn close_incident_api() {}
     )
 )]
 fn narrate_incident_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/incidents/{id}/investigation",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Incident ID"),
+        ("refresh" = Option<bool>, Query, description = "Regenerate playbook before returning")
+    ),
+    responses(
+        (status = 200, description = "Advisory investigation playbook", body = InvestigationPlaybookRecord),
+        (status = 404, description = "Incident not found", body = StatusError)
+    )
+)]
+fn get_incident_investigation_api() {}
 
 #[utoipa::path(
     get,

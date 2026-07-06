@@ -1042,6 +1042,10 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator
         .route("/incidents/:id/narrate", get(routes::narrate_incident))
+        .route(
+            "/incidents/:id/investigation",
+            get(routes::get_incident_investigation),
+        )
         // SOC-006 (#1189): per-incident compliance evidence pack export
         .route(
             "/incidents/:id/evidence-pack",
@@ -1575,6 +1579,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #1392: periodic investigation playbook generation for open incidents.
+    let investigation_poll_interval_secs: u64 =
+        std::env::var("AEGIS_INVESTIGATION_POLL_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(jobs::DEFAULT_INVESTIGATION_POLL_INTERVAL_SECS);
+    let investigation_batch_limit: i64 = std::env::var("AEGIS_INVESTIGATION_BATCH_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_INVESTIGATION_BATCH_LIMIT);
+    let investigation_abort_handle = tokio::spawn(jobs::run_investigation_job(
+        pool.clone(),
+        investigation_poll_interval_secs,
+        investigation_batch_limit,
+        is_leader.clone(),
+    ))
+    .abort_handle();
+
     // #0106: periodically archive old audit_events rows into
     // audit_events_archive to keep the live table bounded. Gated on
     // is_leader (#1149).
@@ -1699,6 +1721,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("triage_job", triage_abort_handle),
         ("policy_advisor_job", policy_advisor_abort_handle),
         ("threat_hunt_job", threat_hunt_abort_handle),
+        ("investigation_job", investigation_abort_handle),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
         ("vacuum_job", vacuum_abort_handle),

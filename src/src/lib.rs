@@ -25,6 +25,7 @@ pub use aegis_soc::correlate;
 pub use aegis_soc::detect;
 pub use aegis_soc::events;
 pub use aegis_soc::ingest;
+pub use aegis_soc::investigation;
 pub use aegis_soc::mcp_inspect;
 pub use aegis_soc::narrate;
 pub use aegis_soc::notify;

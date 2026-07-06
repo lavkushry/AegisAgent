@@ -5,6 +5,7 @@ pub mod correlate;
 pub mod detect;
 pub mod events;
 pub mod ingest;
+pub mod investigation;
 pub mod mcp_inspect;
 pub mod narrate;
 pub mod notify;
