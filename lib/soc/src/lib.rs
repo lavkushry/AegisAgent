@@ -9,6 +9,7 @@ pub mod investigation;
 pub mod mcp_inspect;
 pub mod narrate;
 pub mod notify;
+pub mod permission_review;
 pub mod playbook;
 pub mod policy_advisor;
 pub mod prompt_injection;

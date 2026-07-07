@@ -29,6 +29,7 @@ pub use aegis_soc::investigation;
 pub use aegis_soc::mcp_inspect;
 pub use aegis_soc::narrate;
 pub use aegis_soc::notify;
+pub use aegis_soc::permission_review;
 pub use aegis_soc::policy_advisor;
 pub use aegis_soc::qdrant;
 pub use aegis_soc::rag_poisoning;

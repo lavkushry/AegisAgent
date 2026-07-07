@@ -45,6 +45,12 @@ pub const DEFAULT_THREAT_HUNT_POLL_INTERVAL_SECS: u64 = 3600;
 /// Default batch size per tenant per threat hunt sweep tick.
 pub const DEFAULT_THREAT_HUNT_BATCH_LIMIT: i64 = 20;
 
+/// Default interval between permission review sweeps (#1768).
+pub const DEFAULT_PERMISSION_REVIEW_POLL_INTERVAL_SECS: u64 = 86400;
+
+/// Default batch size per tenant per permission review sweep tick.
+pub const DEFAULT_PERMISSION_REVIEW_BATCH_LIMIT: i64 = 50;
+
 /// Default interval between investigation playbook sweeps (#1392).
 pub const DEFAULT_INVESTIGATION_POLL_INTERVAL_SECS: u64 = 3600;
 
@@ -188,6 +194,54 @@ pub async fn run_threat_hunt_job(
                     n, tenant_id
                 ),
                 Err(e) => error!("threat hunt job failed for tenant {}: {:?}", tenant_id, e),
+            }
+        }
+    }
+}
+
+/// #1768: periodic permission review for stale unused agent permissions.
+/// Opt-in via `AEGIS_PERMISSION_REVIEW_ENABLED=true`. Leader-gated.
+pub async fn run_permission_review_job(
+    pool: DbPool,
+    interval_secs: u64,
+    batch_limit: i64,
+    is_leader: Arc<AtomicBool>,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("permission review job: standby (not leader)");
+            continue;
+        }
+        if !crate::permission_review::permission_review_enabled() {
+            debug!("permission review job: disabled (AEGIS_PERMISSION_REVIEW_ENABLED unset)");
+            continue;
+        }
+        let tenant_ids = match db::list_all_tenant_ids(&pool).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                error!("permission review job: failed to list tenants: {:?}", e);
+                continue;
+            }
+        };
+        for tenant_id in tenant_ids {
+            match crate::permission_review::generate_permission_review_alerts_for_tenant(
+                &pool,
+                &tenant_id,
+                batch_limit,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(n) => info!(
+                    "permission review job: created {} alert(s) (tenant={})",
+                    n, tenant_id
+                ),
+                Err(e) => error!(
+                    "permission review job failed for tenant {}: {:?}",
+                    tenant_id, e
+                ),
             }
         }
     }
