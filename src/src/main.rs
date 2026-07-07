@@ -1868,7 +1868,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1024);
-    let skill_cache = routes::SkillActionCache::new(skill_cache_capacity);
+    // #1210: shared skill-action cache across gateway replicas when
+    // REDIS_URL is set; unset (the default), this is the original
+    // per-process LRU.
+    if redis_url.is_some() {
+        info!("Skill Action Cache: using shared Redis-backed cache (REDIS_URL set)");
+    }
+    let skill_cache =
+        routes::SkillActionCache::new_shared(skill_cache_capacity, redis_url.as_deref()).await;
 
     // In-memory LRU dedup cache for opt-in /v1/authorize replay-protection
     // nonces (#1306). AEGIS_REPLAY_NONCE_CACHE_CAPACITY == 0 disables it

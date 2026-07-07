@@ -122,11 +122,14 @@ pub async fn discover_mcp_tools(
     let skill_key = format!("mcp:{}", server_key);
     let mut registered = 0usize;
     for tool in &payload.tools {
-        state.skill_cache.invalidate(&SkillActionCache::cache_key(
-            &tenant_id,
-            &skill_key,
-            &tool.tool_key,
-        ));
+        state
+            .skill_cache
+            .invalidate(&SkillActionCache::cache_key(
+                &tenant_id,
+                &skill_key,
+                &tool.tool_key,
+            ))
+            .await;
 
         let audit_record = AuditEventRecord {
             id: Uuid::new_v4().to_string(),

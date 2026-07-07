@@ -387,11 +387,14 @@ pub async fn register_tool(
     // #899: a (re-)registration may tighten this action's settings, so drop any
     // cached entry — the next authorize re-reads the fresh row (fail-closed).
     for action in &payload.actions {
-        state.skill_cache.invalidate(&SkillActionCache::cache_key(
-            &tenant_id,
-            &payload.skill_key,
-            &action.action_key,
-        ));
+        state
+            .skill_cache
+            .invalidate(&SkillActionCache::cache_key(
+                &tenant_id,
+                &payload.skill_key,
+                &action.action_key,
+            ))
+            .await;
     }
 
     (

@@ -671,7 +671,7 @@ pub async fn authorize_action_impl(
     // registrations, so serve it from the LRU and fall back to the DB on a miss.
     let skill_cache_key =
         SkillActionCache::cache_key(&tenant_id, &normalized_tool, &normalized_action);
-    let cached_action_meta = state.skill_cache.get(&skill_cache_key);
+    let cached_action_meta = state.skill_cache.get(&skill_cache_key).await;
 
     // #1510: `mcp_server_key` only depends on `normalized_tool`, already
     // resolved above — it doesn't need the skill-action lookup's result, so
@@ -748,7 +748,8 @@ pub async fn authorize_action_impl(
                 // Cache only positive hits; unknown actions keep missing to the DB.
                 state
                     .skill_cache
-                    .insert(skill_cache_key.clone(), meta.clone());
+                    .insert(skill_cache_key.clone(), meta.clone())
+                    .await;
                 Some(meta)
             }
             Ok(None) => None,
@@ -6510,38 +6511,40 @@ mod tests {
         assert_eq!(content_encoding.unwrap(), "gzip");
     }
 
-    #[test]
-    fn skill_action_cache_hit_evict_invalidate_and_disabled() {
+    #[tokio::test]
+    async fn skill_action_cache_hit_evict_invalidate_and_disabled() {
         let meta = |r: &str| (r.to_string(), false, false, "policy".to_string());
         let cache = SkillActionCache::new(2);
         let k1 = SkillActionCache::cache_key("t1", "s", "a1");
         let k2 = SkillActionCache::cache_key("t1", "s", "a2");
         let k3 = SkillActionCache::cache_key("t1", "s", "a3");
 
-        cache.insert(k1.clone(), meta("low"));
-        assert_eq!(cache.get(&k1), Some(meta("low"))); // hit
-                                                       // Tenant-scoped: same skill/action under another tenant is a distinct key.
+        cache.insert(k1.clone(), meta("low")).await;
+        assert_eq!(cache.get(&k1).await, Some(meta("low"))); // hit
+                                                             // Tenant-scoped: same skill/action under another tenant is a distinct key.
         assert_eq!(
-            cache.get(&SkillActionCache::cache_key("t2", "s", "a1")),
+            cache
+                .get(&SkillActionCache::cache_key("t2", "s", "a1"))
+                .await,
             None
         );
 
         // LRU eviction at capacity 2: k1 is most-recently-used, so inserting k3
         // over capacity evicts the least-recent (k2).
-        cache.insert(k2.clone(), meta("low"));
-        let _ = cache.get(&k1);
-        cache.insert(k3.clone(), meta("low"));
-        assert_eq!(cache.get(&k2), None);
-        assert!(cache.get(&k1).is_some());
-        assert!(cache.get(&k3).is_some());
+        cache.insert(k2.clone(), meta("low")).await;
+        let _ = cache.get(&k1).await;
+        cache.insert(k3.clone(), meta("low")).await;
+        assert_eq!(cache.get(&k2).await, None);
+        assert!(cache.get(&k1).await.is_some());
+        assert!(cache.get(&k3).await.is_some());
 
-        cache.invalidate(&k1);
-        assert_eq!(cache.get(&k1), None);
+        cache.invalidate(&k1).await;
+        assert_eq!(cache.get(&k1).await, None);
 
         // Capacity 0 disables the cache entirely.
         let disabled = SkillActionCache::new(0);
-        disabled.insert(k1.clone(), meta("low"));
-        assert_eq!(disabled.get(&k1), None);
+        disabled.insert(k1.clone(), meta("low")).await;
+        assert_eq!(disabled.get(&k1).await, None);
     }
 
     #[test]
