@@ -405,6 +405,13 @@ pub type SkillActionMeta = (String, bool, bool, String);
 pub struct SkillActionCache {
     inner: Mutex<SkillActionCacheInner>,
     capacity: usize,
+    // #1210: shared cache across gateway replicas when `REDIS_URL` is set at
+    // startup; `None` (the default) preserves the original per-process LRU
+    // exactly, including in every existing test. A cache is not
+    // authorization-critical (unlike the rate limiter), so a Redis miss or
+    // error here is simply treated as a cache miss -- the caller's existing
+    // DB fallback is always correct, just slower.
+    redis: Option<redis::aio::ConnectionManager>,
 }
 
 #[derive(Default)]
@@ -414,19 +421,82 @@ struct SkillActionCacheInner {
     order: VecDeque<String>,
 }
 
+impl std::fmt::Debug for SkillActionCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillActionCache")
+            .field("capacity", &self.capacity)
+            .field("redis_backed", &self.redis.is_some())
+            .finish()
+    }
+}
+
+/// TTL applied to Redis-backed skill-action cache entries. A registration
+/// write always invalidates its key explicitly (see `register_tool` /
+/// `discover_mcp_tools`); this TTL is only a safety net against an
+/// invalidation that never reaches a given replica (e.g. it was down).
+const SKILL_CACHE_REDIS_TTL_SECS: u64 = 300;
+
 impl SkillActionCache {
     /// `capacity == 0` disables the cache (every lookup misses, nothing stored).
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: Mutex::new(SkillActionCacheInner::default()),
             capacity,
+            redis: None,
         }
+    }
+
+    /// #1210: like [`SkillActionCache::new`], but backed by Redis when
+    /// `redis_url` resolves to a reachable server -- shares registration
+    /// metadata across gateway replicas instead of each process warming its
+    /// own LRU from the DB independently. A `None`/empty `redis_url`, or a
+    /// failed connection attempt, falls back to the in-memory LRU (logged,
+    /// not fatal).
+    pub async fn new_shared(capacity: usize, redis_url: Option<&str>) -> Self {
+        let redis = match redis_url.map(str::trim).filter(|url| !url.is_empty()) {
+            Some(url) => {
+                match tokio::time::timeout(std::time::Duration::from_secs(5), Self::connect(url))
+                    .await
+                {
+                    Ok(Ok(manager)) => Some(manager),
+                    Ok(Err(e)) => {
+                        error!(
+                            "skill cache: Redis unreachable at startup ({:?}); falling back to in-memory LRU",
+                            e
+                        );
+                        None
+                    }
+                    Err(_) => {
+                        error!(
+                            "skill cache: timed out connecting to Redis after 5s; falling back to in-memory LRU"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        Self {
+            inner: Mutex::new(SkillActionCacheInner::default()),
+            capacity,
+            redis,
+        }
+    }
+
+    async fn connect(redis_url: &str) -> redis::RedisResult<redis::aio::ConnectionManager> {
+        redis::Client::open(redis_url)?
+            .get_connection_manager()
+            .await
     }
 
     pub fn cache_key(tenant_id: &str, skill_key: &str, action_key: &str) -> String {
         // \x1f (unit separator) cannot appear in these identifiers, so the join
         // is unambiguous across the three tenant-scoped components.
         format!("{tenant_id}\x1f{skill_key}\x1f{action_key}")
+    }
+
+    fn redis_key(key: &str) -> String {
+        format!("aegis:skillcache:{key}")
     }
 
     fn touch(order: &mut VecDeque<String>, key: &str) {
@@ -436,10 +506,14 @@ impl SkillActionCache {
         order.push_back(key.to_string());
     }
 
-    /// Return a cached positive hit, marking it most-recently-used.
-    pub fn get(&self, key: &str) -> Option<SkillActionMeta> {
+    /// Return a cached positive hit, marking it most-recently-used (in-memory
+    /// mode) or refreshing its TTL (Redis mode is stateless per read).
+    pub async fn get(&self, key: &str) -> Option<SkillActionMeta> {
         if self.capacity == 0 {
             return None;
+        }
+        if let Some(manager) = &self.redis {
+            return Self::get_redis(manager, key).await;
         }
         let mut inner = match self.inner.lock() {
             Ok(g) => g,
@@ -452,9 +526,43 @@ impl SkillActionCache {
         val
     }
 
-    /// Store a positive lookup result, evicting the least-recent entry if full.
-    pub fn insert(&self, key: String, value: SkillActionMeta) {
+    async fn get_redis(
+        manager: &redis::aio::ConnectionManager,
+        key: &str,
+    ) -> Option<SkillActionMeta> {
+        let outcome = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+            let mut conn = manager.clone();
+            redis::cmd("GET")
+                .arg(Self::redis_key(key))
+                .query_async::<Option<String>>(&mut conn)
+                .await
+        })
+        .await;
+        match outcome {
+            Ok(Ok(Some(json))) => serde_json::from_str(&json).ok(),
+            Ok(Ok(None)) => None,
+            Ok(Err(e)) => {
+                error!(
+                    "skill cache: Redis GET error ({:?}); treating as cache miss",
+                    e
+                );
+                None
+            }
+            Err(_) => {
+                error!("skill cache: Redis GET timed out; treating as cache miss");
+                None
+            }
+        }
+    }
+
+    /// Store a positive lookup result, evicting the least-recent entry if full
+    /// (in-memory mode) or writing through with a TTL (Redis mode).
+    pub async fn insert(&self, key: String, value: SkillActionMeta) {
         if self.capacity == 0 {
+            return;
+        }
+        if let Some(manager) = &self.redis {
+            Self::insert_redis(manager, &key, &value).await;
             return;
         }
         let mut inner = match self.inner.lock() {
@@ -472,9 +580,51 @@ impl SkillActionCache {
         }
     }
 
+    async fn insert_redis(
+        manager: &redis::aio::ConnectionManager,
+        key: &str,
+        value: &SkillActionMeta,
+    ) {
+        let Ok(json) = serde_json::to_string(value) else {
+            return;
+        };
+        let outcome = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+            let mut conn = manager.clone();
+            redis::cmd("SET")
+                .arg(Self::redis_key(key))
+                .arg(json)
+                .arg("EX")
+                .arg(SKILL_CACHE_REDIS_TTL_SECS)
+                .query_async::<()>(&mut conn)
+                .await
+        })
+        .await;
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => error!("skill cache: Redis SET error ({:?})", e),
+            Err(_) => error!("skill cache: Redis SET timed out"),
+        }
+    }
+
     /// Drop a key so the next lookup re-reads the DB (called on every
     /// registration write that could change the action's settings).
-    pub fn invalidate(&self, key: &str) {
+    pub async fn invalidate(&self, key: &str) {
+        if let Some(manager) = &self.redis {
+            let outcome = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+                let mut conn = manager.clone();
+                redis::cmd("DEL")
+                    .arg(Self::redis_key(key))
+                    .query_async::<()>(&mut conn)
+                    .await
+            })
+            .await;
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => error!("skill cache: Redis DEL error ({:?})", e),
+                Err(_) => error!("skill cache: Redis DEL timed out"),
+            }
+            return;
+        }
         let mut inner = match self.inner.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
