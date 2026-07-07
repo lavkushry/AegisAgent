@@ -1780,7 +1780,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Rate Limiter - Capacity: {}, Refill Rate: {} tokens/s",
         rate_limit_capacity, rate_limit_refill_rate
     );
-    let rate_limiter = routes::RateLimiter::new(rate_limit_capacity, rate_limit_refill_rate);
+    // #1210: shared rate-limit state across gateway replicas when REDIS_URL
+    // is set; unset (the default), this is the original per-process bucket.
+    let redis_url = std::env::var("REDIS_URL").ok();
+    if redis_url.is_some() {
+        info!("Rate Limiter: using shared Redis-backed token bucket (REDIS_URL set)");
+    }
+    let rate_limiter = routes::RateLimiter::new_shared(
+        rate_limit_capacity,
+        rate_limit_refill_rate,
+        redis_url.as_deref(),
+    )
+    .await;
 
     // Read quota configuration
     let quota_limit: u64 = std::env::var("AEGIS_QUOTA_LIMIT")
@@ -1810,10 +1821,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(10.0);
-    let approval_callback_ip_limiter = routes::RateLimiter::new(
+    let approval_callback_ip_limiter = routes::RateLimiter::new_shared(
         approval_callback_ip_limit_capacity,
         approval_callback_ip_limit_capacity / 60.0,
-    );
+        redis_url.as_deref(),
+    )
+    .await;
 
     // Per-approval_id failed-attempt tracker for approval-decision callbacks
     // (#1307, AC#2): max 5 failed (4xx) attempts per approval_id per hour.

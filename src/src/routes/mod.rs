@@ -90,11 +90,54 @@ struct TokenBucket {
     last_refreshed: Instant,
 }
 
-#[derive(Debug)]
+// #1210: atomic Redis-backed token bucket, mirroring the in-memory algorithm
+// below exactly (refill-then-consume-one) so behavior is identical whether a
+// given check happens to hit the shared or per-process path. `KEYS[1]` holds
+// a hash of `tokens`/`ts_ms`; TTL bounds memory for tenants that go idle.
+const TOKEN_BUCKET_LUA: &str = r#"
+local tokens = tonumber(redis.call('HGET', KEYS[1], 'tokens'))
+local ts_ms = tonumber(redis.call('HGET', KEYS[1], 'ts_ms'))
+local capacity = tonumber(ARGV[1])
+local refill_rate = tonumber(ARGV[2])
+local now_ms = tonumber(ARGV[3])
+
+if tokens == nil then
+  tokens = capacity
+  ts_ms = now_ms
+end
+
+local elapsed = math.max(0, now_ms - ts_ms) / 1000.0
+tokens = math.min(capacity, tokens + elapsed * refill_rate)
+
+local allowed = 0
+if tokens >= 1.0 then
+  tokens = tokens - 1.0
+  allowed = 1
+end
+
+redis.call('HSET', KEYS[1], 'tokens', tostring(tokens), 'ts_ms', tostring(now_ms))
+redis.call('EXPIRE', KEYS[1], 3600)
+return allowed
+"#;
+
 pub struct RateLimiter {
     buckets: Mutex<HashMap<String, TokenBucket>>,
     pub capacity: f64,
     pub refill_rate: f64,
+    // #1210: shared state across gateway replicas when `REDIS_URL` is set at
+    // startup; `None` (the default) preserves the original per-process
+    // in-memory behavior exactly, including in every existing test.
+    redis: Option<redis::aio::ConnectionManager>,
+}
+
+impl std::fmt::Debug for RateLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimiter")
+            .field("capacity", &self.capacity)
+            .field("refill_rate", &self.refill_rate)
+            .field("redis_backed", &self.redis.is_some())
+            .finish()
+    }
 }
 
 impl RateLimiter {
@@ -103,14 +146,111 @@ impl RateLimiter {
             buckets: Mutex::new(HashMap::new()),
             capacity,
             refill_rate,
+            redis: None,
         }
     }
 
-    pub fn check_rate_limit(&self, tenant_id: &str) -> bool {
+    /// #1210: like [`RateLimiter::new`], but backed by Redis when `redis_url`
+    /// resolves to a reachable server — shares rate-limit state across
+    /// gateway replicas instead of each process tracking its own buckets.
+    /// A `None`/empty `redis_url`, or a failed connection attempt, falls back
+    /// to the in-memory bucket (logged, not fatal): a missing or momentarily
+    /// unreachable Redis should never prevent the gateway from starting.
+    pub async fn new_shared(capacity: f64, refill_rate: f64, redis_url: Option<&str>) -> Self {
+        let redis = match redis_url.map(str::trim).filter(|url| !url.is_empty()) {
+            Some(url) => {
+                match tokio::time::timeout(std::time::Duration::from_secs(5), Self::connect(url))
+                    .await
+                {
+                    Ok(Ok(manager)) => Some(manager),
+                    Ok(Err(e)) => {
+                        error!(
+                            "rate limiter: Redis unreachable at startup ({:?}); falling back to in-memory rate limiting",
+                            e
+                        );
+                        None
+                    }
+                    Err(_) => {
+                        error!(
+                            "rate limiter: timed out connecting to Redis after 5s; falling back to in-memory rate limiting"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            capacity,
+            refill_rate,
+            redis,
+        }
+    }
+
+    async fn connect(redis_url: &str) -> redis::RedisResult<redis::aio::ConnectionManager> {
+        redis::Client::open(redis_url)?
+            .get_connection_manager()
+            .await
+    }
+
+    pub async fn check_rate_limit(&self, tenant_id: &str) -> bool {
         if self.capacity <= 0.0 || self.refill_rate <= 0.0 {
             return true;
         }
 
+        if let Some(manager) = &self.redis {
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                self.check_rate_limit_redis(manager, tenant_id),
+            )
+            .await;
+            // Fail open: a Redis blip (error or timeout) is a
+            // defense-in-depth-layer outage, not an authorization
+            // ambiguity — it must not turn into a gateway-wide denial of
+            // service. The in-memory path is not used as a fallback here
+            // since it would silently diverge from the shared bucket state
+            // other replicas are enforcing.
+            return match outcome {
+                Ok(Ok(allowed)) => allowed,
+                Ok(Err(e)) => {
+                    error!(
+                        "rate limiter: Redis error for tenant {} ({:?}); failing open for this check",
+                        tenant_id, e
+                    );
+                    true
+                }
+                Err(_) => {
+                    error!(
+                        "rate limiter: Redis check timed out for tenant {}; failing open for this check",
+                        tenant_id
+                    );
+                    true
+                }
+            };
+        }
+
+        self.check_rate_limit_memory(tenant_id)
+    }
+
+    async fn check_rate_limit_redis(
+        &self,
+        manager: &redis::aio::ConnectionManager,
+        tenant_id: &str,
+    ) -> redis::RedisResult<bool> {
+        let mut conn = manager.clone();
+        let now_ms = Utc::now().timestamp_millis();
+        let allowed: i64 = redis::Script::new(TOKEN_BUCKET_LUA)
+            .key(format!("aegis:ratelimit:{tenant_id}"))
+            .arg(self.capacity)
+            .arg(self.refill_rate)
+            .arg(now_ms)
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(allowed == 1)
+    }
+
+    fn check_rate_limit_memory(&self, tenant_id: &str) -> bool {
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 
