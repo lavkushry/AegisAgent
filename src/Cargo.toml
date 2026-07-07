@@ -19,6 +19,11 @@ aegis-storage = { path = "../lib/storage" }
 aegis-policy = { path = "../lib/policy" }
 aegis-soc = { path = "../lib/soc" }
 aegis-egress = { path = "../lib/egress" }
+# Phase 6 tool broker: canonical action hashing / credential indirection
+# (6.1) and the connector execution engine (6.3), behind
+# POST /v1/broker/execute (6.4).
+aegis-tool-broker-core = { path = "../lib/tool-broker-core" }
+aegis-tool-broker-connectors = { path = "../lib/tool-broker-connectors" }
 tonic = "0.12.3"
 prost = "0.13.5"
 axum = { version = "0.7.5", features = ["macros", "ws"] }

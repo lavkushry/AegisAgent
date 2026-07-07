@@ -1167,6 +1167,12 @@ pub struct AppState {
     /// owned and awaited elsewhere (e.g. graceful shutdown draining the event
     /// channel). Empty in tests, which never spawn the real background tasks.
     pub background_task_handles: std::sync::Mutex<Vec<(&'static str, tokio::task::AbortHandle)>>,
+    /// Phase 6.4: the tool-broker execution engine behind
+    /// `POST /v1/broker/execute`. Built once at startup by
+    /// [`crate::routes::broker::default_broker_executor`]; the route is a
+    /// thin adapter that consumes the approval atomically via storage, then
+    /// delegates here.
+    pub broker_executor: Arc<aegis_tool_broker_connectors::BrokerExecutor>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -1801,6 +1807,7 @@ pub mod benchutil {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         Ok((state, tenant_id, agent_token))
@@ -2107,6 +2114,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         (state, tenant_id, agent_token)
@@ -2163,6 +2171,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         (state, tenant_id, agent_token)
@@ -2219,6 +2228,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         (state, tenant_id, agent_token)
@@ -2281,6 +2291,7 @@ pub(crate) mod test_helpers {
                 fail_open,
             ))),
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         (state, tenant_id, agent_token)
@@ -2337,6 +2348,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         (state, tenant_id, agent_token)
@@ -2448,6 +2460,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         register_default_test_fixtures(&state, &tenant_id).await;
@@ -2580,6 +2593,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         (state, tenant_id, agent_token)

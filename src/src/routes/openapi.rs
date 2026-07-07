@@ -137,6 +137,7 @@ use utoipa::OpenApi;
         list_broker_tools_api,
         get_broker_tool_api,
         set_broker_tool_status_api,
+        execute_broker_action_api,
         slack_callback_api,
         list_control_commands_api,
         get_control_command_api,
@@ -1820,6 +1821,21 @@ fn get_broker_tool_api() {}
     )
 )]
 fn set_broker_tool_status_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/broker/execute",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Broker action executed"),
+        (status = 403, description = "Tool not active, or approval required/mismatched"),
+        (status = 404, description = "Broker tool not found"),
+        (status = 409, description = "Approval bound to a different action_hash"),
+        (status = 501, description = "No connector registered for connector_type"),
+        (status = 503, description = "Credential resolution or connector execution failed")
+    )
+)]
+fn execute_broker_action_api() {}
 
 #[utoipa::path(
     post,

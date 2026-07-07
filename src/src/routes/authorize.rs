@@ -2243,6 +2243,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         let request = mcp_authorize_request("mcp:server:tool", "read");
@@ -2307,6 +2308,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         // First request is allowed through quota
@@ -7708,6 +7710,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         register_high_risk_action(state.clone()).await;
@@ -7920,6 +7923,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         register_high_risk_action(state.clone()).await;

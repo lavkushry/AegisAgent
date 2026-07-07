@@ -1038,6 +1038,10 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/broker/tools/:id/status",
             post(routes::set_broker_tool_status),
         )
+        // Tool broker (Phase 6.4): execute an approved action through a
+        // registered connector — consumes the approval atomically, then
+        // delegates to the BrokerExecutor; raw credentials never leave it
+        .route("/broker/execute", post(routes::execute_broker_action))
         // SOC Phase 6: Incident lifecycle — close an open incident
         .route("/incidents/:id/close", post(routes::close_incident))
         // SOC Phase 6: RCA Narrator
@@ -2046,6 +2050,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         qdrant_exporter,
         admission_webhook,
         background_task_handles: std::sync::Mutex::new(background_task_handles),
+        broker_executor: routes::broker::default_broker_executor(),
     });
 
     // #883: Cedar policy hot-reload — opt-in background watcher that calls
@@ -2791,6 +2796,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         let app = Router::new()
@@ -3092,6 +3098,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
         });
 
         let app = Router::new()
@@ -3437,6 +3444,7 @@ mod tests {
                 "doomed_task",
                 doomed_abort_handle,
             )]),
+            broker_executor: routes::broker::default_broker_executor(),
         });
 
         let app = Router::new()
