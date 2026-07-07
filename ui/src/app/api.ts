@@ -280,6 +280,22 @@ export interface BacktestResult {
   matched_decision_ids: string[];
 }
 
+/**
+ * Reads the double-submit CSRF token the gateway embeds in `index.html`
+ * (`serve_dashboard_index`, `<meta name="csrf-token">`) alongside an
+ * `HttpOnly` `aegis_csrf` cookie of the same value. The cookie can't be read
+ * from JS by design — this meta tag is how the client echoes it back as
+ * `X-CSRF-Token` so `csrf_validation_middleware` accepts same-origin
+ * state-changing requests. `undefined` outside the browser (SSR) or before
+ * the dashboard shell has loaded the gateway-served page.
+ */
+function getCsrfToken(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  return (
+    document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ?? undefined
+  );
+}
+
 export function buildGatewayHeaders(options: FetchOptions, hasBody = false) {
   const tenantId = options.tenantId.trim();
   if (!tenantId) {
@@ -296,6 +312,10 @@ export function buildGatewayHeaders(options: FetchOptions, hasBody = false) {
   }
   if (hasBody) {
     headers["Content-Type"] = "application/json";
+  }
+  const csrfToken = getCsrfToken();
+  if (csrfToken) {
+    headers["X-CSRF-Token"] = csrfToken;
   }
   return headers;
 }

@@ -9,7 +9,7 @@ test.describe("mocked SOC security controls (#1638)", () => {
     await openMockedConsole(page);
     await page.getByRole("button", { name: "Agents Fleet" }).click();
     await page.getByRole("row").filter({ hasText: AGENT_KEY }).click();
-    const freeze = page.getByRole("button", { name: "Freeze" });
+    const freeze = page.getByRole("button", { name: "Freeze", exact: true });
     await expect(freeze).toBeDisabled();
     await expect(freeze).toHaveAttribute("title", /Requires analyst/i);
     await mock.dispose();
@@ -31,7 +31,7 @@ test.describe("mocked SOC security controls (#1638)", () => {
     await openMockedConsole(page);
     await page.getByRole("button", { name: "Agents Fleet" }).click();
     await page.getByRole("row").filter({ hasText: AGENT_KEY }).click();
-    await page.getByRole("button", { name: "Freeze" }).click();
+    await page.getByRole("button", { name: "Freeze", exact: true }).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
     const confirm = dialog.getByRole("button", { name: /Freeze agent/i });
@@ -42,18 +42,26 @@ test.describe("mocked SOC security controls (#1638)", () => {
     expect(mock.unhandled).toEqual([]);
   });
 
-  test("API failure surfaces operator-visible error without leaking secrets", async ({ page }) => {
-    const mock = await installMockGateway(page, {
-      role: "analyst",
-      failingPaths: ["/v1/agents"],
+  test.describe("simulated gateway failure", () => {
+    // A failed fetch always produces its own browser-logged "Failed to load
+    // resource" console entry, independent of how gracefully the app
+    // surfaces it in the UI — that entry is this test's own simulated
+    // failure, not an unhandled bug, so it's the one thing exempted here.
+    test.use({ expectedConsoleErrors: [/Failed to load resource.*500/i] });
+
+    test("API failure surfaces operator-visible error without leaking secrets", async ({ page }) => {
+      const mock = await installMockGateway(page, {
+        role: "analyst",
+        failingPaths: ["/v1/agents"],
+      });
+      await openMockedConsole(page);
+      await page.getByRole("button", { name: "Agents Fleet" }).click();
+      await expect(page.getByText(/Failed to load agents|Simulated gateway failure/i)).toBeVisible({
+        timeout: 10_000,
+      });
+      await assertNoSecrets(page, [FAKE_SECRET]);
+      await mock.dispose();
     });
-    await openMockedConsole(page);
-    await page.getByRole("button", { name: "Agents Fleet" }).click();
-    await expect(page.getByText(/Failed to load agents|Simulated gateway failure/i)).toBeVisible({
-      timeout: 10_000,
-    });
-    await assertNoSecrets(page, [FAKE_SECRET]);
-    await mock.dispose();
   });
 
   test("settings and config surfaces never render raw bearer secrets", async ({ page }) => {

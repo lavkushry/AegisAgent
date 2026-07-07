@@ -80,7 +80,14 @@ export default function SidebarNav() {
       </div>
       <div className="mb-3 rounded border border-[var(--border-default)] px-3 py-2 text-[10px] text-[var(--text-secondary)]">
         <span className="block uppercase tracking-wider text-[var(--text-muted)]">Tenant context</span>
-        <strong className="block truncate font-mono">{activeTenant || "Not selected"}</strong>
+        {/* activeTenant hydrates from localStorage (see app/store.ts), which
+            is unavailable during SSR/static export -- the server always
+            renders "Not selected" and the client corrects to the persisted
+            tenant on the very first render, a one-time, intentional
+            client/server text difference. */}
+        <strong className="block truncate font-mono" suppressHydrationWarning>
+          {activeTenant || "Not selected"}
+        </strong>
         {streamLabel ? (
           <span className="mt-1 flex items-center gap-1.5 text-[var(--text-muted)]">
             <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: streamColor }} aria-hidden="true" />

@@ -6,7 +6,13 @@ export const TENANT_ID = "tenant_123";
 const SECRET_PATTERNS = [
   /sk-live-[A-Za-z0-9-]+/,
   /Bearer\s+[A-Za-z0-9._-]{16,}/,
-  /"api_key"\s*:\s*"(?!\\[REDACTED\\])/,
+  // Single backslash: `\[`/`\]` escape a literal bracket in a JS regex, so
+  // this matches an `api_key` field whose value is anything OTHER than the
+  // exact redaction marker `[REDACTED]`. The doubled `\\[`/`\\]` this
+  // replaced instead matched a literal backslash followed by one of
+  // R/E/D/A/C/T — a pattern nothing ever produces — so it flagged the
+  // correctly redacted `"[REDACTED]"` value as if it were a leaked secret.
+  /"api_key"\s*:\s*"(?!\[REDACTED\])/,
 ];
 
 /** Configure production UI credentials for one browser page without persisting the bearer token. */

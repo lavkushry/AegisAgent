@@ -30,8 +30,14 @@ export async function installMockGateway(
     const path = url.pathname;
     const tenantHeader = request.headers()["x-aegis-tenant-id"];
     const tenantId = tenantHeader || scenario.tenantId || MOCK_TENANT_A;
+    let body: unknown;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = undefined;
+    }
 
-    const resolved = resolveMockResponse(request.method(), path, tenantId, scenario, runtime);
+    const resolved = resolveMockResponse(request.method(), path, tenantId, scenario, runtime, body);
     if (!resolved) {
       unhandled.push(`${request.method()} ${path}`);
       await route.fulfill({

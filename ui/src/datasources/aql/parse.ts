@@ -31,7 +31,11 @@ interface Token {
 const KEYWORDS = new Set(["and", "or", "to", "stats", "count", "count_over_time", "by"]);
 
 function isIdentChar(ch: string, first: boolean): boolean {
-  if (first) return /[A-Za-z_#@-]/.test(ch);
+  // Field values are frequently UUIDs/hashes, which start with a digit ~62.5%
+  // of the time (10 of 16 hex characters) -- excluding digits from the first
+  // character left "agent_id:3af7442c-..." unparseable at random. There is no
+  // separate numeric-literal token kind for this to collide with.
+  if (first) return /[A-Za-z0-9_#@-]/.test(ch);
   return /[A-Za-z0-9_@.;'#\\/-]/.test(ch);
 }
 

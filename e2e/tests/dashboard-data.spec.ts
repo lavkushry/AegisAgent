@@ -12,7 +12,7 @@ test.describe("production SOC console data workflows", () => {
     const row = page.getByRole("row").filter({ hasText: agent.agentKey });
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.click();
-    await expect(page.getByRole("button", { name: "Freeze" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Freeze", exact: true })).toBeDisabled();
     await expect(page.getByText("Active response")).toBeVisible();
   });
 
@@ -38,7 +38,7 @@ test.describe("production SOC console data workflows", () => {
     const serverCard = page.getByRole("button", { name: new RegExp(serverKey) });
     await expect(serverCard).toBeVisible({ timeout: 10_000 });
     await serverCard.click();
-    await expect(page.getByText(/Manifest Drift History/)).toBeVisible();
+    await expect(page.getByText(/Manifest drift timeline/i)).toBeVisible();
   });
 
   test("Explore executes AQL and renders the matching decision", async ({ page, request, baseURL }) => {
