@@ -1149,6 +1149,42 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // Prompt/model capture (Phase 7.1)
+    async fn insert_prompt_event(&self, record: &PromptEventRecord) -> Result<bool, AegisError> {
+        db::insert_prompt_event(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_prompt_event_by_event_id(
+        &self,
+        tenant_id: &str,
+        event_id: &str,
+    ) -> Result<Option<PromptEventRecord>, AegisError> {
+        db::get_prompt_event_by_event_id(&self.pool, tenant_id, event_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn insert_model_call_event(
+        &self,
+        record: &ModelCallEventRecord,
+    ) -> Result<bool, AegisError> {
+        db::insert_model_call_event(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_model_call_event_by_event_id(
+        &self,
+        tenant_id: &str,
+        event_id: &str,
+    ) -> Result<Option<ModelCallEventRecord>, AegisError> {
+        db::get_model_call_event_by_event_id(&self.pool, tenant_id, event_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // Control commands (Phase 2.3)
     async fn insert_control_command(
         &self,

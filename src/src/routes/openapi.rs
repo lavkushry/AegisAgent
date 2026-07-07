@@ -149,6 +149,8 @@ use utoipa::OpenApi;
         unblock_egress_api,
         ingest_event_api,
         ingest_runtime_event_api,
+        ingest_prompt_event_api,
+        ingest_model_call_api,
         get_openapi_json_api,
         list_playbooks_api,
         delete_playbook_api,
@@ -1946,6 +1948,28 @@ fn ingest_event_api() {}
     )
 )]
 fn ingest_runtime_event_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/ingest/prompt-events",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Ingest prompt lineage event"),
+        (status = 400, description = "Malformed prompt_hash or an unredacted preview")
+    )
+)]
+fn ingest_prompt_event_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/ingest/model-calls",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Ingest model-call lineage event"),
+        (status = 400, description = "Malformed hash or invalid status")
+    )
+)]
+fn ingest_model_call_api() {}
 
 #[utoipa::path(
     get,

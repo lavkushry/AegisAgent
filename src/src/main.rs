@@ -989,6 +989,10 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/agent-cage/runs/:id", get(routes::get_agent_run))
         .route("/ingest/runtime-events", post(routes::ingest_runtime_event))
         .route("/runtime/runs/:id/events", get(routes::list_run_events))
+        // Prompt/model capture (Phase 7.1): lineage-only ingest — a hash and
+        // a caller-redacted preview, never a raw prompt/request/response body
+        .route("/ingest/prompt-events", post(routes::ingest_prompt_event))
+        .route("/ingest/model-calls", post(routes::ingest_model_call))
         // Cage-run control (Phase 4.3): each issues a gateway-signed control
         // command targeting the run rather than mutating it directly.
         .route("/agent-cage/runs/:id/pause", post(routes::pause_run))

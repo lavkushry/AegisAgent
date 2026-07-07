@@ -691,6 +691,27 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
     ) -> Result<Vec<(String, i64)>, AegisError>;
 
+    // Prompt/model capture (Phase 7.1: lineage-only ingest, never raw prompts/payloads)
+    /// Idempotently append a prompt event; `true` = newly inserted, `false` =
+    /// deduped (the `(tenant_id, event_id)` was already present).
+    async fn insert_prompt_event(&self, record: &PromptEventRecord) -> Result<bool, AegisError>;
+    async fn get_prompt_event_by_event_id(
+        &self,
+        tenant_id: &str,
+        event_id: &str,
+    ) -> Result<Option<PromptEventRecord>, AegisError>;
+    /// Idempotently append a model-call event; `true` = newly inserted,
+    /// `false` = deduped (the `(tenant_id, event_id)` was already present).
+    async fn insert_model_call_event(
+        &self,
+        record: &ModelCallEventRecord,
+    ) -> Result<bool, AegisError>;
+    async fn get_model_call_event_by_event_id(
+        &self,
+        tenant_id: &str,
+        event_id: &str,
+    ) -> Result<Option<ModelCallEventRecord>, AegisError>;
+
     // Control commands (Phase 2.3: signed gateway->sensor commands)
     async fn insert_control_command(&self, record: &ControlCommandRecord)
         -> Result<(), AegisError>;

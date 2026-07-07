@@ -50,6 +50,7 @@ pub mod mcp;
 pub mod openapi;
 pub mod playbook;
 pub mod policy;
+pub mod prompt_capture;
 pub mod receipts;
 #[cfg(test)]
 pub mod route_parity;
@@ -77,6 +78,7 @@ pub use mcp::*;
 pub use openapi::*;
 pub use playbook::*;
 pub use policy::*;
+pub use prompt_capture::*;
 pub use receipts::*;
 pub use runtime::*;
 pub use sensors::*;
