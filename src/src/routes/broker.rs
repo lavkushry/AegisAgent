@@ -19,6 +19,13 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tracing::error;
+use uuid::Uuid;
+
+use aegis_tool_broker_connectors::{
+    BrokerExecutor, BrokerToolBinding, ConnectorRegistry, ConsumedApproval, ExecuteError,
+    FilesystemConnector, GithubConnector, GithubMode, HttpConnector, ShellConnector,
+};
+use aegis_tool_broker_core::{action_hash, BrokerAction, CredentialRef, EnvCredentialResolver};
 
 use crate::models::*;
 
@@ -184,6 +191,269 @@ pub async fn set_broker_tool_status(
             StatusError::internal("Database error").into_response()
         }
     }
+}
+
+/// Builds the [`BrokerExecutor`] used by [`execute_broker_action`]. GitHub
+/// runs in mock mode unless `AEGIS_GITHUB_API_BASE` is set (real mode);
+/// `HttpConnector` is always registered (HTTPS-only). The filesystem and
+/// shell connectors are opt-in via `AEGIS_BROKER_WORKSPACE` — with no
+/// configured workspace there is nothing safe to scope them to, so they're
+/// simply absent from the registry (an execute against `filesystem`/`shell`
+/// then fails closed with `UnknownConnectorType`, not a wide-open default).
+pub fn default_broker_executor() -> Arc<BrokerExecutor> {
+    let github_mode = match std::env::var("AEGIS_GITHUB_API_BASE") {
+        Ok(base_url) if !base_url.trim().is_empty() => GithubMode::Real {
+            base_url: base_url.trim_end_matches('/').to_string(),
+        },
+        _ => GithubMode::Mock,
+    };
+    let mut registry = ConnectorRegistry::default()
+        .register(Arc::new(GithubConnector::new(github_mode)))
+        .register(Arc::new(HttpConnector::new()));
+
+    if let Ok(workspace) = std::env::var("AEGIS_BROKER_WORKSPACE") {
+        if !workspace.trim().is_empty() {
+            match FilesystemConnector::new(&workspace) {
+                Ok(fs) => registry = registry.register(Arc::new(fs)),
+                Err(e) => error!(
+                    "AEGIS_BROKER_WORKSPACE {:?} unusable for filesystem connector: {}",
+                    workspace, e
+                ),
+            }
+            match ShellConnector::new(&workspace) {
+                Ok(shell) => registry = registry.register(Arc::new(shell)),
+                Err(e) => error!(
+                    "AEGIS_BROKER_WORKSPACE {:?} unusable for shell connector: {}",
+                    workspace, e
+                ),
+            }
+        }
+    }
+
+    Arc::new(BrokerExecutor::new(
+        registry,
+        Arc::new(EnvCredentialResolver),
+    ))
+}
+
+/// Body for `POST /v1/broker/execute`.
+#[derive(Debug, Deserialize)]
+pub struct ExecuteBrokerActionBody {
+    pub action: String,
+    #[serde(default)]
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub mutates_state: bool,
+    #[serde(default)]
+    pub parameters: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExecuteBrokerActionRequest {
+    pub tool_name: String,
+    pub action: ExecuteBrokerActionBody,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+}
+
+/// POST /v1/broker/execute — the Phase 6.4 execute route: consumes the
+/// approval atomically via storage (for mutating actions), delegates to the
+/// [`BrokerExecutor`], and durably appends a hash-chained receipt before
+/// reporting success — mirroring `decision_requires_durable_receipt`'s
+/// "protected decision" rule from the `/v1/authorize` path (mutating and/or
+/// security-relevant actions must not be lost to a crash between execution
+/// and evidence).
+pub async fn execute_broker_action(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Json(req): Json<ExecuteBrokerActionRequest>,
+) -> impl IntoResponse {
+    if req.tool_name.trim().is_empty() {
+        return StatusError::bad_request("tool_name must not be empty").into_response();
+    }
+    if req.action.action.trim().is_empty() {
+        return StatusError::bad_request("action must not be empty").into_response();
+    }
+
+    let tool = match state
+        .storage
+        .get_broker_tool_by_name(&tenant_id, &req.tool_name)
+        .await
+    {
+        Ok(Some(tool)) => tool,
+        Ok(None) => return StatusError::not_found("broker tool not found").into_response(),
+        Err(e) => {
+            error!("Failed to look up broker tool for execute: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+
+    // The tool identity always comes from the registration lookup above,
+    // never from the request body — otherwise a caller could claim any
+    // `tool_name` string while pointing `action`/`parameters` at whatever
+    // it likes, decoupling the approval binding from what actually executes.
+    let action = BrokerAction {
+        tool: tool.tool_name.clone(),
+        action: req.action.action,
+        resource: req.action.resource,
+        mutates_state: req.action.mutates_state,
+        parameters: req.action.parameters,
+    };
+    let claimed_hash = action_hash(&action);
+
+    let consumed: Option<ConsumedApproval> = if action.mutates_state {
+        let approval_id = match req.approval_id.as_deref() {
+            Some(id) if !id.trim().is_empty() => id,
+            _ => {
+                return StatusError::forbidden(
+                    "approval_id is required for a state-mutating action",
+                )
+                .into_response()
+            }
+        };
+        match state
+            .storage
+            .consume_approval(&tenant_id, approval_id, Some(&claimed_hash))
+            .await
+        {
+            Ok(true) => Some(ConsumedApproval {
+                approval_id: approval_id.to_string(),
+                action_hash: claimed_hash.clone(),
+            }),
+            Ok(false) => {
+                // The claimed-hash check failed atomically inside
+                // consume_approval — nothing was consumed. Distinguish "wrong
+                // hash, approval otherwise still valid" (409, approval
+                // survives for a retry with the right action) from "not
+                // consumable at all" (403: already used/expired/never
+                // approved).
+                return match state
+                    .storage
+                    .approval_is_still_consumable(&tenant_id, approval_id)
+                    .await
+                {
+                    Ok(true) => {
+                        StatusError::conflict("approval is bound to a different action_hash")
+                            .into_response()
+                    }
+                    Ok(false) => StatusError::forbidden(
+                        "approval is not consumable (already consumed, expired, or not approved)",
+                    )
+                    .into_response(),
+                    Err(e) => {
+                        error!("Failed to re-check approval consumability: {:?}", e);
+                        StatusError::internal("Database error").into_response()
+                    }
+                };
+            }
+            Err(e) => {
+                error!("Failed to consume approval for broker execute: {:?}", e);
+                return StatusError::internal("Database error").into_response();
+            }
+        }
+    } else {
+        if req.approval_id.is_some() {
+            return StatusError::bad_request(
+                "approval_id is only meaningful when action.mutates_state is true",
+            )
+            .into_response();
+        }
+        None
+    };
+
+    let binding = BrokerToolBinding {
+        tool_name: tool.tool_name.clone(),
+        connector_type: tool.connector_type.clone(),
+        credential_ref: if tool.credential_ref.is_empty() {
+            None
+        } else {
+            Some(CredentialRef::new(tool.credential_ref.clone()))
+        },
+        status: tool.status.clone(),
+    };
+
+    let output = match state
+        .broker_executor
+        .execute(&binding, &action, consumed.as_ref())
+        .await
+    {
+        Ok(output) => output,
+        Err(e) => return broker_execute_error_response(e),
+    };
+
+    // Protected-decision receipt: mirroring `decision_requires_durable_receipt`'s
+    // "protected decision" rule from the `/v1/authorize` path, this route treats
+    // every successful execution as protected — a broker action is itself a real
+    // external side effect (unlike a plain read-only `/v1/authorize` allow that
+    // never touches the outside world). Written durably and hash-chained BEFORE
+    // the success response goes out, so a crash between execution and receipt
+    // write can never lose the evidence for what the broker just did. Built
+    // directly (not through `build_decision_receipt`, which takes an
+    // `AuthorizeRequest`) since a `BrokerAction` isn't one.
+    let receipt = ActionReceiptRecord {
+        id: Uuid::new_v4().to_string(),
+        tenant_id: tenant_id.clone(),
+        decision_id: None,
+        ts: Utc::now().to_rfc3339(),
+        agent_id: None,
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        tool: Some(action.tool.clone()),
+        action: Some(action.action.clone()),
+        resource: action.resource.clone(),
+        source_trust: "trusted_internal_signed".to_string(),
+        decision: "broker_execute".to_string(),
+        approver: consumed.as_ref().map(|c| c.approval_id.clone()),
+        action_hash: Some(claimed_hash.clone()),
+        prev_receipt_hash: String::new(),
+        receipt_hash: String::new(),
+        canon_version: super::authorize_canon::CANON_VERSION.to_string(),
+        signature: None,
+        signer_public_key: None,
+        signer_key_id: None,
+        created_at: Utc::now(),
+    };
+    if let Err(e) = super::retry_storage_write_on_busy(3, || {
+        state
+            .storage
+            .append_action_receipt_atomic(&tenant_id, receipt.clone())
+    })
+    .await
+    {
+        error!(
+            "Failed to durably append broker execute receipt (tenant={}, tool={}): {:?}",
+            tenant_id, tool.tool_name, e
+        );
+        return StatusError::internal(
+            "action executed but its receipt could not be durably recorded",
+        )
+        .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "tool_name": tool.tool_name,
+            "connector_type": tool.connector_type,
+            "action_hash": claimed_hash,
+            "output": output,
+        })),
+    )
+        .into_response()
+}
+
+fn broker_execute_error_response(e: ExecuteError) -> axum::response::Response {
+    match e {
+        ExecuteError::ToolNotActive { .. } => StatusError::forbidden(e.to_string()),
+        ExecuteError::UnknownConnectorType { .. } => StatusError::not_implemented(e.to_string()),
+        ExecuteError::ApprovalRequired | ExecuteError::ApprovalActionMismatch { .. } => {
+            StatusError::forbidden(e.to_string())
+        }
+        ExecuteError::Credential(_) => StatusError::service_unavailable(e.to_string()),
+        ExecuteError::Connector(_) => StatusError::service_unavailable(e.to_string()),
+    }
+    .into_response()
 }
 
 #[cfg(test)]
@@ -377,5 +647,273 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let fetched: BrokerToolRecord = serde_json::from_slice(&body).unwrap();
         assert_eq!(fetched.status, "disabled");
+    }
+
+    /// Registers a GitHub mock-mode broker tool with no credential
+    /// (`credential_ref: ""` -> `BrokerToolBinding.credential_ref: None`), so
+    /// these tests never depend on an env var being set. `default_broker_executor`
+    /// always registers `github` in mock mode unless `AEGIS_GITHUB_API_BASE`
+    /// is set, matching this helper's assumption.
+    async fn insert_active_github_tool(state: &Arc<AppState>, tenant_id: &str, tool_name: &str) {
+        state
+            .storage
+            .insert_broker_tool(tenant_id, tool_name, "github", "", "[]", Utc::now())
+            .await
+            .unwrap();
+    }
+
+    fn read_action(tool_name: &str) -> ExecuteBrokerActionRequest {
+        ExecuteBrokerActionRequest {
+            tool_name: tool_name.to_string(),
+            action: ExecuteBrokerActionBody {
+                action: "read".to_string(),
+                resource: Some("repo:acme/api".to_string()),
+                mutates_state: false,
+                parameters: json!({"path": "/repos/acme/api/issues"}),
+            },
+            approval_id: None,
+        }
+    }
+
+    fn write_action(tool_name: &str) -> ExecuteBrokerActionRequest {
+        ExecuteBrokerActionRequest {
+            tool_name: tool_name.to_string(),
+            action: ExecuteBrokerActionBody {
+                action: "write".to_string(),
+                resource: Some("repo:acme/api".to_string()),
+                mutates_state: true,
+                parameters: json!({"path": "/repos/acme/api/issues", "body": {"title": "hi"}}),
+            },
+            approval_id: None,
+        }
+    }
+
+    /// Computes the `action_hash` a given execute request's `BrokerAction`
+    /// resolves to, exactly as `execute_broker_action` does — used to bind a
+    /// test-seeded approval to the right hash.
+    fn request_action_hash(tool_name: &str, req: &ExecuteBrokerActionRequest) -> String {
+        action_hash(&BrokerAction {
+            tool: tool_name.to_string(),
+            action: req.action.action.clone(),
+            resource: req.action.resource.clone(),
+            mutates_state: req.action.mutates_state,
+            parameters: req.action.parameters.clone(),
+        })
+    }
+
+    /// `approvals.decision_id` has a foreign key onto `decisions`, so a
+    /// well-formed approval needs a real decision row first; the routes
+    /// test-helper agent (`agent_key: "routes-agent"`, from `setup_state`)
+    /// is reused as that decision's `agent_id`.
+    async fn insert_approval_bound_to(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        action_hash: &str,
+    ) -> String {
+        let agent = state
+            .storage
+            .get_agent_by_key(tenant_id, "routes-agent")
+            .await
+            .unwrap()
+            .expect("setup_state's fixture agent");
+        let decision = DecisionRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            agent_id: agent.id,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "github".to_string(),
+            action: "write".to_string(),
+            resource: Some("repo:acme/api".to_string()),
+            input_json: "{}".to_string(),
+            decision: "require_approval".to_string(),
+            risk_score: None,
+            reason: None,
+            matched_policy_ids: None,
+            request_id: None,
+            latency_ms: None,
+            composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
+            created_at: Utc::now(),
+        };
+        state.storage.insert_decision(&decision).await.unwrap();
+
+        let approval = ApprovalRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: decision.id,
+            status: "APPROVED".to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: "{}".to_string(),
+            original_call_hash: action_hash.to_string(),
+            edited_skill_call: None,
+            effective_call_hash: None,
+            expires_at: None,
+            decided_at: Some(Utc::now()),
+            callback_url: None,
+            callback_secret_hash: None,
+            created_at: Utc::now(),
+        };
+        let id = approval.id.clone();
+        state.storage.insert_approval(&approval).await.unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn a_known_active_tool_allows_a_read_and_appends_a_receipt() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_read").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-read").await;
+        let receipts_before = state.storage.count_receipts(&tenant_id).await.unwrap();
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(read_action("gh-read")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["output"]["result"], json!("ok"));
+
+        let receipts_after = state.storage.count_receipts(&tenant_id).await.unwrap();
+        assert_eq!(receipts_after, receipts_before + 1);
+    }
+
+    #[tokio::test]
+    async fn a_mutating_action_with_no_approval_id_is_forbidden() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_no_approval").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-write").await;
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(write_action("gh-write")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_hash_approval_is_a_conflict_and_the_approval_survives() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_wrong_hash").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-write").await;
+
+        // Bound to some *other* action, not the one we're about to request.
+        let approval_id = insert_approval_bound_to(&state, &tenant_id, &"0".repeat(64)).await;
+
+        let mut req = write_action("gh-write");
+        req.approval_id = Some(approval_id.clone());
+        let response =
+            execute_broker_action(State(state.clone()), TenantId(tenant_id.clone()), Json(req))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // The approval was NOT burned — it's still consumable with the
+        // right hash bound to it (#1603 atomic-hash-check precedent).
+        assert!(state
+            .storage
+            .approval_is_still_consumable(&tenant_id, &approval_id)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_hash_bound_approval_executes_and_appends_a_receipt() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_valid_approval").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-write").await;
+
+        let req = write_action("gh-write");
+        let hash = request_action_hash("gh-write", &req);
+        let approval_id = insert_approval_bound_to(&state, &tenant_id, &hash).await;
+        let receipts_before = state.storage.count_receipts(&tenant_id).await.unwrap();
+
+        let mut req = req;
+        req.approval_id = Some(approval_id.clone());
+        let response =
+            execute_broker_action(State(state.clone()), TenantId(tenant_id.clone()), Json(req))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["output"]["result"], json!("created"));
+
+        let receipts_after = state.storage.count_receipts(&tenant_id).await.unwrap();
+        assert_eq!(receipts_after, receipts_before + 1);
+
+        // Single-use: the same approval cannot be consumed again.
+        assert!(!state
+            .storage
+            .approval_is_still_consumable(&tenant_id, &approval_id)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_disabled_tool_fails_closed() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_disabled").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-read").await;
+        let tool = state
+            .storage
+            .get_broker_tool_by_name(&tenant_id, "gh-read")
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .storage
+            .set_broker_tool_status(&tenant_id, &tool.id, "disabled", Utc::now())
+            .await
+            .unwrap();
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(read_action("gh-read")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tool_name_is_not_found() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_unknown_tool").await;
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(read_action("does-not-exist")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_unregistered_connector_type_is_not_implemented() {
+        let (state, tenant_id, _agent_token) =
+            setup_state("broker_execute_unknown_connector").await;
+        state
+            .storage
+            .insert_broker_tool(&tenant_id, "smtp-tool", "smtp", "", "[]", Utc::now())
+            .await
+            .unwrap();
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(read_action("smtp-tool")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     }
 }
