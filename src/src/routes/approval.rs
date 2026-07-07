@@ -117,6 +117,7 @@ pub(crate) async fn approval_callback_rate_limit_guard(
     if !state
         .approval_callback_ip_limiter
         .check_rate_limit(&addr.ip().to_string())
+        .await
     {
         return Some(
             StatusError::too_many_requests(

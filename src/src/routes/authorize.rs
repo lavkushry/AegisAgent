@@ -491,7 +491,7 @@ pub async fn authorize_action_impl(
     } // !dry_run (idempotency + heartbeat)
 
     // Check Rate Limiting (TASK-0012)
-    if !state.rate_limiter.check_rate_limit(&tenant_id) {
+    if !state.rate_limiter.check_rate_limit(&tenant_id).await {
         return StatusError::too_many_requests("Too many requests. Rate limit exceeded.")
             .into_response();
     }
@@ -2120,16 +2120,63 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limiter() {
         let limiter = RateLimiter::new(2.0, 10.0);
-        assert!(limiter.check_rate_limit("t1"));
-        assert!(limiter.check_rate_limit("t1"));
-        assert!(!limiter.check_rate_limit("t1")); // bucket exhausted
+        assert!(limiter.check_rate_limit("t1").await);
+        assert!(limiter.check_rate_limit("t1").await);
+        assert!(!limiter.check_rate_limit("t1").await); // bucket exhausted
 
         // Different tenant has its own bucket
-        assert!(limiter.check_rate_limit("t2"));
+        assert!(limiter.check_rate_limit("t2").await);
 
         // Refill check
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-        assert!(limiter.check_rate_limit("t1")); // refilled at least 1 token
+        assert!(limiter.check_rate_limit("t1").await); // refilled at least 1 token
+    }
+
+    /// #1210: an unset `REDIS_URL` must behave identically to `RateLimiter::new`.
+    #[tokio::test]
+    async fn new_shared_with_no_redis_url_behaves_like_in_memory() {
+        let limiter = RateLimiter::new_shared(2.0, 10.0, None).await;
+        assert!(limiter.check_rate_limit("t1").await);
+        assert!(limiter.check_rate_limit("t1").await);
+        assert!(!limiter.check_rate_limit("t1").await);
+    }
+
+    /// #1210: an unreachable Redis must not fail startup or the request path —
+    /// it should fall back to the in-memory bucket (fail open, logged).
+    #[tokio::test]
+    async fn new_shared_falls_back_to_in_memory_when_redis_unreachable() {
+        let limiter = RateLimiter::new_shared(2.0, 10.0, Some("redis://127.0.0.1:1/")).await;
+        assert!(limiter.check_rate_limit("t1").await);
+        assert!(limiter.check_rate_limit("t1").await);
+        assert!(!limiter.check_rate_limit("t1").await);
+    }
+
+    /// #1210: when a real Redis is reachable, the token bucket is enforced
+    /// through the shared Lua script and two independent `RateLimiter`
+    /// instances (as two gateway replicas would have) observe the same
+    /// bucket. Skips itself (rather than failing) when no local Redis is
+    /// running, since CI does not provision one for this crate's unit tests.
+    #[tokio::test]
+    async fn new_shared_enforces_one_bucket_across_instances_when_redis_available() {
+        let redis_url = "redis://127.0.0.1:6379/";
+        let probe = RateLimiter::new_shared(2.0, 10.0, Some(redis_url)).await;
+        if probe.redis.is_none() {
+            eprintln!(
+                "skipping new_shared_enforces_one_bucket_across_instances_when_redis_available: no local Redis at {redis_url}"
+            );
+            return;
+        }
+
+        let key = format!("t-shared-{}", Uuid::new_v4());
+        let replica_a = RateLimiter::new_shared(2.0, 10.0, Some(redis_url)).await;
+        let replica_b = RateLimiter::new_shared(2.0, 10.0, Some(redis_url)).await;
+
+        assert!(replica_a.check_rate_limit(&key).await);
+        assert!(replica_b.check_rate_limit(&key).await);
+        // Bucket capacity is shared, so the third call — from either
+        // replica — must be denied even though neither has seen 2 calls
+        // itself.
+        assert!(!replica_a.check_rate_limit(&key).await);
     }
 
     #[tokio::test]

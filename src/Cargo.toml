@@ -100,6 +100,10 @@ base64 = "0.22"
 # AWS KMS Ed25519 signing (#1311), optional — enable with --features kms-aws.
 aws-config = { version = "1.5", optional = true, default-features = false, features = ["behavior-version-latest", "rustls"] }
 aws-sdk-kms = { version = "1.51", optional = true, default-features = false, features = ["rustls"] }
+# Shared rate-limiter state across gateway replicas (#1210), gated on
+# REDIS_URL — unset, RateLimiter stays the existing per-process in-memory
+# token bucket and this client is never constructed.
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 
 
 [features]
