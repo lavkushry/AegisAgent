@@ -10,6 +10,7 @@ from .decorator import (
 )
 from .evidence import create_evidence_pack
 from .logging import StructuredJSONFormatter
+from .prompt_capture import looks_unredacted, redact_preview
 from .receipts import (
     compute_receipt_hash,
     seal_chain,
@@ -30,6 +31,9 @@ __all__ = [
     "StructuredJSONFormatter",
     "ReceiptAccumulator",
     "create_evidence_pack",
+    # prompt/model capture (Phase 7.2)
+    "redact_preview",
+    "looks_unredacted",
     # webhook / Slack callback handling
     "verify_slack_signature",
     "WebhookHandler",

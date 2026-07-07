@@ -9,10 +9,14 @@ import logging
 import re
 import sys
 import time
+import uuid
 from functools import wraps
 from typing import Any, Dict, Optional
 
 import requests
+
+from .canon import sha256_hex
+from .prompt_capture import redact_preview
 
 try:
     import httpx
@@ -118,6 +122,7 @@ class AegisBaseClient:
         environment: str = "production",
         endpoint: str = "http://127.0.0.1:8080",
         signing_key: Optional[str] = None,
+        capture_prompts: bool = False,
     ):
         self.api_key = api_key
         self.agent_id = agent_id
@@ -125,6 +130,66 @@ class AegisBaseClient:
         self.endpoint = endpoint.rstrip("/")
         self.signing_key = signing_key
         self.agent_token: Optional[str] = None
+        # Phase 7.2: prompt/model-call lineage capture is opt-in. Unset (the
+        # default), emit_prompt_event/emit_model_call_event are no-ops that
+        # never touch the network — a caller must explicitly ask for this.
+        self.capture_prompts = capture_prompts
+
+    def _prompt_event_payload(
+        self,
+        prompt: str,
+        role: Optional[str],
+        source_trust: str,
+        model_provider: Optional[str],
+        run_id: Optional[str],
+        trace_id: Optional[str],
+        retention_policy: Optional[str],
+    ) -> Dict[str, Any]:
+        """Builds the `/v1/ingest/prompt-events` body. Never includes the raw
+        prompt — only its hash and a redacted, bounded preview (see
+        `prompt_capture.redact_preview`)."""
+        return {
+            "event_id": str(uuid.uuid4()),
+            "run_id": run_id,
+            "trace_id": trace_id,
+            "prompt_hash": sha256_hex(prompt),
+            "redacted_prompt_preview": redact_preview(prompt),
+            "role": role,
+            "source_trust": source_trust,
+            "model_provider": model_provider,
+            "retention_policy": retention_policy,
+            "redaction_status": "redacted",
+        }
+
+    def _model_call_event_payload(
+        self,
+        provider: str,
+        model: str,
+        status: str,
+        request_text: Optional[str],
+        response_text: Optional[str],
+        started_at: Optional[str],
+        finished_at: Optional[str],
+        token_counts: Optional[Dict[str, Any]],
+        run_id: Optional[str],
+        trace_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Builds the `/v1/ingest/model-calls` body. Never includes the raw
+        request/response bodies — only their hashes."""
+        return {
+            "event_id": str(uuid.uuid4()),
+            "run_id": run_id,
+            "trace_id": trace_id,
+            "provider": provider,
+            "model": model,
+            "request_hash": sha256_hex(request_text) if request_text else None,
+            "response_hash": sha256_hex(response_text) if response_text else None,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "token_counts": token_counts,
+            "status": status,
+            "redaction_status": "redacted",
+        }
 
     def __repr__(self) -> str:
         return (
@@ -183,8 +248,11 @@ class AegisClient(AegisBaseClient):
         environment: str = "production",
         endpoint: str = "http://127.0.0.1:8080",
         signing_key: Optional[str] = None,
+        capture_prompts: bool = False,
     ):
-        super().__init__(api_key, agent_id, environment, endpoint, signing_key)
+        super().__init__(
+            api_key, agent_id, environment, endpoint, signing_key, capture_prompts
+        )
         self.session = requests.Session()
         from urllib3.util import Retry
         from requests.adapters import HTTPAdapter
@@ -376,6 +444,101 @@ class AegisClient(AegisBaseClient):
                 "reason": f"Gateway network error: {e}. Fail-closed.",
                 "matched_policies": [],
             }
+
+    def emit_prompt_event(
+        self,
+        prompt: str,
+        role: Optional[str] = None,
+        source_trust: str = "unknown",
+        model_provider: Optional[str] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        retention_policy: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reports a prompt lineage event to `/v1/ingest/prompt-events` (Phase
+        7.2). A no-op returning `None` unless `capture_prompts=True` was
+        passed to the constructor — this never sends anything by default.
+        Only `sha256(prompt)` and a redacted, bounded preview are sent; the
+        raw prompt never leaves this method.
+        """
+        if not self.capture_prompts:
+            return None
+        payload = self._prompt_event_payload(
+            prompt,
+            role,
+            source_trust,
+            model_provider,
+            run_id,
+            trace_id,
+            retention_policy,
+        )
+        try:
+            response = self._request(
+                "POST",
+                "/v1/ingest/prompt-events",
+                json=payload,
+                headers=self._headers(),
+                timeout=5,
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"Prompt event ingest rejected: {response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Failed to emit prompt event: {e}")
+            return None
+
+    def emit_model_call_event(
+        self,
+        provider: str,
+        model: str,
+        status: str = "success",
+        request_text: Optional[str] = None,
+        response_text: Optional[str] = None,
+        started_at: Optional[str] = None,
+        finished_at: Optional[str] = None,
+        token_counts: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reports a model-call lineage event to `/v1/ingest/model-calls`
+        (Phase 7.2). A no-op returning `None` unless `capture_prompts=True`
+        was passed to the constructor. Only hashes of `request_text` /
+        `response_text` are sent, never the bodies themselves.
+        """
+        if not self.capture_prompts:
+            return None
+        payload = self._model_call_event_payload(
+            provider,
+            model,
+            status,
+            request_text,
+            response_text,
+            started_at,
+            finished_at,
+            token_counts,
+            run_id,
+            trace_id,
+        )
+        try:
+            response = self._request(
+                "POST",
+                "/v1/ingest/model-calls",
+                json=payload,
+                headers=self._headers(),
+                timeout=5,
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"Model-call event ingest rejected: {response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Failed to emit model-call event: {e}")
+            return None
 
     def get_approval_status(self, approval_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves approval request status from the gateway."""
@@ -773,13 +936,16 @@ class AegisAsyncClient(AegisBaseClient):
         environment: str = "production",
         endpoint: str = "http://127.0.0.1:8080",
         signing_key: Optional[str] = None,
+        capture_prompts: bool = False,
     ):
         if httpx is None:
             raise ImportError(
                 "The 'httpx' library is required to use AegisAsyncClient. "
                 "Install it with 'pip install httpx'."
             )
-        super().__init__(api_key, agent_id, environment, endpoint, signing_key)
+        super().__init__(
+            api_key, agent_id, environment, endpoint, signing_key, capture_prompts
+        )
         self.session = httpx.AsyncClient(timeout=httpx.Timeout(5.0))
 
     async def close(self) -> None:
@@ -960,6 +1126,101 @@ class AegisAsyncClient(AegisBaseClient):
                 "reason": f"Gateway network error: {e}. Fail-closed.",
                 "matched_policies": [],
             }
+
+    async def emit_prompt_event(
+        self,
+        prompt: str,
+        role: Optional[str] = None,
+        source_trust: str = "unknown",
+        model_provider: Optional[str] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        retention_policy: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reports a prompt lineage event to `/v1/ingest/prompt-events` (Phase
+        7.2). A no-op returning `None` unless `capture_prompts=True` was
+        passed to the constructor — this never sends anything by default.
+        Only `sha256(prompt)` and a redacted, bounded preview are sent; the
+        raw prompt never leaves this method.
+        """
+        if not self.capture_prompts:
+            return None
+        payload = self._prompt_event_payload(
+            prompt,
+            role,
+            source_trust,
+            model_provider,
+            run_id,
+            trace_id,
+            retention_policy,
+        )
+        try:
+            response = await self._request(
+                "POST",
+                "/v1/ingest/prompt-events",
+                json=payload,
+                headers=self._headers(),
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"Prompt event ingest rejected: {response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Failed to emit prompt event: {e}")
+            return None
+
+    async def emit_model_call_event(
+        self,
+        provider: str,
+        model: str,
+        status: str = "success",
+        request_text: Optional[str] = None,
+        response_text: Optional[str] = None,
+        started_at: Optional[str] = None,
+        finished_at: Optional[str] = None,
+        token_counts: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reports a model-call lineage event to `/v1/ingest/model-calls`
+        (Phase 7.2). A no-op returning `None` unless `capture_prompts=True`
+        was passed to the constructor. Only hashes of `request_text` /
+        `response_text` are sent, never the bodies themselves.
+        """
+        if not self.capture_prompts:
+            return None
+        payload = self._model_call_event_payload(
+            provider,
+            model,
+            status,
+            request_text,
+            response_text,
+            started_at,
+            finished_at,
+            token_counts,
+            run_id,
+            trace_id,
+        )
+        try:
+            response = await self._request(
+                "POST",
+                "/v1/ingest/model-calls",
+                json=payload,
+                headers=self._headers(),
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                return response.json()
+            logger.error(
+                f"Model-call event ingest rejected: {response.status_code} - {response.text}"
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Failed to emit model-call event: {e}")
+            return None
 
     async def get_approval_status(self, approval_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves approval request status from the gateway."""
