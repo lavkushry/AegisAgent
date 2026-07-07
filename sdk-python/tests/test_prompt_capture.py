@@ -28,8 +28,8 @@ class TestRedactPreview(unittest.TestCase):
         self.assertFalse(looks_unredacted(preview))
 
     def test_scrubs_aws_access_key(self):
-        preview = redact_preview("key: AKIAABCDEFGHIJKLMNOP")
-        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", preview)
+        preview = redact_preview("key: AKIAfaketestfixturenotreal")
+        self.assertNotIn("AKIAfaketestfixturenotreal", preview)
         self.assertFalse(looks_unredacted(preview))
 
     def test_scrubs_pem_block(self):
@@ -126,7 +126,7 @@ class TestEmitPromptEvent(unittest.TestCase):
         mock_post.return_value = mock_response
 
         secret_request = "system: sk-liveRequestSecretAbc123"
-        secret_response = "response contains AKIAABCDEFGHIJKLMNOP"
+        secret_response = "response contains AKIAfaketestfixturenotreal"
         client.emit_model_call_event(
             "openai",
             "gpt-5",
@@ -139,7 +139,7 @@ class TestEmitPromptEvent(unittest.TestCase):
         sent_body = mock_post.call_args.kwargs["json"]
         sent_json_str = json.dumps(sent_body)
         self.assertNotIn("sk-liveRequestSecretAbc123", sent_json_str)
-        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", sent_json_str)
+        self.assertNotIn("AKIAfaketestfixturenotreal", sent_json_str)
         self.assertEqual(len(sent_body["request_hash"]), 64)
         self.assertEqual(len(sent_body["response_hash"]), 64)
         self.assertEqual(sent_body["run_id"], "run-1")
