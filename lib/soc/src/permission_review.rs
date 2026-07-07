@@ -157,6 +157,59 @@ pub async fn generate_permission_review_alerts_for_tenant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aegis_api::models::AgentRecord;
+
+    static PERMISSION_REVIEW_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn set_permission_review_env(enabled: Option<&str>, stale_days: Option<&str>) {
+        match enabled {
+            Some(value) => std::env::set_var("AEGIS_PERMISSION_REVIEW_ENABLED", value),
+            None => std::env::remove_var("AEGIS_PERMISSION_REVIEW_ENABLED"),
+        }
+        match stale_days {
+            Some(value) => std::env::set_var("AEGIS_PERMISSION_REVIEW_STALE_DAYS", value),
+            None => std::env::remove_var("AEGIS_PERMISSION_REVIEW_STALE_DAYS"),
+        }
+    }
+
+    async fn setup_pool(test_name: &str) -> DbPool {
+        std::fs::create_dir_all("target").unwrap();
+        let db_url = format!(
+            "sqlite://target/soc_{}_{}.db",
+            test_name,
+            Uuid::new_v4().simple()
+        );
+        db::init_db(&db_url).await.unwrap()
+    }
+
+    async fn seed_agent(pool: &DbPool, tenant_id: &str, agent_id: &str) {
+        let agent = AgentRecord {
+            id: agent_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            agent_key: format!("key_{agent_id}"),
+            agent_token: format!("tok_{agent_id}"),
+            name: format!("Agent {agent_id}"),
+            owner_team: None,
+            owner_email: None,
+            environment: "prod".to_string(),
+            framework: None,
+            model_provider: None,
+            model_name: None,
+            purpose: None,
+            risk_tier: "medium".to_string(),
+            status: "active".to_string(),
+            last_seen_at: None,
+            frozen_reason: None,
+            quarantined_at: None,
+            force_approval: false,
+            signing_key: None,
+            allowed_environments: None,
+            mtls_cn: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db::insert_agent(pool, &agent).await.unwrap();
+    }
 
     #[test]
     fn source_event_ids_are_stable_per_permission() {
@@ -170,25 +223,104 @@ mod tests {
         );
     }
 
-    #[test]
-    fn permission_review_disabled_by_default() {
-        let prev = std::env::var("AEGIS_PERMISSION_REVIEW_ENABLED").ok();
-        std::env::remove_var("AEGIS_PERMISSION_REVIEW_ENABLED");
+    #[tokio::test]
+    async fn permission_review_disabled_by_default() {
+        let _guard = PERMISSION_REVIEW_ENV_LOCK.lock().await;
+        let prev_enabled = std::env::var("AEGIS_PERMISSION_REVIEW_ENABLED").ok();
+        let prev_stale_days = std::env::var("AEGIS_PERMISSION_REVIEW_STALE_DAYS").ok();
+        set_permission_review_env(None, None);
         assert!(!permission_review_enabled());
-        if let Some(v) = prev {
-            std::env::set_var("AEGIS_PERMISSION_REVIEW_ENABLED", v);
-        }
+        set_permission_review_env(prev_enabled.as_deref(), prev_stale_days.as_deref());
     }
 
-    #[test]
-    fn permission_review_enabled_with_true() {
-        let prev = std::env::var("AEGIS_PERMISSION_REVIEW_ENABLED").ok();
-        std::env::set_var("AEGIS_PERMISSION_REVIEW_ENABLED", "true");
+    #[tokio::test]
+    async fn permission_review_enabled_with_true() {
+        let _guard = PERMISSION_REVIEW_ENV_LOCK.lock().await;
+        let prev_enabled = std::env::var("AEGIS_PERMISSION_REVIEW_ENABLED").ok();
+        let prev_stale_days = std::env::var("AEGIS_PERMISSION_REVIEW_STALE_DAYS").ok();
+        set_permission_review_env(Some("true"), None);
         assert!(permission_review_enabled());
-        if let Some(v) = prev {
-            std::env::set_var("AEGIS_PERMISSION_REVIEW_ENABLED", v);
-        } else {
-            std::env::remove_var("AEGIS_PERMISSION_REVIEW_ENABLED");
+        set_permission_review_env(prev_enabled.as_deref(), prev_stale_days.as_deref());
+    }
+
+    #[tokio::test]
+    async fn generates_deduplicated_tenant_scoped_alerts_for_stale_permissions() {
+        let _guard = PERMISSION_REVIEW_ENV_LOCK.lock().await;
+        let prev_enabled = std::env::var("AEGIS_PERMISSION_REVIEW_ENABLED").ok();
+        let prev_stale_days = std::env::var("AEGIS_PERMISSION_REVIEW_STALE_DAYS").ok();
+        set_permission_review_env(Some("true"), Some("30"));
+
+        let pool = setup_pool("permission_review_alerts").await;
+        db::register_tenant(&pool, "tenant_perm_a", "Permission A", "developer")
+            .await
+            .unwrap();
+        db::register_tenant(&pool, "tenant_perm_b", "Permission B", "developer")
+            .await
+            .unwrap();
+        seed_agent(&pool, "tenant_perm_a", "agent_perm_a").await;
+        seed_agent(&pool, "tenant_perm_b", "agent_perm_b").await;
+
+        let tool_perm =
+            db::grant_agent_tool_permission(&pool, "tenant_perm_a", "agent_perm_a", "github")
+                .await
+                .unwrap();
+        let mcp_perm = db::grant_agent_mcp_server_permission(
+            &pool,
+            "tenant_perm_a",
+            "agent_perm_a",
+            "github-mcp",
+        )
+        .await
+        .unwrap();
+        let cross_tenant_perm =
+            db::grant_agent_tool_permission(&pool, "tenant_perm_b", "agent_perm_b", "github")
+                .await
+                .unwrap();
+
+        for permission_id in [&tool_perm.id, &mcp_perm.id, &cross_tenant_perm.id] {
+            aegis_storage::execute_query!(
+                &pool,
+                "UPDATE agent_tool_permissions SET created_at = datetime('now', '-45 days') WHERE id = ?",
+                permission_id
+            )
+            .unwrap();
+            aegis_storage::execute_query!(
+                &pool,
+                "UPDATE agent_mcp_server_permissions SET created_at = datetime('now', '-45 days') WHERE id = ?",
+                permission_id
+            )
+            .unwrap();
         }
+
+        let created = generate_permission_review_alerts_for_tenant(&pool, "tenant_perm_a", 50)
+            .await
+            .unwrap();
+        assert_eq!(created, 2);
+
+        let created_again =
+            generate_permission_review_alerts_for_tenant(&pool, "tenant_perm_a", 50)
+                .await
+                .unwrap();
+        assert_eq!(created_again, 0);
+
+        let tenant_a_alerts = db::list_soc_alerts(&pool, "tenant_perm_a", 10, 0, None, None)
+            .await
+            .unwrap();
+        assert_eq!(tenant_a_alerts.len(), 2);
+        assert!(tenant_a_alerts.iter().any(|alert| {
+            alert.rule == RULE_UNUSED_TOOL_PERMISSION
+                && alert.source_event_id == tool_source_event_id(&tool_perm.id)
+        }));
+        assert!(tenant_a_alerts.iter().any(|alert| {
+            alert.rule == RULE_UNUSED_MCP_SERVER_PERMISSION
+                && alert.source_event_id == mcp_source_event_id(&mcp_perm.id)
+        }));
+
+        let tenant_b_alerts = db::list_soc_alerts(&pool, "tenant_perm_b", 10, 0, None, None)
+            .await
+            .unwrap();
+        assert!(tenant_b_alerts.is_empty());
+
+        set_permission_review_env(prev_enabled.as_deref(), prev_stale_days.as_deref());
     }
 }
