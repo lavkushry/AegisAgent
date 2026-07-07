@@ -142,7 +142,7 @@ impl ReceiptSignBackend for AwsKmsReceiptSigner {
                     .key_id(&self.key_id)
                     .message(receipt_hash.as_bytes().into())
                     .message_type(aws_sdk_kms::types::MessageType::Raw)
-                    .signing_algorithm(aws_sdk_kms::types::SigningAlgorithmSpec::Ed25519)
+                    .signing_algorithm(aws_sdk_kms::types::SigningAlgorithmSpec::Ed25519Sha512)
                     .send()
                     .await
                     .map_err(|e| format!("AWS Sign failed: {e}"))?;
