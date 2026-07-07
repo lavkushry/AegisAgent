@@ -1588,6 +1588,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // #1768: periodic permission review for stale unused agent permissions.
+    let permission_review_poll_interval_secs: u64 =
+        std::env::var("AEGIS_PERMISSION_REVIEW_POLL_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(jobs::DEFAULT_PERMISSION_REVIEW_POLL_INTERVAL_SECS);
+    let permission_review_batch_limit: i64 = std::env::var("AEGIS_PERMISSION_REVIEW_BATCH_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_PERMISSION_REVIEW_BATCH_LIMIT);
+    let permission_review_abort_handle = tokio::spawn(jobs::run_permission_review_job(
+        pool.clone(),
+        permission_review_poll_interval_secs,
+        permission_review_batch_limit,
+        is_leader.clone(),
+    ))
+    .abort_handle();
+
     // #1392: periodic investigation playbook generation for open incidents.
     let investigation_poll_interval_secs: u64 =
         std::env::var("AEGIS_INVESTIGATION_POLL_INTERVAL_SECS")
@@ -1730,6 +1748,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("triage_job", triage_abort_handle),
         ("policy_advisor_job", policy_advisor_abort_handle),
         ("threat_hunt_job", threat_hunt_abort_handle),
+        ("permission_review_job", permission_review_abort_handle),
         ("investigation_job", investigation_abort_handle),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
