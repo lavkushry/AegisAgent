@@ -192,13 +192,16 @@ function tenantIncidents(tenantId: string) {
 }
 
 function incidentGraph() {
+  // Field names must match the real EvidenceNode contract (ui/src/app/api.ts)
+  // -- group/timestamp/metadata, not kind/ts/data -- since
+  // incidentGraphNodesToReceiptRows filters on `node.group === "receipt"`.
   return {
     nodes: [{
       id: `receipt:${RECEIPT_ID}`,
-      kind: "receipt",
+      group: "receipt",
       label: "Receipt link",
-      ts: NOW,
-      data: {
+      timestamp: NOW,
+      metadata: {
         id: RECEIPT_ID,
         receipt_hash: "sha256:receipt-good-receipt-good-receipt-good-receipt-good-re",
         prev_receipt_hash: "genesis",
@@ -268,6 +271,7 @@ export function resolveMockResponse(
   tenantId: string,
   scenario: MockScenario,
   runtime: MockRuntimeState = createMockRuntimeState(),
+  body?: unknown,
 ): { status: number; body: unknown } | null {
   const failPaths = scenario.failingPaths ?? [];
   if (failPaths.includes(path)) {
@@ -363,10 +367,22 @@ export function resolveMockResponse(
   }
 
   if (method === "POST" && path === "/v1/soc/query") {
-    return {
-      status: 200,
-      body: tenantId === MOCK_TENANT_A ? [{ agent_id: AGENT_ID, count: 3 }] : [],
-    };
+    const request = (body ?? {}) as { entity?: string; aggregate?: string };
+    // Aggregate queries (count_by/count_over_time -- the Overview panel's
+    // "top agents by denial" widget) get the pre-aggregated shape; a plain
+    // decision search (Explore) needs real, decision-shaped rows so the UI
+    // can render an agent label, a tool/action, and a linked receipt to
+    // verify -- not just a bare count.
+    if (request.aggregate) {
+      return {
+        status: 200,
+        body: tenantId === MOCK_TENANT_A ? [{ agent_id: AGENT_ID, count: 3 }] : [],
+      };
+    }
+    if ((request.entity ?? "decision") === "decision") {
+      return { status: 200, body: tenantDecisions(tenantId) };
+    }
+    return { status: 200, body: [] };
   }
   if (path.startsWith("/v1/decisions")) return { status: 200, body: tenantDecisions(tenantId) };
   if (path === "/v1/alerts" || path.startsWith("/v1/alerts?")) return { status: 200, body: tenantAlerts(tenantId) };
@@ -417,6 +433,45 @@ export function resolveMockResponse(
         matched_decision_ids: ["decision-e2e-001"],
       },
     };
+  }
+
+  // Settings page capability discovery (discoverSettingsCapabilities): each
+  // probed endpoint must be explicitly handled here, even the ones the real
+  // gateway doesn't implement yet, so `mock.unhandled` stays empty and the
+  // probe's success/failure accurately reflects real gateway behavior.
+  if (path === `/v1/tenants/${encodeURIComponent(tenantId)}`) {
+    return {
+      status: 200,
+      body: { id: tenantId, name: "E2E Tenant", plan: "enterprise", created_at: "2026-01-01T00:00:00.000Z" },
+    };
+  }
+  if (path === "/v1/tenants/risk-weights") {
+    return {
+      status: 200,
+      body: {
+        environment_weight_mutating: 15,
+        context_trust_penalty_trusted_internal_signed: 0,
+        context_trust_penalty_trusted_internal_unsigned: 5,
+        context_trust_penalty_semi_trusted_customer: 15,
+        context_trust_penalty_untrusted_external: 30,
+        context_trust_penalty_malicious_suspected: 50,
+        context_trust_penalty_unknown: 20,
+        mcp_trust_penalty: 10,
+        anomaly_weight_pct: 100,
+        approval_credit: 10,
+      },
+    };
+  }
+  if (path.startsWith("/v1/webhook_subscriptions")) {
+    return { status: 200, body: [] };
+  }
+  if (path.startsWith("/v1/soc/silences")) {
+    return { status: 200, body: [] };
+  }
+  if (path === "/v1/admin/retention") {
+    // Not implemented on the real gateway either — mirrors its actual 404 so
+    // `probeGatewayEndpoint` correctly reports this capability as absent.
+    return { status: 404, body: { error: "not found" } };
   }
 
   return null;

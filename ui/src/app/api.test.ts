@@ -55,6 +55,35 @@ describe("gateway transport", () => {
     });
   });
 
+  it("echoes the gateway's csrf-token meta tag as X-CSRF-Token", () => {
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) =>
+        selector === 'meta[name="csrf-token"]'
+          ? { getAttribute: () => "csrf-abc-123" }
+          : null,
+    });
+
+    expect(
+      buildGatewayHeaders({
+        gatewayUrl: "http://127.0.0.1:8080",
+        bearerToken: "secret-token",
+        tenantId: "tenant-a",
+      }),
+    ).toMatchObject({ "X-CSRF-Token": "csrf-abc-123" });
+  });
+
+  it("omits X-CSRF-Token when the gateway has not embedded a csrf-token meta tag", () => {
+    vi.stubGlobal("document", { querySelector: () => null });
+
+    expect(
+      buildGatewayHeaders({
+        gatewayUrl: "http://127.0.0.1:8080",
+        bearerToken: "secret-token",
+        tenantId: "tenant-a",
+      }),
+    ).not.toHaveProperty("X-CSRF-Token");
+  });
+
   it("fails before network access when tenant context is missing", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
