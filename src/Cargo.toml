@@ -103,8 +103,14 @@ notify-debouncer-mini = "0.7.0"
 # GCP KMS asymmetricSign request/response encoding (#1311).
 base64 = "0.22"
 # AWS KMS Ed25519 signing (#1311), optional — enable with --features kms-aws.
+# NOTE: aws-sdk-kms's "rustls" feature maps to aws-smithy-runtime's legacy
+# `tls-rustls` connector (old hyper-rustls 0.24 / rustls 0.21, RUSTSEC-2026-
+# 0098/0099/0104/0204 via rustls-webpki 0.101.7) — confusingly different from
+# aws-config's "rustls", which maps to the modern `default-https-client`
+# connector. Using "default-https-client" directly here keeps only the
+# modern (rustls 0.23 / hyper-rustls 0.27) TLS stack in the dependency graph.
 aws-config = { version = "1.5", optional = true, default-features = false, features = ["behavior-version-latest", "rustls"] }
-aws-sdk-kms = { version = "1.51", optional = true, default-features = false, features = ["rustls"] }
+aws-sdk-kms = { version = "1.51", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 # Shared rate-limiter state across gateway replicas (#1210), gated on
 # REDIS_URL — unset, RateLimiter stays the existing per-process in-memory
 # token bucket and this client is never constructed.
