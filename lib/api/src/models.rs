@@ -626,6 +626,51 @@ pub struct RuntimeEventRecord {
     pub received_at: DateTime<Utc>,
 }
 
+/// Phase 7.1 (prompt/model capture): lineage record for one observed prompt.
+/// `event_id` is the producer-assigned id; ingest dedupes on
+/// `(tenant_id, event_id)`. Stores a hash and a caller-redacted preview —
+/// never a raw prompt. See `docs/AegisAgent_World_Class_LLD.md` section 5.2.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct PromptEventRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub event_id: String,
+    pub run_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub prompt_hash: String,
+    pub redacted_prompt_preview: Option<String>,
+    pub role: Option<String>,
+    pub source_trust: Option<String>,
+    pub model_provider: Option<String>,
+    pub retention_policy: Option<String>,
+    pub redaction_status: String,
+    pub created_at: DateTime<Utc>,
+    pub received_at: DateTime<Utc>,
+}
+
+/// Phase 7.1 (prompt/model capture): lineage record for one model call.
+/// `event_id` is the producer-assigned id; ingest dedupes on
+/// `(tenant_id, event_id)`. Stores hashes of the request/response, never the
+/// bodies themselves.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct ModelCallEventRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub event_id: String,
+    pub run_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub request_hash: Option<String>,
+    pub response_hash: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub token_counts_json: Option<String>,
+    pub status: String,
+    pub redaction_status: String,
+    pub received_at: DateTime<Utc>,
+}
+
 /// Phase 2.3 (runtime control plane): a signed gateway->sensor control command.
 /// The sensor verifies `signature` (over the canonical command bytes), tenant
 /// binding, `expires_at`, and `nonce` before executing idempotently and ACKing.
