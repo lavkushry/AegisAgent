@@ -562,6 +562,7 @@ pub mod control_commands;
 pub mod correlate;
 pub mod dashboards;
 pub mod decisions;
+pub mod github_repos;
 pub mod investigation_playbooks;
 pub mod leader;
 pub mod mcp;

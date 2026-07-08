@@ -835,6 +835,17 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/ingest", post(routes::ingest_event))
         // #1381: dedicated GitHub App webhook receiver with HMAC-SHA256 verification
         .route("/webhooks/github", post(routes::receive_github_webhook))
+        // #1380: per-repo sensitivity labels for the merge-protection gate
+        .route(
+            "/github/repos/sensitivity",
+            get(routes::list_repo_sensitivity_labels),
+        )
+        .route(
+            "/github/repos/:owner/:repo/sensitivity",
+            get(routes::get_repo_sensitivity_label)
+                .put(routes::set_repo_sensitivity_label)
+                .delete(routes::delete_repo_sensitivity_label),
+        )
         .route("/decisions", get(routes::list_decisions))
         .route("/decisions/timeseries", get(routes::decision_timeseries))
         .route("/decisions/:id", get(routes::get_decision))
