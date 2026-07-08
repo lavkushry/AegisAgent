@@ -43,7 +43,11 @@ ENV/
 
 # Database and local runtime files
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.sqlite3
 /data/*
 !/data/.gitkeep
@@ -67,3 +71,4 @@ e2e/.cache/
 
 # Claude Code agent worktrees (local, ephemeral)
 .claude/worktrees/
+/system_d
