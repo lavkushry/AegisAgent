@@ -495,7 +495,7 @@ pub async fn drain(
 
         // Phase 3: stateful, multi-event correlation (deny_storm / runaway /
         // repeated_approval). Runs after Phase 1 — both are out-of-band (Law 3).
-        for incident in correlator.observe(&ev) {
+        for incident in correlator.observe(&ev, &pool).await {
             // OBS-002 (#1155): per-kind correlated incident counter.
             metrics.inc_incident(&incident.kind);
 

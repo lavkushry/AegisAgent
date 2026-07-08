@@ -23,6 +23,7 @@
 //!   from different tenants or agents are never aggregated together.
 
 use crate::events::AseEvent;
+use aegis_storage::db::DbPool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -249,6 +250,14 @@ fn parse_ts(s: &str) -> i64 {
 /// agent_id)` pair; each entry holds at most the events that fall within
 /// `MAX_WINDOW_SECS`. Events older than that are evicted eagerly on every
 /// `observe` call, so the map never grows unbounded.
+///
+/// #1210: this in-process map is always used for a SQLite-backed gateway
+/// (single-instance by construction -- see ADR-0002). When the Postgres
+/// backend is active, [`Correlator::observe`] instead persists and evaluates
+/// the window through [`aegis_storage::db::correlate::with_window`], so
+/// multiple replicas sharing one Postgres database observe the same window
+/// for a given agent rather than each keeping an independent, unsynchronized
+/// copy in this map.
 #[derive(Default)]
 pub struct Correlator {
     /// Per-(tenant, agent) sliding window of recent event metadata.
@@ -263,10 +272,19 @@ impl Correlator {
     /// the same event (e.g. a burst that is simultaneously a deny storm *and* a
     /// runaway agent).
     ///
-    /// This function never panics, never blocks, and never touches the inline
-    /// path (Law 3). It operates in O(W) time where W is the window size
-    /// (bounded by the threshold constants).
-    pub fn observe(&mut self, ev: &AseEvent) -> Vec<Incident> {
+    /// This function never panics, never blocks the inline authorize path
+    /// (Law 3), and operates in O(W) time where W is the window size
+    /// (bounded by the threshold constants) plus, on a Postgres-backed
+    /// gateway, one round-trip transaction.
+    pub async fn observe(&mut self, ev: &AseEvent, pool: &DbPool) -> Vec<Incident> {
+        match pool {
+            DbPool::Sqlite(_) => self.observe_memory(ev),
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(_) => self.observe_postgres(ev, pool).await,
+        }
+    }
+
+    fn observe_memory(&mut self, ev: &AseEvent) -> Vec<Incident> {
         let key = (ev.tenant_id.clone(), ev.agent_id.clone());
         let ts_now = parse_ts(&ev.occurred_at);
 
@@ -324,6 +342,97 @@ impl Correlator {
         }
 
         incidents
+    }
+
+    /// #1210: same rule evaluation as [`Correlator::observe_memory`], but the
+    /// window lives in the `soc_correlation_windows` Postgres table instead
+    /// of `self.windows` -- shared, and lock-serialized per `(tenant_id,
+    /// agent_id)`, across every replica. `self.windows` is never touched by
+    /// this path, so a gateway can never end up with a mix of stale
+    /// in-memory state and DB state for the same agent.
+    #[cfg(feature = "postgres")]
+    async fn observe_postgres(&mut self, ev: &AseEvent, pool: &DbPool) -> Vec<Incident> {
+        use aegis_storage::db::correlate::CorrelationWindowEntry;
+
+        let ts_now = parse_ts(&ev.occurred_at);
+        let cutoff = ts_now - MAX_WINDOW_SECS;
+
+        let result = aegis_storage::db::correlate::with_window(
+            pool,
+            &ev.tenant_id,
+            &ev.agent_id,
+            |current| {
+                let mut window: Vec<WindowEntry> = current
+                    .into_iter()
+                    .map(|e| WindowEntry {
+                        ts_secs: e.ts_secs,
+                        event_id: e.event_id,
+                        decision: e.decision,
+                        tool: e.tool,
+                        action: e.action,
+                        exfil_paired: e.exfil_paired,
+                        trust_escalation_paired: e.trust_escalation_paired,
+                    })
+                    .collect();
+
+                window.push(WindowEntry {
+                    ts_secs: ts_now,
+                    event_id: ev.event_id.clone(),
+                    decision: ev.decision.clone(),
+                    tool: ev.tool.clone(),
+                    action: ev.action.clone(),
+                    exfil_paired: false,
+                    trust_escalation_paired: false,
+                });
+                window.retain(|e| e.ts_secs >= cutoff);
+
+                let mut incidents = Vec::new();
+                if let Some(inc) = rule_deny_storm(ev, &window, ts_now) {
+                    incidents.push(inc);
+                }
+                if let Some(inc) = rule_runaway(ev, &window, ts_now) {
+                    incidents.push(inc);
+                }
+                if let Some(inc) = rule_repeated_approval(ev, &window, ts_now) {
+                    incidents.push(inc);
+                }
+                if let Some(inc) = rule_data_exfil(ev, &mut window, ts_now) {
+                    incidents.push(inc);
+                }
+                if let Some(inc) = rule_trust_escalation(ev, &mut window, ts_now) {
+                    incidents.push(inc);
+                }
+
+                let new_window: Vec<CorrelationWindowEntry> = window
+                    .iter()
+                    .map(|e| CorrelationWindowEntry {
+                        ts_secs: e.ts_secs,
+                        event_id: e.event_id.clone(),
+                        decision: e.decision.clone(),
+                        tool: e.tool.clone(),
+                        action: e.action.clone(),
+                        exfil_paired: e.exfil_paired,
+                        trust_escalation_paired: e.trust_escalation_paired,
+                    })
+                    .collect();
+
+                (new_window, incidents)
+            },
+        )
+        .await;
+
+        match result {
+            Ok(incidents) => incidents,
+            Err(e) => {
+                tracing::error!(
+                    tenant_id = %ev.tenant_id,
+                    agent_id = %ev.agent_id,
+                    "correlator: Postgres window persistence failed ({:?}); no incidents evaluated for this event",
+                    e
+                );
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -559,6 +668,18 @@ fn rule_trust_escalation(
 mod tests {
     use super::*;
 
+    /// A bare, unmigrated in-memory SQLite pool -- these tests exercise
+    /// `observe_memory` (SQLite never touches `soc_correlation_windows`), so
+    /// no schema is needed, only a valid `DbPool::Sqlite(..)` to pass through.
+    async fn test_pool() -> DbPool {
+        DbPool::Sqlite(
+            sqlx::sqlite::SqlitePoolOptions::new()
+                .connect("sqlite::memory:")
+                .await
+                .expect("in-memory sqlite pool"),
+        )
+    }
+
     /// Build a minimal [`AseEvent`] with the fields the correlator cares about.
     /// `occurred_at` is an explicit RFC 3339 string so tests need no real sleep.
     fn make_event(
@@ -625,7 +746,8 @@ mod tests {
 
     /// Feed N events into the correlator at successive seconds starting from
     /// `base_ts` (RFC 3339). Returns all incidents produced.
-    fn feed_n(
+    async fn feed_n(
+        pool: &DbPool,
         correlator: &mut Correlator,
         n: usize,
         tenant: &str,
@@ -649,24 +771,27 @@ mod tests {
             let ts_str = format!("2026-06-06T{:02}:{:02}:{:02}Z", hh, mm, ss);
             let id = format!("evt_{}_{}_{}", agent, decision, i);
             let ev = make_event(&id, tenant, agent, decision, &ts_str);
-            all.extend(correlator.observe(&ev));
+            all.extend(correlator.observe(&ev, pool).await);
         }
         all
     }
 
     // ─── deny_storm ──────────────────────────────────────────────────────────
 
-    #[test]
-    fn deny_storm_fires_at_exactly_n_denies_in_window() {
+    #[tokio::test]
+    async fn deny_storm_fires_at_exactly_n_denies_in_window() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let incidents = feed_n(
+            &pool,
             &mut c,
             DENY_STORM_N,
             "tenant_a",
             "agent_1",
             "deny",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         assert_eq!(
             incidents.iter().filter(|i| i.kind == "deny_storm").count(),
             1,
@@ -679,44 +804,52 @@ mod tests {
         assert_eq!(inc.source_event_ids.len(), DENY_STORM_N);
     }
 
-    #[test]
-    fn deny_storm_does_not_fire_below_threshold() {
+    #[tokio::test]
+    async fn deny_storm_does_not_fire_below_threshold() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let incidents = feed_n(
+            &pool,
             &mut c,
             DENY_STORM_N - 1,
             "tenant_a",
             "agent_1",
             "deny",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         assert!(
             incidents.iter().all(|i| i.kind != "deny_storm"),
             "no deny_storm below threshold"
         );
     }
 
-    #[test]
-    fn deny_storm_agents_do_not_aggregate_across_different_agents() {
+    #[tokio::test]
+    async fn deny_storm_agents_do_not_aggregate_across_different_agents() {
+        let pool = test_pool().await;
         // 2 denies each for two agents: neither hits threshold of 5.
         let mut c = Correlator::default();
         let half = DENY_STORM_N / 2; // 2
         let inc_a = feed_n(
+            &pool,
             &mut c,
             half,
             "tenant_a",
             "agent_alpha",
             "deny",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         let inc_b = feed_n(
+            &pool,
             &mut c,
             half,
             "tenant_a",
             "agent_beta",
             "deny",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         assert!(
             inc_a.iter().all(|i| i.kind != "deny_storm"),
             "agent_alpha must not fire deny_storm"
@@ -727,27 +860,32 @@ mod tests {
         );
     }
 
-    #[test]
-    fn deny_storm_tenants_do_not_aggregate_across_different_tenants() {
+    #[tokio::test]
+    async fn deny_storm_tenants_do_not_aggregate_across_different_tenants() {
+        let pool = test_pool().await;
         // Same agent_id, different tenants: each only sees 2 denies.
         let mut c = Correlator::default();
         let half = DENY_STORM_N / 2;
         let inc_t1 = feed_n(
+            &pool,
             &mut c,
             half,
             "tenant_x",
             "shared_agent",
             "deny",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         let inc_t2 = feed_n(
+            &pool,
             &mut c,
             half,
             "tenant_y",
             "shared_agent",
             "deny",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         assert!(
             inc_t1.iter().all(|i| i.kind != "deny_storm"),
             "tenant_x must not fire deny_storm"
@@ -758,8 +896,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn deny_storm_window_eviction_old_events_do_not_count() {
+    #[tokio::test]
+    async fn deny_storm_window_eviction_old_events_do_not_count() {
+        let pool = test_pool().await;
         // Send DENY_STORM_N-1 denies at t=0..3, then 1 deny at t=70
         // (well past the 60 s deny_storm window). Old events must be evicted;
         // the single late deny must NOT trigger deny_storm.
@@ -775,7 +914,7 @@ mod tests {
                 "deny",
                 &ts,
             );
-            c.observe(&ev);
+            c.observe(&ev, &pool).await;
         }
 
         // Late event — 70 seconds after the first event, outside the 60 s window.
@@ -786,7 +925,7 @@ mod tests {
             "deny",
             "2026-06-06T12:01:10Z", // 70 seconds after 12:00:00
         );
-        let inc = c.observe(&late_ev);
+        let inc = c.observe(&late_ev, &pool).await;
         assert!(
             inc.iter().all(|i| i.kind != "deny_storm"),
             "old events outside window must be evicted; single late deny must not fire"
@@ -795,8 +934,9 @@ mod tests {
 
     // ─── runaway ──────────────────────────────────────────────────────────────
 
-    #[test]
-    fn runaway_fires_at_exactly_m_actions_in_window() {
+    #[tokio::test]
+    async fn runaway_fires_at_exactly_m_actions_in_window() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         // All events within 9 seconds — inside RUNAWAY_WINDOW_SECS (10 s).
         let mut all_incidents = Vec::new();
@@ -810,7 +950,7 @@ mod tests {
                 decision,
                 &ts,
             );
-            all_incidents.extend(c.observe(&ev));
+            all_incidents.extend(c.observe(&ev, &pool).await);
         }
         let runaway_count = all_incidents.iter().filter(|i| i.kind == "runaway").count();
         assert_eq!(
@@ -822,14 +962,15 @@ mod tests {
         assert_eq!(inc.source_event_ids.len(), RUNAWAY_M);
     }
 
-    #[test]
-    fn runaway_does_not_fire_below_threshold() {
+    #[tokio::test]
+    async fn runaway_does_not_fire_below_threshold() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let mut all_incidents = Vec::new();
         for i in 0..(RUNAWAY_M - 1) {
             let ts = format!("2026-06-06T12:00:{:02}Z", i % 10);
             let ev = make_event(&format!("r_{}", i), "tenant_b", "agent_ok", "allow", &ts);
-            all_incidents.extend(c.observe(&ev));
+            all_incidents.extend(c.observe(&ev, &pool).await);
         }
         assert!(
             all_incidents.iter().all(|i| i.kind != "runaway"),
@@ -839,17 +980,20 @@ mod tests {
 
     // ─── repeated_approval ────────────────────────────────────────────────────
 
-    #[test]
-    fn repeated_approval_fires_at_exactly_k_approvals_in_window() {
+    #[tokio::test]
+    async fn repeated_approval_fires_at_exactly_k_approvals_in_window() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let incidents = feed_n(
+            &pool,
             &mut c,
             REPEATED_APPROVAL_K,
             "tenant_c",
             "agent_approvals",
             "require_approval",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         let count = incidents
             .iter()
             .filter(|i| i.kind == "repeated_approval")
@@ -866,17 +1010,20 @@ mod tests {
         assert_eq!(inc.source_event_ids.len(), REPEATED_APPROVAL_K);
     }
 
-    #[test]
-    fn repeated_approval_does_not_fire_below_threshold() {
+    #[tokio::test]
+    async fn repeated_approval_does_not_fire_below_threshold() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let incidents = feed_n(
+            &pool,
             &mut c,
             REPEATED_APPROVAL_K - 1,
             "tenant_c",
             "agent_safe",
             "require_approval",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         assert!(
             incidents.iter().all(|i| i.kind != "repeated_approval"),
             "no repeated_approval below threshold"
@@ -885,18 +1032,21 @@ mod tests {
 
     // ─── clean stream ─────────────────────────────────────────────────────────
 
-    #[test]
-    fn allow_stream_produces_no_incidents() {
+    #[tokio::test]
+    async fn allow_stream_produces_no_incidents() {
+        let pool = test_pool().await;
         // 50 allows spread across 50 seconds — not a burst, not a storm.
         let mut c = Correlator::default();
         let incidents = feed_n(
+            &pool,
             &mut c,
             50,
             "tenant_d",
             "agent_clean",
             "allow",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         assert!(
             incidents.is_empty(),
             "a healthy allow stream must produce no incidents"
@@ -905,8 +1055,9 @@ mod tests {
 
     // ─── multi-rule on same burst ──────────────────────────────────────────────
 
-    #[test]
-    fn runaway_and_deny_storm_can_both_fire_on_same_burst() {
+    #[tokio::test]
+    async fn runaway_and_deny_storm_can_both_fire_on_same_burst() {
+        let pool = test_pool().await;
         // RUNAWAY_M (20) denies within RUNAWAY_WINDOW_SECS (10 s) — the first
         // DENY_STORM_N (5) all land within the deny_storm window (60 s), so
         // both rules fire.
@@ -922,7 +1073,7 @@ mod tests {
                 "deny",
                 &ts,
             );
-            all_incidents.extend(c.observe(&ev));
+            all_incidents.extend(c.observe(&ev, &pool).await);
         }
         assert!(
             all_incidents.iter().any(|i| i.kind == "deny_storm"),
@@ -936,17 +1087,20 @@ mod tests {
 
     // ─── incident field integrity ──────────────────────────────────────────────
 
-    #[test]
-    fn incident_has_non_empty_required_fields() {
+    #[tokio::test]
+    async fn incident_has_non_empty_required_fields() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let incidents = feed_n(
+            &pool,
             &mut c,
             DENY_STORM_N,
             "tenant_f",
             "agent_fields",
             "deny",
             "2026-06-06T12:00:00Z",
-        );
+        )
+        .await;
         let inc = incidents
             .iter()
             .find(|i| i.kind == "deny_storm")
@@ -960,8 +1114,8 @@ mod tests {
 
     // ─── action_kind classifier ───────────────────────────────────────────────
 
-    #[test]
-    fn action_kind_classifies_sources_correctly() {
+    #[tokio::test]
+    async fn action_kind_classifies_sources_correctly() {
         // Plain source tokens.
         assert_eq!(
             action_kind("read_file"),
@@ -1022,8 +1176,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn action_kind_classifies_sinks_correctly() {
+    #[tokio::test]
+    async fn action_kind_classifies_sinks_correctly() {
         assert_eq!(
             action_kind("send_message"),
             ExfilRole::Sink,
@@ -1097,8 +1251,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn action_kind_classifies_others_correctly() {
+    #[tokio::test]
+    async fn action_kind_classifies_others_correctly() {
         assert_eq!(action_kind("approve"), ExfilRole::Other, "approve → Other");
         assert_eq!(
             action_kind("merge_pr"),
@@ -1118,8 +1272,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn action_kind_sink_wins_over_source_for_ambiguous_names() {
+    #[tokio::test]
+    async fn action_kind_sink_wins_over_source_for_ambiguous_names() {
         // "post_read_result" contains both "post" (Sink) and "read" (Source).
         // Sink must win (egress-safety rule: Sink tokens checked first).
         assert_eq!(
@@ -1131,8 +1285,9 @@ mod tests {
 
     // ─── Rule D — data_exfil_pattern ─────────────────────────────────────────
 
-    #[test]
-    fn exfil_source_then_sink_in_window_fires_exactly_once() {
+    #[tokio::test]
+    async fn exfil_source_then_sink_in_window_fires_exactly_once() {
+        let pool = test_pool().await;
         // A Source (read_file) followed by a Sink (upload) within EXFIL_WINDOW_SECS
         // → exactly one data_exfil_pattern incident.
         let mut c = Correlator::default();
@@ -1154,13 +1309,13 @@ mod tests {
             "upload",
         );
 
-        let inc_source = c.observe(&source_ev);
+        let inc_source = c.observe(&source_ev, &pool).await;
         assert!(
             inc_source.iter().all(|i| i.kind != "data_exfil_pattern"),
             "Source event alone must not fire exfil"
         );
 
-        let inc_sink = c.observe(&sink_ev);
+        let inc_sink = c.observe(&sink_ev, &pool).await;
         let exfil_incidents: Vec<_> = inc_sink
             .iter()
             .filter(|i| i.kind == "data_exfil_pattern")
@@ -1198,8 +1353,9 @@ mod tests {
         assert!(inc.summary.contains("agent_ex"), "summary names agent");
     }
 
-    #[test]
-    fn exfil_sink_then_source_wrong_order_does_not_fire() {
+    #[tokio::test]
+    async fn exfil_sink_then_source_wrong_order_does_not_fire() {
+        let pool = test_pool().await;
         // Sink before Source — causal order violated, must not fire.
         let mut c = Correlator::default();
 
@@ -1220,8 +1376,8 @@ mod tests {
             "read_file",
         );
 
-        let inc1 = c.observe(&sink_ev);
-        let inc2 = c.observe(&source_ev);
+        let inc1 = c.observe(&sink_ev, &pool).await;
+        let inc2 = c.observe(&source_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "data_exfil_pattern"),
@@ -1229,8 +1385,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exfil_source_only_does_not_fire() {
+    #[tokio::test]
+    async fn exfil_source_only_does_not_fire() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let source_ev = make_event_with_action(
             "src_only",
@@ -1240,15 +1397,16 @@ mod tests {
             "2026-06-06T10:00:00Z",
             "get_object",
         );
-        let inc = c.observe(&source_ev);
+        let inc = c.observe(&source_ev, &pool).await;
         assert!(
             inc.iter().all(|i| i.kind != "data_exfil_pattern"),
             "Source-only must not fire"
         );
     }
 
-    #[test]
-    fn exfil_sink_only_does_not_fire() {
+    #[tokio::test]
+    async fn exfil_sink_only_does_not_fire() {
+        let pool = test_pool().await;
         let mut c = Correlator::default();
         let sink_ev = make_event_with_action(
             "sink_only",
@@ -1258,15 +1416,16 @@ mod tests {
             "2026-06-06T10:00:00Z",
             "send_message",
         );
-        let inc = c.observe(&sink_ev);
+        let inc = c.observe(&sink_ev, &pool).await;
         assert!(
             inc.iter().all(|i| i.kind != "data_exfil_pattern"),
             "Sink-only must not fire"
         );
     }
 
-    #[test]
-    fn exfil_different_agents_same_tenant_do_not_pair() {
+    #[tokio::test]
+    async fn exfil_different_agents_same_tenant_do_not_pair() {
+        let pool = test_pool().await;
         // Agent A does Source, Agent B does Sink — must NOT pair across agents.
         let mut c = Correlator::default();
 
@@ -1287,8 +1446,8 @@ mod tests {
             "upload",
         );
 
-        let inc1 = c.observe(&source_ev);
-        let inc2 = c.observe(&sink_ev);
+        let inc1 = c.observe(&source_ev, &pool).await;
+        let inc2 = c.observe(&sink_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "data_exfil_pattern"),
@@ -1296,8 +1455,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exfil_different_tenants_same_agent_do_not_pair() {
+    #[tokio::test]
+    async fn exfil_different_tenants_same_agent_do_not_pair() {
+        let pool = test_pool().await;
         // Tenant X has a Source; Tenant Y has a Sink — must NOT pair across tenants.
         let mut c = Correlator::default();
 
@@ -1318,8 +1478,8 @@ mod tests {
             "upload",
         );
 
-        let inc1 = c.observe(&source_ev);
-        let inc2 = c.observe(&sink_ev);
+        let inc1 = c.observe(&source_ev, &pool).await;
+        let inc2 = c.observe(&sink_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "data_exfil_pattern"),
@@ -1327,8 +1487,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exfil_outside_window_does_not_fire() {
+    #[tokio::test]
+    async fn exfil_outside_window_does_not_fire() {
+        let pool = test_pool().await;
         // Source at T=0, Sink at T=EXFIL_WINDOW_SECS+1 — outside the window.
         let mut c = Correlator::default();
 
@@ -1352,16 +1513,17 @@ mod tests {
             "upload",
         );
 
-        c.observe(&source_ev);
-        let inc = c.observe(&sink_ev);
+        c.observe(&source_ev, &pool).await;
+        let inc = c.observe(&sink_ev, &pool).await;
         assert!(
             inc.iter().all(|i| i.kind != "data_exfil_pattern"),
             "Source outside the exfil window must not pair with Sink"
         );
     }
 
-    #[test]
-    fn exfil_third_event_after_pair_does_not_re_fire() {
+    #[tokio::test]
+    async fn exfil_third_event_after_pair_does_not_re_fire() {
+        let pool = test_pool().await;
         // Source → Sink → another_allow: only one incident, no re-fire on the
         // third event.
         let mut c = Correlator::default();
@@ -1392,9 +1554,9 @@ mod tests {
             "approve",
         );
 
-        let inc1 = c.observe(&source_ev);
-        let inc2 = c.observe(&sink_ev);
-        let inc3 = c.observe(&other_ev);
+        let inc1 = c.observe(&source_ev, &pool).await;
+        let inc2 = c.observe(&sink_ev, &pool).await;
+        let inc3 = c.observe(&other_ev, &pool).await;
 
         let exfil_count = inc1
             .iter()
@@ -1409,8 +1571,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exfil_second_sink_after_paired_does_not_re_fire_on_same_source() {
+    #[tokio::test]
+    async fn exfil_second_sink_after_paired_does_not_re_fire_on_same_source() {
+        let pool = test_pool().await;
         // Source → Sink1 (fires) → Sink2 (no second incident from same source).
         let mut c = Correlator::default();
 
@@ -1439,9 +1602,9 @@ mod tests {
             "send_message",
         );
 
-        let inc1 = c.observe(&source_ev);
-        let inc2 = c.observe(&sink_ev1);
-        let inc3 = c.observe(&sink_ev2);
+        let inc1 = c.observe(&source_ev, &pool).await;
+        let inc2 = c.observe(&sink_ev1, &pool).await;
+        let inc3 = c.observe(&sink_ev2, &pool).await;
 
         // Only one incident total (the Source was paired after the first Sink).
         let exfil_count = inc1
@@ -1492,8 +1655,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn trust_escalation_deny_then_allow_same_tool_action_fires_exactly_once() {
+    #[tokio::test]
+    async fn trust_escalation_deny_then_allow_same_tool_action_fires_exactly_once() {
+        let pool = test_pool().await;
         // Hard deny followed by allow for same (agent, tool, action) in-window
         // → exactly one trust_escalation incident.
         let mut c = Correlator::default();
@@ -1517,13 +1681,13 @@ mod tests {
             "merge_pr",
         );
 
-        let inc_deny = c.observe(&deny_ev);
+        let inc_deny = c.observe(&deny_ev, &pool).await;
         assert!(
             inc_deny.iter().all(|i| i.kind != "trust_escalation"),
             "deny event alone must not fire trust_escalation"
         );
 
-        let inc_allow = c.observe(&allow_ev);
+        let inc_allow = c.observe(&allow_ev, &pool).await;
         let te_incidents: Vec<_> = inc_allow
             .iter()
             .filter(|i| i.kind == "trust_escalation")
@@ -1554,8 +1718,9 @@ mod tests {
         assert!(inc.summary.contains("merge_pr"), "summary names the action");
     }
 
-    #[test]
-    fn trust_escalation_require_approval_then_allow_is_legit_path_no_incident() {
+    #[tokio::test]
+    async fn trust_escalation_require_approval_then_allow_is_legit_path_no_incident() {
+        let pool = test_pool().await;
         // require_approval → allow is the legitimate human-in-the-loop path;
         // must NOT fire trust_escalation (only a hard deny triggers).
         let mut c = Correlator::default();
@@ -1579,8 +1744,8 @@ mod tests {
             "merge_pr",
         );
 
-        let inc1 = c.observe(&ra_ev);
-        let inc2 = c.observe(&allow_ev);
+        let inc1 = c.observe(&ra_ev, &pool).await;
+        let inc2 = c.observe(&allow_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "trust_escalation"),
@@ -1588,8 +1753,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trust_escalation_allow_then_deny_wrong_order_no_incident() {
+    #[tokio::test]
+    async fn trust_escalation_allow_then_deny_wrong_order_no_incident() {
+        let pool = test_pool().await;
         // allow before deny — not the suspicious sequence; must not fire.
         let mut c = Correlator::default();
 
@@ -1612,8 +1778,8 @@ mod tests {
             "merge_pr",
         );
 
-        let inc1 = c.observe(&allow_ev);
-        let inc2 = c.observe(&deny_ev);
+        let inc1 = c.observe(&allow_ev, &pool).await;
+        let inc2 = c.observe(&deny_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "trust_escalation"),
@@ -1621,8 +1787,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trust_escalation_deny_then_allow_different_tool_no_incident() {
+    #[tokio::test]
+    async fn trust_escalation_deny_then_allow_different_tool_no_incident() {
+        let pool = test_pool().await;
         // Deny for tool A, allow for tool B — different tool; must not pair.
         let mut c = Correlator::default();
 
@@ -1645,8 +1812,8 @@ mod tests {
             "merge_pr",
         );
 
-        let inc1 = c.observe(&deny_ev);
-        let inc2 = c.observe(&allow_ev);
+        let inc1 = c.observe(&deny_ev, &pool).await;
+        let inc2 = c.observe(&allow_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "trust_escalation"),
@@ -1654,8 +1821,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trust_escalation_deny_then_allow_different_action_no_incident() {
+    #[tokio::test]
+    async fn trust_escalation_deny_then_allow_different_action_no_incident() {
+        let pool = test_pool().await;
         // Deny for action A, allow for action B — different action; must not pair.
         let mut c = Correlator::default();
 
@@ -1678,8 +1846,8 @@ mod tests {
             "create_branch", // different action
         );
 
-        let inc1 = c.observe(&deny_ev);
-        let inc2 = c.observe(&allow_ev);
+        let inc1 = c.observe(&deny_ev, &pool).await;
+        let inc2 = c.observe(&allow_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "trust_escalation"),
@@ -1687,8 +1855,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trust_escalation_different_agents_no_incident() {
+    #[tokio::test]
+    async fn trust_escalation_different_agents_no_incident() {
+        let pool = test_pool().await;
         // Agent A gets a deny; Agent B gets an allow for same tool+action.
         // Must NOT pair — the deny-then-allow must be for the SAME agent.
         let mut c = Correlator::default();
@@ -1712,8 +1881,8 @@ mod tests {
             "merge_pr",
         );
 
-        let inc1 = c.observe(&deny_ev);
-        let inc2 = c.observe(&allow_ev);
+        let inc1 = c.observe(&deny_ev, &pool).await;
+        let inc2 = c.observe(&allow_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "trust_escalation"),
@@ -1721,8 +1890,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trust_escalation_different_tenants_no_incident() {
+    #[tokio::test]
+    async fn trust_escalation_different_tenants_no_incident() {
+        let pool = test_pool().await;
         // Tenant X agent gets a deny; Tenant Y same-name agent gets an allow.
         // Must NOT pair — isolated by (tenant_id, agent_id) window key.
         let mut c = Correlator::default();
@@ -1746,8 +1916,8 @@ mod tests {
             "merge_pr",
         );
 
-        let inc1 = c.observe(&deny_ev);
-        let inc2 = c.observe(&allow_ev);
+        let inc1 = c.observe(&deny_ev, &pool).await;
+        let inc2 = c.observe(&allow_ev, &pool).await;
         let all: Vec<_> = inc1.iter().chain(inc2.iter()).collect();
         assert!(
             all.iter().all(|i| i.kind != "trust_escalation"),
@@ -1755,8 +1925,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trust_escalation_outside_window_no_incident() {
+    #[tokio::test]
+    async fn trust_escalation_outside_window_no_incident() {
+        let pool = test_pool().await;
         // Deny at T=0, allow at T=TRUST_ESCALATION_WINDOW_SECS+1 — outside window.
         let mut c = Correlator::default();
 
@@ -1782,16 +1953,17 @@ mod tests {
             "merge_pr",
         );
 
-        c.observe(&deny_ev);
-        let inc = c.observe(&allow_ev);
+        c.observe(&deny_ev, &pool).await;
+        let inc = c.observe(&allow_ev, &pool).await;
         assert!(
             inc.iter().all(|i| i.kind != "trust_escalation"),
             "deny outside the trust-escalation window must not pair with allow"
         );
     }
 
-    #[test]
-    fn trust_escalation_second_allow_after_pair_does_not_re_fire() {
+    #[tokio::test]
+    async fn trust_escalation_second_allow_after_pair_does_not_re_fire() {
+        let pool = test_pool().await;
         // deny → allow1 (fires) → allow2 (same tool+action): only one incident,
         // no re-fire because the deny is already paired.
         let mut c = Correlator::default();
@@ -1824,9 +1996,9 @@ mod tests {
             "merge_pr",
         );
 
-        let inc1 = c.observe(&deny_ev);
-        let inc2 = c.observe(&allow_ev1);
-        let inc3 = c.observe(&allow_ev2);
+        let inc1 = c.observe(&deny_ev, &pool).await;
+        let inc2 = c.observe(&allow_ev1, &pool).await;
+        let inc3 = c.observe(&allow_ev2, &pool).await;
 
         let te_count = inc1
             .iter()
