@@ -442,3 +442,27 @@ jobs:
         with:
           manifest-path: src/Cargo.toml
           command: check licenses
+
+  # #1297: the chart (helm/aegis-gateway/) had no CI coverage at all -- a
+  # broken template or invalid values.yaml could land undetected. `helm lint`
+  # catches malformed templates/values; `helm template` additionally proves
+  # every template actually renders (lint alone doesn't fully exercise
+  # conditional blocks the default values don't reach), including once with
+  # the HPA/autoscaling values overridden since those templates are inert
+  # (but still present) with the chart's own defaults.
+  helm-lint:
+    name: Helm chart lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+      - name: helm lint
+        run: helm lint helm/aegis-gateway/
+      - name: helm template (default values)
+        run: helm template test-release helm/aegis-gateway/ > /dev/null
+      - name: helm template (autoscaling enabled)
+        run: |
+          helm template test-release helm/aegis-gateway/ \
+            --set autoscaling.enabled=true \
+            --set replicaCount=3 \
+            > /dev/null
