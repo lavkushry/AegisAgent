@@ -149,14 +149,29 @@ pub async fn current_leader(pool: &DbPool) -> Result<Option<(String, DateTime<Ut
                 "SELECT holder_id, lease_expires_at FROM leader_lock WHERE id = ?",
             );
             let span = tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-            let row = crate::db::postgres_read_with_failover(pools, |p| async {
-                sqlx::query_as::<_, (String, DateTime<Utc>)>(&pg_sql)
-                    .bind(LOCK_ID)
-                    .fetch_optional(p)
-                    .instrument(span)
-                    .await
-            })
-            .await?;
+            let result = sqlx::query_as::<_, (String, DateTime<Utc>)>(&pg_sql)
+                .bind(LOCK_ID)
+                .fetch_optional(pools.read_pool())
+                .instrument(span.clone())
+                .await;
+            let row = match result {
+                Ok(v) => v,
+                Err(e)
+                    if pools.has_read_replica()
+                        && crate::db::is_retryable_read_replica_error(&e) =>
+                {
+                    tracing::warn!(
+                        error = %e,
+                        "read replica query failed; retrying on primary (#914)"
+                    );
+                    sqlx::query_as::<_, (String, DateTime<Utc>)>(&pg_sql)
+                        .bind(LOCK_ID)
+                        .fetch_optional(pools.write_pool())
+                        .instrument(span)
+                        .await?
+                }
+                Err(e) => return Err(e),
+            };
             Ok(row)
         }
     }
