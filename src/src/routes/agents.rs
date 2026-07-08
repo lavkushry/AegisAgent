@@ -164,7 +164,9 @@ pub async fn register_agent(
 /// GET /v1/agents — list agents for the authenticated tenant.
 ///
 /// Query params:
-///   `limit` (default 50, max 200), `offset` (default 0), `status` (optional).
+///   `limit` (default 50, max 200), `offset` (default 0), `status` (optional),
+///   `owner_team` (#1389, optional) — exact match against the agent's
+///   `owner_team` metadata, so an operator can list "every agent team X owns".
 ///   `cursor` (#1142) — opaque keyset-pagination token from a previous page's
 ///   `X-Next-Cursor` response header; takes priority over `offset` when both
 ///   are supplied.
@@ -175,6 +177,7 @@ pub async fn list_agents(
 ) -> impl IntoResponse {
     let (limit, offset) = parse_pagination(raw_query.as_deref());
     let status_filter = super::parse_filter(raw_query.as_deref(), "status");
+    let owner_team_filter = super::parse_filter(raw_query.as_deref(), "owner_team");
     let cursor = match super::parse_cursor(raw_query.as_deref()) {
         Ok(c) => c,
         Err(resp) => return *resp,
@@ -182,7 +185,14 @@ pub async fn list_agents(
 
     match state
         .storage
-        .list_agents_cursor(&tenant_id, limit, offset, cursor, status_filter.as_deref())
+        .list_agents_cursor(
+            &tenant_id,
+            limit,
+            offset,
+            cursor,
+            status_filter.as_deref(),
+            owner_team_filter.as_deref(),
+        )
         .await
     {
         Ok((agents, next_cursor)) => super::paginated_response(&agents, next_cursor),
