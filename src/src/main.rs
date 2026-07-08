@@ -19,6 +19,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
 use gateway::admission;
+use gateway::airgap;
 use gateway::audit_batch;
 use gateway::db;
 use gateway::error::StatusError;
@@ -1293,6 +1294,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             1
         });
+    }
+
+    // #1297: air-gapped kill-switch. Checked before any other startup work
+    // (including OTel init just below, which would otherwise dial out to
+    // AEGIS_OTLP_ENDPOINT) so a misconfigured AEGIS_AIRGAP=true deployment
+    // fails loudly instead of silently phoning home.
+    if let Err(msg) = airgap::verify_airgap_or_fail_closed() {
+        return Err(msg.into());
     }
 
     // #1156: distributed tracing, gated on AEGIS_OTLP_ENDPOINT. `None` when
