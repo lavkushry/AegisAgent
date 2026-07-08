@@ -277,14 +277,6 @@ impl PolicyEngine {
                 .unwrap_or_else(|| policy_id.to_string());
             matched_policies.push(matched_name);
             if let Some(policy) = policy_set.policy(policy_id) {
-                // Surface the stable, human-assigned `@id` annotation (if any) in
-                // addition to Cedar's auto-numbered policy id ("policy0", ...),
-                // so callers/tests can match on a name that doesn't shift if
-                // policy ordering in the .cedar file changes.
-                if let Some(id) = policy.annotation("id") {
-                    matched_policies.push(id.trim_matches('"').to_string());
-                }
-
                 // Escalate the binary Cedar `allow` using annotation overrides.
                 // Severity order (most → least restrictive):
                 //   quarantine > require_approval > redact > allow
@@ -415,6 +407,31 @@ mod tests {
             .authorize("test_tenant", &request, "low", true, false)
             .unwrap();
         assert_eq!(result.decision, "allow");
+    }
+
+    /// An unknown MCP tool is denied by the `mcp_unknown_tool` forbid rule,
+    /// and its `@id` annotation surfaces exactly once in `matched_policies`
+    /// (not twice — the annotation used to be pushed both by the general
+    /// `@id`-preferring lookup and by a separate, now-removed block that
+    /// duplicated it whenever a policy carried an `@id` annotation).
+    #[tokio::test]
+    async fn unknown_mcp_tool_denied_with_single_matched_policy_entry() {
+        let engine = setup_engine().await;
+        let request = mutating_request_at_trust("trusted_internal_signed");
+        let result = engine
+            .authorize("test_tenant", &request, "low", false, false)
+            .unwrap();
+        assert_eq!(result.decision, "deny");
+        let occurrences = result
+            .matched_policies
+            .iter()
+            .filter(|p| p.as_str() == "mcp_unknown_tool")
+            .count();
+        assert_eq!(
+            occurrences, 1,
+            "matched_policies: {:?}",
+            result.matched_policies
+        );
     }
 
     /// #1296: an agent auto-escalated to risk_tier "high" must clear human
