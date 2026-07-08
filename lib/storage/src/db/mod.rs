@@ -559,6 +559,7 @@ pub mod alerting;
 pub mod approvals;
 pub mod broker_tools;
 pub mod control_commands;
+pub mod correlate;
 pub mod dashboards;
 pub mod decisions;
 pub mod investigation_playbooks;
