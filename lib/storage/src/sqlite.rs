@@ -103,10 +103,19 @@ impl StorageBackend for SqlDbStorage {
         offset: i64,
         cursor: Option<i64>,
         status_filter: Option<&str>,
+        owner_team_filter: Option<&str>,
     ) -> Result<(Vec<AgentRecord>, Option<i64>), AegisError> {
-        db::list_agents_cursor(&self.pool, tenant_id, limit, offset, cursor, status_filter)
-            .await
-            .map_err(AegisError::Database)
+        db::list_agents_cursor(
+            &self.pool,
+            tenant_id,
+            limit,
+            offset,
+            cursor,
+            status_filter,
+            owner_team_filter,
+        )
+        .await
+        .map_err(AegisError::Database)
     }
 
     async fn get_agent_by_id(

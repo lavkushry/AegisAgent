@@ -125,6 +125,10 @@ pub async fn list_agents(
 }
 
 /// #1142: cursor-paginated variant of [`list_agents`].
+///
+/// `owner_team_filter` (#1389): governance filter so an operator can list
+/// "every agent team X owns" -- `owner_team` was previously stored and
+/// settable via `PATCH /v1/agents/:id` but had no way to query by it.
 pub async fn list_agents_cursor(
     pool: &DbPool,
     tenant_id: &str,
@@ -132,6 +136,7 @@ pub async fn list_agents_cursor(
     offset: i64,
     cursor: Option<i64>,
     status_filter: Option<&str>,
+    owner_team_filter: Option<&str>,
 ) -> Result<(Vec<AgentRecord>, Option<i64>), sqlx::Error> {
     let limit = limit.clamp(1, crate::db::SOC_MAX_LIMIT);
     let query = "SELECT *, rowid FROM agents
@@ -140,6 +145,7 @@ pub async fn list_agents_cursor(
              (? IS NULL AND status != 'deleted')
              OR status = ?
            )
+           AND (? IS NULL OR owner_team = ?)
            AND (? IS NULL OR rowid < ?)
          ORDER BY rowid DESC
          LIMIT ? OFFSET ?";
@@ -149,6 +155,8 @@ pub async fn list_agents_cursor(
                 .bind(tenant_id)
                 .bind(status_filter)
                 .bind(status_filter)
+                .bind(owner_team_filter)
+                .bind(owner_team_filter)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(limit + 1)
@@ -165,6 +173,8 @@ pub async fn list_agents_cursor(
                 .bind(tenant_id)
                 .bind(status_filter)
                 .bind(status_filter)
+                .bind(owner_team_filter)
+                .bind(owner_team_filter)
                 .bind(cursor)
                 .bind(cursor)
                 .bind(limit + 1)
@@ -1007,16 +1017,60 @@ mod tests {
             .unwrap();
         }
 
-        let (page, next_cursor) = list_agents_cursor(&pool, tenant_id, 2, 0, None, None)
+        let (page, next_cursor) = list_agents_cursor(&pool, tenant_id, 2, 0, None, None, None)
             .await
             .unwrap();
         assert_eq!(page.len(), 2);
         assert!(next_cursor.is_some());
 
-        let (page2, next_cursor2) = list_agents_cursor(&pool, tenant_id, 2, 0, next_cursor, None)
-            .await
-            .unwrap();
+        let (page2, next_cursor2) =
+            list_agents_cursor(&pool, tenant_id, 2, 0, next_cursor, None, None)
+                .await
+                .unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(next_cursor2, None);
+    }
+
+    /// #1389: `owner_team_filter` lists only agents owned by that team,
+    /// leaving agents with no owner_team (or a different one) out.
+    #[tokio::test]
+    async fn list_agents_cursor_filters_by_owner_team() {
+        let pool = setup_pool("agents_cursor_owner_team").await;
+        let tenant_id = "tenant_agents_owner_team";
+        register_tenant(&pool, tenant_id, "Owner Team Tenant", "developer")
+            .await
+            .unwrap();
+
+        let mut platform_agent = make_test_agent(
+            "agent_platform",
+            tenant_id,
+            "agent-platform",
+            "tok-platform",
+        );
+        platform_agent.owner_team = Some("platform".to_string());
+        insert_agent(&pool, &platform_agent).await.unwrap();
+
+        let mut data_agent = make_test_agent("agent_data", tenant_id, "agent-data", "tok-data");
+        data_agent.owner_team = Some("data".to_string());
+        insert_agent(&pool, &data_agent).await.unwrap();
+
+        let unowned_agent =
+            make_test_agent("agent_unowned", tenant_id, "agent-unowned", "tok-unowned");
+        insert_agent(&pool, &unowned_agent).await.unwrap();
+
+        let (page, _) = list_agents_cursor(&pool, tenant_id, 50, 0, None, None, Some("platform"))
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "agent_platform");
+
+        let (unfiltered, _) = list_agents_cursor(&pool, tenant_id, 50, 0, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            unfiltered.len(),
+            3,
+            "no owner_team filter must return every agent regardless of ownership"
+        );
     }
 }

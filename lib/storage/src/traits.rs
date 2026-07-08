@@ -194,6 +194,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: i64,
         cursor: Option<i64>,
         status_filter: Option<&str>,
+        owner_team_filter: Option<&str>,
     ) -> Result<(Vec<AgentRecord>, Option<i64>), AegisError>;
     async fn get_agent_by_id(
         &self,
