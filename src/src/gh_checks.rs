@@ -123,7 +123,7 @@ pub fn build_annotations(risky_actions: &[RiskyAction]) -> Vec<Value> {
         .iter()
         .take(MAX_RISKY_ACTIONS)
         .map(|ra| {
-            let level = if ra.decision == "deny" || ra.decision == "quarantine" {
+            let level = if matches!(ra.decision.as_str(), "deny" | "quarantine" | "rejected") {
                 "failure"
             } else {
                 "warning"
@@ -366,6 +366,148 @@ impl GhChecksClient {
 
         Ok(())
     }
+
+    /// Resolve one pending action for `(repo, pr_number)` after a human
+    /// decides it via `/v1/approvals/:id/{approve,reject}`, and refresh the
+    /// check run so a PR that went `action_required` doesn't stay blocked
+    /// forever once decided -- closing the loop `record_decision` opens.
+    /// Approved moves the action to `allowed`; rejected moves it to `denied`
+    /// (the action never ran, same as an automatic Cedar `deny`).
+    ///
+    /// A no-op if nothing is tracked for this PR (gateway restarted since
+    /// the original decision, or the action was never a GitHub PR call in
+    /// the first place) -- there's nothing stale to correct, matching the
+    /// existing precedent that all check-run state resets on restart.
+    pub async fn record_approval_decision_resolution(
+        &self,
+        repo: &str,
+        pr_number: u64,
+        approved: bool,
+    ) -> Result<(), String> {
+        let key = Self::run_key(repo, pr_number);
+        let resolved_label = if approved { "approved" } else { "rejected" };
+
+        let (check_run_id, allowed, denied, pending, risky_actions) = {
+            let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(state) = runs.get_mut(&key) else {
+                return Ok(());
+            };
+            if state.pending == 0 {
+                return Ok(());
+            }
+            state.pending -= 1;
+            if approved {
+                state.allowed += 1;
+            } else {
+                state.denied += 1;
+            }
+            // Best-effort: mark one still-pending risky-action entry resolved
+            // so the summary doesn't keep listing it as awaiting approval.
+            // There's no per-entry approval correlation id to pick the exact
+            // match when several are pending at once, so this takes the
+            // first (oldest) one.
+            if let Some(ra) = state
+                .risky_actions
+                .iter_mut()
+                .find(|ra| ra.decision == "require_approval")
+            {
+                ra.decision = resolved_label.to_string();
+            }
+            (
+                state.check_run_id,
+                state.allowed,
+                state.denied,
+                state.pending,
+                state.risky_actions.clone(),
+            )
+        };
+
+        let Some(check_run_id) = check_run_id else {
+            return Ok(());
+        };
+        let conclusion = compute_conclusion(denied, pending);
+        let (title, summary) = format_check_output(allowed, denied, pending, &risky_actions);
+        let annotations = build_annotations(&risky_actions);
+        self.update_check_run(
+            repo,
+            check_run_id,
+            &title,
+            &summary,
+            conclusion,
+            &annotations,
+        )
+        .await
+    }
+
+    /// Test-only: seed `(repo, pr_number)` as if `record_decision` already
+    /// ran, without making the real network call it would otherwise attempt
+    /// -- lets cross-module tests (e.g. `routes::approval`'s
+    /// approve/reject-resolves-the-check-run tests) exercise the
+    /// `record_approval_decision_resolution` path end-to-end via the public
+    /// approve/reject handlers. `check_run_id: None` matches what
+    /// `record_decision` leaves behind when its network call never
+    /// succeeds (e.g. no live GitHub API in a test environment).
+    #[cfg(test)]
+    pub(crate) fn seed_pending_for_test(&self, repo: &str, pr_number: u64) {
+        let key = Self::run_key(repo, pr_number);
+        let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        runs.insert(
+            key,
+            CheckRunState {
+                check_run_id: None,
+                head_sha: None,
+                allowed: 0,
+                denied: 0,
+                pending: 1,
+                risky_actions: vec![RiskyAction {
+                    tool: "github".to_string(),
+                    action: "merge_pull_request".to_string(),
+                    decision: "require_approval".to_string(),
+                    reason: "needs review".to_string(),
+                    risk_score: 70,
+                }],
+            },
+        );
+    }
+
+    /// Test-only: read back the `(allowed, denied, pending)` tally for
+    /// `(repo, pr_number)`.
+    #[cfg(test)]
+    pub(crate) fn tally_for_test(&self, repo: &str, pr_number: u64) -> (u32, u32, u32) {
+        let key = Self::run_key(repo, pr_number);
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        let state = runs
+            .get(&key)
+            .expect("run must be seeded before reading its tally");
+        (state.allowed, state.denied, state.pending)
+    }
+}
+
+/// Spawn a background task that resolves one pending action for
+/// `(repo, pr_number)` after an Aegis approve/reject decision, refreshing
+/// the check run. Fire-and-forget, matching [`spawn_record_decision`] --
+/// never blocks or fails the `/v1/approvals/:id/{approve,reject}` response
+/// (Law 3).
+pub fn spawn_record_approval_decision_resolution(
+    client: Arc<GhChecksClient>,
+    repo: String,
+    pr_number: u64,
+    approved: bool,
+) {
+    tokio::spawn(async move {
+        match client
+            .record_approval_decision_resolution(&repo, pr_number, approved)
+            .await
+        {
+            Ok(()) => debug!(
+                repo,
+                pr_number, approved, "Aegis check run resolved after decision"
+            ),
+            Err(e) => {
+                warn!(repo, pr_number, approved, error = %e, "Failed to resolve Aegis check run after decision")
+            }
+        }
+    });
 }
 
 /// Spawn a background task that records a decision against the Aegis check
@@ -528,5 +670,99 @@ mod tests {
         let key = GhChecksClient::run_key("owner/repo", 7);
         let runs = client.runs.lock().unwrap();
         assert!(!runs.contains_key(&key));
+    }
+
+    #[test]
+    fn build_annotations_rejected_is_failure_level() {
+        let risky = vec![RiskyAction {
+            tool: "github".to_string(),
+            action: "merge_pull_request".to_string(),
+            decision: "rejected".to_string(),
+            reason: "blocked by reviewer".to_string(),
+            risk_score: 70,
+        }];
+        let annotations = build_annotations(&risky);
+        assert_eq!(annotations[0]["annotation_level"], "failure");
+    }
+
+    /// Thin wrapper returning the run key alongside the seed, for tests that
+    /// want to look the state back up afterward.
+    fn seed_pending_run(client: &GhChecksClient, repo: &str, pr_number: u64) -> String {
+        client.seed_pending_for_test(repo, pr_number);
+        GhChecksClient::run_key(repo, pr_number)
+    }
+
+    #[tokio::test]
+    async fn record_approval_decision_resolution_approved_moves_pending_to_allowed() {
+        let client = GhChecksClient::new("tok".to_string());
+        let key = seed_pending_run(&client, "owner/repo", 42);
+
+        let result = client
+            .record_approval_decision_resolution("owner/repo", 42, true)
+            .await;
+        assert!(result.is_ok());
+
+        let runs = client.runs.lock().unwrap();
+        let state = runs.get(&key).unwrap();
+        assert_eq!(state.pending, 0);
+        assert_eq!(state.allowed, 1);
+        assert_eq!(state.denied, 0);
+        assert_eq!(state.risky_actions[0].decision, "approved");
+    }
+
+    #[tokio::test]
+    async fn record_approval_decision_resolution_rejected_moves_pending_to_denied() {
+        let client = GhChecksClient::new("tok".to_string());
+        let key = seed_pending_run(&client, "owner/repo", 43);
+
+        let result = client
+            .record_approval_decision_resolution("owner/repo", 43, false)
+            .await;
+        assert!(result.is_ok());
+
+        let runs = client.runs.lock().unwrap();
+        let state = runs.get(&key).unwrap();
+        assert_eq!(state.pending, 0);
+        assert_eq!(state.allowed, 0);
+        assert_eq!(state.denied, 1);
+        assert_eq!(state.risky_actions[0].decision, "rejected");
+    }
+
+    #[tokio::test]
+    async fn record_approval_decision_resolution_is_a_no_op_when_nothing_tracked() {
+        let client = GhChecksClient::new("tok".to_string());
+        let result = client
+            .record_approval_decision_resolution("owner/repo", 99, true)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn record_approval_decision_resolution_is_a_no_op_when_no_pending_remains() {
+        let client = GhChecksClient::new("tok".to_string());
+        let key = GhChecksClient::run_key("owner/repo", 44);
+        {
+            let mut runs = client.runs.lock().unwrap();
+            runs.insert(
+                key.clone(),
+                CheckRunState {
+                    check_run_id: None,
+                    head_sha: None,
+                    allowed: 3,
+                    denied: 0,
+                    pending: 0,
+                    risky_actions: vec![],
+                },
+            );
+        }
+
+        let result = client
+            .record_approval_decision_resolution("owner/repo", 44, true)
+            .await;
+        assert!(result.is_ok());
+
+        let runs = client.runs.lock().unwrap();
+        let state = runs.get(&key).unwrap();
+        assert_eq!(state.allowed, 3, "no-op must not touch an unrelated tally");
     }
 }

@@ -552,11 +552,53 @@ pub(crate) async fn approve_approval_inner(
     };
     let _ = state.storage.insert_audit_event(&audit_record).await;
 
+    spawn_github_check_resolution_for_approval(&state, &approval, true);
+
     (
         StatusCode::OK,
         Json(json!({"status": "success", "approval_id": approval_id})),
     )
         .into_response()
+}
+
+/// #1380: close the loop `gh_checks::spawn_record_decision` opens -- a
+/// `require_approval` decision on a GitHub PR action marks the Aegis check
+/// `action_required`, but nothing previously updated it once a human
+/// actually decided the approval, leaving the PR blocked forever even after
+/// approval. Fire-and-forget (Law 3): never blocks or fails the
+/// approve/reject response. A no-op for approvals unrelated to a GitHub PR
+/// tool call, or when the checks client isn't configured.
+fn spawn_github_check_resolution_for_approval(
+    state: &Arc<AppState>,
+    approval: &ApprovalRecord,
+    approved: bool,
+) {
+    let Some(checks_client) = state.github_checks_client.as_ref() else {
+        return;
+    };
+    let tool_call: Option<AuthorizeToolCall> = approval
+        .edited_skill_call
+        .as_ref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .or_else(|| serde_json::from_str(&approval.original_skill_call).ok());
+    let Some(tool_call) = tool_call else {
+        return;
+    };
+    if tool_call.tool != "github" {
+        return;
+    }
+    let Some(resource) = tool_call.resource.as_deref() else {
+        return;
+    };
+    let Some((repo, pr_number)) = crate::gh_comment::extract_pr_ref(resource) else {
+        return;
+    };
+    crate::gh_checks::spawn_record_approval_decision_resolution(
+        std::sync::Arc::clone(checks_client),
+        repo,
+        pr_number,
+        approved,
+    );
 }
 
 // Reject Handler
@@ -662,6 +704,8 @@ pub(crate) async fn reject_approval_inner(
         created_at: Utc::now(),
     };
     let _ = state.storage.insert_audit_event(&audit_record).await;
+
+    spawn_github_check_resolution_for_approval(&state, &approval, false);
 
     (
         StatusCode::OK,
@@ -2577,6 +2621,168 @@ mod tests {
         let response = slack_callback(State(state.clone()), headers, body)
             .await
             .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // ── #1380: approve/reject resolves the GitHub check run ────────────────────
+
+    async fn create_pending_github_pr_approval(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        agent_token: &str,
+        pr_number: u64,
+    ) -> String {
+        let agent = state
+            .storage
+            .get_agent_by_token(tenant_id, agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let resource = format!("owner/repo#{pr_number}");
+        let decision_id = Uuid::new_v4().to_string();
+        let record_dec = DecisionRecord {
+            id: decision_id.clone(),
+            tenant_id: tenant_id.to_string(),
+            agent_id: agent.id,
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "github".to_string(),
+            action: "merge_pull_request".to_string(),
+            resource: Some(resource.clone()),
+            input_json: "{}".to_string(),
+            decision: "require_approval".to_string(),
+            risk_score: Some(90),
+            reason: Some("high-risk merge".to_string()),
+            matched_policy_ids: None,
+            request_id: None,
+            latency_ms: None,
+            composite_risk_score: None,
+            root_trust_level: None,
+            parent_run_id: None,
+            created_at: Utc::now(),
+        };
+        state.storage.insert_decision(&record_dec).await.unwrap();
+
+        let tool_call_json = serde_json::json!({
+            "tool": "github",
+            "action": "merge_pull_request",
+            "resource": resource,
+            "mutates_state": true,
+            "parameters": {"base_branch": "main"}
+        })
+        .to_string();
+
+        let approval_id = Uuid::new_v4().to_string();
+        let record = ApprovalRecord {
+            id: approval_id.clone(),
+            tenant_id: tenant_id.to_string(),
+            decision_id,
+            status: "created".to_string(),
+            approver_group: None,
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: tool_call_json,
+            original_call_hash: "hash1".to_string(),
+            edited_skill_call: None,
+            effective_call_hash: None,
+            expires_at: Some(Utc::now() + Duration::minutes(10)),
+            decided_at: None,
+            callback_url: None,
+            callback_secret_hash: None,
+            created_at: Utc::now(),
+        };
+        state.storage.insert_approval(&record).await.unwrap();
+        approval_id
+    }
+
+    #[tokio::test]
+    async fn approving_a_pending_github_pr_action_resolves_the_check_run() {
+        let (state, tenant_id, agent_token, checks_client) =
+            setup_state_with_github_checks_client("approve_resolves_gh_check").await;
+        checks_client.seed_pending_for_test("owner/repo", 42);
+
+        let approval_id =
+            create_pending_github_pr_approval(&state, &tenant_id, &agent_token, 42).await;
+
+        let response = approve_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(Uuid::parse_str(&approval_id).unwrap()),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer-1".to_string(),
+                reason: Some("looks safe".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Give the fire-and-forget check-run resolution task a moment to run.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let (allowed, denied, pending) = checks_client.tally_for_test("owner/repo", 42);
+        assert_eq!(pending, 0, "approval must clear the pending count");
+        assert_eq!(allowed, 1, "approval must move the action to allowed");
+        assert_eq!(denied, 0);
+    }
+
+    #[tokio::test]
+    async fn rejecting_a_pending_github_pr_action_resolves_the_check_run_as_denied() {
+        let (state, tenant_id, agent_token, checks_client) =
+            setup_state_with_github_checks_client("reject_resolves_gh_check").await;
+        checks_client.seed_pending_for_test("owner/repo", 43);
+
+        let approval_id =
+            create_pending_github_pr_approval(&state, &tenant_id, &agent_token, 43).await;
+
+        let response = reject_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(Uuid::parse_str(&approval_id).unwrap()),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer-1".to_string(),
+                reason: Some("blocked: needs a smaller diff".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let (allowed, denied, pending) = checks_client.tally_for_test("owner/repo", 43);
+        assert_eq!(pending, 0, "rejection must clear the pending count");
+        assert_eq!(denied, 1, "rejection must move the action to denied");
+        assert_eq!(allowed, 0);
+    }
+
+    /// `create_pending_approval`'s fixture resource ("repo/example/pull/1")
+    /// isn't PR-shaped (`gh_comment::extract_pr_ref` needs "owner/repo#N"),
+    /// so `spawn_github_check_resolution_for_approval` must no-op cleanly --
+    /// this confirms approving still succeeds rather than erroring or
+    /// panicking on the unparseable resource.
+    #[tokio::test]
+    async fn approving_a_non_pr_shaped_resource_still_succeeds() {
+        let (state, tenant_id, agent_token, _checks_client) =
+            setup_state_with_github_checks_client("approve_non_pr_shaped_no_check").await;
+        let (approval_id, _hash) =
+            create_pending_approval(&state, &tenant_id, &agent_token, "1").await;
+
+        let response = approve_approval(
+            State(state.clone()),
+            ConnectInfo(test_conn_info()),
+            TenantId(tenant_id.clone()),
+            Path(approval_id),
+            HeaderMap::new(),
+            Json(ApproveRequest {
+                approver_user_id: "reviewer-1".to_string(),
+                reason: Some("fine".to_string()),
+            }),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
     }
 }

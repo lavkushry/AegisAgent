@@ -1517,7 +1517,7 @@ mod tests {
         let tenant_b = format!("tenant_b_{}", Uuid::new_v4().simple());
         register_tenant_helper(state.storage.as_ref(), &tenant_b, "Tenant B", "developer").await;
 
-        set_repo_sensitivity_label(
+        let _ = set_repo_sensitivity_label(
             State(state.clone()),
             TenantId(tenant_a.clone()),
             Path(("acme".to_string(), "widgets".to_string())),

@@ -2273,6 +2273,72 @@ pub(crate) mod test_helpers {
     }
 
     /// Like [`setup_state`], but returns an [`AppState`] with
+    /// `github_checks_client` configured (#1380 approval/reject
+    /// merge-protection loop tests) -- no network calls are ever made in
+    /// these tests since the client's `token` is a dummy value never sent
+    /// anywhere unless a check-run update is actually attempted.
+    pub(crate) async fn setup_state_with_github_checks_client(
+        test_name: &str,
+    ) -> (
+        Arc<AppState>,
+        String,
+        String,
+        Arc<crate::gh_checks::GhChecksClient>,
+    ) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.storage.get_pool().clone(),
+            state_raw.metrics.clone(),
+            None,
+        ));
+
+        let checks_client = Arc::new(crate::gh_checks::GhChecksClient::new(
+            "test-token".to_string(),
+        ));
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            storage: state_raw.storage.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
+            canonical_hash_cache: CanonicalHashCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            policy_signing_verifying_key: None,
+            command_signing_key: None,
+            slack_signing_secret: None,
+            slack_bot_token: None,
+            github_pr_commenter: None,
+            github_checks_client: Some(checks_client.clone()),
+            qdrant_exporter: None,
+            admission_webhook: None,
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
+            broker_executor: crate::routes::broker::default_broker_executor(),
+        });
+
+        (state, tenant_id, agent_token, checks_client)
+    }
+
+    /// Like [`setup_state`], but returns an [`AppState`] with
     /// `policy_signing_verifying_key` set to `Some(verifying_key_hex)`, for
     /// testing `POST /v1/policies/bundles` signature verification (#1280).
     pub(crate) async fn setup_state_with_policy_signing_key(
