@@ -244,30 +244,6 @@ pub fn is_retryable_read_replica_error(err: &sqlx::Error) -> bool {
     }
 }
 
-/// Run a read against the replica pool, falling back to the primary on
-/// transient replica errors when a dedicated replica is configured (#914).
-#[cfg(feature = "postgres")]
-pub async fn postgres_read_with_failover<T, F, Fut>(
-    pools: &PostgresDbPools,
-    run: F,
-) -> Result<T, sqlx::Error>
-where
-    F: Fn(&sqlx::PgPool) -> Fut,
-    Fut: std::future::Future<Output = Result<T, sqlx::Error>>,
-{
-    match run(pools.read_pool()).await {
-        Ok(v) => Ok(v),
-        Err(e) if pools.has_read_replica() && is_retryable_read_replica_error(&e) => {
-            tracing::warn!(
-                error = %e,
-                "read replica query failed; retrying on primary (#914)"
-            );
-            run(pools.write_pool()).await
-        }
-        Err(e) => Err(e),
-    }
-}
-
 // #900: every db::*query* macro below wraps the sqlx future with a
 // `db_query` tracing span (sql text + backend) via `.instrument(...)`. This
 // is the single point all ~170 query functions across lib/storage/src/db/
@@ -321,14 +297,29 @@ macro_rules! fetch_optional {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_optional(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_optional(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_optional(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -352,14 +343,29 @@ macro_rules! fetch_all {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_all(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_all(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_all(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -383,14 +389,29 @@ macro_rules! fetch_one {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_one(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_one(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_one(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -414,14 +435,29 @@ macro_rules! fetch_one_as {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query_as::<_, $ty>(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_one(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query_as::<_, $ty>(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_one(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query_as::<_, $ty>(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_one(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -445,14 +481,29 @@ macro_rules! fetch_optional_as {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query_as::<_, $ty>(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_optional(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query_as::<_, $ty>(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_optional(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query_as::<_, $ty>(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_optional(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -476,14 +527,29 @@ macro_rules! fetch_all_as {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query_as::<_, $ty>(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_all(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query_as::<_, $ty>(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_all(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query_as::<_, $ty>(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_all(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -507,14 +573,29 @@ macro_rules! fetch_one_scalar {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query_scalar::<_, $ty>(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_one(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query_scalar::<_, $ty>(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_one(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query_scalar::<_, $ty>(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_one(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -538,14 +619,29 @@ macro_rules! fetch_optional_scalar {
                 let pg_sql = $crate::db::to_postgres_sql($sql);
                 let span =
                     tracing::debug_span!("db_query", sql = %pg_sql, backend = "postgres");
-                $crate::db::postgres_read_with_failover(pools, |p| async {
-                    sqlx::query_scalar::<_, $ty>(&pg_sql)
-                        $(.bind($bind))*
-                        .fetch_optional(p)
-                        .instrument(span)
-                        .await
-                })
-                .await
+                let result = sqlx::query_scalar::<_, $ty>(&pg_sql)
+                    $(.bind($bind.clone()))*
+                    .fetch_optional(pools.read_pool())
+                    .instrument(span.clone())
+                    .await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e)
+                        if pools.has_read_replica()
+                            && $crate::db::is_retryable_read_replica_error(&e) =>
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica query failed; retrying on primary (#914)"
+                        );
+                        sqlx::query_scalar::<_, $ty>(&pg_sql)
+                            $(.bind($bind.clone()))*
+                            .fetch_optional(pools.write_pool())
+                            .instrument(span)
+                            .await
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
     };
@@ -635,10 +731,22 @@ pub async fn health_check(pool: &DbPool) -> Result<(), sqlx::Error> {
                 .fetch_one(pools.write_pool())
                 .await?;
             if pools.has_read_replica() {
-                postgres_read_with_failover(pools, |p| async {
-                    sqlx::query_scalar::<_, i64>("SELECT 1").fetch_one(p).await
-                })
-                .await?;
+                let result = sqlx::query_scalar::<_, i64>("SELECT 1")
+                    .fetch_one(pools.read_pool())
+                    .await;
+                match result {
+                    Ok(_) => {}
+                    Err(e) if is_retryable_read_replica_error(&e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "read replica health check failed; retrying on primary (#914)"
+                        );
+                        sqlx::query_scalar::<_, i64>("SELECT 1")
+                            .fetch_one(pools.write_pool())
+                            .await?;
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             Ok(())
         }
