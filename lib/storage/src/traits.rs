@@ -300,6 +300,28 @@ pub trait StorageBackend: Send + Sync + 'static {
         server_key: &str,
     ) -> Result<bool, AegisError>;
 
+    // GitHub App protection layer: per-repo sensitivity labels (#1380)
+    async fn set_repo_sensitivity_label(
+        &self,
+        tenant_id: &str,
+        repo_full_name: &str,
+        sensitivity_label: &str,
+    ) -> Result<RepoSensitivityLabel, AegisError>;
+    async fn get_repo_sensitivity_label(
+        &self,
+        tenant_id: &str,
+        repo_full_name: &str,
+    ) -> Result<Option<RepoSensitivityLabel>, AegisError>;
+    async fn list_repo_sensitivity_labels(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<RepoSensitivityLabel>, AegisError>;
+    async fn delete_repo_sensitivity_label(
+        &self,
+        tenant_id: &str,
+        repo_full_name: &str,
+    ) -> Result<bool, AegisError>;
+
     // Approvals
     async fn consume_approval(
         &self,

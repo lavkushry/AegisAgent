@@ -365,6 +365,51 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn set_repo_sensitivity_label(
+        &self,
+        tenant_id: &str,
+        repo_full_name: &str,
+        sensitivity_label: &str,
+    ) -> Result<RepoSensitivityLabel, AegisError> {
+        db::github_repos::set_repo_sensitivity_label(
+            &self.pool,
+            tenant_id,
+            repo_full_name,
+            sensitivity_label,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn get_repo_sensitivity_label(
+        &self,
+        tenant_id: &str,
+        repo_full_name: &str,
+    ) -> Result<Option<RepoSensitivityLabel>, AegisError> {
+        db::github_repos::get_repo_sensitivity_label(&self.pool, tenant_id, repo_full_name)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_repo_sensitivity_labels(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<RepoSensitivityLabel>, AegisError> {
+        db::github_repos::list_repo_sensitivity_labels(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn delete_repo_sensitivity_label(
+        &self,
+        tenant_id: &str,
+        repo_full_name: &str,
+    ) -> Result<bool, AegisError> {
+        db::github_repos::delete_repo_sensitivity_label(&self.pool, tenant_id, repo_full_name)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // Approvals
     async fn consume_approval(
         &self,

@@ -423,6 +423,24 @@ pub struct AgentMcpServerPermission {
     pub created_at: DateTime<Utc>,
 }
 
+/// A repo's configured sensitivity label for the GitHub App protection
+/// layer (#1380). No row for a repo means "low" (see the migration).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
+pub struct RepoSensitivityLabel {
+    pub id: String,
+    pub tenant_id: String,
+    pub repo_full_name: String,
+    pub sensitivity_label: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body for `PUT /v1/github/repos/:repo/sensitivity` (#1380).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SetRepoSensitivityLabelRequest {
+    pub sensitivity_label: String,
+}
+
 /// Request body for `POST /v1/agents/:id/mcp-permissions` (#1766).
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct GrantMcpServerPermissionRequest {

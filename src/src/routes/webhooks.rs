@@ -442,6 +442,120 @@ pub async fn receive_github_webhook(
     }
 }
 
+// ── GitHub App protection layer: per-repo sensitivity labels (#1380) ─────────
+
+const VALID_SENSITIVITY_LABELS: [&str; 4] = ["low", "medium", "high", "critical"];
+
+fn repo_full_name(owner: &str, repo: &str) -> String {
+    format!("{owner}/{repo}")
+}
+
+/// `PUT /v1/github/repos/:owner/:repo/sensitivity` — set (or replace) a
+/// repo's sensitivity label. Rejects anything outside the fixed vocabulary
+/// (fail-closed: an unrecognized label must not silently become "low").
+pub async fn set_repo_sensitivity_label(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(payload): Json<crate::models::SetRepoSensitivityLabelRequest>,
+) -> impl IntoResponse {
+    if !VALID_SENSITIVITY_LABELS.contains(&payload.sensitivity_label.as_str()) {
+        return StatusError::bad_request(format!(
+            "sensitivity_label must be one of {:?}",
+            VALID_SENSITIVITY_LABELS
+        ))
+        .into_response();
+    }
+
+    let repo_full_name = repo_full_name(&owner, &repo);
+    match state
+        .storage
+        .set_repo_sensitivity_label(&tenant_id, &repo_full_name, &payload.sensitivity_label)
+        .await
+    {
+        Ok(label) => (StatusCode::OK, Json(label)).into_response(),
+        Err(e) => {
+            error!("Failed to set repo sensitivity label: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// `GET /v1/github/repos/:owner/:repo/sensitivity` — read a repo's
+/// configured label, defaulting to "low" when unset.
+pub async fn get_repo_sensitivity_label(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path((owner, repo)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let repo_full_name = repo_full_name(&owner, &repo);
+    match state
+        .storage
+        .get_repo_sensitivity_label(&tenant_id, &repo_full_name)
+        .await
+    {
+        Ok(Some(label)) => (StatusCode::OK, Json(json!(label))).into_response(),
+        Ok(None) => (
+            StatusCode::OK,
+            Json(json!({
+                "tenant_id": tenant_id,
+                "repo_full_name": repo_full_name,
+                "sensitivity_label": "low",
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to get repo sensitivity label: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// `GET /v1/github/repos/sensitivity` — list every repo sensitivity label
+/// configured for the tenant (repos with no row are omitted; callers treat
+/// an absent repo as "low").
+pub async fn list_repo_sensitivity_labels(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+) -> impl IntoResponse {
+    match state.storage.list_repo_sensitivity_labels(&tenant_id).await {
+        Ok(labels) => (StatusCode::OK, Json(json!({ "labels": labels }))).into_response(),
+        Err(e) => {
+            error!("Failed to list repo sensitivity labels: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// `DELETE /v1/github/repos/:owner/:repo/sensitivity` — revert a repo to the
+/// "low" default.
+pub async fn delete_repo_sensitivity_label(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path((owner, repo)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let repo_full_name = repo_full_name(&owner, &repo);
+    match state
+        .storage
+        .delete_repo_sensitivity_label(&tenant_id, &repo_full_name)
+        .await
+    {
+        Ok(deleted) => (
+            StatusCode::OK,
+            Json(json!({
+                "tenant_id": tenant_id,
+                "repo_full_name": repo_full_name,
+                "deleted": deleted,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to delete repo sensitivity label: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 pub(crate) fn default_webhook_event_types() -> String {
     "*".to_string()
 }
@@ -1281,5 +1395,150 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert_eq!(v["status"], "ignored");
         assert_eq!(v["reason"], "unsupported_event_type");
+    }
+
+    // ── repo sensitivity labels (#1380) ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_repo_sensitivity_label_defaults_to_low_when_unset() {
+        let (state, tenant_id, _) = setup_state("repo_sensitivity_default").await;
+
+        let resp = get_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["sensitivity_label"], "low");
+        assert_eq!(v["repo_full_name"], "acme/widgets");
+    }
+
+    #[tokio::test]
+    async fn set_repo_sensitivity_label_rejects_unknown_value() {
+        let (state, tenant_id, _) = setup_state("repo_sensitivity_invalid").await;
+
+        let resp = set_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+            Json(SetRepoSensitivityLabelRequest {
+                sensitivity_label: "extremely-dangerous".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn set_then_get_then_list_then_delete_repo_sensitivity_label_round_trips() {
+        let (state, tenant_id, _) = setup_state("repo_sensitivity_roundtrip").await;
+
+        let set_resp = set_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+            Json(SetRepoSensitivityLabelRequest {
+                sensitivity_label: "critical".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(set_resp.status(), StatusCode::OK);
+
+        let get_resp = get_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+        )
+        .await
+        .into_response();
+        let b = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["sensitivity_label"], "critical");
+
+        // Setting again (replace, not duplicate) must still leave exactly one label.
+        let replace_resp = set_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+            Json(SetRepoSensitivityLabelRequest {
+                sensitivity_label: "medium".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(replace_resp.status(), StatusCode::OK);
+
+        let list_resp =
+            list_repo_sensitivity_labels(State(state.clone()), TenantId(tenant_id.clone()))
+                .await
+                .into_response();
+        let b = to_bytes(list_resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        let labels = v["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 1, "replace must not duplicate rows");
+        assert_eq!(labels[0]["sensitivity_label"], "medium");
+
+        let delete_resp = delete_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+        )
+        .await
+        .into_response();
+        assert_eq!(delete_resp.status(), StatusCode::OK);
+        let b = to_bytes(delete_resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["deleted"], true);
+
+        // Deleted repo reverts to the "low" default.
+        let get_after_delete = get_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+        )
+        .await
+        .into_response();
+        let b = to_bytes(get_after_delete.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["sensitivity_label"], "low");
+    }
+
+    #[tokio::test]
+    async fn repo_sensitivity_labels_are_tenant_scoped() {
+        let (state, tenant_a, _) = setup_state("repo_sensitivity_tenant_a").await;
+        let tenant_b = format!("tenant_b_{}", Uuid::new_v4().simple());
+        register_tenant_helper(state.storage.as_ref(), &tenant_b, "Tenant B", "developer").await;
+
+        set_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_a.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+            Json(SetRepoSensitivityLabelRequest {
+                sensitivity_label: "critical".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+
+        // tenant_b never configured this repo -- must see the "low" default,
+        // not tenant_a's "critical" (cross-tenant isolation, CWE-284).
+        let resp = get_repo_sensitivity_label(
+            State(state.clone()),
+            TenantId(tenant_b.clone()),
+            Path(("acme".to_string(), "widgets".to_string())),
+        )
+        .await
+        .into_response();
+        let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["sensitivity_label"], "low");
     }
 }

@@ -170,6 +170,10 @@ use utoipa::OpenApi;
         get_sensor_api,
         sensor_heartbeat_api,
         receive_github_webhook_api,
+        list_repo_sensitivity_labels_api,
+        get_repo_sensitivity_label_api,
+        set_repo_sensitivity_label_api,
+        delete_repo_sensitivity_label_api,
     ),
     components(
         schemas(
@@ -202,6 +206,8 @@ use utoipa::OpenApi;
             GrantToolPermissionRequest,
             AgentMcpServerPermission,
             GrantMcpServerPermissionRequest,
+            RepoSensitivityLabel,
+            SetRepoSensitivityLabelRequest,
             McpServerRecord,
             McpToolRecord,
             PolicyRecord,
@@ -2160,3 +2166,57 @@ fn sensor_heartbeat_api() {}
     )
 )]
 fn receive_github_webhook_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/github/repos/sensitivity",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List of configured repo sensitivity labels")
+    )
+)]
+fn list_repo_sensitivity_labels_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/github/repos/{owner}/{repo}/sensitivity",
+    security(("bearer_auth" = [])),
+    params(
+        ("owner" = String, Path, description = "Repo owner"),
+        ("repo" = String, Path, description = "Repo name")
+    ),
+    responses(
+        (status = 200, description = "Repo sensitivity label (defaults to \"low\" when unset)", body = RepoSensitivityLabel)
+    )
+)]
+fn get_repo_sensitivity_label_api() {}
+
+#[utoipa::path(
+    put,
+    path = "/v1/github/repos/{owner}/{repo}/sensitivity",
+    security(("bearer_auth" = [])),
+    params(
+        ("owner" = String, Path, description = "Repo owner"),
+        ("repo" = String, Path, description = "Repo name")
+    ),
+    request_body = SetRepoSensitivityLabelRequest,
+    responses(
+        (status = 200, description = "Repo sensitivity label set", body = RepoSensitivityLabel),
+        (status = 400, description = "Invalid sensitivity_label value", body = StatusError)
+    )
+)]
+fn set_repo_sensitivity_label_api() {}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/github/repos/{owner}/{repo}/sensitivity",
+    security(("bearer_auth" = [])),
+    params(
+        ("owner" = String, Path, description = "Repo owner"),
+        ("repo" = String, Path, description = "Repo name")
+    ),
+    responses(
+        (status = 200, description = "Repo sensitivity label removed (reverts to \"low\")")
+    )
+)]
+fn delete_repo_sensitivity_label_api() {}
