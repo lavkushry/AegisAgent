@@ -9,7 +9,13 @@ AegisAgent's GitHub integration has three independent pieces, each gated by its 
 2. **Webhook ingestion** — `POST /v1/webhooks/github` accepts native GitHub events (`pull_request`, `issues`, `issue_comment`) into the SOC pipeline (`AEGIS_GITHUB_WEBHOOK_SECRET`).
 3. **The trust-provenance gate itself** — what actually blocks a malicious merge — needs no GitHub-specific configuration at all; it's the same Cedar policy every tool call goes through (see [`security-model.md`](security-model.md)).
 
-There is no GitHub App manifest, private key, or JWT-exchange flow built into AegisAgent. Both `AEGIS_GITHUB_*` variables are pre-obtained bearer credentials you generate through GitHub (a GitHub App installation access token, or a fine-grained PAT with equivalent scopes) and hand to the gateway as plain strings.
+There is no private-key handling or JWT-exchange *flow* built into AegisAgent — a GitHub App manifest (`github-app/aegis-app-manifest.json`) is provided to register the App itself with the minimum permissions each piece above actually needs (see `github-app/README.md`), but the resulting App ID/private key/webhook secret are exchanged and refreshed outside the gateway. Both `AEGIS_GITHUB_*` variables are pre-obtained bearer credentials you generate through GitHub (a GitHub App installation access token, or a fine-grained PAT with equivalent scopes) and hand to the gateway as plain strings.
+
+---
+
+## 0. Registering the GitHub App
+
+`github-app/aegis-app-manifest.json` is a [manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest) requesting exactly four permissions (`metadata: read`, `pull_requests: read`, `issues: write`, `checks: write`) and three events (`pull_request`, `issues`, `issue_comment`) — see `github-app/README.md` for the per-permission rationale and the full registration walkthrough (submit the manifest, exchange the resulting `code` for the App's credentials, install it on your repos). Do this once per GitHub organization/account; the rest of this guide is gateway-side configuration that applies regardless of how the App was registered.
 
 ---
 

@@ -1,0 +1,20 @@
+{
+  "name": "AegisAgent Protection Layer",
+  "description": "Integrity layer for AI coding-agent PRs: surfaces every Aegis authorize decision as a check run, comments on denied actions, and ingests native GitHub events into the SOC pipeline. See docs/github-integration.md.",
+  "url": "https://github.com/lavkushry/AegisAgent",
+  "public": false,
+  "default_permissions": {
+    "metadata": "read",
+    "pull_requests": "read",
+    "issues": "write",
+    "checks": "write"
+  },
+  "default_events": [
+    "pull_request",
+    "issues",
+    "issue_comment"
+  ],
+  "hook_attributes": {
+    "url": "https://<your-gateway-host>/v1/webhooks/github"
+  }
+}
