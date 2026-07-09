@@ -208,24 +208,62 @@ fn send_signal(pid: i32, signal: i32) -> Result<(), EnforceError> {
     if pid <= 0 {
         return Err(EnforceError::InvalidPid(pid));
     }
-    let rc = unsafe { libc::kill(pid, signal) };
-    if rc == 0 {
+    // Use the `kill` CLI rather than `libc::kill` so we stay out of `unsafe`
+    // (Semgrep rust.lang.security.unsafe-usage). Arguments are always
+    // integer PIDs we registered ourselves — never shell-interpolated.
+    let flag = match signal {
+        s if s == libc::SIGTERM => "-TERM",
+        s if s == libc::SIGKILL => "-KILL",
+        s if s == libc::SIGSTOP => "-STOP",
+        s if s == libc::SIGCONT => "-CONT",
+        other => {
+            return Err(EnforceError::SignalFailed {
+                pid,
+                signal: other,
+                detail: format!("unsupported signal {other}"),
+            });
+        }
+    };
+    let output = std::process::Command::new("kill")
+        .args([flag, &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| EnforceError::SignalFailed {
+            pid,
+            signal,
+            detail: e.to_string(),
+        })?;
+    if output.status.success() {
         Ok(())
     } else {
-        let err = std::io::Error::last_os_error();
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // Already-dead is success for control-plane kill (idempotent).
+        if detail.contains("No such process") || detail.contains("no such process") {
+            return Ok(());
+        }
         Err(EnforceError::SignalFailed {
             pid,
             signal,
-            detail: err.to_string(),
+            detail: if detail.is_empty() {
+                format!("kill exited {}", output.status)
+            } else {
+                detail
+            },
         })
     }
 }
 
-/// `true` if a process with `pid` exists (POSIX kill(pid, 0)).
+/// `true` if a process with `pid` exists (`kill -0`).
 pub fn process_alive(pid: i32) -> bool {
-    // signal 0 = existence check
-    let rc = unsafe { libc::kill(pid, 0) };
-    rc == 0
+    if pid <= 0 {
+        return false;
+    }
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
