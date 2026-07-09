@@ -4,7 +4,7 @@
 
 **Legend — status values:** Implemented · Partial · Planned · Missing (design references inside other columns may still use ✅/🟡/📐 shorthand)  
 **Production-readiness:** prod = hardened & exercised · beta = works, sharp edges · design = paper only  
-**Verified against:** `origin/main` after #1793 (MCP manifest signing), #1794 (LLM gateway / Phase 7.3), #1795 (investigation evidence export / Phase 8.3) — 2026-07-09.
+**Verified against:** `origin/main` after console panel suite #1821–#1830 and TS receipt corpus gate — 2026-07-10.
 
 > **How to read this for production:**  
 > - **Known-agent integrity gateway** (authorize → policy → approval → receipt → SOC) is largely **prod**.  
@@ -20,10 +20,10 @@
 | Approval edit lifecycle (re-hash + re-evaluate) | Implemented | `routes/approval.rs`, migration `0024_approval_effective_call_hash.sql` | — | — | integration | prod | — |
 | Approval consume (single-use, atomic) | Implemented | `routes/approval.rs`, SDK consume paths | — | — | integration + SDK | prod | — |
 | Receipt chain (append, per-tenant prev-hash) | Implemented | `routes/authorize_receipts.rs`, `lib/storage/src/db/receipts.rs` | — | concurrent append ✅ | vectors + bench | prod | — |
-| Receipt verification (single/range/chain/head) | Implemented | `routes/receipts.rs`, `sdk-python/aegisagent/verify_receipts.py` | TS verifier incomplete | — | integration + CLI | prod | TS parity |
+| Receipt verification (single/range/chain/head) | Implemented | `routes/receipts.rs`, Python/Go/TS verifiers + `tests/receipt_chain_vectors.json` | — | — | integration + CLI + 4-lang corpus | prod | — |
 | Receipt signing (Ed25519, optional) | Implemented | `src/src/sign.rs`, `src/src/kms_receipt_signer.rs`, migration `0020_*` | default KMS path / rotation runbook automation | — | unit | beta | ops runbook |
 | Evidence pack (compliance #1298) | Implemented | `GET /v1/compliance/evidence-pack` (`routes/tenant.rs`) | — | #1298 | integration | beta | — |
-| Investigation evidence export (Phase 8.3) | Implemented | `POST /v1/evidence/export` (`routes/evidence_export.rs`), `receipt_checkpoints` (`0044` / PG `0029`) | UI download affordance | #1795 | unit (pack + self-receipt chain) | beta | UI |
+| Investigation evidence export (Phase 8.3) | Implemented | `POST /v1/evidence/export` (`routes/evidence_export.rs`), `receipt_checkpoints` (`0044` / PG `0029`); console Integrity + `receipt-integrity` panel | — | #1795, #1826 | unit + Playwright mock | beta | — |
 | Evidence graph | Implemented | `src/src/graph.rs`, `/v1/graph/*` | richer edges when producers emit prompt/model/runtime consistently | #1272 | unit + integration | beta | producer coverage |
 | SOC events pipeline (async) | Implemented | `lib/soc/src/events.rs`, `ingest.rs`, `detect.rs` | — | — | unit + integration | prod | — |
 | Incidents (correlate, narrate, close) | Implemented | `lib/soc/src/correlate.rs`, `narrate.rs`, `routes/soc.rs` | — | — | unit + integration | prod | — |
@@ -34,11 +34,12 @@
 | MCP gateway (registry, discovery, pin, drift, optional Ed25519 sign) | Implemented | `routes/mcp.rs`, `lib/soc/src/mcp_inspect.rs`, migration `0043_mcp_server_manifest_signing_key.sql` | standalone MCP proxy binary 📐 | #1793, #1336 | unit + integration | prod (lite) | proxy-mode |
 | Tool permissions (per-agent) | Implemented | migration `0013_agent_tool_permissions.sql`, `routes/agents.rs` | — | — | integration | prod | — |
 | SDK Python | Implemented | `sdk-python/aegisagent/*` incl. prompt capture emit | — | #1776 | unit + parity vectors | prod | — |
-| SDK TypeScript | Implemented | `sdk-typescript/src/*` (canon, client, protect) | receipt chain verifier parity | [sdk-parity-status.md](sdk-parity-status.md) | unit + parity vectors | beta | receipt verifier |
+| SDK TypeScript | Implemented | `sdk-typescript/src/*` (canon, client, protect, **receipts**) | — | [sdk-parity-status.md](sdk-parity-status.md) | unit + shared corpus | prod | — |
 | SDK Go | Implemented | `sdk-go/{canon,aegis}/` | prompt/model emit parity | [sdk-parity-status.md](sdk-parity-status.md) | unit + parity vectors | beta | capture parity |
-| UI: approvals | Implemented | `ui/src/dashboards/system/approvals.ts` | — | — | vitest + Playwright | beta | — |
-| UI: receipts/integrity | Implemented | `ui/src/dashboards/system/integrity.ts`, `receipts.ts` | — | — | vitest | beta | — |
-| UI: incidents/SOC | Implemented | `overview.ts`, `fleet.ts`, `incidents.ts`, `socQuery.ts` | dedicated incident drill-down | — | vitest | beta | incident view |
+| UI: approvals | Implemented | `ui-next/…/approvals` + `approval-card` panel | — | #1824 | bun test + Playwright | beta | — |
+| UI: receipts/integrity | Implemented | `ui-next` Integrity page + `provable-timeline` / `receipt-integrity` panels | — | #1825–#1826 | bun test + Playwright | beta | — |
+| UI: panel framework + system catalog | Implemented | `ui-next/src/panels/*`, 10 system boards, charts + decision-graph | cage/ban/quarantine product pages | #1815–#1830 | bun test + E2E mock suite | beta | Phase 9 cage UI |
+| UI: incidents/SOC | Implemented | overview/fleet/incidents system boards + `decision-graph` | richer incident drill-down | #1828 | bun test + Playwright | beta | incident detail |
 | UI: agent-cage console | Planned | — | cage runs page, control actions UX (Phase 9.2–9.3) | Phased PR plan §11 | — | design | after cage binary lands |
 | Agent runs registry (cage control-plane API) | Partial | `lib/storage/src/db/agent_runs.rs`, migration `0026`; `routes/runtime.rs` (`/v1/agent-cage/runs` + controls) | claim/heartbeat/lease APIs + executor not on main (WIP branch) | #1681 | route + storage | beta | cage execution PR |
 | Runtime events ingest + timeline | Partial | `POST /v1/ingest/runtime-events`, `list/query` ASE APIs | rich producers (process/fs/net) on sensor | #1681 | storage + route | beta | sensor collectors |
@@ -51,7 +52,7 @@
 | Tool broker | Partial | `routes/broker.rs`, `lib/tool-broker-core`, `lib/tool-broker-connectors` | standalone broker binary; mandatory path for privileged tools | Phased PR plan §8 | unit + route | beta | binary + force-path |
 | Prompt capture | Implemented | `POST /v1/ingest/prompt-events` (`routes/prompt_capture.rs`), Python SDK emit | Go/TS emit; UI timeline | #1775/#1776 | unit + SDK | beta | UI + SDK parity |
 | Model call capture | Implemented | `POST /v1/ingest/model-calls`; `bins/aegis-llm-gateway` (Phase 7.3) | Dockerfile/Helm/compose for LLM gateway; broader provider adapters | #1775/#1776/#1794 | unit + gateway tests | beta | packaging + adapters |
-| Runtime timeline (UI) | Partial | APIs: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline`; Provable Timeline panel | full console pages (prompt/model/egress/cage) | Phase 9.2 | route + vitest | beta | Phase 9 UI |
+| Runtime timeline (UI) | Partial | APIs: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline`; `provable-timeline` panel (receipts) | full console pages (prompt/model/egress/cage) | Phase 9.2 | route + bun test | beta | Phase 9 UI |
 | Deployment (Compose/Helm) | Partial | gateway + sensor + egress-proxy charts/images; compose full stack | cage + llm-gateway + broker + UI Helm; multi-replica | #1206, #1297/#1790 | helm lint + e2e | beta (single-writer) | packaging + Postgres |
 | Postgres production mode | Partial | `features = postgres`, `migrations_postgres/*` (29 files) | full parity ops path, multi-replica validation, default Helm | #1194 | migration + feature tests | design→beta | Postgres GA |
 | CI / testing / supply chain | Implemented | `.github/workflows/*` (fmt/clippy/tests/coverage/deny; release cosign/SLSA/SBOM) | — | #1172, #1174, #1792 | — | prod | — |
@@ -76,8 +77,8 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave C — P2 product surface / honesty
 
-9. UI Phase 9.2–9.3 (cage runs, ban/quarantine centers, timelines, evidence export)  
-10. TypeScript receipt chain verifier parity  
+9. UI Phase 9.2–9.3 (cage runs, ban/quarantine centers, runtime timelines)  
+10. ~~TypeScript receipt chain verifier parity~~ **Done** (`sdk-typescript/src/receipts.ts` + shared corpus; CI `ts-canon` runs canon + receipts)  
 11. Keep this matrix + `current-vs-roadmap.md` in lockstep with landing PRs  
 12. Branch merge-or-close pass (~80 remote branches)  
 
