@@ -249,6 +249,30 @@ jobs:
       - name: Doctor preflight
         run: make doctor
 
+  # ── Phase 4: Bun SPA (ui-next) unit/build gate ────────────────────────────────
+  ui-next:
+    name: UI-next (Bun SPA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Install dependencies
+        working-directory: ui-next
+        run: bun install --frozen-lockfile
+      - name: Unit tests
+        working-directory: ui-next
+        run: bun test
+      - name: Production build (base /dashboard/)
+        working-directory: ui-next
+        run: bun run build
+      - name: Verify asset base path
+        working-directory: ui-next
+        run: |
+          grep -q '/dashboard/assets/' dist/index.html
+          test -f dist/index.html
+
   # ── PR-051: TypeScript SDK test gate ──────────────────────────────────────────
   typescript-sdk:
     name: TypeScript SDK

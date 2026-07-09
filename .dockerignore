@@ -24,10 +24,12 @@ data/
 *.sqlite-shm
 *.sqlite-wal
 
-# Node.js
+# Node.js / Bun
 node_modules/
 ui/dist/
 ui/.next/
+ui-next/dist/
+ui-next/node_modules/
 
 # Python caches
 __pycache__/

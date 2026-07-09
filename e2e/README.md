@@ -2,6 +2,8 @@
 
 Playwright browser tests for the production SOC console served at `/dashboard/`.
 
+**Phase 4 cutover:** the gateway Docker image builds the **Bun SPA** (`ui-next/`) and serves it at `/dashboard/`. Specs target ui-next routes (React Router links, Settings form, Dark SOC shell). Legacy Next panel mocks (#1638) are skipped until re-ported.
+
 ## Prerequisites
 
 - Node.js 20+

@@ -5,6 +5,7 @@ use axum::{
     middleware::Next,
     response::IntoResponse,
 };
+use std::path::{Path, PathBuf};
 
 /// Middleware: CSRF protection for all state-changing endpoints (POST/PUT/PATCH/DELETE) (#1308).
 /// Enforces Double-Submit Cookie validation if the `aegis_csrf` cookie is present on the request.
@@ -51,6 +52,46 @@ pub async fn csrf_validation_middleware(request: Request<Body>, next: Next) -> i
 
 const CSP_VALUE: &str = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob:; frame-ancestors 'none'";
 
+/// Resolve the on-disk directory of the dashboard SPA static export.
+///
+/// Precedence (Phase 4 cutover):
+/// 1. `AEGIS_UI_DIST` — absolute or relative path override
+/// 2. `AEGIS_UI_BUNDLE=legacy` → `ui/dist` (Next)
+/// 3. `AEGIS_UI_BUNDLE=next` → `ui-next/dist` (Bun SPA)
+/// 4. Default: prefer `ui-next/dist` if `index.html` exists, else `ui/dist`
+pub fn dashboard_dist_dir() -> PathBuf {
+    dashboard_dist_dir_from_env(
+        std::env::var("AEGIS_UI_DIST").ok(),
+        std::env::var("AEGIS_UI_BUNDLE").ok(),
+        |p| Path::new(p).join("index.html").is_file(),
+    )
+}
+
+/// Pure resolver for tests (inject existence check).
+pub fn dashboard_dist_dir_from_env(
+    dist_override: Option<String>,
+    bundle: Option<String>,
+    index_exists: impl Fn(&str) -> bool,
+) -> PathBuf {
+    if let Some(path) = dist_override {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    match bundle.as_deref().map(str::trim).unwrap_or("") {
+        "legacy" => PathBuf::from("ui/dist"),
+        "next" => PathBuf::from("ui-next/dist"),
+        _ => {
+            if index_exists("ui-next/dist") {
+                PathBuf::from("ui-next/dist")
+            } else {
+                PathBuf::from("ui/dist")
+            }
+        }
+    }
+}
+
 /// GET /dashboard/ — serves the index.html page
 pub async fn serve_dashboard_index() -> impl IntoResponse {
     let token = uuid::Uuid::new_v4().to_string();
@@ -66,7 +107,8 @@ pub async fn serve_dashboard_index() -> impl IntoResponse {
     let cookie_val = format!("aegis_csrf={}; Path=/; SameSite=Strict; HttpOnly", token);
     headers.insert(header::SET_COOKIE, cookie_val.parse().unwrap());
 
-    match tokio::fs::read_to_string("ui/dist/index.html").await {
+    let index_path = dashboard_dist_dir().join("index.html");
+    match tokio::fs::read_to_string(&index_path).await {
         Ok(html) => {
             let html_with_csrf = html.replace(
                 "<head>",
@@ -75,9 +117,13 @@ pub async fn serve_dashboard_index() -> impl IntoResponse {
             (headers, html_with_csrf).into_response()
         }
         Err(e) => {
-            tracing::error!("Failed to read dashboard index.html: {:?}", e);
+            tracing::error!(
+                "Failed to read dashboard index.html at {}: {:?}",
+                index_path.display(),
+                e
+            );
             StatusError::not_found(
-                "Dashboard assets not found. Run 'npm run build' inside 'ui' directory.",
+                "Dashboard assets not found. Build ui-next (`bun run build`) or set AEGIS_UI_DIST / AEGIS_UI_BUNDLE.",
             )
             .into_response()
         }
@@ -93,7 +139,7 @@ pub async fn serve_dashboard_static(
         return StatusError::forbidden("Access denied").into_response();
     }
 
-    let file_path = std::path::Path::new("ui/dist").join(path);
+    let file_path = dashboard_dist_dir().join(path);
 
     if file_path.is_file() {
         match tokio::fs::read(&file_path).await {
@@ -114,6 +160,7 @@ pub async fn serve_dashboard_static(
                     "ico" => "image/x-icon",
                     "png" => "image/png",
                     "jpg" | "jpeg" => "image/jpeg",
+                    "map" => "application/json; charset=utf-8",
                     "json" => "application/json; charset=utf-8",
                     _ => "application/octet-stream",
                 };
@@ -139,9 +186,46 @@ mod tests {
     use axum::http::{header, Method, Request, StatusCode};
     use tower::ServiceExt;
 
+    #[test]
+    fn dist_override_wins() {
+        let dir = dashboard_dist_dir_from_env(
+            Some("/custom/out".into()),
+            Some("legacy".into()),
+            |_| true,
+        );
+        assert_eq!(dir, PathBuf::from("/custom/out"));
+    }
+
+    #[test]
+    fn bundle_legacy_and_next() {
+        assert_eq!(
+            dashboard_dist_dir_from_env(None, Some("legacy".into()), |_| true),
+            PathBuf::from("ui/dist")
+        );
+        assert_eq!(
+            dashboard_dist_dir_from_env(None, Some("next".into()), |_| false),
+            PathBuf::from("ui-next/dist")
+        );
+    }
+
+    #[test]
+    fn default_prefers_next_when_index_exists() {
+        assert_eq!(
+            dashboard_dist_dir_from_env(None, None, |p| p == "ui-next/dist"),
+            PathBuf::from("ui-next/dist")
+        );
+        assert_eq!(
+            dashboard_dist_dir_from_env(None, None, |_| false),
+            PathBuf::from("ui/dist")
+        );
+    }
+
     #[tokio::test]
     async fn test_dashboard_index_csrf_and_csp() {
-        // Ensure index file exists for test
+        // Prefer ui/dist so the existing test fixture path still works even if
+        // a local ui-next/dist is present on the developer machine.
+        // Safety: setenv is process-global; only this test file touches these keys.
+        std::env::set_var("AEGIS_UI_BUNDLE", "legacy");
         let _ = tokio::fs::create_dir_all("ui/dist").await;
         let _ = tokio::fs::write(
             "ui/dist/index.html",
@@ -179,6 +263,8 @@ mod tests {
             .unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
         assert!(body_str.contains("<meta name=\"csrf-token\""));
+
+        std::env::remove_var("AEGIS_UI_BUNDLE");
     }
 
     #[tokio::test]

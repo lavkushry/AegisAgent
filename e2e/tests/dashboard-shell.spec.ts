@@ -1,15 +1,23 @@
 import { test, expect } from "../fixtures/guardedTest";
-import { openConfiguredConsole, TENANT_ID } from "./helpers";
+import { openConfiguredConsole, openNav, TENANT_ID } from "./helpers";
 
-test.describe("production SOC console shell", () => {
+/**
+ * Phase 4 — Bun SPA (ui-next) shell contracts.
+ * Gateway injects CSRF meta + cookie; SPA is served at /dashboard/.
+ */
+test.describe("production SOC console shell (ui-next)", () => {
   test("loads the AegisAgent SOC Console", async ({ page }) => {
     await page.goto("/dashboard/");
     await expect(page).toHaveTitle(/AegisAgent SOC Console/);
     await expect(page.getByRole("heading", { name: "AegisAgent" })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "SOC console" })).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "SOC console" }),
+    ).toBeVisible();
   });
 
-  test("serves a restrictive Content-Security-Policy header (#1309)", async ({ page }) => {
+  test("serves a restrictive Content-Security-Policy header (#1309)", async ({
+    page,
+  }) => {
     const response = await page.goto("/dashboard/");
     expect(response).not.toBeNull();
     const csp = response!.headers()["content-security-policy"];
@@ -18,40 +26,62 @@ test.describe("production SOC console shell", () => {
     expect(csp).toContain("frame-ancestors 'none'");
   });
 
-  test("sets a SameSite=Strict CSRF cookie and csrf meta tag (#1308)", async ({ page, context }) => {
+  test("sets a SameSite=Strict CSRF cookie and csrf meta tag (#1308)", async ({
+    page,
+    context,
+  }) => {
     await page.goto("/dashboard/");
-    const csrfCookie = (await context.cookies()).find((cookie) => cookie.name === "aegis_csrf");
+    const csrfCookie = (await context.cookies()).find(
+      (cookie) => cookie.name === "aegis_csrf",
+    );
     expect(csrfCookie).toBeTruthy();
     expect(csrfCookie!.sameSite).toBe("Strict");
     expect(csrfCookie!.httpOnly).toBe(true);
-    await expect(page.locator('meta[name="csrf-token"]')).toHaveAttribute("content", /.+/);
+    await expect(page.locator('meta[name="csrf-token"]')).toHaveAttribute(
+      "content",
+      /.+/,
+    );
   });
 
-  test("keeps production bearer credentials in memory only", async ({ page }) => {
+  test("keeps production bearer credentials in memory only", async ({
+    page,
+  }) => {
     await openConfiguredConsole(page);
-    await expect(page.getByText("Tenant context").locator("..")).toContainText(TENANT_ID);
-    expect(await page.evaluate(() => localStorage.getItem("aegis_active_tenant"))).toBe(TENANT_ID);
-    expect(await page.evaluate(() => localStorage.getItem("aegis_bearer_token"))).toBeNull();
+    await expect(page.getByText("Tenant context").locator("..")).toContainText(
+      TENANT_ID,
+    );
+    expect(
+      await page.evaluate(() => localStorage.getItem("aegis_active_tenant")),
+    ).toBe(TENANT_ID);
+    expect(
+      await page.evaluate(() => localStorage.getItem("aegis_bearer_token")),
+    ).toBeNull();
   });
 
   const navCases = [
-    ["overview", "Overview"], ["dashboards", "Dashboards"],
-    ["integrity", "Integrity Console"], ["explore", "Explore"],
-    ["incidents", "Incidents"], ["detections", "Detections"],
-    ["rules", "Rules"], ["approvals", "Approvals"], ["agents", "Agents Fleet"],
-    ["mcp", "MCP Servers"], ["receipts", "Receipts Log"],
-    ["analytics", "Analytics"],
-    ["dashboard-editor", "Dashboard editor"],
-    ["settings", "Settings"],
+    ["/", "Overview"],
+    ["/integrity", "Integrity"],
+    ["/explore", "Explore"],
+    ["/incidents", "Incidents"],
+    ["/approvals", "Approvals"],
+    ["/agents", "Agents"],
+    ["/mcp", "MCP"],
+    ["/settings", "Settings"],
   ] as const;
 
-  for (const [view, label] of navCases) {
-    test(`navigation opens ${label} with URL-synced state`, async ({ page }) => {
+  for (const [path, label] of navCases) {
+    test(`navigation opens ${label}`, async ({ page }) => {
       await openConfiguredConsole(page);
-      const navButton = page.getByRole("navigation", { name: "SOC console" }).getByRole("button", { name: label });
-      await navButton.click();
-      await expect(page).toHaveURL(new RegExp(`[?&]view=${view}(?:&|$)`));
-      await expect(navButton).toHaveClass(/bg-\[var\(--brand\)\]/);
+      await openNav(page, label);
+      const expected =
+        path === "/"
+          ? /\/dashboard\/?$/
+          : new RegExp(`/dashboard${path.replace("/", "\\/")}\\/?$`);
+      await expect(page).toHaveURL(expected);
+      const navLink = page
+        .getByRole("navigation", { name: "SOC console" })
+        .getByRole("link", { name: label });
+      await expect(navLink).toHaveClass(/bg-\[var\(--brand-subtle\)\]/);
     });
   }
 });

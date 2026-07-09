@@ -1,15 +1,16 @@
-# Dashboard (#1326): the gateway's serve_dashboard_index/serve_dashboard_static
-# handlers (src/src/routes/dashboard.rs) read a static-exported Next.js build
-# from the relative path `ui/dist` at runtime — ui/next.config.ts sets
-# `output: "export", distDir: "dist"` for exactly this. Build it here and copy
-# the result into the final image; without this stage the gateway has no
-# `ui/dist` and every /dashboard/* request 404s.
-FROM node:26-bookworm AS ui-builder
-WORKDIR /build/ui
-COPY ui/package.json ui/package-lock.json ./
-RUN npm ci
-COPY ui ./
-RUN npm run build
+# Dashboard: Bun SPA rewrite (ui-next). Built with Bun and copied to
+# /app/ui/dist so the gateway's relative path resolution and compose
+# volumes keep working. Override at runtime with AEGIS_UI_DIST or
+# AEGIS_UI_BUNDLE=next|legacy if a dual-tree layout is mounted.
+#
+# See docs/components/Console_UI_Bun_Contracts.md §6 (Phase 4 cutover).
+FROM oven/bun:1.3-debian AS ui-builder
+WORKDIR /build/ui-next
+COPY ui-next/package.json ui-next/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY ui-next ./
+# Production static export with base /dashboard/ (vite.config.ts).
+RUN bun run build
 
 FROM rust:1.96-bookworm AS builder
 WORKDIR /build
@@ -57,29 +58,22 @@ RUN mkdir -p /data && chown 65532:65532 /data
 # variant happens to ship, since reqwest's TLS calls (webhook delivery,
 # GitHub API, Qdrant) need a real CA store to verify outbound HTTPS
 # regardless of what's baked into the base image.
-#
-# Image size note: ~88MB measured (base alone is ~37MB of glibc + libgcc +
-# libssl; the gateway binary is ~35MB even stripped) — cedar-policy,
-# qdrant-client/tonic, sqlx, and rustls/aws-lc-rs are real weight, not bloat
-# to trim further. The issue's <50MB target assumed a `static-debian12` +
-# musl-static build; that's not reachable here, since several transitive
-# deps (aws-lc-rs's C code, SQLite's bundled C amalgamation) need a musl
-# toolchain to cross-compile against, and a from-scratch musl build is
-# unverified and out of scope for this PR. ~88MB is still a substantial
-# improvement over the prior debian:bookworm-slim+apt image, and meets the
-# criteria that actually harden the runtime: no shell, no package manager,
-# non-root.
 FROM gcr.io/distroless/cc-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=builder /build/target/release/gateway /usr/local/bin/aegis-gateway
 COPY policies.cedar /app/policies.cedar
-COPY --from=ui-builder --chown=65532:65532 /build/ui/dist /app/ui/dist
+# Place Bun SPA at the historical ui/dist path (gateway default + prefer-next).
+COPY --from=ui-builder --chown=65532:65532 /build/ui-next/dist /app/ui/dist
+# Also install under ui-next/dist so AEGIS_UI_BUNDLE=next resolves without remount.
+COPY --from=ui-builder --chown=65532:65532 /build/ui-next/dist /app/ui-next/dist
 COPY --from=builder --chown=65532:65532 /data /data
 
 ENV DATABASE_URL=sqlite:///data/aegis.db
 ENV CEDAR_POLICY_PATH=/app/policies.cedar
 ENV RUST_LOG=info,gateway=debug,sqlx=info
+# Explicit: serve Bun rewrite (redundant with files present; documents cutover).
+ENV AEGIS_UI_BUNDLE=next
 
 # No curl/shell in this image — `--healthcheck` execs the gateway binary
 # itself, which GETs its own /livez and exits 0/1 (see main.rs).

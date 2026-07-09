@@ -45,7 +45,7 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | 1 Scaffold + Settings + Overview + Dark SOC shell | Done |
 | 2 Approvals / Integrity / Explore port | Done (simple Explore chips; full AQL later) |
 | 3 Fleet / Incidents / MCP / edit / evidence export | Done |
-| 4 Gateway cutover `ui-next/dist` → production path | Pending |
+| 4 Gateway cutover + Docker/CI + Playwright P0 | Done |
 
 ### Routes
 

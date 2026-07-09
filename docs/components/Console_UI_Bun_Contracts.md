@@ -75,15 +75,27 @@ bun run build
 Until cutover, **legacy `ui/` (Next)** remains the production console.  
 **`ui-next/`** is the rewrite SPA. Do not delete Next until P0 Playwright passes.
 
-### Cutover checklist (not executed in Phase 3)
+### Cutover checklist (Phase 4 — implemented)
 
-1. **CI:** `bun test` + `bun run build` in `ui-next/` on every PR; cache Bun.
-2. **Docker/gateway:** build stage uses Bun to emit `ui-next/dist` (or rename to `ui/dist`) with `base: /dashboard/`.
-3. **Gateway serve path:** `src/src/routes/dashboard.rs` continues to serve static `/dashboard/*` + inject CSRF meta on index — no API change required if asset base stays `/dashboard/`.
-4. **Parity gate:** Playwright P0: Settings tenant gate, Overview stats, Approvals list, Integrity verify, Explore search, Agents list, Incidents list, MCP list.
-5. **Feature flag (optional):** `AEGIS_UI_BUNDLE=next|legacy` during soak; default legacy until green.
-6. **Remove Next `ui/`** only after one release with Bun SPA as sole dashboard.
-7. **Rollback:** keep previous image tag with Next `ui/dist` for one release window.
+| Step | Status |
+|---|---|
+| CI `ui-next` job: `bun test` + `bun run build` | Done (`.github/workflows/ci.yml`) |
+| Docker builds Bun SPA into image | Done (`src/Dockerfile` → `/app/ui/dist` + `/app/ui-next/dist`) |
+| Gateway dist resolution | Done (`AEGIS_UI_DIST`, `AEGIS_UI_BUNDLE=next\|legacy`, prefer `ui-next/dist` when present) |
+| CSRF meta + cookie on index | Unchanged (`dashboard.rs`) |
+| Playwright P0 for ui-next routes | Done (`e2e/tests/dashboard-*.spec.ts`, shell + data) |
+| Default image env `AEGIS_UI_BUNDLE=next` | Done |
+| Remove Next `ui/` tree | **Deferred** — dual-tree remains for rollback one release |
+| Re-port mocked panel harness (#1638) | Deferred (tests skipped) |
+
+**Runtime env:**
+
+| Variable | Effect |
+|---|---|
+| `AEGIS_UI_DIST` | Absolute/relative path override to SPA root containing `index.html` |
+| `AEGIS_UI_BUNDLE=next` | Force `ui-next/dist` |
+| `AEGIS_UI_BUNDLE=legacy` | Force `ui/dist` (Next export) |
+| *(unset)* | Prefer `ui-next/dist` if `index.html` exists, else `ui/dist` |
 
 ## 7. Theme contract (product of record)
 

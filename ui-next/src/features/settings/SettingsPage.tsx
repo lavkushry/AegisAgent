@@ -122,7 +122,7 @@ export function SettingsPage() {
         </label>
 
         <button type="button" className="btn-primary" onClick={onApply}>
-          Apply config
+          Apply Config
         </button>
       </section>
     </div>

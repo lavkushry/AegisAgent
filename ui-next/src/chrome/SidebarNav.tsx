@@ -23,7 +23,7 @@ const ITEMS = [
 
 export function SidebarNav() {
   return (
-    <nav className="flex flex-col gap-0.5 p-2">
+    <nav className="flex flex-col gap-0.5 p-2" aria-label="SOC console">
       {ITEMS.map(({ to, label, icon: Icon, end }) => (
         <NavLink
           key={to}
