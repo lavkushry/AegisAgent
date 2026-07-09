@@ -8,6 +8,7 @@ import HeatmapPanel from "./standard/HeatmapPanel";
 import TimeSeriesPanel from "./standard/TimeSeriesPanel";
 import ApprovalCardPanel from "./differentiators/ApprovalCardPanel";
 import ProvableTimelinePanel from "./differentiators/ProvableTimelinePanel";
+import ReceiptIntegrityPanel from "./differentiators/ReceiptIntegrityPanel";
 
 const entries: PanelRegistryEntry[] = [
   {
@@ -62,6 +63,12 @@ const entries: PanelRegistryEntry[] = [
     type: "provable-timeline",
     Component: ProvableTimelinePanel as PanelRegistryEntry["Component"],
     defaultOptions: { maxRows: 25, showRangeVerify: true },
+    chartLib: "none",
+  },
+  {
+    type: "receipt-integrity",
+    Component: ReceiptIntegrityPanel as PanelRegistryEntry["Component"],
+    defaultOptions: { showExports: true, showRangeVerify: true },
     chartLib: "none",
   },
 ];

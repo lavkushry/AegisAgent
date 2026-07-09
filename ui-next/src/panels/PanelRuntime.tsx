@@ -108,7 +108,11 @@ export function PanelRuntime({
       isStale={isStale && !isFetching}
       error={error ? errorMessage(error) : undefined}
       isEmpty={
-        !isLoading && definition.type !== "note" && frame.length === 0
+        !isLoading &&
+        definition.type !== "note" &&
+        // Control surface: still show verify/export when the chain is empty.
+        definition.type !== "receipt-integrity" &&
+        frame.length === 0
       }
     >
       <Component

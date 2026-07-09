@@ -2,8 +2,9 @@ import { DEFAULT_DATASOURCE_ID } from "@/datasources/registry";
 import type { DashboardSchema } from "../schema";
 
 /**
- * Integrity board — receipt hash-chain surface (read-only system template).
- * Live verify/export controls remain on the Integrity feature page.
+ * Integrity board — receipt hash-chain surface (system template).
+ * receipt-integrity: chain summary + verify-range + evidence exports.
+ * provable-timeline: per-row verify of the linked receipt list.
  */
 export const integrityDashboard: DashboardSchema = {
   uid: "integrity",
@@ -22,11 +23,33 @@ export const integrityDashboard: DashboardSchema = {
             title: "Receipt chain",
             datasourceId: DEFAULT_DATASOURCE_ID,
             options: {
-              body: "Verifiable hash-chained action receipts. Verify chain / per-row Verify below; export evidence packs on the Integrity page. This board is a copyable template for tenant dashboards.",
+              body: "Verifiable hash-chained action receipts (aegis-jcs-1). Verify range and export evidence packs above; walk the timeline below for per-link Verify.",
             },
           },
           w: 12,
           h: 1,
+        },
+      ],
+    },
+    {
+      id: "controls",
+      title: "Chain integrity",
+      panels: [
+        {
+          panel: {
+            id: "integrity-controls",
+            type: "receipt-integrity",
+            title: "Verify & export",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            entity: "receipt",
+            limit: 50,
+            options: {
+              showExports: true,
+              showRangeVerify: true,
+            },
+          },
+          w: 12,
+          h: 3,
         },
       ],
     },
@@ -44,7 +67,8 @@ export const integrityDashboard: DashboardSchema = {
             limit: 25,
             options: {
               maxRows: 25,
-              showRangeVerify: true,
+              // Range verify lives on the receipt-integrity panel above.
+              showRangeVerify: false,
             },
             drilldowns: [
               {
@@ -54,7 +78,7 @@ export const integrityDashboard: DashboardSchema = {
             ],
           },
           w: 12,
-          h: 6,
+          h: 5,
         },
       ],
     },
