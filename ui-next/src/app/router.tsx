@@ -8,6 +8,9 @@ import { ExplorePage } from "@/features/explore/ExplorePage";
 import { AgentsPage } from "@/features/agents/AgentsPage";
 import { IncidentsPage } from "@/features/incidents/IncidentsPage";
 import { McpPage } from "@/features/mcp/McpPage";
+import { DetectionsPage } from "@/features/detections/DetectionsPage";
+import { RulesPage } from "@/features/rules/RulesPage";
+import { AlertingPage } from "@/features/alerting/AlertingPage";
 
 export function AppRouter() {
   return (
@@ -19,6 +22,9 @@ export function AppRouter() {
           <Route path="/approvals" element={<ApprovalsPage />} />
           <Route path="/integrity" element={<IntegrityPage />} />
           <Route path="/explore" element={<ExplorePage />} />
+          <Route path="/detections" element={<DetectionsPage />} />
+          <Route path="/rules" element={<RulesPage />} />
+          <Route path="/alerting" element={<AlertingPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/incidents" element={<IncidentsPage />} />
           <Route path="/mcp" element={<McpPage />} />
