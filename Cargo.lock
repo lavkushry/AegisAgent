@@ -94,6 +94,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-llm-gateway"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "chrono",
+ "clap",
+ "hex",
+ "http 1.4.2",
+ "http-body-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower 0.5.3",
+ "tower-http 0.6.11",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "aegis-node-sensor"
 version = "0.1.0"
 dependencies = [
@@ -6311,6 +6336,7 @@ dependencies = [
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
+ "tracing",
  "url",
 ]
 

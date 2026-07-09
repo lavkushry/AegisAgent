@@ -27,10 +27,12 @@ still missing, verified against the code, not assumed from an old plan doc.
   loop designed and reviewed (it shells out to the host Docker CLI, a
   security-sensitive decision this project's own threat model would want
   scrutinized before landing).
-- **Phase 7.3 — LLM gateway adapter** (prompt/model-call choke point) not
-  started. Phases 7.1/7.2 (lineage schemas + SDK capture) shipped
-  (#1775/#1776); this is the last unbuilt piece of the Phased PR Plan
-  (`docs/AegisAgent_Phased_PR_Plan.md` §9).
+- **Phase 7.3 — LLM gateway adapter** (prompt/model-call choke point) —
+  **implemented on branch** as `bins/aegis-llm-gateway` (OpenAI-compatible
+  reverse proxy; `model_call_started`/`model_call_finished` local events;
+  ships hashes + token metadata to `POST /v1/ingest/model-calls`; failure
+  redaction). Phases 7.1/7.2 already shipped (#1775/#1776). PR not yet
+  opened/merged.
 - **Phase 8.3 — Evidence export** (checkpoints + graph manifest +
   redaction manifest, export action emits its own receipt) not built. The
   existing `GET /v1/compliance/evidence-pack` (#1298) is a different,

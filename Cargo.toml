@@ -14,6 +14,7 @@ members = [
     "bins/aegis-node-sensor",
     "bins/aegis-cage-runner",
     "bins/aegis-egress-proxy",
+    "bins/aegis-llm-gateway",
 ]
 # src/fuzz has its own cargo-fuzz-managed build (ASan/sancov instrumentation,
 # a separate target dir) and must never be built by `cargo build/test
