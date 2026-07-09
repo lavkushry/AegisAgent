@@ -69,6 +69,7 @@ test.describe("production SOC console shell (ui-next)", () => {
     ["/incidents", "Incidents"],
     ["/agents", "Agents"],
     ["/mcp", "MCP"],
+    ["/dashboards", "Dashboards"],
     ["/settings", "Settings"],
   ] as const;
 
@@ -87,4 +88,21 @@ test.describe("production SOC console shell (ui-next)", () => {
       await expect(navLink).toHaveClass(/bg-\[var\(--brand-subtle\)\]/);
     });
   }
+
+  test("ControlsBar exposes time range and live toggle", async ({ page }) => {
+    await openConfiguredConsole(page);
+    await openNav(page, "Overview");
+    const rangeGroup = page.getByRole("group", { name: "Time range" });
+    await expect(rangeGroup).toBeVisible();
+    await expect(rangeGroup.getByRole("button", { name: "24h" })).toBeVisible();
+    await rangeGroup.getByRole("button", { name: "7d" }).click();
+    await expect(rangeGroup.getByRole("button", { name: "7d" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const live = page.getByRole("button", { name: /Live( off)?/ });
+    await expect(live).toBeVisible();
+    await live.click();
+    await expect(page.getByRole("button", { name: /Live( off)?/ })).toBeVisible();
+  });
 });

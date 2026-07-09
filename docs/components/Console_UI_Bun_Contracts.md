@@ -1,13 +1,13 @@
-# Console UI contracts — Bun rewrite (Phase 0 freeze)
+# Console UI contracts — Bun rewrite (product of record)
 
-**Status:** binding for `ui-next/` → eventual cutover to `ui/`  
-**Related plan:** full Bun SPA rewrite (React 19 + Vite + Bun)
+**Status:** binding for `ui-next/` (production console)  
+**Related plan:** full Bun SPA rewrite (React 19 + Vite + Bun) — Phases 0–D complete; Phase E cutover
 
 ## 1. Deploy / serve contract
 
 | Item | Value |
 |---|---|
-| Artifact directory | `ui-next/dist` (cutover: `ui/dist`) |
+| Artifact directory | `ui-next/dist` (also copied to `ui/dist` in the Docker image for path compatibility) |
 | Gateway routes | `GET /dashboard/`, `GET /dashboard/*path` |
 | Gateway handler | `src/src/routes/dashboard.rs` |
 | Vite `base` | `/dashboard/` |
@@ -28,23 +28,22 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 - Demo mode may persist bearer in `localStorage`.  
 - Production must **not** persist bearer; strip on load.
 
-## 4. P0 surfaces (scaffold → full port)
+## 4. P0 surfaces (shipped)
 
 | # | Surface | Status |
 |---|---|---|
-| 1 | Settings / connection (+ operator id) | Phase 1–2 |
-| 2 | Overview (`/v1/stats`) | Phase 1 |
-| 3 | Approvals (`GET/POST /v1/approvals…`) | Phase 2 |
-| 4 | Integrity / receipts (list + verify + verify-range) | Phase 2 |
-| 5 | Explore (chip query → `/v1/decisions`) | Phase 2 (simple AQL chips; full compiler later) |
-| 6 | Agents fleet + controls | Phase 3 |
-| 7 | Incidents + evidence pack | Phase 3 |
-| 8 | MCP registry + quarantine | Phase 3 |
-| 9 | Approval edit + evidence export | Phase 3 |
-| 10 | Detections / Rules / Alerting | Phase 5 |
-| 11 | Full AQL + frame/types field catalog | Phase A (datasource spine) |
-| 12 | PanelRuntime + gateway-entity + schema Overview | Phase B |
-| 13 | ControlsBar + live poll stream + agent detail + MCP history | Phase C |
+| 1 | Settings / connection (+ operator id) | Shipped |
+| 2 | Overview (schema-driven `DashboardLoader`) | Shipped (Phase B) |
+| 3 | Approvals (`GET/POST /v1/approvals…`) | Shipped |
+| 4 | Integrity / receipts (list + verify + verify-range) | Shipped |
+| 5 | Explore (AQL → `/v1/decisions`) | Shipped (Phase A) |
+| 6 | Agents fleet + detail + controls | Shipped (Phase C) |
+| 7 | Incidents + evidence pack | Shipped |
+| 8 | MCP registry + quarantine + history | Shipped (Phase C) |
+| 9 | Approval edit + evidence export | Shipped |
+| 10 | Detections / Rules / Alerting | Shipped (Phase 5) |
+| 11 | ControlsBar (time range + live stream) | Shipped (Phase C) |
+| 12 | Dashboard editor (`/v1/soc/dashboards`) | Shipped (Phase D) |
 
 ### Phase 2–3 API map
 
@@ -63,6 +62,7 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | Agents | `GET /v1/agents`; `POST …/freeze|unfreeze|restore|revoke` |
 | Incidents | `GET /v1/incidents`; `GET /v1/incidents/:id`; `GET …/evidence-pack` |
 | MCP | `GET /v1/mcp/servers`; tools; quarantine/restore |
+| Tenant dashboards | `GET/POST /v1/soc/dashboards`; `GET/PUT/DELETE /v1/soc/dashboards/:uid` |
 
 ## 5. Build commands
 
@@ -71,25 +71,20 @@ cd ui-next
 bun install --frozen-lockfile
 bun test
 bun run build
-# serve: gateway reads ui/dist (copy or cutover path)
+# serve: gateway reads ui-next/dist (or AEGIS_UI_DIST)
 ```
 
-## 6. Dual-tree period & cutover plan (Phase 4)
-
-Until cutover, **legacy `ui/` (Next)** remains the production console.  
-**`ui-next/`** is the rewrite SPA. Do not delete Next until P0 Playwright passes.
-
-### Cutover checklist (Phase 4 — implemented)
+## 6. Cutover (Phase E — complete)
 
 | Step | Status |
 |---|---|
-| CI `ui-next` job: `bun test` + `bun run build` | Done (`.github/workflows/ci.yml`) |
+| CI `ui-next` job: `bun test` + `bun run build` | Done |
 | Docker builds Bun SPA into image | Done (`src/Dockerfile` → `/app/ui/dist` + `/app/ui-next/dist`) |
-| Gateway dist resolution | Done (`AEGIS_UI_DIST`, `AEGIS_UI_BUNDLE=next\|legacy`, prefer `ui-next/dist` when present) |
+| Gateway dist resolution | Done (`AEGIS_UI_DIST`, `AEGIS_UI_BUNDLE=next\|legacy`) |
 | CSRF meta + cookie on index | Unchanged (`dashboard.rs`) |
-| Playwright P0 for ui-next routes | Done (`e2e/tests/dashboard-*.spec.ts`, shell + data) |
+| Playwright for ui-next routes | Done (`e2e/tests/dashboard-*.spec.ts`) — Phase E expands ControlsBar, Dashboards, agent detail, detections/rules/alerting |
 | Default image env `AEGIS_UI_BUNDLE=next` | Done |
-| Remove Next `ui/` tree | **Deferred** — dual-tree remains for rollback one release |
+| Remove Next `ui/` tree | **Done (Phase E)** — single tree is `ui-next/` |
 | Re-port mocked panel harness (#1638) | Deferred (tests skipped) |
 
 **Runtime env:**
@@ -98,7 +93,7 @@ Until cutover, **legacy `ui/` (Next)** remains the production console.
 |---|---|
 | `AEGIS_UI_DIST` | Absolute/relative path override to SPA root containing `index.html` |
 | `AEGIS_UI_BUNDLE=next` | Force `ui-next/dist` |
-| `AEGIS_UI_BUNDLE=legacy` | Force `ui/dist` (Next export) |
+| `AEGIS_UI_BUNDLE=legacy` | Force `ui/dist` (image still copies Bun SPA here for path compatibility) |
 | *(unset)* | Prefer `ui-next/dist` if `index.html` exists, else `ui/dist` |
 
 ## 7. Theme contract (product of record)
@@ -109,7 +104,7 @@ Until cutover, **legacy `ui/` (Next)** remains the production console.
 | Light | `light` | Daytime / print / evidence export |
 | OLED | `oled` | True-black wall / NOC displays |
 
-- Token source: `ui-next/src/design-system/tokens.css` (must stay aligned with `ui/src/design-system/tokens.css`).
+- Token source: `ui-next/src/design-system/tokens.css`.
 - Design system: `docs/AegisAgent_SOC_Console_Design_System.md` §3.
 - Density: `data-density` = `compact` (default) | `cozy`.
 - **Anti-template:** no stock Material / Ant / full shadcn skin. One brand accent (indigo); severity, decision, and trust ramps are reserved (never used for chrome decoration).

@@ -10,7 +10,7 @@ SPA rewrite of the SOC console. **Bun** is the package manager and test runner; 
 | Light | Daytime, print, evidence export |
 | OLED | True black wall / NOC displays |
 
-Tokens live in `src/design-system/tokens.css` (parity with `ui/src/design-system/tokens.css` and `docs/AegisAgent_SOC_Console_Design_System.md`). Do **not** adopt stock shadcn/Material skins — semantic tokens only.
+Tokens live in `src/design-system/tokens.css` (see `docs/AegisAgent_SOC_Console_Design_System.md`). Do **not** adopt stock shadcn/Material skins — semantic tokens only.
 
 ## Commands
 
@@ -35,7 +35,7 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 - Fail-closed: no `/v1` call without tenant (`X-Aegis-Tenant-ID`)
 - CSRF: `X-CSRF-Token` from gateway-injected meta when present
 - Production: bearer not persisted in `localStorage`
-- Dual-tree: legacy Next `ui/` remains production until cutover
+- Single tree: this package is the production console (Phase E cutover)
 
 ## Phase status
 
@@ -43,17 +43,28 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 |---|---|
 | 0 Contracts freeze | Done |
 | 1 Scaffold + Settings + Overview + Dark SOC shell | Done |
-| 2 Approvals / Integrity / Explore port | Done (simple Explore chips; full AQL later) |
+| 2 Approvals / Integrity / Explore port | Done |
 | 3 Fleet / Incidents / MCP / edit / evidence export | Done |
 | 4 Gateway cutover + Docker/CI + Playwright P0 | Done |
+| A AQL + DataFrame | Done |
+| B PanelRuntime + schema Overview | Done |
+| C ControlsBar + live stream + agent detail | Done |
+| D Dashboard editor + `/v1/soc/dashboards` | Done |
+| E E2E expansion + remove legacy Next `ui/` | Done |
 
 ### Routes
 
 | Path | Notes |
 |---|---|
+| `/dashboard/` | Schema-driven Overview |
 | `/dashboard/approvals` | Queue + approve / reject / **edit** (re-hash) |
 | `/dashboard/integrity` | Receipts, verify, range, investigation + compliance packs |
-| `/dashboard/explore` | Decision search with `field:value` chips |
+| `/dashboard/explore` | AQL decision search |
 | `/dashboard/agents` | Fleet + freeze / unfreeze / restore / revoke |
+| `/dashboard/agents/:id` | Agent detail |
 | `/dashboard/incidents` | Cases + per-incident evidence-pack ZIP |
 | `/dashboard/mcp` | MCP registry, tools, quarantine / restore |
+| `/dashboard/detections` | Triggered alerts |
+| `/dashboard/rules` | Detection rule catalogue |
+| `/dashboard/alerting` | Webhook subscriptions |
+| `/dashboard/dashboards` | Tenant dashboard JSON editor |

@@ -54,9 +54,10 @@ const CSP_VALUE: &str = "default-src 'self'; script-src 'self' 'unsafe-inline' '
 
 /// Resolve the on-disk directory of the dashboard SPA static export.
 ///
-/// Precedence (Phase 4 cutover):
+/// Precedence (Phase E — Bun SPA only; `ui/dist` is a path alias used by the
+/// Docker image which copies `ui-next/dist` to both locations):
 /// 1. `AEGIS_UI_DIST` — absolute or relative path override
-/// 2. `AEGIS_UI_BUNDLE=legacy` → `ui/dist` (Next)
+/// 2. `AEGIS_UI_BUNDLE=legacy` → `ui/dist` (image path alias)
 /// 3. `AEGIS_UI_BUNDLE=next` → `ui-next/dist` (Bun SPA)
 /// 4. Default: prefer `ui-next/dist` if `index.html` exists, else `ui/dist`
 pub fn dashboard_dist_dir() -> PathBuf {
