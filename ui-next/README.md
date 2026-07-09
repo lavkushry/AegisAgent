@@ -51,6 +51,7 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | C ControlsBar + live stream + agent detail | Done |
 | D Dashboard editor + `/v1/soc/dashboards` | Done |
 | E E2E expansion + remove legacy Next `ui/` | Done |
+| F Hardening (a11y, redact, mocked #1638) | Done |
 
 ### Routes
 

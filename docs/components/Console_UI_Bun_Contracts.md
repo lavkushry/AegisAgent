@@ -1,7 +1,7 @@
 # Console UI contracts — Bun rewrite (product of record)
 
 **Status:** binding for `ui-next/` (production console)  
-**Related plan:** full Bun SPA rewrite (React 19 + Vite + Bun) — Phases 0–D complete; Phase E cutover
+**Related plan:** full Bun SPA rewrite (React 19 + Vite + Bun) — Phases 0–F complete
 
 ## 1. Deploy / serve contract
 
@@ -85,7 +85,9 @@ bun run build
 | Playwright for ui-next routes | Done (`e2e/tests/dashboard-*.spec.ts`) — Phase E expands ControlsBar, Dashboards, agent detail, detections/rules/alerting |
 | Default image env `AEGIS_UI_BUNDLE=next` | Done |
 | Remove Next `ui/` tree | **Done (Phase E)** — single tree is `ui-next/` |
-| Re-port mocked panel harness (#1638) | Deferred (tests skipped) |
+| Re-port mocked workflows (#1638) | **Done (Phase F)** — `e2e/tests/mocked-soc-workflows.spec.ts` against ui-next |
+| Display secret redaction | **Done (Phase F)** — `ui-next/src/lib/redact.ts` on Approvals tool-call previews |
+| A11y baseline | **Done (Phase F)** — skip link, `main#main-content`, Settings `aria-label`s, reduced-motion |
 
 **Runtime env:**
 

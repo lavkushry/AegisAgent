@@ -35,6 +35,39 @@ body {
   outline-offset: 2px;
 }
 
+/* Keyboard skip target — visible only on focus */
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: 0.75rem;
+  z-index: 100;
+  transform: translateY(-200%);
+  border-radius: var(--radius-control);
+  background: var(--brand);
+  color: var(--text-on-brand);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .panel-card {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-panel);

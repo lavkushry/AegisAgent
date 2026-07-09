@@ -20,6 +20,7 @@ import {
   type AuthorizeToolCall,
 } from "@/domains/approvals";
 import { errorMessage } from "@/lib/format";
+import { redactJsonForDisplay } from "@/lib/redact";
 
 type PendingAction =
   | { kind: "approve"; approval: ApprovalRecord }
@@ -255,7 +256,7 @@ export function ApprovalsPage() {
                 </div>
               ) : call ? (
                 <pre className="max-h-36 overflow-auto rounded border border-[var(--border-default)] bg-[var(--surface-app)] p-2 font-mono text-[10px] text-[var(--text-secondary)]">
-                  {JSON.stringify(call, null, 2)}
+                  {redactJsonForDisplay(call)}
                 </pre>
               ) : null}
 
@@ -355,7 +356,7 @@ export function ApprovalsPage() {
             </div>
             {selected.kind === "edit" ? (
               <pre className="max-h-28 overflow-auto rounded border border-[var(--border-default)] bg-[var(--surface-app)] p-2 font-mono text-[10px]">
-                {JSON.stringify(selected.editedToolCall.parameters, null, 2)}
+                {redactJsonForDisplay(selected.editedToolCall.parameters)}
               </pre>
             ) : null}
             <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">

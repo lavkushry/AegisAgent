@@ -71,6 +71,8 @@ export function SettingsPage() {
           <input
             className="input-field"
             type="url"
+            name="gatewayUrl"
+            aria-label="Gateway URL"
             value={localUrl}
             onChange={(e) => setLocalUrl(e.target.value)}
           />
@@ -81,6 +83,8 @@ export function SettingsPage() {
           <input
             className="input-field"
             type="text"
+            name="tenantId"
+            aria-label="Tenant ID"
             value={localTenant}
             onChange={(e) => setLocalTenant(e.target.value)}
             placeholder="tenant_123"
@@ -89,12 +93,14 @@ export function SettingsPage() {
 
         <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
           <span className="flex items-center gap-1">
-            <KeyRound size={12} /> Bearer token
+            <KeyRound size={12} aria-hidden="true" /> Bearer token
             {bearerToken ? " (set)" : " (empty)"}
           </span>
           <input
             className="input-field"
             type="password"
+            name="bearerToken"
+            aria-label="Bearer token"
             value={localToken}
             onChange={(e) => setLocalToken(e.target.value)}
             placeholder={
@@ -106,11 +112,13 @@ export function SettingsPage() {
 
         <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
           <span className="flex items-center gap-1">
-            <User size={12} /> Operator ID
+            <User size={12} aria-hidden="true" /> Operator ID
           </span>
           <input
             className="input-field"
             type="text"
+            name="operatorId"
+            aria-label="Operator ID"
             value={localOperator}
             onChange={(e) => setLocalOperator(e.target.value)}
             placeholder="platform_admin"

@@ -14,7 +14,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-full min-h-screen bg-[var(--surface-app)] text-[var(--text-primary)]">
-      <aside className="flex w-56 shrink-0 flex-col border-r border-[var(--border-default)] bg-[var(--surface-panel)]">
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
+      <aside
+        className="flex w-56 shrink-0 flex-col border-r border-[var(--border-default)] bg-[var(--surface-panel)]"
+        aria-label="Console chrome"
+      >
         <div className="border-b border-[var(--border-default)] px-4 py-4">
           <h1 className="text-xs font-bold tracking-wider text-[var(--brand)]">
             AegisAgent
@@ -24,7 +30,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div className="mt-2 text-[10px] text-[var(--text-secondary)]">
             Tenant context
-            <div className="mt-0.5 font-mono text-[11px] text-[var(--text-primary)]">
+            <div
+              className="mt-0.5 font-mono text-[11px] text-[var(--text-primary)]"
+              data-testid="tenant-context"
+            >
               {activeTenant.trim() ? activeTenant : "Not selected"}
             </div>
           </div>
@@ -39,7 +48,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <ControlsBar />
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main id="main-content" className="flex-1 overflow-auto p-6" tabIndex={-1}>
+          {children}
+        </main>
       </div>
     </div>
   );
