@@ -99,3 +99,44 @@ All time filters must be RFC3339 timestamps; UI relative tokens such as
 - [ ] TLS configured (`AEGIS_TLS_CERT`/`AEGIS_TLS_KEY`) or TLS-terminating proxy.
 - [ ] Receipt signing key configured if transparency anchoring is required.
 - [ ] Backups + retention reviewed (see `deployment-guide.md`).
+- [ ] Multi-replica only with PostgreSQL `DATABASE_URL` (Helm fails closed on SQLite scale-out — `helm/aegis-gateway/templates/validate-backend.yaml`).
+- [ ] Gateway image built with `--features postgres` when `DATABASE_URL` is Postgres.
+
+## 9. Enterprise console auth: JWT-only (no native OIDC yet)
+
+**Honest limitation (Wave B):** the gateway and console do **not** embed an
+OIDC/SAML client. Production human auth is:
+
+1. **JWT** — set `AEGIS_JWT_REQUIRED=true` and issue HS256 (or configured)
+   tokens from your identity system, **or**
+2. **Edge SSO** — put an Identity-Aware Proxy / OAuth2-proxy / API gateway
+   that terminates OIDC in front of the Helm Service and injects or mints
+   the gateway JWT, **or**
+3. **Agent mTLS / bearer** for machine principals (`AEGIS_MTLS_CA_CERT`, agent
+   tokens) — not a substitute for human SSO.
+
+Do **not** market “native Okta/Azure AD login in the Aegis console” until
+Phase 10.1 lands. The production Helm profile
+(`helm/aegis-gateway/values-production.yaml`) enables `jwtRequired: true`
+and multi-replica Postgres assumptions.
+
+## 10. PostgreSQL multi-replica (production path)
+
+| Mode | `DATABASE_URL` | `replicaCount` | Notes |
+|---|---|---|---|
+| Dev / single-writer | `sqlite:///data/aegis.db` | `1` only | Default chart; PVC RWO |
+| Production HA | `postgres://…` or `postgresql://…` | `≥2` allowed | Use `values-production.yaml`; disable SQLite PVC; `AEGIS_REPLAY_STORE=db` |
+
+Compile the gateway with the workspace `postgres` feature when using Postgres.
+Migrations live under `lib/storage/migrations_postgres/`. SQLite remains the
+local/dev path.
+
+## 11. Data-plane packaging (Wave B)
+
+| Binary | Dockerfile | Helm | Compose (full) |
+|---|---|---|---|
+| gateway | yes | `helm/aegis-gateway` | yes |
+| node-sensor | yes | `helm/aegis-node-sensor` | yes |
+| egress-proxy | yes | `helm/aegis-egress-proxy` | yes |
+| llm-gateway | yes (`bins/aegis-llm-gateway/Dockerfile`) | `helm/aegis-llm-gateway` | yes |
+| cage-runner | **no** (lib-only on main — Wave A) | **no** | **no** |

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: aegis-llm-gateway
+description: AegisAgent LLM gateway adapter — OpenAI-compatible reverse proxy for prompt/model-call lineage capture (Phase 7.3), kept separate from the control-plane gateway.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/lavkushry/AegisAgent
+sources:
+  - https://github.com/lavkushry/AegisAgent
+keywords:
+  - ai-agent-security
+  - llm-gateway
+  - model-call-capture
+maintainers:
+  - name: AegisAgent

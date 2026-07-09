@@ -1,0 +1,53 @@
+# Production-oriented overrides for aegis-gateway.
+#
+# Install:
+#   helm upgrade --install aegis helm/aegis-gateway \
+#     -f helm/aegis-gateway/values-production.yaml \
+#     --set config.databaseUrl='postgres://aegis:SECRET@postgres:5432/aegis' \
+#     --set secret.create=true \
+#     --set secret.jwtSecret='long-random-secret' \
+#     --set secret.adminApiKey='long-random-admin-key'
+#
+# Enterprise auth note (Wave B): console/admin auth is **JWT (and agent tokens /
+# mTLS for agents)**. There is no first-class OIDC/SAML connector in this chart
+# yet — put an Identity-Aware Proxy / OIDC-capable reverse proxy in front of the
+# Service, or mint short-lived JWTs from your IdP. Document that limitation for
+# buyers; do not claim native OIDC until Phase 10.1 lands.
+
+replicaCount: 2
+
+# Multi-replica requires Postgres — chart fails template render on SQLite.
+config:
+  # -- MUST be overridden to a real postgres URL (placeholder fails health intentionally if left as-is).
+  databaseUrl: "postgres://aegis:CHANGE_ME@postgres:5432/aegis"
+  logLevel: "info,gateway=info,sqlx=warn"
+  jwtRequired: true
+  # Replay store must be durable across pods (set via extraEnv below).
+  corsOrigins: ""
+
+# SQLite RWO volume is wrong for multi-replica Postgres — disable chart PVC.
+persistence:
+  enabled: false
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+secret:
+  create: false
+  existingSecret: ""
+  jwtSecret: ""
+  policySigningKey: ""
+  githubWebhookSecret: ""
+  # Optional admin diagnostics key (AEGIS_ADMIN_API_KEY) — put in existingSecret.
+
+extraEnv:
+  - name: AEGIS_REPLAY_STORE
+    value: "db"
+  - name: AEGIS_DEMO_MODE
+    value: "false"
