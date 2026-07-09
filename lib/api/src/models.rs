@@ -618,13 +618,59 @@ pub struct AgentRunRecord {
     pub source_component: String,
     /// Sensor enforcement posture for the run: `observe` | `enforce` | `lockdown`.
     pub mode: String,
-    /// Lifecycle: `started` | `running` | `paused` | `killed` | `finished` | `quarantined`.
+    /// Lifecycle: `started` | `claimed` | `running` | `paused` | `killed` |
+    /// `finished` | `quarantined` | `stalled`. `started` means "created, not
+    /// yet claimed by a runner" for cage runs (`claimed`/`running` are new
+    /// values -- see aegis-cage-runner's execution loop); non-cage
+    /// (SDK-integrated) runs are unaffected and never transition past
+    /// `started` today.
     pub status: String,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
     pub root_trace_id: Option<String>,
     pub root_trust_level: Option<String>,
     pub policy_bundle_id: Option<String>,
+    /// Opaque id (e.g. hostname/config-supplied string) of the
+    /// aegis-cage-runner process that currently holds the claim on this
+    /// run. `None` until claimed. Not a security boundary -- the tenant
+    /// bearer token used to reach these endpoints already is one.
+    #[serde(default)]
+    pub claimed_by: Option<String>,
+    #[serde(default)]
+    pub claimed_at: Option<DateTime<Utc>>,
+    /// Refreshed by the claiming runner's heartbeat; a lease-expiry sweep
+    /// (`mark_stale_agent_runs_stalled`) flips a run to `stalled` if this
+    /// (or `claimed_at`, before the first heartbeat) goes too stale.
+    #[serde(default)]
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    /// The remaining fields mirror `aegis_cage_runner::spec::SandboxSpec`'s
+    /// nested shapes and are populated only when the run was created with
+    /// `CreateAgentRunRequest.cage_spec` set (`None` for the existing,
+    /// unaffected SDK-integrated-run case). Nested shapes are raw JSON text
+    /// (`_json` suffix), matching this schema's existing convention
+    /// (`manifest_json`, `steps_json`, `settings_json`, etc.) rather than a
+    /// new one; the gateway route layer and the cage-runner binary each
+    /// serialize/deserialize independently at this boundary.
+    #[serde(default)]
+    pub image_ref: Option<String>,
+    #[serde(default)]
+    pub image_digest: Option<String>,
+    #[serde(default)]
+    pub command_json: Option<String>,
+    #[serde(default)]
+    pub working_dir: Option<String>,
+    #[serde(default)]
+    pub resource_limits_json: Option<String>,
+    #[serde(default)]
+    pub network_spec_json: Option<String>,
+    #[serde(default)]
+    pub tooling_spec_json: Option<String>,
+    #[serde(default)]
+    pub environment_json: Option<String>,
+    #[serde(default)]
+    pub workspace_spec_json: Option<String>,
+    #[serde(default)]
+    pub controlled_mounts_json: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

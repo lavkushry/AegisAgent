@@ -447,6 +447,49 @@ pub async fn run_vacuum_job(pool: DbPool, interval_secs: u64, is_leader: Arc<Ato
     }
 }
 
+/// Default interval between agent-run lease-expiry sweeps.
+pub const DEFAULT_AGENT_RUN_STALL_SWEEP_INTERVAL_SECS: u64 = 60;
+
+/// Default lease timeout (seconds since the last heartbeat, or since claim
+/// if no heartbeat has landed yet) before a claimed/running cage run is
+/// flipped to `stalled` — 8x the runner's own 15s heartbeat interval,
+/// generous enough to tolerate a couple of missed ticks from transient
+/// network blips.
+pub const DEFAULT_AGENT_RUN_LEASE_TIMEOUT_SECS: i64 = 120;
+
+/// Run `db::mark_stale_agent_runs_stalled` on a fixed interval until the
+/// process exits — the aegis-cage-runner execution loop's crash-recovery
+/// mechanism: a claimed/running run whose lease has gone stale (the runner
+/// process crashed, was killed, or lost network) is flipped to `stalled` so
+/// an operator can see it's stuck. Deliberately does NOT auto-requeue the
+/// run (resuming a possibly-partially-executed action is itself a security
+/// decision). `is_leader`-gated like `run_vacuum_job`/
+/// `run_approval_cleanup_job` above — this is a global, cross-tenant sweep,
+/// and only one gateway replica needs to run it (the underlying `UPDATE` is
+/// itself idempotent/safe under concurrent execution, but there's no
+/// benefit to every replica doing it every tick).
+pub async fn run_agent_run_stall_sweep_job(
+    pool: DbPool,
+    interval_secs: u64,
+    lease_timeout_secs: i64,
+    is_leader: Arc<AtomicBool>,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if !is_leader.load(Ordering::Relaxed) {
+            debug!("agent-run stall sweep job: standby (not leader)");
+            continue;
+        }
+        let threshold = Utc::now() - Duration::seconds(lease_timeout_secs);
+        match db::mark_stale_agent_runs_stalled(&pool, threshold).await {
+            Ok(0) => {}
+            Ok(n) => warn!("marked {} stalled agent run(s) past their lease timeout", n),
+            Err(e) => error!("agent-run stall sweep job failed: {:?}", e),
+        }
+    }
+}
+
 /// Default interval between debounced heartbeat flushes (#1511).
 pub const DEFAULT_HEARTBEAT_FLUSH_INTERVAL_SECS: u64 = 30;
 

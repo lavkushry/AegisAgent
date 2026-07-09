@@ -689,6 +689,51 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: i64,
     ) -> Result<Vec<AgentRunRecord>, AegisError>;
 
+    // aegis-cage-runner execution loop: atomic claim + heartbeat + ownership-
+    // scoped status transitions + lease-expiry sweep.
+    /// Insert a cage-execution run and its signed `start_run` control
+    /// command atomically (`start_command: None` for a non-cage run, same
+    /// effect as `insert_agent_run`).
+    async fn insert_agent_run_with_start_command(
+        &self,
+        run: &AgentRunRecord,
+        start_command: Option<&ControlCommandRecord>,
+    ) -> Result<(), AegisError>;
+    /// Compare-and-swap claim: `started` -> `claimed`. `Ok(true)` iff this
+    /// call won the race.
+    async fn claim_agent_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        runner_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+    /// Refresh the lease on a claimed/running run. `Ok(false)` means the
+    /// caller no longer holds the claim.
+    async fn heartbeat_agent_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        runner_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError>;
+    /// Transition a run's status, but only while `runner_id` still holds the
+    /// claim.
+    async fn update_claimed_agent_run_status(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        runner_id: &str,
+        status: &str,
+        finished_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, AegisError>;
+    /// Global (cross-tenant) lease-expiry sweep. Returns rows flipped to
+    /// `stalled`.
+    async fn mark_stale_agent_runs_stalled(
+        &self,
+        threshold: DateTime<Utc>,
+    ) -> Result<u64, AegisError>;
+
     // Runtime events (Phase 2.2: idempotent ingest substrate)
     /// Idempotently append a runtime event; `true` = newly inserted, `false` =
     /// deduped (the `(tenant_id, event_id)` was already present).

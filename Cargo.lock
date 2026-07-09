@@ -30,14 +30,24 @@ name = "aegis-cage-runner"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
+ "clap",
  "crc32fast",
+ "ed25519-dalek",
+ "hex",
+ "hostname",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "toml",
  "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]
