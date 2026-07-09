@@ -490,9 +490,12 @@ jobs:
         run: helm lint helm/aegis-gateway/
       - name: helm template (default values)
         run: helm template test-release helm/aegis-gateway/ > /dev/null
-      - name: helm template (autoscaling enabled)
+      # Multi-replica / HPA requires PostgreSQL (validate-backend.yaml fail-closed).
+      # Exercise the HPA templates with a production-shaped database URL.
+      - name: helm template (autoscaling + postgres)
         run: |
           helm template test-release helm/aegis-gateway/ \
             --set autoscaling.enabled=true \
             --set replicaCount=3 \
+            --set config.databaseUrl='postgres://aegis:secret@postgres:5432/aegis' \
             > /dev/null
