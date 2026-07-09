@@ -7,3 +7,4 @@ export { detectionsDashboard } from "./detections";
 export { mcpDashboard } from "./mcp";
 export { rulesDashboard } from "./rules";
 export { alertingDashboard } from "./alerting";
+export { exploreDashboard } from "./explore";

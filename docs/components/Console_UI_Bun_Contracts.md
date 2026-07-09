@@ -44,7 +44,7 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | 10 | Detections / Rules / Alerting | Shipped (Phase 5) |
 | 11 | ControlsBar (time range + live stream) | Shipped (Phase C) |
 | 12 | Dashboard editor (`/v1/soc/dashboards`) | Shipped (Phase D) |
-| 13 | System dashboard catalog (copy templates) | Overview, Integrity, Fleet, Approvals, Incidents, Detections, MCP, Rules, Alerting |
+| 13 | System dashboard catalog (copy templates) | Overview, Integrity, Fleet, Approvals, Incidents, Detections, MCP, Rules, Alerting, Explore |
 | 14 | Lazy routes + route error boundary | Shipped |
 
 ### Phase 2–3 API map
