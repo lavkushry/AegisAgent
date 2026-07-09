@@ -7,13 +7,17 @@ import { HashChip } from "@/components/security/HashChip";
 import { TrustBadge } from "@/components/security/TrustBadge";
 import { DecisionBadge } from "@/components/security/DecisionBadge";
 import {
-  parseSimpleExploreQuery,
+  compileExploreAql,
   searchDecisions,
+  validateExploreAql,
+  type DecisionFilters,
 } from "@/domains/decisions";
+import { fieldsForEntity } from "@/datasources/fieldCatalog";
+import { aqlAutocomplete } from "@/datasources/aql/autocomplete";
 import { errorMessage, formatTime } from "@/lib/format";
 
 const EXAMPLE =
-  "decision:require_approval trust:untrusted_external";
+  'agent_id:agent-1 AND decision:deny AND source_trust:untrusted_external';
 
 export function ExplorePage() {
   const gatewayUrl = useAppStore((s) => s.gatewayUrl);
@@ -30,9 +34,28 @@ export function ExplorePage() {
   const [submitted, setSubmitted] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const filters = useMemo(
-    () => parseSimpleExploreQuery(submitted),
+  const fieldDescriptors = useMemo(() => fieldsForEntity("decision"), []);
+  const draftError = useMemo(
+    () => validateExploreAql(draft, "decision"),
+    [draft],
+  );
+  const submittedError = useMemo(
+    () => validateExploreAql(submitted, "decision"),
     [submitted],
+  );
+
+  const filters: DecisionFilters | null = useMemo(() => {
+    if (submittedError) return null;
+    try {
+      return compileExploreAql(submitted, "decision");
+    } catch {
+      return null;
+    }
+  }, [submitted, submittedError]);
+
+  const suggestions = useMemo(
+    () => aqlAutocomplete(draft, draft.length, fieldDescriptors),
+    [draft, fieldDescriptors],
   );
 
   const { data, error, isLoading, isFetching } = useQuery({
@@ -42,9 +65,10 @@ export function ExplorePage() {
       bearerToken,
       activeTenant,
       submitted,
+      filters,
     ],
-    queryFn: () => searchDecisions(apiOpts, filters),
-    enabled: tenantReady,
+    queryFn: () => searchDecisions(apiOpts, filters ?? { limit: 50 }),
+    enabled: tenantReady && Boolean(filters) && !submittedError,
     refetchInterval: 12_000,
     retry: false,
   });
@@ -60,74 +84,111 @@ export function ExplorePage() {
       <div>
         <h1 className="text-sm font-bold uppercase tracking-wider">Explore</h1>
         <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-          Discover-style search over authorization decisions. Phase 2 supports
-          field chips (<code className="font-mono">decision:</code>,{" "}
-          <code className="font-mono">agent_id:</code>,{" "}
-          <code className="font-mono">trust:</code>,{" "}
-          <code className="font-mono">skill:</code>) plus free-text{" "}
-          <code className="font-mono">q</code>.
+          Full AQL over authorization decisions (AND-only execution path; OR
+          fails closed). Example:{" "}
+          <code className="font-mono text-[10px]">{EXAMPLE}</code>
           {isFetching ? " · refreshing…" : null}
         </p>
       </div>
 
       <form
-        className="panel-card flex flex-col gap-2 sm:flex-row sm:items-center"
+        className="panel-card flex flex-col gap-2"
         onSubmit={(e) => {
           e.preventDefault();
+          if (draftError) return;
           setSubmitted(draft.trim());
           setExpandedId(null);
         }}
       >
-        <div className="relative min-w-0 flex-1">
-          <Search
-            size={14}
-            className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-[var(--text-muted)]"
-          />
-          <input
-            className="input-field pl-8"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={EXAMPLE}
-            aria-label="Explore query"
-          />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              size={14}
+              className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-[var(--text-muted)]"
+            />
+            <input
+              className="input-field pl-8"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={EXAMPLE}
+              aria-label="Explore query"
+              aria-invalid={Boolean(draftError)}
+            />
+          </div>
+          <button
+            type="submit"
+            className="btn-primary shrink-0"
+            disabled={Boolean(draftError)}
+          >
+            Search
+          </button>
         </div>
-        <button type="submit" className="btn-primary shrink-0">
-          Search
-        </button>
+        {draftError ? (
+          <p className="text-[11px] text-[var(--sev-high)]" role="alert">
+            {draftError}
+          </p>
+        ) : null}
+        {suggestions.length > 0 && draft.trim() ? (
+          <div className="flex flex-wrap gap-1">
+            {suggestions.slice(0, 8).map((s) => (
+              <button
+                key={`${s.label}-${s.insertText}`}
+                type="button"
+                className="rounded border border-[var(--border-default)] bg-[var(--interactive-bg)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:bg-[var(--interactive-bg-hover)]"
+                onClick={() => {
+                  // Replace trailing incomplete token with suggestion insert
+                  const base = draft.replace(/(\S+)$/, "").trimEnd();
+                  const next = base
+                    ? `${base} ${s.insertText}`
+                    : s.insertText;
+                  setDraft(next);
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </form>
 
       <div className="flex flex-wrap gap-2 text-[10px] text-[var(--text-muted)]">
         <span>Active filters:</span>
-        {filters.decision ? (
+        {filters?.decision ? (
           <code className="rounded bg-[var(--interactive-bg)] px-1.5 py-0.5 font-mono">
             decision:{filters.decision}
           </code>
         ) : null}
-        {filters.agentId ? (
+        {filters?.agentId ? (
           <code className="rounded bg-[var(--interactive-bg)] px-1.5 py-0.5 font-mono">
             agent_id:{filters.agentId}
           </code>
         ) : null}
-        {filters.sourceTrust ? (
+        {filters?.sourceTrust ? (
           <code className="rounded bg-[var(--interactive-bg)] px-1.5 py-0.5 font-mono">
-            trust:{filters.sourceTrust}
+            source_trust:{filters.sourceTrust}
           </code>
         ) : null}
-        {filters.skill ? (
+        {filters?.skill ? (
           <code className="rounded bg-[var(--interactive-bg)] px-1.5 py-0.5 font-mono">
-            skill:{filters.skill}
+            tool:{filters.skill}
           </code>
         ) : null}
-        {filters.q ? (
+        {filters?.actionHash ? (
+          <code className="rounded bg-[var(--interactive-bg)] px-1.5 py-0.5 font-mono">
+            action_hash:{filters.actionHash}
+          </code>
+        ) : null}
+        {filters?.q ? (
           <code className="rounded bg-[var(--interactive-bg)] px-1.5 py-0.5 font-mono">
             q:{filters.q}
           </code>
         ) : null}
-        {!filters.decision &&
-        !filters.agentId &&
-        !filters.sourceTrust &&
-        !filters.skill &&
-        !filters.q ? (
+        {!filters?.decision &&
+        !filters?.agentId &&
+        !filters?.sourceTrust &&
+        !filters?.skill &&
+        !filters?.actionHash &&
+        !filters?.q ? (
           <span className="text-[var(--text-secondary)]">
             none (latest decisions)
           </span>
@@ -142,8 +203,13 @@ export function ExplorePage() {
           {errorMessage(error)}
         </div>
       )}
+      {submittedError ? (
+        <div className="panel-card text-xs text-[var(--sev-high)]">
+          {submittedError}
+        </div>
+      ) : null}
 
-      {!isLoading && !error ? (
+      {!isLoading && !error && !submittedError ? (
         <p className="text-[11px] text-[var(--text-muted)]">
           {rows.length} result{rows.length === 1 ? "" : "s"}
         </p>
@@ -187,13 +253,16 @@ export function ExplorePage() {
                   <td className="px-3 py-2 text-[var(--text-secondary)]">
                     {row.tool ?? row.skill ?? "—"}
                   </td>
-                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                  <td
+                    className="px-3 py-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <HashChip hash={row.action_hash} kind="action" />
                   </td>
                 </tr>
               );
             })}
-            {!isLoading && rows.length === 0 ? (
+            {!isLoading && rows.length === 0 && !submittedError ? (
               <tr>
                 <td
                   colSpan={6}

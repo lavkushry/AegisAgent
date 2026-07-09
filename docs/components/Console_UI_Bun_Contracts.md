@@ -42,6 +42,7 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | 8 | MCP registry + quarantine | Phase 3 |
 | 9 | Approval edit + evidence export | Phase 3 |
 | 10 | Detections / Rules / Alerting | Phase 5 |
+| 11 | Full AQL + frame/types field catalog | Phase A (datasource spine) |
 
 ### Phase 2–3 API map
 
