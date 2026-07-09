@@ -12,6 +12,7 @@ import type {
   QueryRequest,
 } from "./types";
 import { aqlToCompiledRequest } from "./aql/compile";
+import { resolveTimeToken } from "./timeRange";
 
 export const SOC_QUERY_DATASOURCE_ID = "soc-query";
 
@@ -31,10 +32,16 @@ function entityName(entity: EntityKind | undefined): string {
   return "decision";
 }
 
+/** Expand relative tokens; drop unparseable absolute/relative values. */
+function absoluteTime(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  return resolveTimeToken(token) ?? undefined;
+}
+
 function buildBody(req: QueryRequest): SocQueryBody {
   let filters: Record<string, string | undefined> = {
-    from: req.timeRange.from,
-    to: req.timeRange.to,
+    from: absoluteTime(req.timeRange.from),
+    to: absoluteTime(req.timeRange.to),
   };
 
   if (req.aql?.trim()) {
@@ -51,6 +58,9 @@ function buildBody(req: QueryRequest): SocQueryBody {
         ]),
       ),
     };
+    // AQL @time may also be relative — normalize again.
+    filters.from = absoluteTime(filters.from);
+    filters.to = absoluteTime(filters.to);
     const body: SocQueryBody = {
       version: 1,
       entity: entityName(req.entity),
