@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { SYSTEM_DASHBOARD_CATALOG } from "../editor/catalog";
 import { validateDashboardSchema } from "../editor/validate";
 import {
+  alertingDashboard,
   approvalsDashboard,
   detectionsDashboard,
   fleetDashboard,
@@ -22,9 +23,11 @@ const SYSTEM = [
   detectionsDashboard,
   mcpDashboard,
   rulesDashboard,
+  alertingDashboard,
 ] as const;
 
 const EXPECTED_UIDS = [
+  "alerting",
   "approvals",
   "detections",
   "fleet",

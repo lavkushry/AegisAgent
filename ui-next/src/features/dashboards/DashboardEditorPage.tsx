@@ -247,10 +247,11 @@ export function DashboardEditorPage() {
                   <button
                     type="button"
                     title={`Copy ${entry.uid}`}
+                    aria-label={`Copy ${entry.uid}`}
                     className="shrink-0 rounded border border-[var(--border-default)] p-1"
                     onClick={() => copyFromSystem(entry.uid)}
                   >
-                    <Copy size={12} />
+                    <Copy size={12} aria-hidden="true" />
                   </button>
                 </li>
               ))}

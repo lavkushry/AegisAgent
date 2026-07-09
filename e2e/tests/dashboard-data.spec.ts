@@ -197,8 +197,28 @@ test.describe("production SOC console data workflows (ui-next)", () => {
       "Detections",
       "MCP registry",
       "Rules",
+      "Alerting",
     ]) {
       await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
     }
+  });
+
+  test("Dashboard editor can copy a system template into the JSON draft", async ({
+    page,
+  }) => {
+    await openConfiguredConsole(page);
+    await openNav(page, "Dashboards");
+    // Copy Integrity system board (button title="Copy integrity")
+    await page.getByRole("button", { name: /Copy integrity/i }).click();
+    await expect(
+      page.getByText(/Copied system dashboard 'integrity'/i),
+    ).toBeVisible({ timeout: 5_000 });
+    const editor = page.getByLabel("Dashboard JSON editor");
+    await expect(editor).toContainText('"title"');
+    await expect(editor).toContainText("integrity-copy-");
+    await page.getByRole("button", { name: "Validate" }).click();
+    await expect(page.getByText(/Schema is valid/i)).toBeVisible({
+      timeout: 5_000,
+    });
   });
 });

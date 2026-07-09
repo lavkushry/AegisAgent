@@ -1,5 +1,6 @@
 import type { DashboardSchema } from "../schema";
 import {
+  alertingDashboard,
   approvalsDashboard,
   detectionsDashboard,
   fleetDashboard,
@@ -146,6 +147,12 @@ export const SYSTEM_DASHBOARD_CATALOG: readonly SystemDashboardEntry[] = [
     uid: rulesDashboard.uid,
     title: rulesDashboard.title,
     schema: rulesDashboard,
+    readOnly: true,
+  },
+  {
+    uid: alertingDashboard.uid,
+    title: alertingDashboard.title,
+    schema: alertingDashboard,
     readOnly: true,
   },
 ];
