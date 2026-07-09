@@ -182,9 +182,64 @@ impl SandboxSpec {
                     .into(),
             ));
         }
+        self.validate_network()?;
 
         self.validate_mounts()?;
         self.validate_environment()?;
+        Ok(())
+    }
+
+    /// Forced-egress posture:
+    /// - no `direct_internet` (checked above)
+    /// - `allowed_destinations` require an `egress_proxy_url` (cannot enforce
+    ///   an allowlist with `--network none` alone)
+    /// - when a proxy URL is set, it must be a non-empty `http`/`https` URL
+    fn validate_network(&self) -> Result<(), CageError> {
+        let proxy = self
+            .network
+            .egress_proxy_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
+        if !self.network.allowed_destinations.is_empty() && proxy.is_none() {
+            return Err(CageError::InvalidSpec(
+                "network.allowed_destinations requires network.egress_proxy_url \
+                 (allowlists are enforced at the egress proxy, not with open bridge egress)"
+                    .into(),
+            ));
+        }
+
+        if let Some(url) = proxy {
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(CageError::InvalidSpec(
+                    "network.egress_proxy_url must be an http:// or https:// URL".into(),
+                ));
+            }
+            // Reject URLs that would become docker CLI flags if ever mishandled.
+            if url.contains(' ') || url.contains('\n') || url.contains('\r') {
+                return Err(CageError::InvalidSpec(
+                    "network.egress_proxy_url must not contain whitespace".into(),
+                ));
+            }
+        } else if self
+            .network
+            .egress_proxy_url
+            .as_ref()
+            .is_some_and(|s| s.trim().is_empty())
+        {
+            return Err(CageError::InvalidSpec(
+                "network.egress_proxy_url must not be empty when set".into(),
+            ));
+        }
+
+        for dest in &self.network.allowed_destinations {
+            if dest.trim().is_empty() {
+                return Err(CageError::InvalidSpec(
+                    "network.allowed_destinations entries must not be empty".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -283,6 +338,31 @@ mod tests {
     fn direct_internet_is_rejected() {
         let mut spec = minimal_spec();
         spec.network.direct_internet = true;
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn allowed_destinations_require_egress_proxy_url() {
+        let mut spec = minimal_spec();
+        spec.network.allowed_destinations = vec!["example.com".to_string()];
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("egress_proxy_url"), "got {err}");
+    }
+
+    #[test]
+    fn egress_proxy_url_and_allowlist_validate_together() {
+        let mut spec = minimal_spec();
+        spec.network.egress_proxy_url = Some("http://127.0.0.1:8888".to_string());
+        spec.network.allowed_destinations = vec!["api.example.com".to_string()];
+        spec.validate().unwrap();
+    }
+
+    #[test]
+    fn egress_proxy_url_must_be_http_or_https() {
+        let mut spec = minimal_spec();
+        spec.network.egress_proxy_url = Some("ftp://proxy".to_string());
+        assert!(spec.validate().is_err());
+        spec.network.egress_proxy_url = Some("".to_string());
         assert!(spec.validate().is_err());
     }
 

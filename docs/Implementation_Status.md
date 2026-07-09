@@ -47,8 +47,8 @@
 | Ban system (first-class store) | Partial | `lib/storage/src/db/agent_bans.rs`, migration `0029` | enforcement at every choke point + sensor prop | #1678 | storage | beta | preflight wire-up |
 | Quarantine records | Partial | `lib/storage/src/db/quarantine.rs`, migration `0030`; agent-status quarantine | workspace/sandbox quarantine (needs cage) | #1679 | storage | beta | cage integration |
 | Node sensor | Partial | `bins/aegis-node-sensor` (main, spool, shipper, command_receiver), Dockerfile, Helm, compose | **real** process/fs/network/secret collectors; full local enforce | Phased PR plan §5 | unit | beta (skeleton) | collectors + e2e |
-| Agent cage runner | Partial | binary + DockerRuntime + Dockerfile + compose `cage` + Helm; gateway lifecycle smoke (`cage_run_lifecycle_*` + `scripts/cage-smoke.sh`) | Host Docker security review; sensor↔runner IPC; full Docker e2e untrusted→cage | Phased PR plan §6 | unit (lib) + claim lifecycle + helm lint | beta (local/k8s) | Docker e2e + security review |
-| Egress proxy | Partial | `bins/aegis-egress-proxy` binary + Dockerfile + Helm + compose; `POST /v1/egress/check` | forced cage netns integration; always-on path | Phased PR plan §7 | unit + proxy tests | beta | cage net integration |
+| Agent cage runner | Partial | binary + DockerRuntime + packaging; **forced egress plan** (`egress_proxy_url` → bridge + forced HTTP(S)_PROXY; default still `--network none`) | transparent/netns bypass prevention; sensor↔runner IPC | Phased PR plan §6 | unit (lib) + claim lifecycle | beta (local/k8s) | hard net isolation |
+| Egress proxy | Partial | binary + Helm + compose + check API; cage injects forced proxy env when `egress_proxy_url` set | always-on transparent path; per-run allowlist auto-wired to proxy CLI | Phased PR plan §7 | unit + proxy tests | beta | transparent force |
 | Tool broker | Partial | `routes/broker.rs`, `lib/tool-broker-core`, `lib/tool-broker-connectors` | standalone broker binary; mandatory path for privileged tools | Phased PR plan §8 | unit + route | beta | binary + force-path |
 | Prompt capture | Implemented | `POST /v1/ingest/prompt-events` (`routes/prompt_capture.rs`), Python SDK emit | Go/TS emit; UI timeline | #1775/#1776 | unit + SDK | beta | UI + SDK parity |
 | Model call capture | Implemented | `POST /v1/ingest/model-calls`; `bins/aegis-llm-gateway` (Phase 7.3) | Dockerfile/Helm/compose for LLM gateway; broader provider adapters | #1775/#1776/#1794 | unit + gateway tests | beta | packaging + adapters |
@@ -63,10 +63,11 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave A — P0 unknown-agent control (blocks full control-plane claim)
 
-1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done** (gateway unit + `scripts/cage-smoke.sh`); **remaining:** Docker host security review + full Docker e2e  
-2. Gateway claim/heartbeat/lease APIs — present (`/v1/agent-cage/runs/:id/{claim,heartbeat,status}`)  
-3. Sensor: minimal real telemetry + enforce kill/pause/quarantine on host  
-4. E2E: untrusted agent → cage → egress deny → control action → receipt/incident (Docker)  
+1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~forced proxy egress injection~~ **Done** (bridge + forced HTTP(S)_PROXY when `egress_proxy_url` set; residual: raw-socket bypass without transparent proxy)  
+2. Gateway claim/heartbeat/lease APIs — present  
+3. Sensor host enforce + collectors (see open PRs / follow-ups)  
+4. E2E: untrusted agent → cage → egress deny → control action → receipt/incident  
+
 
 ### Wave B — P1 production ops (blocks multi-tenant HA claim)
 

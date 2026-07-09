@@ -41,24 +41,111 @@ pub async fn docker_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Proxy env keys the cage **forces** when `egress_proxy_url` is set.
+/// Tenant-supplied values for these keys are stripped and replaced so a
+/// compromised agent cannot point itself at a different proxy or clear them.
+const FORCED_PROXY_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
+/// How the sandbox reaches the egress proxy (if any).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EgressNetworkPlan {
+    /// Docker `--network` value: `none` (no egress) or `bridge` (proxy path).
+    docker_network: &'static str,
+    /// Proxy URL injected into the container (loopback rewritten for Docker).
+    proxy_url: Option<String>,
+    /// When true, add `host.docker.internal:host-gateway` so containers can
+    /// reach a proxy bound on the host loopback.
+    add_host_gateway: bool,
+}
+
+/// Plan forced egress for a validated [`SandboxSpec`].
+///
+/// | `egress_proxy_url` | Docker network | Proxy env |
+/// |--------------------|----------------|-----------|
+/// | unset              | `none`         | none (no egress at all) |
+/// | set                | `bridge`       | forced HTTP(S)_PROXY to that URL |
+///
+/// Residual: with `bridge`, a malicious process can still open raw sockets
+/// that bypass HTTP_PROXY. Hard network isolation (internal netns + sidecar,
+/// or always-on transparent proxy) remains a follow-up. Soft forced egress
+/// still beats open internet: cooperative HTTP clients and most agent SDKs
+/// honor the injected proxy, and `direct_internet` stays forbidden.
+fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
+    let raw = spec
+        .network
+        .egress_proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    match raw {
+        None => EgressNetworkPlan {
+            docker_network: "none",
+            proxy_url: None,
+            add_host_gateway: false,
+        },
+        Some(url) => {
+            let (container_url, add_host_gateway) = rewrite_loopback_proxy_for_container(url);
+            EgressNetworkPlan {
+                docker_network: "bridge",
+                proxy_url: Some(container_url),
+                add_host_gateway,
+            }
+        }
+    }
+}
+
+/// Map host-loopback proxy URLs to `host.docker.internal` so a container on
+/// the Docker bridge can reach a proxy listening on the host (compose
+/// `network_mode: host`, local `aegis-egress-proxy` on 127.0.0.1:8888).
+fn rewrite_loopback_proxy_for_container(proxy_url: &str) -> (String, bool) {
+    const LOOPBACK_HOSTS: &[&str] = &["127.0.0.1", "localhost", "[::1]"];
+    for scheme in ["http://", "https://"] {
+        let Some(rest) = proxy_url.strip_prefix(scheme) else {
+            continue;
+        };
+        for host in LOOPBACK_HOSTS {
+            if rest == *host
+                || rest.starts_with(&format!("{host}:"))
+                || rest.starts_with(&format!("{host}/"))
+            {
+                let after_host = &rest[host.len()..];
+                return (format!("{scheme}host.docker.internal{after_host}"), true);
+            }
+        }
+    }
+    (proxy_url.to_string(), false)
+}
+
 /// Every flag here maps directly to an isolation guarantee from
-/// `docs/AegisAgent_Agent_Cage.md` section 8: `--network none` (no direct
-/// internet — the spec itself already forbids `direct_internet: true`, this
-/// is defense in depth at the runtime layer too), no `-v
-/// /var/run/docker.sock`, no host paths beyond the isolated workspace,
-/// `--read-only` when the image requests it, and best-effort resource caps
-/// so one sandbox can't starve the host.
+/// `docs/AegisAgent_Agent_Cage.md` §8–9:
+/// - no Docker socket / host home mounts
+/// - no `direct_internet` (spec-validated)
+/// - default `--network none`; bridge only when an egress proxy URL is set
+/// - forced `HTTP_PROXY`/`HTTPS_PROXY` when proxy mode is active
+/// - `--read-only` when requested, resource caps, `--` end-of-options
 fn build_create_args(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
 ) -> Vec<String> {
+    let egress = plan_egress_network(spec);
+
     let mut args = vec![
         "create".to_string(),
         "--name".to_string(),
         container_name.to_string(),
         "--network".to_string(),
-        "none".to_string(),
+        egress.docker_network.to_string(),
         "--pids-limit".to_string(),
         spec.resources.process_limit.to_string(),
         "--memory".to_string(),
@@ -66,6 +153,11 @@ fn build_create_args(
         "--cpus".to_string(),
         format!("{:.3}", spec.resources.cpu_millis as f64 / 1000.0),
     ];
+
+    if egress.add_host_gateway {
+        args.push("--add-host".to_string());
+        args.push("host.docker.internal:host-gateway".to_string());
+    }
 
     if spec.image.read_only_rootfs {
         args.push("--read-only".to_string());
@@ -76,9 +168,38 @@ fn build_create_args(
     args.push("-w".to_string());
     args.push(spec.working_dir.clone());
 
+    // Tenant env first, but drop keys we will force below so a compromised
+    // agent cannot clear or retarget the proxy.
     for (key, value) in &spec.environment {
+        if FORCED_PROXY_ENV_KEYS
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+        {
+            continue;
+        }
         args.push("-e".to_string());
         args.push(format!("{key}={value}"));
+    }
+
+    if let Some(proxy_url) = &egress.proxy_url {
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            args.push("-e".to_string());
+            args.push(format!("{key}={proxy_url}"));
+        }
+        // Empty NO_PROXY: do not let the workload bypass the proxy for
+        // "local" destinations by default.
+        args.push("-e".to_string());
+        args.push("NO_PROXY=".to_string());
+        args.push("-e".to_string());
+        args.push("no_proxy=".to_string());
+
+        if !spec.network.allowed_destinations.is_empty() {
+            args.push("-e".to_string());
+            args.push(format!(
+                "AEGIS_EGRESS_ALLOWED_DESTINATIONS={}",
+                spec.network.allowed_destinations.join(",")
+            ));
+        }
     }
 
     // `--` marks the end of docker-create's own flags: without it, an
@@ -241,5 +362,76 @@ mod tests {
 
         let dash_dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(&args[dash_dash_pos + 1..], &["alpine:latest", "sleep", "5"]);
+    }
+
+    #[test]
+    fn default_spec_uses_network_none_without_proxy_env() {
+        let spec = spec_with("alpine:latest", vec!["true"]);
+        let args = build_create_args(&spec, "c", &PathBuf::from("/tmp/ws"));
+        let flags: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+        assert!(flags.windows(2).any(|w| w == ["--network", "none"]));
+        assert!(!flags.iter().any(|a| a.contains("HTTP_PROXY")));
+        assert!(!flags.contains(&"--add-host"));
+    }
+
+    #[test]
+    fn egress_proxy_forces_bridge_proxy_env_and_host_gateway_for_loopback() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.network.egress_proxy_url = Some("http://127.0.0.1:8888".to_string());
+        // Tenant tries to point proxy elsewhere — must be stripped/overridden.
+        spec.environment.insert(
+            "HTTP_PROXY".to_string(),
+            "http://evil.example:1".to_string(),
+        );
+        spec.environment
+            .insert("AEGIS_RUN_ID".to_string(), "run_1".to_string());
+        spec.network.allowed_destinations = vec!["api.example.com".to_string()];
+
+        let args = build_create_args(&spec, "c", &PathBuf::from("/tmp/ws"));
+        let flags: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        assert!(flags.windows(2).any(|w| w == ["--network", "bridge"]));
+        assert!(flags
+            .windows(2)
+            .any(|w| { w[0] == "--add-host" && w[1] == "host.docker.internal:host-gateway" }));
+        assert!(flags.contains(&"HTTP_PROXY=http://host.docker.internal:8888"));
+        assert!(flags.contains(&"HTTPS_PROXY=http://host.docker.internal:8888"));
+        assert!(flags.contains(&"NO_PROXY="));
+        assert!(!flags.iter().any(|a| a.contains("evil.example")));
+        assert!(flags.contains(&"AEGIS_RUN_ID=run_1"));
+        assert!(flags.contains(&"AEGIS_EGRESS_ALLOWED_DESTINATIONS=api.example.com"));
+    }
+
+    #[test]
+    fn non_loopback_proxy_url_is_not_rewritten() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.network.egress_proxy_url = Some("http://aegis-egress-proxy:8888".to_string());
+        let args = build_create_args(&spec, "c", &PathBuf::from("/tmp/ws"));
+        let flags: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+        assert!(flags.windows(2).any(|w| w == ["--network", "bridge"]));
+        assert!(!flags.iter().any(|a| a.starts_with("--add-host")));
+        assert!(flags.contains(&"HTTP_PROXY=http://aegis-egress-proxy:8888"));
+    }
+
+    #[test]
+    fn rewrite_loopback_proxy_for_container_covers_localhost_variants() {
+        let (u, gw) = rewrite_loopback_proxy_for_container("http://localhost:18080");
+        assert!(gw);
+        assert_eq!(u, "http://host.docker.internal:18080");
+        let (u2, gw2) = rewrite_loopback_proxy_for_container("https://10.0.0.5:8888");
+        assert!(!gw2);
+        assert_eq!(u2, "https://10.0.0.5:8888");
     }
 }
