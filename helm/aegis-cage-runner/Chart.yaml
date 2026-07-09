@@ -1,0 +1,19 @@
+apiVersion: v2
+name: aegis-cage-runner
+description: >
+  AegisAgent disposable sandbox executor — claims gateway-registered cage runs
+  and executes them via Docker. Separate process/image from the gateway
+  (docs/AegisAgent_Agent_Cage.md). Horizontal scale = more replicas racing
+  claim_agent_run, not multi-run concurrency inside one pod.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/lavkushry/AegisAgent
+sources:
+  - https://github.com/lavkushry/AegisAgent
+keywords:
+  - ai-agent-security
+  - agent-cage
+  - sandbox
+maintainers:
+  - name: AegisAgent

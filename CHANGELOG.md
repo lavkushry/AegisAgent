@@ -29,6 +29,9 @@ All notable changes to this project are documented here. The format is based on
   + mounted `docker.sock`), example TOML, and opt-in `docker-compose.full.yml`
   profile `cage`. The execution binary already existed; packaging + docs
   catch up so local full-stack can start a claim/execute loop.
+- **Cage-runner Helm chart** — `helm/aegis-cage-runner/` Deployment with
+  ConfigMap, Secret, optional PVC, hostPath docker.sock; CI `helm lint` /
+  `helm template` coverage.
 
 ### Performance
 
