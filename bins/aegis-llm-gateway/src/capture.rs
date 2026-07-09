@@ -84,14 +84,8 @@ pub fn parse_response_meta(body: &[u8]) -> ResponseMeta {
         .get("model")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let token_counts = value.get("usage").cloned().and_then(|u| {
-        // Only ship object-shaped usage; ignore unexpected shapes.
-        if u.is_object() {
-            Some(u)
-        } else {
-            None
-        }
-    });
+    // Only ship object-shaped usage; ignore unexpected shapes.
+    let token_counts = value.get("usage").cloned().filter(|u| u.is_object());
     ResponseMeta {
         model,
         token_counts,
