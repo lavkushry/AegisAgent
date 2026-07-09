@@ -1,10 +1,12 @@
-import { DEFAULT_DATASOURCE_ID } from "@/datasources/registry";
+import {
+  DEFAULT_DATASOURCE_ID,
+  SOC_QUERY_DATASOURCE_ID,
+} from "@/datasources/registry";
 import type { DashboardSchema } from "../schema";
 
 /**
  * SOC Overview — schema-driven landing board.
- * Phase B: gateway-entity snapshots + list entities only
- * (timeseries/count_by aggregates → Phase C soc-query).
+ * Snapshots/lists via gateway-entity; decision volume via soc-query timeseries.
  */
 export const overviewDashboard: DashboardSchema = {
   uid: "overview",
@@ -142,6 +144,35 @@ export const overviewDashboard: DashboardSchema = {
           },
           w: 2,
           h: 1,
+        },
+      ],
+    },
+    {
+      id: "volume",
+      title: "Decision volume",
+      panels: [
+        {
+          panel: {
+            id: "ts-decisions",
+            type: "timeseries",
+            title: "Decisions over time",
+            datasourceId: SOC_QUERY_DATASOURCE_ID,
+            entity: "decision",
+            aggregate: "count_over_time",
+            interval: "hour",
+            options: {
+              timeField: "bucket",
+              valueField: "count",
+            },
+            drilldowns: [
+              {
+                label: "Explore decisions",
+                target: { kind: "explore", aqlTemplate: "decision:*" },
+              },
+            ],
+          },
+          w: 12,
+          h: 3,
         },
       ],
     },

@@ -5,7 +5,7 @@ import StatusPanel from "./standard/StatusPanel";
 import FeedPanel from "./standard/FeedPanel";
 import NotePanel from "./standard/NotePanel";
 import HeatmapPlaceholder from "./standard/HeatmapPlaceholder";
-import TimeSeriesPlaceholder from "./standard/TimeSeriesPlaceholder";
+import TimeSeriesPanel from "./standard/TimeSeriesPanel";
 
 const entries: PanelRegistryEntry[] = [
   {
@@ -22,7 +22,7 @@ const entries: PanelRegistryEntry[] = [
   },
   {
     type: "timeseries",
-    Component: TimeSeriesPlaceholder as PanelRegistryEntry["Component"],
+    Component: TimeSeriesPanel as PanelRegistryEntry["Component"],
     defaultOptions: {},
     chartLib: "none",
   },
