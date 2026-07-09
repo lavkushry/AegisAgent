@@ -252,12 +252,13 @@ Initial Docker implementation (`aegis-cage-runner` / `docker_cli`):
 
 - **Default:** `--network none` (no egress at all) when `egress_proxy_url` is unset
 - **Forced proxy mode:** when `network.egress_proxy_url` is set:
-  - `--network bridge` so the sandbox can reach the proxy
+  - create a **per-sandbox Docker bridge with IP masquerade disabled** (`aegis-cage-<sandbox_id>`) so Docker NAT cannot provide free public Internet for raw sockets
   - force-inject `HTTP_PROXY` / `HTTPS_PROXY` / empty `NO_PROXY` (tenant values for those keys are stripped)
   - rewrite loopback proxy hosts to `host.docker.internal` + `--add-host host.docker.internal:host-gateway`
   - surface `allowed_destinations` as `AEGIS_EGRESS_ALLOWED_DESTINATIONS` (proxy must still enforce allowlist via `--allow-domain` / gateway check)
+  - remove the network on sandbox destroy
 - `direct_internet: true` is rejected at validate time (gateway + runner)
-- **Residual:** bridge + env force is soft force — raw sockets can bypass HTTP_PROXY until transparent proxy / internal network + sidecar lands
+- **Residual:** host-local routes may still reach the Docker host; full transparent iptables REDIRECT inside the netns remains a follow-up
 
 ### 9.2 Kubernetes approach
 

@@ -49,7 +49,7 @@ Strongest current capabilities:
 
 - cage narrative e2e residual hardening / transparent egress (P1; soft force + wave-a script done)
 - sensor real telemetry + host enforce (P0)
-- transparent / netns forced egress (no raw-socket bypass) (P1 residual; soft force + narrative e2e done)
+- transparent iptables REDIRECT forced egress (P1 residual; no-masquerade network + proxy env done)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
 - full Phase 9 console (cage, ban/quarantine centers, runtime timelines) (P2)

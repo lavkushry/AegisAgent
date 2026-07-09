@@ -58,8 +58,11 @@ const FORCED_PROXY_ENV_KEYS: &[&str] = &[
 /// How the sandbox reaches the egress proxy (if any).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EgressNetworkPlan {
-    /// Docker `--network` value: `none` (no egress) or `bridge` (proxy path).
-    docker_network: &'static str,
+    /// Docker `--network` value: `none`, or a dedicated no-masquerade
+    /// network name created for this sandbox.
+    docker_network: String,
+    /// When true, `create` must `docker network create` this name first.
+    create_isolated_network: bool,
     /// Proxy URL injected into the container (loopback rewritten for Docker).
     proxy_url: Option<String>,
     /// When true, add `host.docker.internal:host-gateway` so containers can
@@ -67,18 +70,37 @@ struct EgressNetworkPlan {
     add_host_gateway: bool,
 }
 
+/// Stable Docker network name for a sandbox's forced-egress path.
+/// Docker allows `[a-zA-Z0-9][a-zA-Z0-9_.-]*`.
+pub fn egress_network_name(sandbox_id: &str) -> String {
+    let safe: String = sandbox_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("aegis-cage-{safe}")
+}
+
 /// Plan forced egress for a validated [`SandboxSpec`].
 ///
 /// | `egress_proxy_url` | Docker network | Proxy env |
 /// |--------------------|----------------|-----------|
 /// | unset              | `none`         | none (no egress at all) |
-/// | set                | `bridge`       | forced HTTP(S)_PROXY to that URL |
+/// | set                | per-sandbox bridge with **IP masquerade disabled** | forced HTTP(S)_PROXY |
 ///
-/// Residual: with `bridge`, a malicious process can still open raw sockets
-/// that bypass HTTP_PROXY. Hard network isolation (internal netns + sidecar,
-/// or always-on transparent proxy) remains a follow-up. Soft forced egress
-/// still beats open internet: cooperative HTTP clients and most agent SDKs
-/// honor the injected proxy, and `direct_internet` stays forbidden.
+/// Disabling masquerade means the sandbox cannot SNAT to the public Internet
+/// for raw TCP/UDP — only host-reachable destinations (e.g. the egress proxy
+/// via `host.docker.internal`) remain usable. Cooperative clients still use
+/// the forced proxy env; raw sockets no longer get a free ride through NAT.
+///
+/// Residual: host-local services on the Docker host remain reachable if
+/// routed; full transparent iptables REDIRECT inside the netns is still a
+/// follow-up for absolute force.
 fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
     let raw = spec
         .network
@@ -89,17 +111,58 @@ fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
 
     match raw {
         None => EgressNetworkPlan {
-            docker_network: "none",
+            docker_network: "none".to_string(),
+            create_isolated_network: false,
             proxy_url: None,
             add_host_gateway: false,
         },
         Some(url) => {
             let (container_url, add_host_gateway) = rewrite_loopback_proxy_for_container(url);
             EgressNetworkPlan {
-                docker_network: "bridge",
+                docker_network: egress_network_name(&spec.sandbox_id),
+                create_isolated_network: true,
                 proxy_url: Some(container_url),
                 add_host_gateway,
             }
+        }
+    }
+}
+
+/// Create a per-sandbox bridge with IP masquerade **off** so containers
+/// cannot reach arbitrary public destinations via Docker NAT.
+pub async fn create_egress_network(network_name: &str) -> Result<(), CageError> {
+    run_docker(&[
+        "network".to_string(),
+        "create".to_string(),
+        "--driver".to_string(),
+        "bridge".to_string(),
+        "--opt".to_string(),
+        "com.docker.network.bridge.enable_ip_masquerade=false".to_string(),
+        network_name.to_string(),
+    ])
+    .await
+    .map(|_| ())
+}
+
+/// Best-effort remove of a per-sandbox egress network (after container rm).
+pub async fn remove_network(network_name: &str) -> Result<(), CageError> {
+    match run_docker(&[
+        "network".to_string(),
+        "rm".to_string(),
+        network_name.to_string(),
+    ])
+    .await
+    {
+        Ok(_) => Ok(()),
+        // Already gone / still has endpoints — destroy path is best-effort.
+        Err(CageError::Runtime(msg))
+            if msg.contains("not found") || msg.contains("No such network") =>
+        {
+            Ok(())
+        }
+        Err(e) => {
+            tracing::warn!(network = %network_name, error = %e, "failed to remove cage egress network");
+            Ok(())
         }
     }
 }
@@ -130,22 +193,21 @@ fn rewrite_loopback_proxy_for_container(proxy_url: &str) -> (String, bool) {
 /// `docs/AegisAgent_Agent_Cage.md` §8–9:
 /// - no Docker socket / host home mounts
 /// - no `direct_internet` (spec-validated)
-/// - default `--network none`; bridge only when an egress proxy URL is set
+/// - default `--network none`; dedicated no-masquerade network when proxy set
 /// - forced `HTTP_PROXY`/`HTTPS_PROXY` when proxy mode is active
 /// - `--read-only` when requested, resource caps, `--` end-of-options
 fn build_create_args(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
+    egress: &EgressNetworkPlan,
 ) -> Vec<String> {
-    let egress = plan_egress_network(spec);
-
     let mut args = vec![
         "create".to_string(),
         "--name".to_string(),
         container_name.to_string(),
         "--network".to_string(),
-        egress.docker_network.to_string(),
+        egress.docker_network.clone(),
         "--pids-limit".to_string(),
         spec.resources.process_limit.to_string(),
         "--memory".to_string(),
@@ -214,15 +276,34 @@ fn build_create_args(
 }
 
 /// `docker create` — allocates the container without starting it, so the
-/// caller controls exactly when it begins running. Returns the backend
-/// container ID.
+/// caller controls exactly when it begins running. Returns
+/// `(container_id, optional_network_name_to_cleanup)`.
 pub async fn create(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
-) -> Result<String, CageError> {
-    let args = build_create_args(spec, container_name, workspace_dir);
-    run_docker(&args).await
+) -> Result<(String, Option<String>), CageError> {
+    let egress = plan_egress_network(spec);
+    if egress.create_isolated_network {
+        create_egress_network(&egress.docker_network).await?;
+    }
+    let args = build_create_args(spec, container_name, workspace_dir, &egress);
+    match run_docker(&args).await {
+        Ok(id) => {
+            let net = if egress.create_isolated_network {
+                Some(egress.docker_network)
+            } else {
+                None
+            };
+            Ok((id, net))
+        }
+        Err(e) => {
+            if egress.create_isolated_network {
+                let _ = remove_network(&egress.docker_network).await;
+            }
+            Err(e)
+        }
+    }
 }
 
 pub async fn start(container_id: &str) -> Result<(), CageError> {
@@ -340,7 +421,12 @@ mod tests {
     #[test]
     fn end_of_options_marker_precedes_the_image_ref() {
         let spec = spec_with("--privileged", vec!["--pid=host", "alpine"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
 
         let dash_dash_pos = args
             .iter()
@@ -358,7 +444,12 @@ mod tests {
     #[test]
     fn normal_image_ref_and_command_are_placed_after_the_marker() {
         let spec = spec_with("alpine:latest", vec!["sleep", "5"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
 
         let dash_dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(&args[dash_dash_pos + 1..], &["alpine:latest", "sleep", "5"]);
@@ -367,7 +458,12 @@ mod tests {
     #[test]
     fn default_spec_uses_network_none_without_proxy_env() {
         let spec = spec_with("alpine:latest", vec!["true"]);
-        let args = build_create_args(&spec, "c", &PathBuf::from("/tmp/ws"));
+        let args = build_create_args(
+            &spec,
+            "c",
+            &PathBuf::from("/tmp/ws"),
+            &plan_egress_network(&spec),
+        );
         let flags: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
@@ -391,14 +487,22 @@ mod tests {
             .insert("AEGIS_RUN_ID".to_string(), "run_1".to_string());
         spec.network.allowed_destinations = vec!["api.example.com".to_string()];
 
-        let args = build_create_args(&spec, "c", &PathBuf::from("/tmp/ws"));
+        let args = build_create_args(
+            &spec,
+            "c",
+            &PathBuf::from("/tmp/ws"),
+            &plan_egress_network(&spec),
+        );
         let flags: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
             .map(String::as_str)
             .collect();
 
-        assert!(flags.windows(2).any(|w| w == ["--network", "bridge"]));
+        assert!(flags
+            .windows(2)
+            .any(|w| w[0] == "--network" && w[1].starts_with("aegis-cage-")));
+        assert!(plan_egress_network(&spec).create_isolated_network);
         assert!(flags
             .windows(2)
             .any(|w| { w[0] == "--add-host" && w[1] == "host.docker.internal:host-gateway" }));
@@ -414,15 +518,30 @@ mod tests {
     fn non_loopback_proxy_url_is_not_rewritten() {
         let mut spec = spec_with("alpine:latest", vec!["true"]);
         spec.network.egress_proxy_url = Some("http://aegis-egress-proxy:8888".to_string());
-        let args = build_create_args(&spec, "c", &PathBuf::from("/tmp/ws"));
+        let args = build_create_args(
+            &spec,
+            "c",
+            &PathBuf::from("/tmp/ws"),
+            &plan_egress_network(&spec),
+        );
         let flags: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
             .map(String::as_str)
             .collect();
-        assert!(flags.windows(2).any(|w| w == ["--network", "bridge"]));
+        assert!(flags
+            .windows(2)
+            .any(|w| w[0] == "--network" && w[1].starts_with("aegis-cage-")));
+        assert!(plan_egress_network(&spec).create_isolated_network);
         assert!(!flags.iter().any(|a| a.starts_with("--add-host")));
         assert!(flags.contains(&"HTTP_PROXY=http://aegis-egress-proxy:8888"));
+    }
+
+    #[test]
+    fn egress_network_name_is_docker_safe() {
+        assert_eq!(egress_network_name("sandbox_1"), "aegis-cage-sandbox_1");
+        assert!(egress_network_name("a/b:c").starts_with("aegis-cage-"));
+        assert!(!egress_network_name("a/b:c").contains('/'));
     }
 
     #[test]
