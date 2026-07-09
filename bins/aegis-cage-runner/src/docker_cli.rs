@@ -364,7 +364,7 @@ mod tests {
             .collect();
 
         assert!(!flags_before_image.contains(&"--read-only"));
-        assert!(!flags_before_image.iter().any(|a| *a == "--tmpfs"));
+        assert!(!flags_before_image.contains(&"--tmpfs"));
         // Hardening still applies when rootfs is writable.
         assert!(flags_before_image
             .windows(2)
