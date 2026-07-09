@@ -84,6 +84,11 @@ pub struct RegisterMcpServerRequest {
     pub source: Option<String>,
     pub trust_level: String,
     pub endpoint: String,
+    /// Optional Ed25519 public key (hex) to pin for this server's manifest
+    /// discovery calls from registration onward. See
+    /// [`McpServerRecord::manifest_signing_public_key`].
+    #[serde(default)]
+    pub manifest_signing_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -107,6 +112,12 @@ pub struct McpToolManifestItem {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DiscoverMcpToolsRequest {
     pub tools: Vec<McpToolManifestItem>,
+    /// Hex-encoded Ed25519 signature over the order-independent canonical
+    /// hash of `tools` (see `mcp_manifest_signed_hash`). Required and
+    /// verified against the server's `manifest_signing_public_key` if one is
+    /// pinned; ignored (and may be omitted) if the server has no pinned key.
+    #[serde(default)]
+    pub manifest_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
@@ -502,6 +513,14 @@ pub struct McpServerRecord {
     /// to `false` — inspection only runs once explicitly enabled.
     #[serde(default)]
     pub inspection_enabled: bool,
+    /// Optional Ed25519 public key (hex) pinned for this server's manifest
+    /// discovery calls. `None` (default) = unsigned, trust-on-first-use
+    /// discovery, unchanged from pre-existing behavior. Once set, `POST
+    /// /v1/mcp/servers/:server_key/tools` requires a valid
+    /// `manifest_signature` on every discovery call for this server and
+    /// fails closed (403) on a missing/invalid one.
+    #[serde(default)]
+    pub manifest_signing_public_key: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -1392,6 +1411,11 @@ pub struct UpdateMcpServerRequest {
     pub status: Option<String>,
     /// #1333: opt-in toggle for MCP response inspection.
     pub inspection_enabled: Option<bool>,
+    /// Pin/rotate/clear the per-server manifest-signing public key.
+    /// `Some(None)` clears it (reverting the server to unsigned discovery);
+    /// `Some(Some(hex))` sets/rotates it; field absent from the patch leaves
+    /// it untouched.
+    pub manifest_signing_public_key: Option<Option<String>>,
 }
 
 /// `POST /v1/mcp/servers/:server_key/inspect` (#1333) request body. The SDK

@@ -491,6 +491,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         endpoint: Option<&str>,
         status: Option<&str>,
         inspection_enabled: Option<bool>,
+        manifest_signing_public_key: Option<Option<&str>>,
     ) -> Result<Option<McpServerRecord>, AegisError>;
     async fn get_mcp_server_by_id(
         &self,

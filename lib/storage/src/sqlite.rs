@@ -733,6 +733,7 @@ impl StorageBackend for SqlDbStorage {
         endpoint: Option<&str>,
         status: Option<&str>,
         inspection_enabled: Option<bool>,
+        manifest_signing_public_key: Option<Option<&str>>,
     ) -> Result<Option<McpServerRecord>, AegisError> {
         db::update_mcp_server(
             &self.pool,
@@ -745,6 +746,7 @@ impl StorageBackend for SqlDbStorage {
             trust_level,
             endpoint,
             status,
+            manifest_signing_public_key,
         )
         .await
         .map_err(AegisError::Database)?;

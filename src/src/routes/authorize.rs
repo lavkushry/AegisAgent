@@ -6565,6 +6565,7 @@ mod tests {
             manifest_hash: String::new(),
             last_discovery_at: None,
             inspection_enabled: false,
+            manifest_signing_public_key: None,
             created_at: now,
         };
         let cache = McpServerCache::new(2);
@@ -6722,6 +6723,7 @@ mod tests {
                 source: None,
                 trust_level: "semi_trusted".to_string(),
                 endpoint: "http://localhost:5099".to_string(),
+                manifest_signing_public_key: None,
             }),
         )
         .await;

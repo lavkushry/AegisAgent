@@ -398,6 +398,12 @@ impl AdminService for AdminGrpcServiceImpl {
             },
             trust_level: req.trust_level,
             endpoint: req.endpoint,
+            // The gRPC admin API has no manifest-signing-key field in its
+            // .proto contract (lib/api/proto/admin.proto) — servers
+            // registered via gRPC always start unsigned; pin a key
+            // afterward via PATCH /v1/mcp/servers/:server_key over REST if
+            // desired.
+            manifest_signing_public_key: None,
         };
 
         let response = crate::routes::register_mcp_server(
@@ -455,6 +461,13 @@ impl AdminService for AdminGrpcServiceImpl {
                     approval_required: t.approval_required,
                 })
                 .collect(),
+            // No manifest-signature field in the gRPC .proto contract.
+            // Servers with no pinned signing key are unaffected; a server
+            // WITH a pinned key correctly fails closed (403) for gRPC-based
+            // discovery, since there's no way for this caller to supply a
+            // valid signature — consistent with the fail-closed invariant,
+            // not a bypass.
+            manifest_signature: None,
         };
 
         let response = crate::routes::discover_mcp_tools(

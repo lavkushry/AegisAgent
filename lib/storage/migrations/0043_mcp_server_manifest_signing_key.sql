@@ -1,0 +1,15 @@
+-- Optional Ed25519 public key (hex-encoded) pinned per MCP server, gating
+-- signature verification of that server's tool-manifest discovery calls
+-- (POST /v1/mcp/servers/:server_key/tools). Closes the trust-on-first-use
+-- gap in compute_mcp_manifest_hash-based drift detection: a forged manifest
+-- submitted before or during a server's first discovery was previously
+-- indistinguishable from a legitimate one, since only *subsequent* changes
+-- to an already-pinned manifest were caught as drift.
+--
+-- NULL (the default, and true for every pre-existing server) leaves
+-- discovery exactly as it behaves today -- unsigned, trust-on-first-use,
+-- drift-detected-after. Per-server opt-in, mirroring inspection_enabled
+-- (#1333) and agents.mtls_cn (#1310): different MCP servers have different
+-- operators, so there is no single gateway-wide signing key the way there
+-- is for Cedar policy bundles (AEGIS_POLICY_SIGNING_KEY, #1280).
+ALTER TABLE mcp_servers ADD COLUMN manifest_signing_public_key TEXT;

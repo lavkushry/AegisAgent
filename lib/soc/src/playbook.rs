@@ -266,6 +266,7 @@ pub async fn execute_step(
                     None,
                     Some("quarantined"),
                     None,
+                    None,
                 )
                 .await?;
             Ok(StepResult {
@@ -686,6 +687,7 @@ mod tests {
             manifest_hash: "".to_string(),
             last_discovery_at: None,
             inspection_enabled: false,
+            manifest_signing_public_key: None,
             created_at: chrono::Utc::now(),
         };
         aegis_storage::db::register_mcp_server(&pool, &mcp_server)

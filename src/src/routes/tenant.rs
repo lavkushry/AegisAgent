@@ -1241,6 +1241,7 @@ mod tests {
                 source: None,
                 trust_level: "trusted_internal_signed".to_string(),
                 endpoint: "stdio://test".to_string(),
+                manifest_signing_public_key: None,
             }),
         )
         .await;
