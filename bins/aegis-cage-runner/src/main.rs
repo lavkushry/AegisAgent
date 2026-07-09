@@ -410,14 +410,36 @@ async fn poll_and_process_run_commands(
         let new_status = match outcome {
             Ok(()) => {
                 tracing::info!(command_id = %cmd.command_id, action = %cmd.action, "command executed");
-                if cmd.action == "pause_run" {
-                    let _ = client
-                        .update_run_status(run_id, runner_id, "paused", None)
-                        .await;
-                } else if cmd.action == "resume_run" {
-                    let _ = client
-                        .update_run_status(run_id, runner_id, "running", None)
-                        .await;
+                // Report run lifecycle status so operators/e2e see the control
+                // outcome, not only the Docker "exited" → finished path from
+                // wait_or_kill_on_timeout (which cannot distinguish a signed
+                // kill from a clean process exit).
+                match cmd.action.as_str() {
+                    "pause_run" => {
+                        let _ = client
+                            .update_run_status(run_id, runner_id, "paused", None)
+                            .await;
+                    }
+                    "resume_run" => {
+                        let _ = client
+                            .update_run_status(run_id, runner_id, "running", None)
+                            .await;
+                    }
+                    "kill_run" | "quarantine_run" => {
+                        let _ = client
+                            .update_run_status(
+                                run_id,
+                                runner_id,
+                                if cmd.action == "quarantine_run" {
+                                    "quarantined"
+                                } else {
+                                    "killed"
+                                },
+                                Some(chrono::Utc::now()),
+                            )
+                            .await;
+                    }
+                    _ => {}
                 }
                 "acked"
             }
