@@ -9,6 +9,7 @@ import TimeSeriesPanel from "./standard/TimeSeriesPanel";
 import ApprovalCardPanel from "./differentiators/ApprovalCardPanel";
 import ProvableTimelinePanel from "./differentiators/ProvableTimelinePanel";
 import ReceiptIntegrityPanel from "./differentiators/ReceiptIntegrityPanel";
+import AgentRiskMapPanel from "./differentiators/AgentRiskMapPanel";
 
 const entries: PanelRegistryEntry[] = [
   {
@@ -69,6 +70,12 @@ const entries: PanelRegistryEntry[] = [
     type: "receipt-integrity",
     Component: ReceiptIntegrityPanel as PanelRegistryEntry["Component"],
     defaultOptions: { showExports: true, showRangeVerify: true },
+    chartLib: "none",
+  },
+  {
+    type: "agent-risk-map",
+    Component: AgentRiskMapPanel as PanelRegistryEntry["Component"],
+    defaultOptions: { maxRows: 10 },
     chartLib: "none",
   },
 ];

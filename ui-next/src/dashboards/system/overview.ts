@@ -234,6 +234,30 @@ export const overviewDashboard: DashboardSchema = {
       ],
     },
     {
+      id: "risk",
+      title: "Top risk",
+      panels: [
+        {
+          panel: {
+            id: "risk-map-top",
+            type: "agent-risk-map",
+            title: "Riskiest agents (24h, advisory)",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "agent-scoreboard",
+            options: { maxRows: 5 },
+            drilldowns: [
+              {
+                label: "Open agent",
+                target: { kind: "agent", agentIdField: "agent_id" },
+              },
+            ],
+          },
+          w: 12,
+          h: 3,
+        },
+      ],
+    },
+    {
       id: "feeds",
       title: "Live signals",
       panels: [
