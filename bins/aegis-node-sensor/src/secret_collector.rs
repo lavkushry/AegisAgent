@@ -14,7 +14,9 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 
-use crate::fs_collector::{is_reportable_path, open_paths_for_pid_in};
+use crate::fs_collector::is_reportable_path;
+#[cfg(target_os = "linux")]
+use crate::fs_collector::open_paths_for_pid_in;
 use crate::gateway_client::RuntimeEventPayload;
 use crate::process_collector::{scan_host_aegis_processes, DiscoveredProcess};
 use crate::spool::{Lane, SpoolQueue};
