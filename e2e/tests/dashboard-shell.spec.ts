@@ -105,4 +105,12 @@ test.describe("production SOC console shell (ui-next)", () => {
     await live.click();
     await expect(page.getByRole("button", { name: /Live( off)?/ })).toBeVisible();
   });
+
+  test("exposes skip-to-main-content target", async ({ page }) => {
+    await page.goto("/dashboard/");
+    await expect(page.locator("#main-content")).toHaveCount(1);
+    await expect(
+      page.getByRole("link", { name: "Skip to main content" }),
+    ).toHaveAttribute("href", "#main-content");
+  });
 });

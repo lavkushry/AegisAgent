@@ -474,5 +474,13 @@ export function resolveMockResponse(
     return { status: 404, body: { error: "not found" } };
   }
 
+  // Tenant dashboard editor (#1634 / Phase D)
+  if (path === "/v1/soc/dashboards") {
+    return { status: 200, body: [] };
+  }
+  if (path.startsWith("/v1/soc/dashboards/")) {
+    return { status: 404, body: { error: "not found" } };
+  }
+
   return null;
 }

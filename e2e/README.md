@@ -2,7 +2,7 @@
 
 Playwright browser tests for the production SOC console served at `/dashboard/`.
 
-**Production console:** Bun SPA (`ui-next/`). The gateway Docker image builds `ui-next` and serves it at `/dashboard/`. Specs target React Router routes, Settings form, Dark SOC shell, ControlsBar, and the dashboard editor.
+**Production console:** Bun SPA (`ui-next/`). The gateway Docker image builds `ui-next` and serves it at `/dashboard/`. Specs target React Router routes, Settings form, Dark SOC shell, ControlsBar, dashboard editor, and re-ported mocked workflows (#1638).
 
 ## Prerequisites
 
@@ -36,10 +36,10 @@ AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright test tests/dashboard-sh
 
 | Spec | Mode | Coverage |
 |------|------|----------|
-| `dashboard-shell.spec.ts` | Live gateway | CSP/CSRF, full nav (incl. Dashboards), ControlsBar time range + live |
+| `dashboard-shell.spec.ts` | Live gateway | CSP/CSRF, full nav (incl. Dashboards), ControlsBar, skip-to-main |
 | `dashboard-data.spec.ts` | Live gateway | Agents, MCP, Explore, Integrity, Approvals, Overview panels, agent detail, Detections/Rules/Alerting, dashboard editor validate |
 | `dashboard-evidence-graph.spec.ts` | Live gateway | Fleet inventory + bookmarkable agent detail |
-| `mocked-soc-workflows.spec.ts` | (skipped) | Legacy Next panel mocks (#1638) — re-port tracked separately |
+| `mocked-soc-workflows.spec.ts` | Mocked `/v1/*` | Overview stats, tenant isolation, approve + secret redaction, integrity verify, explore, freeze, MCP quarantine, detections, dashboard validate |
 | `soc-security.spec.ts` | Live gateway | Freeze confirm dialog, operator id field |
 
 Mock fixtures live in `e2e/fixtures/`. They use fake credentials only (`fake-bearer-e2e-only`).
@@ -51,5 +51,5 @@ The `Dashboard E2E (Playwright)` job in `.github/workflows/ci.yml` builds Docker
 ## Guardrails
 
 - `e2e/fixtures/guardedTest.ts` fails tests on browser `console.error` and uncaught page exceptions.
-- Mocked suites assert `unhandled` gateway routes stay empty (no silent 501s) when re-enabled.
+- Mocked suites assert `unhandled` gateway routes stay empty (no silent 501s).
 - `assertNoSecrets()` scans the DOM for fixture secrets and `[REDACTED]` expectations.
