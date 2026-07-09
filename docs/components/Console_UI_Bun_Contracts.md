@@ -64,8 +64,23 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | Explore | `GET /v1/decisions?limit=&q=&agent_id=&decision=&source_trust=&skill=` |
 | Agents | `GET /v1/agents`; `POST …/freeze|unfreeze|restore|revoke` |
 | Incidents | `GET /v1/incidents`; `GET /v1/incidents/:id`; `GET …/evidence-pack` |
+| Evidence graph | `GET /v1/graph/incident/:id`; `GET /v1/graph/agent/:id`; `GET /v1/graph/run/:id` |
+| SOC analytics | `POST /v1/soc/query` (`count_over_time`, `count_by`) |
+| Agent risk scoreboard | `GET /v1/agents/risk-scoreboard` (advisory composite score) |
 | MCP | `GET /v1/mcp/servers`; tools; quarantine/restore |
 | Tenant dashboards | `GET/POST /v1/soc/dashboards`; `GET/PUT/DELETE /v1/soc/dashboards/:uid` |
+
+## 4b. Panel suite (complete)
+
+Allowlisted `PanelType` values are all registered in `ui-next/src/panels/registry.ts`. Product inventory: [Console_UI.md §3](./Console_UI.md).
+
+| Class | Types |
+|---|---|
+| Standard | `stat`, `table`, `timeseries`, `heatmap`, `status`, `feed`, `note` |
+| Differentiators ★ | `approval-card`, `provable-timeline`, `receipt-integrity` |
+| Fleet / investigation | `agent-risk-map`, `decision-graph` |
+
+Typed but unused in the editor catalog until needed: `agent-table` (alias of table patterns). Chart rendering is pure SVG (no uPlot/ECharts dependency yet).
 
 ## 5. Build commands
 
@@ -91,9 +106,12 @@ bun run build
 | Re-port mocked workflows (#1638) | **Done (Phase F)** — `e2e/tests/mocked-soc-workflows.spec.ts` against ui-next |
 | Display secret redaction | **Done (Phase F)** — `ui-next/src/lib/redact.ts` on Approvals tool-call previews |
 | A11y baseline | **Done (Phase F)** — skip link, `main#main-content`, Settings `aria-label`s, reduced-motion |
-| System catalog (10 boards) | **Done** — copy-only templates in `ui-next/src/dashboards/system/` |
+| System catalog (10 boards) | **Done** — copy-only templates in `ui-next/src/dashboards/system/` (#1815–#1820) |
 | Lazy routes + error boundary | **Done** — feature chunks + `RouteErrorBoundary` |
 | Playwright freeze/confirm fixes | **Done** — exact control names + ui-next Confirm labels |
+| Chart panels (`timeseries`, `heatmap`) | **Done** — pure SVG + `soc-query` (#1821–#1822) |
+| Differentiator panels ★ | **Done** — approval-card, provable-timeline, receipt-integrity (#1824–#1826) |
+| Fleet / evidence graph panels | **Done** — agent-risk-map, decision-graph (#1827–#1828) |
 
 ### 6.1 System dashboard catalog (editor)
 

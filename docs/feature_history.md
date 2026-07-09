@@ -13,7 +13,12 @@ Production SOC console is **`ui-next/`** (Bun + Vite + React 19 SPA at `/dashboa
 | 0–5 | Scaffold, P0 surfaces, cutover | #1798–#1802 |
 | A–D | AQL, panels, ControlsBar, editor | #1803–#1807 |
 | E–F | Playwright expansion, Next delete, a11y/redact/mocks | #1808–#1809 |
-| Post | Lazy routes, E2E locator fixes, system catalog (10 boards) | #1810–#1819 |
+| Post catalog | Lazy routes, E2E fixes, **10 system boards** | #1810–#1820 |
+| Charts | `soc-query` timeseries + heatmap (pure SVG) | #1821–#1822 |
+| Differentiators ★ | `approval-card`, `provable-timeline`, `receipt-integrity` | #1824–#1826 |
+| Fleet graphs | `agent-risk-map`, `decision-graph` (evidence graph SVG) | #1827–#1828 |
+
+**Panel allowlist complete** — every `PanelType` in `ui-next/src/panels/types.ts` that the editor allows is registered (standard + differentiators + risk map + decision graph). See [`docs/components/Console_UI.md`](components/Console_UI.md).
 
 Contracts: [`docs/components/Console_UI_Bun_Contracts.md`](components/Console_UI_Bun_Contracts.md).
 
