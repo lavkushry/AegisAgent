@@ -2,6 +2,7 @@ import { test, expect } from "../fixtures/guardedTest";
 import {
   createAllowedDecision,
   createPendingApproval,
+  agentControlButton,
   openConfiguredConsole,
   openNav,
   registerTestAgent,
@@ -28,7 +29,7 @@ test.describe("production SOC console data workflows (ui-next)", () => {
     await openNav(page, "Agents");
     const row = page.getByRole("row").filter({ hasText: agent.agentKey });
     await expect(row).toBeVisible({ timeout: 15_000 });
-    await expect(row.getByRole("button", { name: "freeze" })).toBeVisible();
+    await expect(agentControlButton(row, "freeze")).toBeVisible();
   });
 
   test("MCP registry renders a newly registered server", async ({

@@ -1,5 +1,6 @@
 import { test, expect } from "../fixtures/guardedTest";
 import {
+  agentControlButton,
   confirmDangerousAction,
   openConfiguredConsole,
   openNav,
@@ -24,7 +25,7 @@ test.describe("SOC console security (ui-next)", () => {
     await openNav(page, "Agents");
     const row = page.getByRole("row").filter({ hasText: agent.agentKey });
     await expect(row).toBeVisible({ timeout: 15_000 });
-    await row.getByRole("button", { name: "freeze" }).click();
+    await agentControlButton(row, "freeze").click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText(/Confirm freeze/i)).toBeVisible();
@@ -46,7 +47,7 @@ test.describe("SOC console security (ui-next)", () => {
     await openNav(page, "Agents");
     const row = page.getByRole("row").filter({ hasText: agent.agentKey });
     await expect(row).toBeVisible({ timeout: 15_000 });
-    await row.getByRole("button", { name: "freeze" }).click();
+    await agentControlButton(row, "freeze").click();
     await confirmDangerousAction(page, "e2e freeze test", /Confirm freeze/i);
     // Status may update after invalidate; tolerate network failure messaging.
     await expect(
