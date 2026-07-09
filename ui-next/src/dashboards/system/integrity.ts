@@ -22,7 +22,7 @@ export const integrityDashboard: DashboardSchema = {
             title: "Receipt chain",
             datasourceId: DEFAULT_DATASOURCE_ID,
             options: {
-              body: "Verifiable hash-chained action receipts. Use the Integrity page controls to verify range or export evidence packs. This board is a copyable template for tenant dashboards.",
+              body: "Verifiable hash-chained action receipts. Verify chain / per-row Verify below; export evidence packs on the Integrity page. This board is a copyable template for tenant dashboards.",
             },
           },
           w: 12,
@@ -31,28 +31,20 @@ export const integrityDashboard: DashboardSchema = {
       ],
     },
     {
-      id: "receipts",
-      title: "Recent receipts",
+      id: "timeline",
+      title: "Provable timeline",
       panels: [
         {
           panel: {
-            id: "table-receipts",
-            type: "table",
-            title: "Receipt log",
+            id: "timeline-receipts",
+            type: "provable-timeline",
+            title: "Hash-chained receipts",
             datasourceId: DEFAULT_DATASOURCE_ID,
             entity: "receipt",
             limit: 25,
             options: {
-              columns: [
-                "id",
-                "decision",
-                "agent_id",
-                "source_trust",
-                "receipt_hash",
-                "prev_receipt_hash",
-                "ts",
-              ],
               maxRows: 25,
+              showRangeVerify: true,
             },
             drilldowns: [
               {
@@ -62,7 +54,7 @@ export const integrityDashboard: DashboardSchema = {
             ],
           },
           w: 12,
-          h: 5,
+          h: 6,
         },
       ],
     },

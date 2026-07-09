@@ -7,6 +7,7 @@ import NotePanel from "./standard/NotePanel";
 import HeatmapPanel from "./standard/HeatmapPanel";
 import TimeSeriesPanel from "./standard/TimeSeriesPanel";
 import ApprovalCardPanel from "./differentiators/ApprovalCardPanel";
+import ProvableTimelinePanel from "./differentiators/ProvableTimelinePanel";
 
 const entries: PanelRegistryEntry[] = [
   {
@@ -55,6 +56,12 @@ const entries: PanelRegistryEntry[] = [
     type: "approval-card",
     Component: ApprovalCardPanel as PanelRegistryEntry["Component"],
     defaultOptions: { maxCards: 6, interactive: true },
+    chartLib: "none",
+  },
+  {
+    type: "provable-timeline",
+    Component: ProvableTimelinePanel as PanelRegistryEntry["Component"],
+    defaultOptions: { maxRows: 25, showRangeVerify: true },
     chartLib: "none",
   },
 ];
