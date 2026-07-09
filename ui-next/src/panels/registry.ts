@@ -4,7 +4,7 @@ import TablePanel from "./standard/TablePanel";
 import StatusPanel from "./standard/StatusPanel";
 import FeedPanel from "./standard/FeedPanel";
 import NotePanel from "./standard/NotePanel";
-import HeatmapPlaceholder from "./standard/HeatmapPlaceholder";
+import HeatmapPanel from "./standard/HeatmapPanel";
 import TimeSeriesPanel from "./standard/TimeSeriesPanel";
 
 const entries: PanelRegistryEntry[] = [
@@ -46,7 +46,7 @@ const entries: PanelRegistryEntry[] = [
   },
   {
     type: "heatmap",
-    Component: HeatmapPlaceholder as PanelRegistryEntry["Component"],
+    Component: HeatmapPanel as PanelRegistryEntry["Component"],
     defaultOptions: {},
     chartLib: "none",
   },

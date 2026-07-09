@@ -177,23 +177,59 @@ export const overviewDashboard: DashboardSchema = {
       ],
     },
     {
-      id: "trust",
-      title: "Trust provenance",
+      id: "facets",
+      title: "Decision mix",
       panels: [
         {
           panel: {
-            id: "table-trust-distribution",
-            type: "table",
-            title: "Trust level distribution",
-            datasourceId: DEFAULT_DATASOURCE_ID,
-            snapshot: "trust-breakdown",
+            id: "hm-decision",
+            type: "heatmap",
+            title: "By decision",
+            datasourceId: SOC_QUERY_DATASOURCE_ID,
+            entity: "decision",
+            aggregate: "count_by",
+            groupBy: "decision",
+            limit: 8,
             options: {
-              columns: ["trust_level", "count"],
-              maxRows: 6,
+              categoryField: "value",
+              valueField: "count",
             },
+            drilldowns: [
+              {
+                label: "Explore denials",
+                target: { kind: "explore", aqlTemplate: "decision:deny" },
+              },
+            ],
           },
-          w: 12,
-          h: 2,
+          w: 6,
+          h: 3,
+        },
+        {
+          panel: {
+            id: "hm-trust",
+            type: "heatmap",
+            title: "By source trust",
+            datasourceId: SOC_QUERY_DATASOURCE_ID,
+            entity: "decision",
+            aggregate: "count_by",
+            groupBy: "source_trust",
+            limit: 8,
+            options: {
+              categoryField: "value",
+              valueField: "count",
+            },
+            drilldowns: [
+              {
+                label: "Explore untrusted",
+                target: {
+                  kind: "explore",
+                  aqlTemplate: "source_trust:untrusted_external",
+                },
+              },
+            ],
+          },
+          w: 6,
+          h: 3,
         },
       ],
     },
