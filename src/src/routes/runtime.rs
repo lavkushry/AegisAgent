@@ -1503,6 +1503,96 @@ mod tests {
         assert_eq!(response2.status(), StatusCode::CONFLICT);
     }
 
+    /// Smoke: create (with signed start_run) → claim → heartbeat → status running → finished.
+    /// Mirrors the gateway side of `aegis-cage-runner` without invoking Docker.
+    #[tokio::test]
+    async fn cage_run_lifecycle_create_claim_heartbeat_status() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_lifecycle_smoke",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+        let run = create_cage_run(&state, &tenant_id, "run-lifecycle-smoke").await;
+        assert_eq!(run.status, "started");
+        assert!(run.image_ref.is_some());
+
+        let commands = state
+            .storage
+            .list_control_commands(&tenant_id, 50, 0)
+            .await
+            .unwrap();
+        assert!(
+            commands
+                .iter()
+                .any(|c| c.target_id == run.id && c.action == "start_run" && c.status == "issued"),
+            "start_run command must be issued for cage_spec runs"
+        );
+
+        let runner = "smoke-runner-1";
+        let response = claim_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunnerIdRequest {
+                runner_id: runner.to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let claimed: AgentRunRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(claimed.status, "claimed");
+        assert_eq!(claimed.claimed_by.as_deref(), Some(runner));
+
+        let hb = heartbeat_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunnerIdRequest {
+                runner_id: runner.to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(hb.status(), StatusCode::OK);
+
+        let running = update_run_status(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(UpdateRunStatusRequest {
+                runner_id: runner.to_string(),
+                status: "running".to_string(),
+                finished_at: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(running.status(), StatusCode::OK);
+        let body = to_bytes(running.into_body(), usize::MAX).await.unwrap();
+        let running_rec: AgentRunRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(running_rec.status, "running");
+
+        let finished = update_run_status(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(UpdateRunStatusRequest {
+                runner_id: runner.to_string(),
+                status: "finished".to_string(),
+                finished_at: Some(Utc::now()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(finished.status(), StatusCode::OK);
+        let body = to_bytes(finished.into_body(), usize::MAX).await.unwrap();
+        let done: AgentRunRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(done.status, "finished");
+        assert!(done.finished_at.is_some());
+    }
+
     #[tokio::test]
     async fn claim_run_404s_for_an_unknown_run() {
         let (state, tenant_id, _agent_token) = setup_state("cage_claim_unknown").await;

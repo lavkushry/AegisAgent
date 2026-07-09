@@ -32,6 +32,10 @@ All notable changes to this project are documented here. The format is based on
 - **Cage-runner Helm chart** — `helm/aegis-cage-runner/` Deployment with
   ConfigMap, Secret, optional PVC, hostPath docker.sock; CI `helm lint` /
   `helm template` coverage.
+- **Cage claim-path smoke** — gateway unit test
+  `cage_run_lifecycle_create_claim_heartbeat_status` and
+  `scripts/cage-smoke.sh` (HTTP create → start_run → claim → heartbeat →
+  status; no Docker required).
 
 ### Performance
 
