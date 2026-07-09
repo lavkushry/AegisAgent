@@ -18,9 +18,7 @@ use crate::capture::{
     safe_prompt_preview, sha256_hex,
 };
 use crate::events::{ModelCallEvent, ModelCallEventSink, ModelCallEventType};
-use crate::gateway_client::{
-    LineageClient, ModelCallIngestPayload, PromptEventIngestPayload,
-};
+use crate::gateway_client::{LineageClient, ModelCallIngestPayload, PromptEventIngestPayload};
 
 /// Shared proxy configuration + collaborators.
 #[derive(Clone)]
@@ -223,24 +221,22 @@ async fn begin_capture(state: &ProxyState, body: &[u8]) -> CallContext {
             if let Err(err) = state.lineage.ingest_prompt_event(&prompt_payload).await {
                 tracing::warn!(error = %err, "prompt lineage ingest failed");
             }
-            state.sink.record(
-                ModelCallEvent {
-                    event_type: ModelCallEventType::PromptObserved,
-                    event_id: format!("{event_id}-prompt"),
-                    provider: state.provider.clone(),
-                    model: meta.model.clone(),
-                    status: None,
-                    request_hash: None,
-                    response_hash: None,
-                    prompt_hash: Some(ph.clone()),
-                    redacted_prompt_preview: Some(preview.clone()),
-                    token_counts: None,
-                    detail: None,
-                    run_id: state.run_id.clone(),
-                    trace_id: state.trace_id.clone(),
-                    occurred_at: Utc::now(),
-                },
-            );
+            state.sink.record(ModelCallEvent {
+                event_type: ModelCallEventType::PromptObserved,
+                event_id: format!("{event_id}-prompt"),
+                provider: state.provider.clone(),
+                model: meta.model.clone(),
+                status: None,
+                request_hash: None,
+                response_hash: None,
+                prompt_hash: Some(ph.clone()),
+                redacted_prompt_preview: Some(preview.clone()),
+                token_counts: None,
+                detail: None,
+                run_id: state.run_id.clone(),
+                trace_id: state.trace_id.clone(),
+                occurred_at: Utc::now(),
+            });
         }
     }
 
@@ -389,7 +385,8 @@ mod tests {
         let lineage = Arc::new(RecordingLineageClient::default());
         let state = test_state(Arc::clone(&sink), Arc::clone(&lineage));
 
-        let request = br#"{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello world"}]}"#;
+        let request =
+            br#"{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello world"}]}"#;
         let response = Bytes::from_static(
             br#"{"model":"gpt-4o-mini","usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7},"choices":[{"message":{"content":"hi"}}]}"#,
         );
@@ -414,8 +411,14 @@ mod tests {
             .expect("finished event");
         assert_eq!(finished.status.as_deref(), Some("success"));
         assert_eq!(finished.model, "gpt-4o-mini");
-        assert!(finished.request_hash.as_ref().is_some_and(|h| h.len() == 64));
-        assert!(finished.response_hash.as_ref().is_some_and(|h| h.len() == 64));
+        assert!(finished
+            .request_hash
+            .as_ref()
+            .is_some_and(|h| h.len() == 64));
+        assert!(finished
+            .response_hash
+            .as_ref()
+            .is_some_and(|h| h.len() == 64));
         let usage = finished.token_counts.as_ref().expect("token counts");
         assert_eq!(usage["prompt_tokens"], 5);
         assert_eq!(usage["completion_tokens"], 2);
@@ -435,7 +438,8 @@ mod tests {
         let state = test_state(Arc::clone(&sink), Arc::clone(&lineage));
 
         let request = br#"{"model":"gpt-4o-mini","messages":[{"role":"user","content":"ping"}]}"#;
-        let err = "upstream 401: Authorization Bearer sk-super-secret-key-value rejected".to_string();
+        let err =
+            "upstream 401: Authorization Bearer sk-super-secret-key-value rejected".to_string();
 
         capture_cycle_for_test(&state, request, Err(err)).await;
 
@@ -477,10 +481,7 @@ mod tests {
 
         let prompts = lineage.prompt_events();
         assert_eq!(prompts.len(), 1);
-        let preview = prompts[0]
-            .redacted_prompt_preview
-            .as_deref()
-            .unwrap_or("");
+        let preview = prompts[0].redacted_prompt_preview.as_deref().unwrap_or("");
         assert!(!looks_unredacted(preview));
         assert!(!preview.contains("sk-live"));
         assert_eq!(prompts[0].prompt_hash.len(), 64);

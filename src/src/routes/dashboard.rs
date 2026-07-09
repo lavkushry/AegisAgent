@@ -188,11 +188,10 @@ mod tests {
 
     #[test]
     fn dist_override_wins() {
-        let dir = dashboard_dist_dir_from_env(
-            Some("/custom/out".into()),
-            Some("legacy".into()),
-            |_| true,
-        );
+        let dir =
+            dashboard_dist_dir_from_env(Some("/custom/out".into()), Some("legacy".into()), |_| {
+                true
+            });
         assert_eq!(dir, PathBuf::from("/custom/out"));
     }
 

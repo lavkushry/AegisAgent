@@ -123,6 +123,7 @@ use utoipa::OpenApi;
         get_timeline_api,
         get_audit_events_api,
         get_evidence_pack_api,
+        export_evidence_api,
         ws_events_api,
         list_agent_cage_runs_api,
         get_agent_cage_run_api,
@@ -1245,6 +1246,17 @@ fn get_audit_events_api() {}
     )
 )]
 fn get_evidence_pack_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/evidence/export",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "ZIP archive of investigation evidence export"),
+        (status = 400, description = "Invalid parameters", body = StatusError)
+    )
+)]
+fn export_evidence_api() {}
 
 #[utoipa::path(
     get,

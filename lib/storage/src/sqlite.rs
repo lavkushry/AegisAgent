@@ -1102,7 +1102,6 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
-
     async fn check_and_insert_replay_nonce(
         &self,
         tenant_id: &str,

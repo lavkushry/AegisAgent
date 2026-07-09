@@ -287,12 +287,12 @@ pub fn build_investigation_evidence_zip(
     Ok(cursor.into_inner())
 }
 
-fn parse_bound(label: &str, raw: Option<&str>) -> Result<Option<DateTime<Utc>>, StatusError> {
+fn parse_bound(label: &str, raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
     match raw {
         None => Ok(None),
         Some(s) => DateTime::parse_from_rfc3339(s)
             .map(|dt| Some(dt.with_timezone(&Utc)))
-            .map_err(|e| StatusError::bad_request(format!("invalid '{label}' timestamp: {e}"))),
+            .map_err(|e| format!("invalid '{label}' timestamp: {e}")),
     }
 }
 
@@ -307,11 +307,11 @@ pub async fn export_evidence(
 ) -> impl IntoResponse {
     let from = match parse_bound("from", req.from.as_deref()) {
         Ok(v) => v,
-        Err(e) => return e.into_response(),
+        Err(e) => return StatusError::bad_request(e).into_response(),
     };
     let to = match parse_bound("to", req.to.as_deref()) {
         Ok(v) => v,
-        Err(e) => return e.into_response(),
+        Err(e) => return StatusError::bad_request(e).into_response(),
     };
 
     let mut receipts = match state
@@ -361,8 +361,7 @@ pub async fn export_evidence(
         checkpoints.push(cp);
     }
 
-    let graph_manifest =
-        build_graph_manifest(req.run_id.as_deref(), &receipts, &events);
+    let graph_manifest = build_graph_manifest(req.run_id.as_deref(), &receipts, &events);
     let redaction_manifest = build_redaction_manifest(&events, &receipts);
 
     let export_id = Uuid::new_v4().to_string();
@@ -457,10 +456,7 @@ pub async fn export_evidence(
     receipts_with_export.push(export_receipt.clone());
 
     if let Some(obj) = manifest.as_object_mut() {
-        obj.insert(
-            "export_receipt_id".to_string(),
-            json!(export_receipt.id),
-        );
+        obj.insert("export_receipt_id".to_string(), json!(export_receipt.id));
         obj.insert(
             "export_receipt_hash".to_string(),
             json!(export_receipt.receipt_hash),
@@ -526,7 +522,12 @@ mod tests {
     use crate::routes::test_helpers::setup_state;
     use axum::body::to_bytes;
 
-    fn sample_receipt(tenant_id: &str, id: &str, prev: &str, run_id: Option<&str>) -> ActionReceiptRecord {
+    fn sample_receipt(
+        tenant_id: &str,
+        id: &str,
+        prev: &str,
+        run_id: Option<&str>,
+    ) -> ActionReceiptRecord {
         let mut rec = ActionReceiptRecord {
             id: id.to_string(),
             tenant_id: tenant_id.to_string(),
@@ -542,7 +543,12 @@ mod tests {
             source_trust: "semi_trusted_customer".to_string(),
             decision: "allow".to_string(),
             approver: None,
-            action_hash: Some(format!("{:0>64}", id.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>())),
+            action_hash: Some(format!(
+                "{:0>64}",
+                id.chars()
+                    .filter(|c| c.is_ascii_hexdigit())
+                    .collect::<String>()
+            )),
             prev_receipt_hash: prev.to_string(),
             receipt_hash: String::new(),
             canon_version: "aegis-jcs-1".to_string(),
