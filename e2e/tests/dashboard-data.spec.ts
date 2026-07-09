@@ -182,4 +182,21 @@ test.describe("production SOC console data workflows (ui-next)", () => {
       timeout: 5_000,
     });
   });
+
+  test("Dashboard editor lists system templates for copy", async ({ page }) => {
+    await openConfiguredConsole(page);
+    await openNav(page, "Dashboards");
+    await expect(page.getByText("System (read-only)")).toBeVisible();
+    // Core catalog boards (Phase B overview + expanded templates)
+    for (const title of [
+      "SOC Overview",
+      "Integrity",
+      "Agent fleet",
+      "Approvals",
+      "Incidents",
+      "Detections",
+    ]) {
+      await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
+    }
+  });
 });
