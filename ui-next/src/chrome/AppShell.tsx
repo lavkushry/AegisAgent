@@ -1,11 +1,16 @@
 import type { ReactNode } from "react";
 import { SidebarNav } from "./SidebarNav";
 import { ThemeControls } from "./ThemeControls";
+import { ControlsBar } from "./ControlsBar";
 import { useAppStore } from "@/app/store";
+import { useSocStream } from "@/hooks/useSocStream";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const activeTenant = useAppStore((s) => s.activeTenant);
   const theme = useAppStore((s) => s.theme);
+
+  // Advisory live stream when Live is enabled in ControlsBar
+  useSocStream();
 
   return (
     <div className="flex h-full min-h-screen bg-[var(--surface-app)] text-[var(--text-primary)]">
@@ -32,7 +37,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </aside>
-      <main className="flex-1 overflow-auto p-6">{children}</main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ControlsBar />
+        <main className="flex-1 overflow-auto p-6">{children}</main>
+      </div>
     </div>
   );
 }

@@ -4,9 +4,13 @@ import {
   DEFAULT_DATASOURCE_ID,
   GatewayEntityDatasource,
 } from "./gatewayEntity";
+import {
+  STREAM_DATASOURCE_ID,
+  SocStreamDatasource,
+} from "./stream";
 import type { Datasource } from "./types";
 
-export { DEFAULT_DATASOURCE_ID };
+export { DEFAULT_DATASOURCE_ID, STREAM_DATASOURCE_ID };
 
 /** Datasource map from current gateway connection (stable between renders). */
 export function useDatasources(): Map<string, Datasource> {
@@ -17,8 +21,10 @@ export function useDatasources(): Map<string, Datasource> {
   return useMemo(() => {
     const opts = { gatewayUrl, bearerToken, tenantId };
     const entity = new GatewayEntityDatasource(opts);
+    const stream = new SocStreamDatasource(opts);
     const map = new Map<string, Datasource>();
     map.set(entity.id, entity);
+    map.set(stream.id, stream);
     return map;
   }, [gatewayUrl, bearerToken, tenantId]);
 }

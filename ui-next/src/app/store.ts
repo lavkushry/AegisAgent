@@ -5,7 +5,10 @@ import {
   persistBearerToken,
   persistConnection,
 } from "./runtimeConfig";
-import type { VariableValues } from "@/datasources/types";
+import type {
+  StreamConnectionStatus,
+  VariableValues,
+} from "@/datasources/types";
 
 export type Theme = "dark-soc" | "light" | "oled";
 export type Density = "compact" | "cozy";
@@ -25,6 +28,7 @@ interface AppState {
   timeRange: string;
   variables: VariableValues;
   liveMode: boolean;
+  streamStatus: StreamConnectionStatus;
   setGatewayUrl: (url: string) => void;
   setBearerToken: (token: string) => void;
   setActiveTenant: (tenant: string) => void;
@@ -35,6 +39,7 @@ interface AppState {
   setTimeRange: (range: string) => void;
   setVariables: (variables: VariableValues) => void;
   setLiveMode: (live: boolean) => void;
+  setStreamStatus: (status: StreamConnectionStatus) => void;
   applyConnection: (input: {
     gatewayUrl: string;
     activeTenant: string;
@@ -100,6 +105,7 @@ export const useAppStore = create<AppState>((set) => ({
   timeRange: "24h",
   variables: {},
   liveMode: false,
+  streamStatus: "closed",
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
   setBearerToken: (token) => {
     persistBearerToken(
@@ -136,6 +142,7 @@ export const useAppStore = create<AppState>((set) => ({
   setTimeRange: (timeRange) => set({ timeRange }),
   setVariables: (variables) => set({ variables }),
   setLiveMode: (liveMode) => set({ liveMode }),
+  setStreamStatus: (streamStatus) => set({ streamStatus }),
   applyConnection: ({ gatewayUrl, activeTenant, bearerToken, operatorId }) => {
     persistConnection(
       typeof window !== "undefined" ? window.localStorage : null,
