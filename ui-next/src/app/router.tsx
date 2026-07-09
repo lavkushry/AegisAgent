@@ -12,6 +12,7 @@ import { McpPage } from "@/features/mcp/McpPage";
 import { DetectionsPage } from "@/features/detections/DetectionsPage";
 import { RulesPage } from "@/features/rules/RulesPage";
 import { AlertingPage } from "@/features/alerting/AlertingPage";
+import { DashboardEditorPage } from "@/features/dashboards/DashboardEditorPage";
 
 export function AppRouter() {
   return (
@@ -30,6 +31,7 @@ export function AppRouter() {
           <Route path="/agents/:agentId" element={<AgentDetailPage />} />
           <Route path="/incidents" element={<IncidentsPage />} />
           <Route path="/mcp" element={<McpPage />} />
+          <Route path="/dashboards" element={<DashboardEditorPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AppShell>
