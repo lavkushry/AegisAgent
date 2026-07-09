@@ -192,22 +192,91 @@ function tenantIncidents(tenantId: string) {
 }
 
 function incidentGraph() {
-  // Field names must match the real EvidenceNode contract (ui/src/app/api.ts)
-  // -- group/timestamp/metadata, not kind/ts/data -- since
-  // incidentGraphNodesToReceiptRows filters on `node.group === "receipt"`.
+  // Field names must match the real EvidenceNode contract
+  // (group/timestamp/metadata) for decision-graph + receipt filters.
   return {
-    nodes: [{
-      id: `receipt:${RECEIPT_ID}`,
-      group: "receipt",
-      label: "Receipt link",
-      timestamp: NOW,
-      metadata: {
-        id: RECEIPT_ID,
-        receipt_hash: "sha256:receipt-good-receipt-good-receipt-good-receipt-good-re",
-        prev_receipt_hash: "genesis",
-        ts: NOW,
+    nodes: [
+      {
+        id: `agent:${AGENT_ID}`,
+        group: "agent",
+        label: "E2E Mock Agent",
+        timestamp: NOW,
+        metadata: null,
       },
-    }],
+      {
+        id: "tool_call:decision-e2e-001",
+        group: "tool_call",
+        label: "github.merge_pull_request",
+        timestamp: NOW,
+        metadata: null,
+      },
+      {
+        id: "decision:decision-e2e-001",
+        group: "decision",
+        label: "require_approval",
+        timestamp: NOW,
+        metadata: { risk_score: 72, reason: "high-risk mutating action" },
+      },
+      {
+        id: `approval:${APPROVAL_ID}`,
+        group: "approval",
+        label: "pending",
+        timestamp: NOW,
+        metadata: null,
+      },
+      {
+        id: `receipt:${RECEIPT_ID}`,
+        group: "receipt",
+        label: "Receipt link",
+        timestamp: NOW,
+        metadata: {
+          id: RECEIPT_ID,
+          receipt_hash:
+            "sha256:receipt-good-receipt-good-receipt-good-receipt-good-re",
+          prev_receipt_hash: "genesis",
+          ts: NOW,
+        },
+      },
+      {
+        id: `incident:${INCIDENT_ID}`,
+        group: "incident",
+        label: "Ordered receipt linkage failed",
+        timestamp: NOW,
+        metadata: null,
+      },
+    ],
+    edges: [
+      {
+        from: `agent:${AGENT_ID}`,
+        to: "tool_call:decision-e2e-001",
+        label: "triggered_by",
+        timestamp: NOW,
+      },
+      {
+        from: "tool_call:decision-e2e-001",
+        to: "decision:decision-e2e-001",
+        label: "decided",
+        timestamp: NOW,
+      },
+      {
+        from: "decision:decision-e2e-001",
+        to: `approval:${APPROVAL_ID}`,
+        label: "approved",
+        timestamp: NOW,
+      },
+      {
+        from: "decision:decision-e2e-001",
+        to: `receipt:${RECEIPT_ID}`,
+        label: "produced",
+        timestamp: NOW,
+      },
+      {
+        from: `incident:${INCIDENT_ID}`,
+        to: "decision:decision-e2e-001",
+        label: "linked_to",
+        timestamp: NOW,
+      },
+    ],
   };
 }
 

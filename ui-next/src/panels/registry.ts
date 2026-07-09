@@ -10,6 +10,7 @@ import ApprovalCardPanel from "./differentiators/ApprovalCardPanel";
 import ProvableTimelinePanel from "./differentiators/ProvableTimelinePanel";
 import ReceiptIntegrityPanel from "./differentiators/ReceiptIntegrityPanel";
 import AgentRiskMapPanel from "./differentiators/AgentRiskMapPanel";
+import DecisionGraphPanel from "./differentiators/DecisionGraphPanel";
 
 const entries: PanelRegistryEntry[] = [
   {
@@ -76,6 +77,16 @@ const entries: PanelRegistryEntry[] = [
     type: "agent-risk-map",
     Component: AgentRiskMapPanel as PanelRegistryEntry["Component"],
     defaultOptions: { maxRows: 10 },
+    chartLib: "none",
+  },
+  {
+    type: "decision-graph",
+    Component: DecisionGraphPanel as PanelRegistryEntry["Component"],
+    defaultOptions: {
+      scopeKind: "incident",
+      scopeIdField: "id",
+      maxNodes: 40,
+    },
     chartLib: "none",
   },
 ];
