@@ -3,18 +3,16 @@
 //! handling. Phase 3.2: registers with the gateway on startup and
 //! heartbeats on an interval. Phase 3.3: a durable local spool is opened.
 //! Phase 3.4: the spool is drained to the gateway's ingest endpoint on its
-//! own tick. Phase 3.5: polls for signed control commands addressed to this
-//! sensor, verifies and executes them, and ACK/NACKs the result. Phase 3.6
-//! (this file also covers): tracks gateway reachability from heartbeat
-//! outcomes and consults the observe/enforce/lockdown decision engine
-//! whenever that reachability changes. There are no real controlled
-//! actions or runs to gate yet (those arrive with the cage runner, Phase
-//! 4) — this wires the mode engine to a real, if narrow, signal, rather
-//! than a placeholder.
+//! own tick. Phase 3.5: polls for signed control commands, verifies and
+//! executes them (host `ProcessEnforcer` applies real SIGTERM/STOP/CONT for
+//! registered run PIDs; Docker cages remain `aegis-cage-runner`). Phase 3.6:
+//! tracks gateway reachability from heartbeats and consults the
+//! observe/enforce/lockdown decision engine on transitions.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
@@ -24,6 +22,7 @@ use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
 use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
+use aegis_node_sensor::process_enforcer::ProcessEnforcer;
 use aegis_node_sensor::shipper::EventShipper;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
 
@@ -185,9 +184,13 @@ async fn main() -> ExitCode {
     // the sensor's local default if the operator has tuned it per tenant.
     let heartbeat_interval = Duration::from_secs(registration.heartbeat_interval_secs);
     let shipper = EventShipper::new(&client);
-    let command_receiver = CommandReceiver::new(
+    // Shared with CommandReceiver so future process collectors can
+    // register_run(run_id, pid) on the same map the control loop uses.
+    let process_enforcer = Arc::new(ProcessEnforcer::new());
+    let command_receiver = CommandReceiver::with_enforcer(
         config.gateway_public_key_hex.as_deref(),
         config.tenant_id.clone(),
+        process_enforcer.clone(),
     );
     if config.gateway_public_key_hex.is_none() {
         tracing::warn!(
@@ -251,11 +254,14 @@ async fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Fetch commands, filter to the ones addressed to this sensor and still
-/// awaiting action, then verify/execute/ACK-or-NACK each. The gateway's
-/// `status` filter (only `"issued"` commands are re-fetched) is what makes
-/// this safe to call on an unbounded interval, including after a sensor
-/// restart — a command this sensor already ACKed won't come back.
+/// Fetch commands, filter to those this sensor can enforce, then
+/// verify/execute/ACK-or-NACK each. Accepts:
+/// - `target_type=sensor` addressed to this sensor_id (e.g. kill-all registered)
+/// - `target_type=run` for a run_id currently registered in the process enforcer
+///
+/// The gateway's status filter (only `"issued"` re-fetched) makes this safe
+/// to poll forever, including after restart — already-ACKed commands do not
+/// come back.
 async fn poll_and_process_commands(
     client: &GatewayClient,
     receiver: &CommandReceiver,
@@ -269,10 +275,16 @@ async fn poll_and_process_commands(
         }
     };
 
-    for cmd in commands
-        .into_iter()
-        .filter(|c| c.target_type == "sensor" && c.target_id == sensor_id && c.status == "issued")
-    {
+    for cmd in commands.into_iter().filter(|c| {
+        if c.status != "issued" {
+            return false;
+        }
+        match c.target_type.as_str() {
+            "sensor" => c.target_id == sensor_id,
+            "run" => receiver.enforcer().has_run(&c.target_id),
+            _ => false,
+        }
+    }) {
         let now = chrono::Utc::now();
         let new_status = match receiver.verify(&cmd, now) {
             Ok(()) => match receiver.execute(&cmd) {

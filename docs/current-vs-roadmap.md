@@ -37,7 +37,7 @@ Strongest current capabilities:
 
 ### Partial (built, not end-to-end production)
 
-- **Node sensor** — binary, register/heartbeat, command poll, shipper; not full process/fs/net collectors
+- **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs); not full process/fs/net collectors
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
 - **Agent cage runner** — binary + claim/execute loop; local compose profile `cage` + Helm chart; host Docker socket security review / e2e still open
@@ -48,7 +48,7 @@ Strongest current capabilities:
 ### Roadmap / not done
 
 - cage host Docker security review + Helm + e2e path (P0; execution binary exists)
-- sensor real telemetry + host enforce (P0)
+- sensor process/fs/net collectors that register host PIDs (P0; enforce path exists)
 - forced egress for unknown agents (P0)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
@@ -76,11 +76,11 @@ Strongest current capabilities:
 | TypeScript SDK | Available today | Canon + protect + client + receipt chain verifier (shared corpus). |
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Partial | Bun SPA panel suite shipped; cage/ban/quarantine pages incomplete. |
-| Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
+| Node sensor | Partial | Binary + packaging + host ProcessEnforcer; collectors incomplete. |
 | Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; host security review / e2e still open. |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
-| Signed control commands | Partial | Issue + sensor poll path; full host enforce incomplete. |
+| Signed control commands | Partial | Issue + sensor poll + host PID enforce; auto discovery incomplete. |
 | Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
 | Postgres production mode | Roadmap / partial | Code path exists; SQLite single-writer is still the default deploy. |
 | Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |
