@@ -1,68 +1,97 @@
-# Active tasks
+# Active tasks — pre-production remaining work
 
-Source of truth for shipped features: [`CLAUDE.md`](/CLAUDE.md) (root) — its
-"Current Status & Feature Parity History" section and
-[`docs/feature_history.md`](../../../docs/feature_history.md) are kept
-current per-PR. This file previously duplicated a feature checklist that
-rotted (most items below were checked off in PRs #1276, #1277, #1602,
-#1611–#1774, etc. without this file being updated) — don't re-duplicate
-that list here again. Track only what's genuinely in flight or genuinely
-still missing, verified against the code, not assumed from an old plan doc.
+Source of truth for **shipped** features: root [`CLAUDE.md`](../../../CLAUDE.md)
+and [`docs/feature_history.md`](../../../docs/feature_history.md).
 
-## Verified still missing (2026-07-09 audit)
+Source of truth for **capability status**:
+[`docs/Implementation_Status.md`](../../../docs/Implementation_Status.md)
+(refreshed 2026-07-09 against `main` after #1793–#1795).
 
-- **MCP manifest signing** — `manifest_hash`-based drift *detection* exists
-  (`lib/storage/src/db/mcp.rs`, `src/src/routes/authorize.rs`), but there is
-  no cryptographic signature verification of MCP server manifests (unlike
-  policy bundles, which are Ed25519-signed — `src/src/routes/policy.rs`,
-  #1280). A manifest that "drifts" is detected and gated; a manifest that's
-  simply forged/never-signed is not distinguished from a legitimate one.
-- **`aegis-cage-runner` has no binary.** `bins/aegis-cage-runner` is a
-  lib-only crate (`SandboxRuntime` trait, Docker CLI wrapper, workspace
-  management, event emission — all unit-tested) with no `main.rs`/`[[bin]]`
-  target, and the gateway doesn't depend on it either. The
-  `/v1/agent-cage/runs` control-plane routes manage run *records*; nothing
-  polls them and actually invokes Docker to execute a sandboxed run yet.
-  This is a bigger lift than "add a Dockerfile" — it needs an execution
-  loop designed and reviewed (it shells out to the host Docker CLI, a
-  security-sensitive decision this project's own threat model would want
-  scrutinized before landing).
-- **Phase 7.3 — LLM gateway adapter** (prompt/model-call choke point) —
-  **implemented on branch** as `bins/aegis-llm-gateway` (OpenAI-compatible
-  reverse proxy; `model_call_started`/`model_call_finished` local events;
-  ships hashes + token metadata to `POST /v1/ingest/model-calls`; failure
-  redaction). Phases 7.1/7.2 already shipped (#1775/#1776). PR not yet
-  opened/merged.
-- **Phase 8.3 — Evidence export** — **implemented on branch** as
-  `POST /v1/evidence/export` (investigation pack: events, receipts,
-  receipt_checkpoints, graph_manifest, redaction_manifest; export appends
-  a durable self-receipt). Distinct from #1298 compliance pack. PR not yet
-  merged.
-- **Deployment packaging gaps (#1297 follow-up)** — `helm/` had only the
-  gateway chart, `docker-compose.yml` had only gateway; being fixed in
-  branch `deploy-1297-sensor-proxy-packaging` (Dockerfiles + Helm charts +
-  compose entries for `aegis-egress-proxy`/`aegis-node-sensor`, plus a
-  repo-root `.dockerignore` that didn't exist — every prior `docker build`
-  sent the whole repo, including `target/`, as build context).
-- **~85 unmerged local/remote branches** (164 total incl. main), several of
-  which duplicate work already re-landed on `main` under different PRs
-  (confirmed for the five `feat/1142-*-cursor` branches — all six #1142
-  pagination targets are already merged via #1747–#1752, including
-  `list_policy_templates_cursor`, which lives in `lib/policy/src/compiler.rs`
-  rather than `lib/storage` since templates come from an in-memory catalog,
-  not `StorageBackend` — those five branches are dead and should be deleted,
-  not merged; deletion is blocked pending explicit user
-  authorization/action, not a technical blocker).
+This file tracks only **in-flight** and **verified remaining** production work.
+Do not re-list shipped items as open.
 
-## Fixed (2026-07-09)
+**Verified against:** `origin/main` @ post-#1795 (investigation evidence export).
 
-- **Coverage gate raised to match the 80% standard.** `.github/workflows/
-  ci.yml`'s Rust gate was `--fail-under-lines 70` against an actual measured
-  87.62% — raised to 80 (comfortable margin). Python's was `--fail-under=75`
-  against an actual measured exactly 80% — raised to 78, not 80, to leave a
-  safety margin rather than sitting flush with the current number.
+---
 
-## Everything else previously listed here
+## In flight
 
-Shipped. See `CLAUDE.md` and `git log --oneline --grep="<keyword>"` for the
-landing PR rather than trusting a static checklist again.
+- **`feat/cage-runner-execution-loop` (local)** — cage-runner binary / claim /
+  heartbeat / Docker execution loop. **P0.** Needs security review of host
+  Docker CLI access before merge. Not on `main` yet.
+
+---
+
+## Wave A — P0 (unknown-agent control plane)
+
+Blocks any claim of runtime control over non-cooperative agents.
+
+- [ ] **Cage-runner `main` + execution loop** — poll/claim runs, start Docker
+      sandbox, emit lifecycle events, report status; package Dockerfile/Helm.
+- [ ] **Gateway cage lease APIs on main** — claim / heartbeat / ownership-scoped
+      status (if not merged with cage PR).
+- [ ] **Sensor collectors + host enforcement** — real process/fs/net/secret
+      signals; execute signed pause/kill/quarantine against the host/workload.
+- [ ] **E2E unknown-agent path** — cage + egress deny + control action +
+      receipt/incident in compose or Playwright/integration harness.
+- [ ] **Egress forced path for caged runs** — not opt-in only (netns / default
+      route through proxy).
+
+---
+
+## Wave B — P1 (production ops / HA)
+
+Blocks multi-replica and enterprise-ops claims.
+
+- [ ] **Postgres production mode (#1194)** — supported primary path, multi-
+      replica validation, Helm defaults safe for HA.
+- [ ] **Deploy packaging gaps** — Helm/Docker/compose for **cage-runner** and
+      **llm-gateway** (broker chart if split out); full-stack Helm story.
+- [ ] **OIDC/SAML for console/admin** — or explicit “JWT-only” enterprise
+      limitation in public docs.
+- [ ] **Production install checklist enforced** — `AEGIS_JWT_REQUIRED`,
+      `AEGIS_ADMIN_API_KEY`, `AEGIS_REPLAY_STORE=db`, TLS, demo mode off,
+      backups/retention (see `docs/production-hardening.md` §8).
+
+---
+
+## Wave C — P2 (product surface / honesty)
+
+- [ ] **UI Phase 9.2–9.3** — cage runs, ban/quarantine centers, prompt/model/
+      egress timelines, evidence export UX, policy center.
+- [ ] **TypeScript receipt chain verifier** parity with Python/Go.
+- [ ] **Go/TS prompt-model emit** parity with Python Phase 7.2.
+- [ ] **Ban/quarantine enforcement** at all choke points (egress, broker,
+      cage start, sensor), not only store + partial preflight.
+- [ ] **Standalone MCP proxy binary** (optional product line; Lite remains prod).
+- [ ] **Branch hygiene** — merge-or-close pass on ~80 remote branches (no bulk
+      delete without one-by-one review).
+- [ ] **Docs stay current** — update `Implementation_Status.md` in the same PR
+      as capability landings (validator enforces required row labels).
+
+---
+
+## Recently closed (do not re-open as missing)
+
+| Item | Landing |
+|------|---------|
+| MCP manifest Ed25519 signing (opt-in) | #1793 |
+| Coverage gates raised (Rust 80%, Python 78%) | #1792 |
+| Sensor + egress-proxy packaging (Docker/Helm/compose) | #1790 / #1791 |
+| Phase 7.1 prompt/model schemas | #1775 |
+| Phase 7.2 Python SDK capture | #1776 |
+| Phase 7.3 LLM gateway adapter | #1794 |
+| Phase 8.3 investigation evidence export + checkpoints | #1795 |
+| Dead `feat/1142-*-cursor` branches | deleted (session audit) |
+
+---
+
+## Production claim matrix (quick)
+
+| Claim | Status |
+|-------|--------|
+| Known-agent integrity gateway | **Shipable** (ops checklist still required) |
+| Integrity-anchored SOC evidence | **Mostly shipable** (UI beta) |
+| Unknown-agent sandbox control | **Blocked on Wave A** |
+| Multi-replica K8s | **Blocked on Wave B / Postgres** |
+| Full enterprise console + OIDC | **Blocked on Wave B/C** |

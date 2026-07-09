@@ -7,41 +7,53 @@ description: Clear public status of what AegisAgent supports today and what is p
 
 This page is intentionally direct.
 
-AegisAgent has a working MVP, but the full AI Agent Security Control Plane is a roadmap.
+AegisAgent has a working **known-agent integrity MVP** on `main`. The full AI Agent Security Control Plane (unknown-agent runtime isolation + multi-replica production ops) is **partially built** — binaries and APIs exist for several data-plane pieces, but the end-to-end enforcement loop is not complete.
 
-The project should not claim runtime control over unknown agents until the runtime data-plane components exist and are connected to real choke points.
+Do **not** claim runtime control over unknown agents until the cage execution loop, sensor collectors, and forced egress path are connected and tested.
+
+For the detailed capability matrix, see [Implementation_Status.md](Implementation_Status.md).
 
 ---
 
 ## Short version
 
-## Available today
+### Available today (known-agent integrity)
 
-AegisAgent currently protects known agents that integrate through the SDK/gateway.
+AegisAgent protects **known agents** that integrate through the SDK/gateway.
 
-The strongest current capabilities are:
+Strongest current capabilities:
 
 - action authorization before protected tool execution
-- deterministic source-trust policy
+- deterministic source-trust policy (Cedar)
 - approval integrity with exact `action_hash`
-- fail-closed SDK verification
-- verifiable receipts
-- audit events
-- MCP Gateway Lite governance primitives
-- local Docker Compose demo
+- fail-closed SDK verification (Python/Go/TS)
+- verifiable hash-chained receipts + verification APIs/CLI
+- audit / SOC events, incidents, SOC query API
+- MCP Gateway Lite (registry, drift, optional Ed25519 manifest signing)
+- prompt/model lineage ingest + Python SDK capture + LLM gateway adapter
+- investigation evidence export (events, receipts, checkpoints, graph + redaction manifests, self-receipt)
+- compliance evidence pack ZIP
+- local Docker Compose demo (gateway + optional sensor/egress)
 
-## Roadmap
+### Partial (built, not end-to-end production)
 
-The target system adds runtime control for unknown or non-cooperative agents:
+- **Node sensor** — binary, register/heartbeat, command poll, shipper; not full process/fs/net collectors
+- **Egress proxy** — binary + Helm; not forced for all caged traffic by default
+- **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
+- **Agent cage runner** — Docker runtime **library** only on main (execution binary WIP)
+- **Console UI** — approvals/receipts/incidents/overview; missing cage/ban/quarantine/timeline product pages
+- **Deploy** — gateway + sensor + egress Helm; missing cage/llm-gateway charts; single-writer SQLite default
+- **Postgres** — feature + migrations exist; not the default HA production path
 
-- node sensor
-- agent cage runner
-- egress proxy
-- tool broker
-- signed control commands
-- ban/quarantine system
-- prompt/model/tool/runtime timeline
-- SOC evidence graph and console
+### Roadmap / not done
+
+- cage execution loop + host Docker security review (P0)
+- sensor real telemetry + host enforce (P0)
+- forced egress for unknown agents (P0)
+- Postgres multi-replica GA (#1194) (P1)
+- OIDC/SAML for console/admin (P1)
+- full Phase 9 console (cage, ban/quarantine centers, timelines) (P2)
+- TypeScript receipt chain verifier parity (P2)
 
 ---
 
@@ -49,33 +61,30 @@ The target system adds runtime control for unknown or non-cooperative agents:
 
 | Capability | Status | What it means |
 |---|---:|---|
-| Rust gateway | Available today | Local Axum gateway for authorization, approvals, receipts, audit, and MCP Lite governance. |
-| Python SDK | Available today | `@protect_tool` can wrap known-agent tool functions and fail closed if authorization or approval verification fails. |
+| Rust gateway | Available today | Axum gateway for authorization, approvals, receipts, audit, MCP Lite, broker routes, runtime control APIs. |
+| Python SDK | Available today | `@protect_tool` fails closed on hash mismatch / expired approval / unreachable gateway for high-risk paths; prompt/model emit opt-in. |
 | Cedar policy engine | Available today | Deterministic policy decisions for protected action requests. |
-| Source-trust gating | Available today | Policy can treat untrusted external context differently from trusted internal context. |
-| Canonical action hashing | Available today | Exact actions are canonicalized and hashed for approval integrity. |
-| Approval workflow | Available today | Risky actions can be paused, approved, rejected, edited, and consumed. |
-| Approval hash binding | Available today | Approval is bound to the exact action hash, reducing approve-then-swap risk. |
-| Action receipts | Available today | Protected decisions can emit hash-chained evidence receipts. |
-| Receipt verification endpoint/CLI | Available today | Receipts can be recomputed and checked for tampering. |
-| Audit events | Available today | Recent protected decisions can be inspected through API endpoints. |
-| MCP Gateway Lite | Available today | MCP server/tool registration, discovery, approval/disable controls, unknown-tool denial, and MCP audit events. |
-| GitHub attack demo | Available today | Demonstrates blocking a high-risk merge action triggered by untrusted external content. |
-| TypeScript SDK | Partial / planned | Repository has SDK direction, but public docs should treat Python as the primary working demo path. |
-| Go SDK | Partial / planned | Repository has SDK direction, but it is not the main demo path yet. |
-| Full web console | Roadmap | A production console should show approvals, agents, incidents, receipts, timelines, bans, quarantine, and evidence graph. |
-| Node sensor | Roadmap | Runtime daemon/DaemonSet/sidecar to observe agent process, file, network, and control events. |
-| Agent cage runner | Roadmap | Disposable sandbox runner for unknown agents with filesystem, network, credential, and resource isolation. |
-| Egress proxy | Roadmap | Network choke point for allow/block rules, DNS/HTTP metadata, exfil hooks, and egress receipts. |
-| Tool broker | Roadmap | Credential-owning broker that executes/proxies actions after AegisAgent authorization. |
-| Signed control commands | Roadmap | Gateway-to-sensor command protocol for pause, kill, quarantine, ban, policy update, and evidence collection. |
-| Ban center | Roadmap | First-class bans for agents, fingerprints, tools, MCP servers, destinations, prompts, and behavior signatures. |
-| Quarantine center | Roadmap | Preserve and isolate risky agents, workspaces, files, tools, credentials, destinations, and prompt lineage. |
-| Prompt/model capture timeline | Roadmap | Capture prompt/model metadata where there is a real choke point, with hashes/redaction instead of raw sensitive prompts by default. |
-| Runtime timeline | Roadmap | Process, file, shell, network, secret access, package install, browser, and control events linked by run/trace IDs. |
-| Evidence graph | Roadmap | Link prompt, model, tool, runtime, approval, receipt, ban, quarantine, and incident evidence. |
-| Postgres production mode | Roadmap | SQLite remains the local/dev path; production architecture should support Postgres. |
-| Kubernetes/Helm production deployment | Roadmap | Target deployment model includes gateway, sensors, cage runner, egress proxy, tool broker, console, metrics, and storage. |
+| Source-trust gating | Available today | Untrusted external context treated differently from trusted internal. |
+| Canonical action hashing | Available today | `aegis-jcs-1` byte-identical across languages. |
+| Approval workflow | Available today | Pause, approve, reject, edit, consume; hash-bound. |
+| Action receipts | Available today | Hash-chained evidence; optional Ed25519/KMS signing. |
+| Receipt verification | Available today | HTTP + Python/Go CLI/SDK; TS verifier still incomplete. |
+| MCP Gateway Lite | Available today | Register/discover/pin/drift; optional manifest signature verify. |
+| Prompt/model capture | Available today | Ingest APIs + Python SDK + LLM reverse-proxy adapter. |
+| Evidence graph | Available today | `/v1/graph/*` for run/incident/agent lineage. |
+| Investigation evidence export | Available today | `POST /v1/evidence/export` with checkpoints + self-receipt. |
+| SOC query / incidents | Available today | Async detect/correlate + query API + beta UI. |
+| TypeScript SDK | Partial | Canon + protect + client shipped; receipt verifier gap. |
+| Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
+| Full web console | Partial / roadmap | Core dashboards exist; cage/ban/quarantine/timeline product pages incomplete. |
+| Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
+| Agent cage runner | Partial / roadmap | Lib on main; execution binary not merged. |
+| Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
+| Tool broker | Partial | In-gateway execute path; no standalone broker service. |
+| Signed control commands | Partial | Issue + sensor poll path; full host enforce incomplete. |
+| Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
+| Postgres production mode | Roadmap / partial | Code path exists; SQLite single-writer is still the default deploy. |
+| Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |
 
 ---
 
@@ -95,8 +104,8 @@ The demo shows:
 Untrusted GitHub issue
   → protected GitHub merge action
   → deterministic policy check
-  → blocked before execution
-  → audit evidence available
+  → blocked / approval-bound before execution
+  → audit / receipt evidence available
 ```
 
 See [Quickstart](quickstart.md) and [Demo: malicious GitHub issue](demo-github-attack.md).
@@ -105,18 +114,17 @@ See [Quickstart](quickstart.md) and [Demo: malicious GitHub issue](demo-github-a
 
 ## What not to claim yet
 
-Do not claim that the current MVP already provides:
+Do not claim that the current `main` already provides:
 
-- full EDR-like runtime control
-- process kill/quarantine enforcement
-- default network egress blocking
-- raw credential isolation for all tools
-- full SOC console
-- complete unknown-agent sandboxing
-- production-ready Kubernetes deployment
-- magic protection for agents that bypass every AegisAgent choke point
+- full EDR-like runtime control on arbitrary hosts
+- automatic process kill/quarantine for agents that never call the SDK
+- default network egress blocking for all agent traffic
+- raw credential isolation for every tool path
+- complete unknown-agent sandboxing (cage executor not on main)
+- multi-replica production Kubernetes on SQLite
+- full enterprise SOC console with OIDC
 
-Those are target architecture goals.
+Those remain target architecture goals or incomplete waves (see Implementation Status).
 
 ---
 
@@ -125,38 +133,13 @@ Those are target architecture goals.
 AegisAgent is moving toward this architecture:
 
 ```text
-Control Plane
-  + Runtime Sensor
-  + Agent Cage
-  + Egress Proxy
-  + Tool Broker
-  + MCP Gateway
-  + Receipt-backed SOC Evidence
+Control Plane (gateway) — largely shipped
+  + Runtime Sensor — skeleton shipped
+  + Agent Cage — lib shipped, executor WIP
+  + Egress Proxy — binary shipped, force-path WIP
+  + Tool Broker — gateway path shipped
+  + LLM choke point — adapter shipped
+  + Integrity-anchored SOC + evidence export — largely shipped
 ```
 
-The architecture principle is strict:
-
-> Do not put untrusted agent execution inside the gateway.
-
-The gateway is the central control plane. Runtime enforcement should happen through separate data-plane components.
-
----
-
-## Why this distinction matters
-
-Security products lose trust when they overclaim.
-
-AegisAgent's honest boundary is:
-
-> If an action passes through AegisAgent, AegisAgent can control and prove the decision. If an action bypasses every AegisAgent choke point, the architecture must isolate, block, or treat that agent as hostile through runtime controls.
-
-That is the difference between a demo gateway and a real AI agent security control plane.
-
----
-
-## Read next
-
-- [Core concepts](concepts.md)
-- [Quickstart](quickstart.md)
-- [World-Class HLD](AegisAgent_World_Class_HLD.md)
-- [Phased PR Plan](AegisAgent_Phased_PR_Plan.md)
+Integrity motto remains: **make the approval trustworthy; trust the source, not the text.**
