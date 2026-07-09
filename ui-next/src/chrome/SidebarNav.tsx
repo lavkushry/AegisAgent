@@ -4,6 +4,7 @@ import {
   Fingerprint,
   LayoutDashboard,
   ListChecks,
+  PanelsTopLeft,
   Radar,
   Search,
   Server,
@@ -24,6 +25,7 @@ const ITEMS = [
   { to: "/incidents", label: "Incidents", icon: Siren, end: false },
   { to: "/agents", label: "Agents", icon: Bot, end: false },
   { to: "/mcp", label: "MCP", icon: Server, end: false },
+  { to: "/dashboards", label: "Dashboards", icon: PanelsTopLeft, end: false },
   { to: "/settings", label: "Settings", icon: Settings, end: false },
 ] as const;
 

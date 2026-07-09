@@ -90,6 +90,29 @@ export async function probeLivez(
   }
 }
 
+/**
+ * Soft capability probe: true if the path responds as present.
+ * 404/405/501 → false; other errors (auth, network) → true so the UI still
+ * attempts the real call rather than silently disabling the feature.
+ */
+export async function probeGatewayEndpoint(
+  opts: FetchOptions,
+  path: string,
+): Promise<boolean> {
+  try {
+    await fetchFromGateway<unknown>(opts, path);
+    return true;
+  } catch (error) {
+    if (
+      error instanceof GatewayRequestError &&
+      [404, 405, 501].includes(error.status)
+    ) {
+      return false;
+    }
+    return true;
+  }
+}
+
 /** Binary download (evidence packs). Fail-closed on non-2xx. */
 export async function downloadFromGateway(
   options: FetchOptions,
