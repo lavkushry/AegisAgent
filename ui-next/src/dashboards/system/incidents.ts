@@ -96,7 +96,30 @@ export const incidentsDashboard: DashboardSchema = {
               },
             ],
           },
-          w: 12,
+          w: 6,
+          h: 5,
+        },
+        {
+          panel: {
+            id: "graph-latest-incident",
+            type: "decision-graph",
+            title: "Evidence graph (latest case)",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            entity: "incident",
+            limit: 1,
+            options: {
+              scopeKind: "incident",
+              scopeIdField: "id",
+              maxNodes: 40,
+            },
+            drilldowns: [
+              {
+                label: "Open incidents",
+                target: { kind: "incident", incidentIdField: "id" },
+              },
+            ],
+          },
+          w: 6,
           h: 5,
         },
       ],
