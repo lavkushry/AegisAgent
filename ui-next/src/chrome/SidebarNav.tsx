@@ -1,7 +1,10 @@
 import {
+  Bell,
   Bot,
   Fingerprint,
   LayoutDashboard,
+  ListChecks,
+  Radar,
   Search,
   Server,
   Settings,
@@ -13,6 +16,9 @@ import { NavLink } from "react-router-dom";
 const ITEMS = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/approvals", label: "Approvals", icon: Shield, end: false },
+  { to: "/detections", label: "Detections", icon: Radar, end: false },
+  { to: "/rules", label: "Rules", icon: ListChecks, end: false },
+  { to: "/alerting", label: "Alerting", icon: Bell, end: false },
   { to: "/integrity", label: "Integrity", icon: Fingerprint, end: false },
   { to: "/explore", label: "Explore", icon: Search, end: false },
   { to: "/incidents", label: "Incidents", icon: Siren, end: false },
