@@ -9,6 +9,35 @@
 # aegis-cage-runner is deliberately absent: it currently has no `main.rs`/
 # binary target (lib-only crate — see bins/aegis-cage-runner/Cargo.toml),
 # so there is nothing yet to build an image from.
+#
+# Prerequisite: aegis-node-sensor authenticates like any other API client
+# (bearer token, no sensor-specific auth mechanism — see
+# bins/aegis-node-sensor/src/gateway_client.rs) and refuses to start
+# without one (config.rs's SensorConfig::resolve fails closed on a missing
+# api_token). Create the tenant, then export AEGIS_SENSOR_API_TOKEN before
+# `up`, e.g. against a running `docker compose up -d gateway`:
+#   curl -X POST http://127.0.0.1:8080/v1/tenants \
+#     -H "Content-Type: application/json" \
+#     -d '{"id":"tenant_dev_alpha","name":"Dev Tenant Alpha","plan":"free"}'
+#   export AEGIS_SENSOR_API_TOKEN=tenant_dev_alpha
+# In this local/dev setup (no AEGIS_JWT_REQUIRED) the gateway's TenantId
+# extractor accepts any `tenant_`-prefixed bearer as that tenant, so the
+# tenant id itself is the token — verified end-to-end locally (sensor
+# registered, heartbeat succeeded). A production deployment with JWT
+# required would instead issue this token via a real registered
+# agent/service-account credential, not the tenant id.
+#
+# Also verified locally: `network_mode: host` (used here and in the base
+# docker-compose.yml) needs Docker Desktop's host-networking support on
+# macOS/Windows, which is not on by default (check Docker Desktop's
+# networking settings for a host-networking toggle; availability/wording
+# varies by version). If `curl 127.0.0.1:8080` hangs against a container
+# reporting "healthy", that's this — the HEALTHCHECK directive execs
+# inside the container's own namespace and passes regardless of host
+# reachability. Linux (incl. CI) is unaffected — host networking there
+# just works. To smoke-test on an affected host, temporarily swap
+# `network_mode: host` for an explicit `ports:` mapping on a bridge
+# network instead.
 include:
   - docker-compose.yml
 
@@ -54,5 +83,7 @@ services:
       - "http://127.0.0.1:8080"
       - "--tenant-id"
       - "${AEGIS_DEMO_TENANT_ID:-tenant_dev_alpha}"
+      - "--api-token"
+      - "${AEGIS_SENSOR_API_TOKEN:?Register an agent for the sensor and export its token as AEGIS_SENSOR_API_TOKEN first -- see the prerequisite note above}"
       - "--mode"
       - "observe"
