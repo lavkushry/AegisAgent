@@ -60,10 +60,13 @@ test.describe("production SOC console shell (ui-next)", () => {
 
   const navCases = [
     ["/", "Overview"],
+    ["/approvals", "Approvals"],
+    ["/detections", "Detections"],
+    ["/rules", "Rules"],
+    ["/alerting", "Alerting"],
     ["/integrity", "Integrity"],
     ["/explore", "Explore"],
     ["/incidents", "Incidents"],
-    ["/approvals", "Approvals"],
     ["/agents", "Agents"],
     ["/mcp", "MCP"],
     ["/settings", "Settings"],

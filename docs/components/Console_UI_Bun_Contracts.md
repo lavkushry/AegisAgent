@@ -41,6 +41,7 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | 7 | Incidents + evidence pack | Phase 3 |
 | 8 | MCP registry + quarantine | Phase 3 |
 | 9 | Approval edit + evidence export | Phase 3 |
+| 10 | Detections / Rules / Alerting | Phase 5 |
 
 ### Phase 2–3 API map
 
