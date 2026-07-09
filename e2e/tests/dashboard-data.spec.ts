@@ -195,6 +195,8 @@ test.describe("production SOC console data workflows (ui-next)", () => {
       "Approvals",
       "Incidents",
       "Detections",
+      "MCP registry",
+      "Rules",
     ]) {
       await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
     }

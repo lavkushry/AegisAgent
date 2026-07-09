@@ -4,3 +4,5 @@ export { fleetDashboard } from "./fleet";
 export { approvalsDashboard } from "./approvals";
 export { incidentsDashboard } from "./incidents";
 export { detectionsDashboard } from "./detections";
+export { mcpDashboard } from "./mcp";
+export { rulesDashboard } from "./rules";
