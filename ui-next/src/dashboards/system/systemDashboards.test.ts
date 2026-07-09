@@ -8,7 +8,9 @@ import {
   fleetDashboard,
   incidentsDashboard,
   integrityDashboard,
+  mcpDashboard,
   overviewDashboard,
+  rulesDashboard,
 } from "./index";
 
 const SYSTEM = [
@@ -18,21 +20,25 @@ const SYSTEM = [
   approvalsDashboard,
   incidentsDashboard,
   detectionsDashboard,
+  mcpDashboard,
+  rulesDashboard,
+] as const;
+
+const EXPECTED_UIDS = [
+  "approvals",
+  "detections",
+  "fleet",
+  "incidents",
+  "integrity",
+  "mcp",
+  "overview",
+  "rules",
 ] as const;
 
 describe("system dashboards", () => {
   test("catalog lists all built-in boards", () => {
     const uids = SYSTEM_DASHBOARD_CATALOG.map((e) => e.uid).sort();
-    expect(uids).toEqual(
-      [
-        "approvals",
-        "detections",
-        "fleet",
-        "incidents",
-        "integrity",
-        "overview",
-      ].sort(),
-    );
+    expect(uids).toEqual([...EXPECTED_UIDS].sort());
     for (const entry of SYSTEM_DASHBOARD_CATALOG) {
       expect(entry.readOnly).toBe(true);
     }
