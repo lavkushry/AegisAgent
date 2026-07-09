@@ -2,6 +2,8 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { FAKE_SECRET } from "../fixtures/gatewayFixtures";
 
 export const TENANT_ID = "tenant_123";
+/** Operator identity for approval mutations on the Bun SPA. */
+export const OPERATOR_ID = "e2e_operator";
 
 const SECRET_PATTERNS = [
   /sk-live-[A-Za-z0-9-]+/,
@@ -15,14 +17,27 @@ const SECRET_PATTERNS = [
   /"api_key"\s*:\s*"(?!\[REDACTED\])/,
 ];
 
-/** Configure production UI credentials for one browser page without persisting the bearer token. */
+/**
+ * Configure production UI credentials for one browser page without persisting
+ * the bearer token. Targets the Bun SPA Settings route (ui-next cutover).
+ */
 export async function openConfiguredConsole(page: Page): Promise<void> {
-  await page.goto("/dashboard/");
-  await page.getByLabel("Gateway URL").fill("http://127.0.0.1:8080");
-  await page.getByLabel("Bearer Token").fill(TENANT_ID);
-  await page.getByLabel("Tenant ID").fill(TENANT_ID);
-  await page.getByRole("button", { name: "Apply Config" }).click();
+  await page.goto("/dashboard/settings");
+  await page.getByLabel(/Gateway URL/i).fill("http://127.0.0.1:8080");
+  await page.getByLabel(/Tenant ID/i).fill(TENANT_ID);
+  await page.getByLabel(/Bearer token/i).fill(TENANT_ID);
+  const operator = page.getByLabel(/Operator ID/i);
+  if ((await operator.count()) > 0) {
+    await operator.fill(OPERATOR_ID);
+  }
+  await page.getByRole("button", { name: /Apply Config/i }).click();
   await page.getByText(TENANT_ID, { exact: true }).first().waitFor();
+}
+
+/** Navigate via SPA sidebar link (ui-next React Router). */
+export async function openNav(page: Page, name: string | RegExp): Promise<void> {
+  const nav = page.getByRole("navigation", { name: "SOC console" });
+  await nav.getByRole("link", { name }).click();
 }
 
 export interface TestAgent {
@@ -39,7 +54,8 @@ export async function confirmDangerousAction(
   reason: string,
   confirmLabel?: string | RegExp,
 ): Promise<void> {
-  const dialog = page.getByRole("alertdialog");
+  // ui-next uses role=dialog; legacy Next used alertdialog.
+  const dialog = page.getByRole("dialog").or(page.getByRole("alertdialog"));
   await expect(dialog).toBeVisible();
   await dialog.locator("textarea").fill(reason);
   const confirm = dialog.getByRole("button", {

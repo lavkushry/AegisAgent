@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { KeyRound, Server } from "lucide-react";
+import { KeyRound, Server, User } from "lucide-react";
 import { DEMO_MODE } from "@/app/runtimeConfig";
 import { useAppStore } from "@/app/store";
 import { probeLivez } from "@/lib/http/client";
@@ -10,12 +10,14 @@ export function SettingsPage() {
     gatewayUrl,
     bearerToken,
     activeTenant,
+    operatorId,
     applyConnection,
   } = useAppStore();
 
   const [localUrl, setLocalUrl] = useState(gatewayUrl);
   const [localTenant, setLocalTenant] = useState(activeTenant);
   const [localToken, setLocalToken] = useState("");
+  const [localOperator, setLocalOperator] = useState(operatorId);
 
   const { data: live } = useQuery({
     queryKey: ["livez", gatewayUrl],
@@ -28,6 +30,7 @@ export function SettingsPage() {
       gatewayUrl: localUrl,
       activeTenant: localTenant,
       bearerToken: localToken.trim() || undefined,
+      operatorId: localOperator,
     });
     setLocalToken("");
   };
@@ -52,7 +55,13 @@ export function SettingsPage() {
 
         <div className="rounded-md border border-[var(--border-default)] p-3 text-xs">
           Liveness:{" "}
-          <span className={live ? "text-green-400" : "text-red-400"}>
+          <span
+            className={
+              live
+                ? "text-[var(--state-verified)]"
+                : "text-[var(--state-failed)]"
+            }
+          >
             {live ? "/livez OK" : "/livez unreachable"}
           </span>
         </div>
@@ -95,8 +104,25 @@ export function SettingsPage() {
           />
         </label>
 
+        <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+          <span className="flex items-center gap-1">
+            <User size={12} /> Operator ID
+          </span>
+          <input
+            className="input-field"
+            type="text"
+            value={localOperator}
+            onChange={(e) => setLocalOperator(e.target.value)}
+            placeholder="platform_admin"
+          />
+          <span className="normal-case tracking-normal text-[var(--text-muted)]">
+            Sent as <code className="font-mono">approver_user_id</code> on
+            approve/reject. Required for Approvals mutations.
+          </span>
+        </label>
+
         <button type="button" className="btn-primary" onClick={onApply}>
-          Apply config
+          Apply Config
         </button>
       </section>
     </div>

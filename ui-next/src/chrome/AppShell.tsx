@@ -11,9 +11,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex h-full min-h-screen bg-[var(--surface-app)] text-[var(--text-primary)]">
       <aside className="flex w-56 shrink-0 flex-col border-r border-[var(--border-default)] bg-[var(--surface-panel)]">
         <div className="border-b border-[var(--border-default)] px-4 py-4">
-          <div className="text-xs font-bold tracking-wider text-[var(--brand)]">
+          <h1 className="text-xs font-bold tracking-wider text-[var(--brand)]">
             AegisAgent
-          </div>
+          </h1>
           <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
             SOC Console
           </div>

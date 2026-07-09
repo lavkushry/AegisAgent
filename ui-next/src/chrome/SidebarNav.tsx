@@ -1,23 +1,29 @@
 import {
+  Bot,
   Fingerprint,
   LayoutDashboard,
   Search,
+  Server,
   Settings,
   Shield,
+  Siren,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const ITEMS = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
+  { to: "/approvals", label: "Approvals", icon: Shield, end: false },
   { to: "/integrity", label: "Integrity", icon: Fingerprint, end: false },
   { to: "/explore", label: "Explore", icon: Search, end: false },
-  { to: "/approvals", label: "Approvals", icon: Shield, end: false },
+  { to: "/incidents", label: "Incidents", icon: Siren, end: false },
+  { to: "/agents", label: "Agents", icon: Bot, end: false },
+  { to: "/mcp", label: "MCP", icon: Server, end: false },
   { to: "/settings", label: "Settings", icon: Settings, end: false },
 ] as const;
 
 export function SidebarNav() {
   return (
-    <nav className="flex flex-col gap-0.5 p-2">
+    <nav className="flex flex-col gap-0.5 p-2" aria-label="SOC console">
       {ITEMS.map(({ to, label, icon: Icon, end }) => (
         <NavLink
           key={to}
