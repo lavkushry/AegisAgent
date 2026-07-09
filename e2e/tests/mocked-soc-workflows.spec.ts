@@ -11,6 +11,7 @@ import {
   openMockedConsole,
 } from "../fixtures/installMockGateway";
 import {
+  agentControlButton,
   assertNoSecrets,
   confirmDangerousAction,
   openNav,
@@ -143,7 +144,7 @@ test.describe("mocked SOC console workflows (#1638)", () => {
     await openNav(page, "Agents");
     const row = page.getByRole("row").filter({ hasText: AGENT_KEY });
     await expect(row).toBeVisible({ timeout: 10_000 });
-    await row.getByRole("button", { name: "freeze" }).click();
+    await agentControlButton(row, "freeze").click();
     await confirmDangerousAction(
       page,
       "Containment during investigation",
