@@ -6,6 +6,7 @@ import FeedPanel from "./standard/FeedPanel";
 import NotePanel from "./standard/NotePanel";
 import HeatmapPanel from "./standard/HeatmapPanel";
 import TimeSeriesPanel from "./standard/TimeSeriesPanel";
+import ApprovalCardPanel from "./differentiators/ApprovalCardPanel";
 
 const entries: PanelRegistryEntry[] = [
   {
@@ -48,6 +49,12 @@ const entries: PanelRegistryEntry[] = [
     type: "heatmap",
     Component: HeatmapPanel as PanelRegistryEntry["Component"],
     defaultOptions: {},
+    chartLib: "none",
+  },
+  {
+    type: "approval-card",
+    Component: ApprovalCardPanel as PanelRegistryEntry["Component"],
+    defaultOptions: { maxCards: 6, interactive: true },
     chartLib: "none",
   },
 ];
