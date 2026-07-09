@@ -30,11 +30,25 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 
 ## 4. P0 surfaces (scaffold → full port)
 
-1. Settings / connection  
-2. Overview (stats)  
-3. Approvals  
-4. Integrity / receipts  
-5. Explore (AQL)  
+| # | Surface | Status |
+|---|---|---|
+| 1 | Settings / connection (+ operator id) | Phase 1–2 |
+| 2 | Overview (`/v1/stats`) | Phase 1 |
+| 3 | Approvals (`GET/POST /v1/approvals…`) | Phase 2 |
+| 4 | Integrity / receipts (list + verify + verify-range) | Phase 2 |
+| 5 | Explore (chip query → `/v1/decisions`) | Phase 2 (simple AQL chips; full compiler later) |
+
+### Phase 2 API map
+
+| UI action | Gateway |
+|---|---|
+| List pending approvals | `GET /v1/approvals` |
+| Approve | `POST /v1/approvals/:id/approve` body `{approver_user_id, reason}` |
+| Reject | `POST /v1/approvals/:id/reject` body `{approver_user_id, reason}` |
+| List receipts | `GET /v1/receipts?limit=` |
+| Verify one | `GET /v1/receipts/:id/verify` (`verified` boolean, fail-closed normalize) |
+| Verify range | `POST /v1/receipts/verify-range` |
+| Explore | `GET /v1/decisions?limit=&q=&agent_id=&decision=&source_trust=&skill=` |
 
 ## 5. Build commands
 

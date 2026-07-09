@@ -16,12 +16,15 @@ interface AppState {
   gatewayUrl: string;
   bearerToken: string;
   activeTenant: string;
+  /** Human operator identity for approval mutations (approver_user_id). */
+  operatorId: string;
   theme: Theme;
   density: Density;
   activeView: string;
   setGatewayUrl: (url: string) => void;
   setBearerToken: (token: string) => void;
   setActiveTenant: (tenant: string) => void;
+  setOperatorId: (id: string) => void;
   setTheme: (theme: Theme) => void;
   setDensity: (density: Density) => void;
   setActiveView: (view: string) => void;
@@ -29,6 +32,7 @@ interface AppState {
     gatewayUrl: string;
     activeTenant: string;
     bearerToken?: string;
+    operatorId?: string;
   }) => void;
 }
 
@@ -49,6 +53,15 @@ function getInitialDensity(): Density {
   return VALID_DENSITIES.includes(stored as Density)
     ? (stored as Density)
     : "compact";
+}
+
+function getInitialOperatorId(): string {
+  if (typeof window === "undefined") {
+    return DEMO_MODE ? "platform_admin" : "";
+  }
+  const stored = window.localStorage.getItem("aegis_operator_id");
+  if (stored) return stored;
+  return DEMO_MODE ? "platform_admin" : "";
 }
 
 function applyAttribute(
@@ -73,6 +86,7 @@ export const useAppStore = create<AppState>((set) => ({
   gatewayUrl: initial.gatewayUrl,
   bearerToken: initial.bearerToken,
   activeTenant: initial.activeTenant,
+  operatorId: getInitialOperatorId(),
   theme: initialTheme,
   density: initialDensity,
   activeView: "overview",
@@ -86,6 +100,14 @@ export const useAppStore = create<AppState>((set) => ({
     set({ bearerToken: token });
   },
   setActiveTenant: (tenant) => set({ activeTenant: tenant }),
+  setOperatorId: (id) => {
+    const next = id.trim();
+    if (typeof window !== "undefined") {
+      if (next) window.localStorage.setItem("aegis_operator_id", next);
+      else window.localStorage.removeItem("aegis_operator_id");
+    }
+    set({ operatorId: next });
+  },
   setTheme: (theme) => {
     if (typeof window !== "undefined") {
       window.localStorage.setItem("aegis_theme", theme);
@@ -101,27 +123,31 @@ export const useAppStore = create<AppState>((set) => ({
     set({ density });
   },
   setActiveView: (view) => set({ activeView: view }),
-  applyConnection: ({ gatewayUrl, activeTenant, bearerToken }) => {
+  applyConnection: ({ gatewayUrl, activeTenant, bearerToken, operatorId }) => {
     persistConnection(
       typeof window !== "undefined" ? window.localStorage : null,
       { gatewayUrl, activeTenant },
     );
+    const patch: Partial<AppState> = {
+      gatewayUrl: gatewayUrl.trim(),
+      activeTenant: activeTenant.trim(),
+    };
+    if (operatorId !== undefined) {
+      const next = operatorId.trim();
+      if (typeof window !== "undefined") {
+        if (next) window.localStorage.setItem("aegis_operator_id", next);
+        else window.localStorage.removeItem("aegis_operator_id");
+      }
+      patch.operatorId = next;
+    }
     if (bearerToken !== undefined && bearerToken.trim()) {
       persistBearerToken(
         typeof window !== "undefined" ? window.localStorage : null,
         bearerToken.trim(),
         DEMO_MODE,
       );
-      set({
-        gatewayUrl: gatewayUrl.trim(),
-        activeTenant: activeTenant.trim(),
-        bearerToken: bearerToken.trim(),
-      });
-      return;
+      patch.bearerToken = bearerToken.trim();
     }
-    set({
-      gatewayUrl: gatewayUrl.trim(),
-      activeTenant: activeTenant.trim(),
-    });
+    set(patch);
   },
 }));

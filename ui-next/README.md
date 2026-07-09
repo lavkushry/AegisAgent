@@ -42,7 +42,15 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | Phase | Status |
 |---|---|
 | 0 Contracts freeze | Done |
-| 1 Scaffold + Settings + Overview + Dark SOC shell | In progress |
-| 2 Approvals / Integrity / Explore port | Pending |
-| 3 Full surface parity | Pending |
+| 1 Scaffold + Settings + Overview + Dark SOC shell | Done |
+| 2 Approvals / Integrity / Explore port | Done (simple Explore chips; full AQL later) |
+| 3 Full surface parity (fleet, incidents, dashboards, …) | Pending |
 | 4 Gateway cutover `ui-next/dist` → production path | Pending |
+
+### Phase 2 routes
+
+| Path | Notes |
+|---|---|
+| `/dashboard/approvals` | Queue + approve/reject bound to `action_hash` |
+| `/dashboard/integrity` | Receipt list, per-row verify, verify-range |
+| `/dashboard/explore` | Decision search with `field:value` chips |
