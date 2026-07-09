@@ -4,6 +4,19 @@ This document contains the historical status, feature releases, and ticket verif
 
 ---
 
+## Console UI — Bun rewrite (July 2026)
+
+Production SOC console is **`ui-next/`** (Bun + Vite + React 19 SPA at `/dashboard/`). Legacy Next `ui/` was removed (Phase E).
+
+| Phase | Deliverable | PRs (selected) |
+|-------|-------------|----------------|
+| 0–5 | Scaffold, P0 surfaces, cutover | #1798–#1802 |
+| A–D | AQL, panels, ControlsBar, editor | #1803–#1807 |
+| E–F | Playwright expansion, Next delete, a11y/redact/mocks | #1808–#1809 |
+| Post | Lazy routes, E2E locator fixes, system catalog (10 boards) | #1810–#1819 |
+
+Contracts: [`docs/components/Console_UI_Bun_Contracts.md`](components/Console_UI_Bun_Contracts.md).
+
 ## SDK & Gateway Status (June 2026 Baseline)
 
 **Python SDK — 187 tests, fully verified on `main`:**
