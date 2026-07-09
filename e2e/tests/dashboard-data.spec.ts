@@ -186,8 +186,13 @@ test.describe("production SOC console data workflows (ui-next)", () => {
   test("Dashboard editor lists system templates for copy", async ({ page }) => {
     await openConfiguredConsole(page);
     await openNav(page, "Dashboards");
-    await expect(page.getByText("System (read-only)")).toBeVisible();
-    // Core catalog boards (Phase B overview + expanded templates)
+    // Scope to the system catalog list (avoid matching sidebar nav labels).
+    const systemList = page
+      .getByRole("heading", { name: /System \(read-only\)/i })
+      .locator("..")
+      .getByRole("list")
+      .first();
+    await expect(systemList).toBeVisible();
     for (const title of [
       "SOC Overview",
       "Integrity",
@@ -200,7 +205,9 @@ test.describe("production SOC console data workflows (ui-next)", () => {
       "Alerting",
       "Explore",
     ]) {
-      await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
+      await expect(
+        systemList.getByText(title, { exact: true }),
+      ).toBeVisible();
     }
   });
 
