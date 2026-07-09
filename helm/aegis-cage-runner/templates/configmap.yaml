@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aegis-cage-runner.fullname" . }}
+  labels:
+    {{- include "aegis-cage-runner.labels" . | nindent 4 }}
+data:
+  # RawRunnerConfig deny_unknown_fields — only declared keys.
+  # api_token is NOT here (Secret + --api-token).
+  runner.toml: |
+    gateway_url = {{ required "config.gatewayUrl is required" .Values.config.gatewayUrl | quote }}
+    tenant_id = {{ required "config.tenantId is required" .Values.config.tenantId | quote }}
+    gateway_public_key_hex = {{ required "config.gatewayPublicKeyHex is required" .Values.config.gatewayPublicKeyHex | quote }}
+    workspace_root = {{ .Values.config.workspaceRoot | quote }}
+    claim_poll_interval_secs = {{ .Values.config.claimPollIntervalSecs }}
+    control_poll_interval_secs = {{ .Values.config.controlPollIntervalSecs }}
+    heartbeat_interval_secs = {{ .Values.config.heartbeatIntervalSecs }}

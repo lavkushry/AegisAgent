@@ -40,7 +40,7 @@ Strongest current capabilities:
 - **Node sensor** — binary, register/heartbeat, command poll, shipper; not full process/fs/net collectors
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
-- **Agent cage runner** — binary + claim/execute loop on main; local image/compose profile; not default-forced or Helm-packaged
+- **Agent cage runner** — binary + claim/execute loop; local compose profile `cage` + Helm chart; host Docker socket security review / e2e still open
 - **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph); missing cage/ban/quarantine product pages
 - **Deploy** — gateway + sensor + egress Helm; missing cage/llm-gateway charts; single-writer SQLite default
 - **Postgres** — feature + migrations exist; not the default HA production path
@@ -77,7 +77,7 @@ Strongest current capabilities:
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Partial | Bun SPA panel suite shipped; cage/ban/quarantine pages incomplete. |
 | Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
-| Agent cage runner | Partial | Binary + DockerRuntime + compose profile `cage`; host security review / Helm / e2e still open. |
+| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; host security review / e2e still open. |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
 | Signed control commands | Partial | Issue + sensor poll path; full host enforce incomplete. |

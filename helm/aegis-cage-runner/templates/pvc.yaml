@@ -1,0 +1,17 @@
+{{- if and .Values.persistence.enabled .Values.persistence.usePvc }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "aegis-cage-runner.fullname" . }}-workspaces
+  labels:
+    {{- include "aegis-cage-runner.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+  {{- if .Values.persistence.storageClassName }}
+  storageClassName: {{ .Values.persistence.storageClassName | quote }}
+  {{- end }}
+{{- end }}

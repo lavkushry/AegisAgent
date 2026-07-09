@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aegis-cage-runner.fullname" . }}
+  labels:
+    {{- include "aegis-cage-runner.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aegis-cage-runner.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "aegis-cage-runner.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "aegis-cage-runner.serviceAccountName" . }}
+      {{- if or .Values.podSecurityContext .Values.dockerGroupGid }}
+      securityContext:
+        {{- with .Values.podSecurityContext }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.dockerGroupGid }}
+        supplementalGroups:
+          - {{ .Values.dockerGroupGid }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cage-runner
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # No HTTP listen port — poll/claim worker. Kubelet restartPolicy
+          # covers process death; do not invent a fake /livez.
+          args:
+            - "--config"
+            - "/etc/aegis-cage/runner.toml"
+            - "--api-token"
+            - "$(AEGIS_API_TOKEN)"
+            - "--runner-id"
+            - "$(RUNNER_ID)"
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.config.logLevel | quote }}
+            - name: AEGIS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-cage-runner.secretName" . }}
+                  key: AEGIS_API_TOKEN
+            {{- if .Values.config.runnerId }}
+            - name: RUNNER_ID
+              value: {{ .Values.config.runnerId | quote }}
+            {{- else }}
+            - name: RUNNER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/aegis-cage
+              readOnly: true
+            - name: workspaces
+              mountPath: {{ .Values.config.workspaceRoot }}
+            {{- if .Values.dockerSocket.enabled }}
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "aegis-cage-runner.fullname" . }}
+        - name: workspaces
+          {{- if and .Values.persistence.enabled .Values.persistence.usePvc }}
+          persistentVolumeClaim:
+            claimName: {{ include "aegis-cage-runner.fullname" . }}-workspaces
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.dockerSocket.enabled }}
+        - name: docker-sock
+          hostPath:
+            path: {{ .Values.dockerSocket.hostPath }}
+            type: Socket
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

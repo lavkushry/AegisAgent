@@ -1,0 +1,98 @@
+# Default values for aegis-cage-runner.
+#
+# Requires a host Docker engine (socket mount). The runner shells out to the
+# Docker CLI inside the image — not Docker-in-Docker.
+#
+# Gateway must sign control commands (`AEGIS_COMMAND_SIGNING_KEY`); this chart
+# pins the matching public key as config.gatewayPublicKeyHex.
+
+# -- Number of runner replicas. Stateless claim race — safe to scale out.
+replicaCount: 1
+
+image:
+  repository: aegisagent-cage-runner
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag; defaults to .Chart.AppVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Docker socket access typically requires root or a matching docker group GID.
+# Prefer dockerGroupGid + runAsNonRoot when your node image documents the GID.
+podSecurityContext: {}
+
+securityContext:
+  # Root default is intentional for host docker.sock on bare nodes; tighten
+  # with dockerGroupGid + runAsUser when you can.
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+    add:
+      # Not always required; leave empty unless your policy needs it.
+      []
+
+# -- If set, run as this GID (supplementalGroups) so the process can open
+# the host docker.sock without full root. Example: 999 on many Ubuntu nodes.
+dockerGroupGid: null
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+config:
+  # -- Required: base URL of the gateway that issues/claims cage runs.
+  gatewayUrl: ""
+  # -- Required: tenant this runner claims runs for.
+  tenantId: ""
+  # -- Required: Ed25519 verifying key (hex) matching gateway AEGIS_COMMAND_SIGNING_KEY.
+  gatewayPublicKeyHex: ""
+  logLevel: "info"
+  # -- Workspace root inside the container (PVC or emptyDir).
+  workspaceRoot: /var/lib/aegis-cage/workspaces
+  claimPollIntervalSecs: 5
+  controlPollIntervalSecs: 5
+  heartbeatIntervalSecs: 15
+  # -- Optional static runner id; when empty, uses the pod name (recommended).
+  runnerId: ""
+
+secret:
+  # -- Set true to create a Secret from apiToken below.
+  # Production: leave false and set existingSecret.
+  create: false
+  existingSecret: ""
+  # -- Tenant bearer token (same pattern as node-sensor / egress-proxy).
+  apiToken: ""
+
+dockerSocket:
+  # -- Mount the host Docker engine socket (required for SandboxRuntime).
+  enabled: true
+  hostPath: /var/run/docker.sock
+
+persistence:
+  # emptyDir is fine for disposable sandboxes; use a PVC if workspaces
+  # must survive pod restarts on the same node.
+  enabled: true
+  size: 10Gi
+  storageClassName: ""
+  # -- When false, uses emptyDir instead of a PVC.
+  usePvc: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
