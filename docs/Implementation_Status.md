@@ -47,7 +47,7 @@
 | Ban system (first-class store) | Partial | `lib/storage/src/db/agent_bans.rs`, migration `0029` | enforcement at every choke point + sensor prop | #1678 | storage | beta | preflight wire-up |
 | Quarantine records | Partial | `lib/storage/src/db/quarantine.rs`, migration `0030`; agent-status quarantine | workspace/sandbox quarantine (needs cage) | #1679 | storage | beta | cage integration |
 | Node sensor | Partial | `bins/aegis-node-sensor` (main, spool, shipper, command_receiver), Dockerfile, Helm, compose | **real** process/fs/network/secret collectors; full local enforce | Phased PR plan §5 | unit | beta (skeleton) | collectors + e2e |
-| Agent cage runner | Partial | binary + DockerRuntime + packaging; **forced egress plan** (`egress_proxy_url` → bridge + forced HTTP(S)_PROXY; default still `--network none`) | transparent/netns bypass prevention; sensor↔runner IPC | Phased PR plan §6 | unit (lib) + claim lifecycle | beta (local/k8s) | hard net isolation |
+| Agent cage runner | Partial | forced proxy egress + **wave-a narrative e2e** (`scripts/cage-wave-a-e2e.sh`: isolation, egress deny path, signed kill) | transparent/netns bypass prevention | Phased PR plan §6 | unit + CI wave-a e2e | beta (local/k8s) | hard net isolation |
 | Egress proxy | Partial | binary + Helm + compose + check API; cage injects forced proxy env when `egress_proxy_url` set | always-on transparent path; per-run allowlist auto-wired to proxy CLI | Phased PR plan §7 | unit + proxy tests | beta | transparent force |
 | Tool broker | Partial | `routes/broker.rs`, `lib/tool-broker-core`, `lib/tool-broker-connectors` | standalone broker binary; mandatory path for privileged tools | Phased PR plan §8 | unit + route | beta | binary + force-path |
 | Prompt capture | Implemented | `POST /v1/ingest/prompt-events` (`routes/prompt_capture.rs`), Python SDK emit | Go/TS emit; UI timeline | #1775/#1776 | unit + SDK | beta | UI + SDK parity |
@@ -63,10 +63,11 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave A — P0 unknown-agent control (blocks full control-plane claim)
 
-1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~forced proxy egress injection~~ **Done** (bridge + forced HTTP(S)_PROXY when `egress_proxy_url` set; residual: raw-socket bypass without transparent proxy)  
+1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~forced proxy egress injection~~ **Done**  
 2. Gateway claim/heartbeat/lease APIs — present  
-3. Sensor host enforce + collectors (see open PRs / follow-ups)  
-4. E2E: untrusted agent → cage → egress deny → control action → receipt/incident  
+3. Sensor host enforce + process collector (open PRs)  
+4. ~~Narrative e2e (isolation + egress deny path + signed kill)~~ **Done** (`scripts/cage-wave-a-e2e.sh`, CI job)  
+
 
 
 ### Wave B — P1 production ops (blocks multi-tenant HA claim)
@@ -89,7 +90,7 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 |---|---|
 | Known-agent integrity (SDK authorize / approval hash / fail-closed / receipts) | **Yes** |
 | Integrity-anchored SOC on gateway evidence | **Mostly yes** (beta UI) |
-| Unknown-agent sandbox + forced egress + host kill | **No** until Wave A |
+| Unknown-agent sandbox + forced egress + host kill | **Partial** — soft force + narrative e2e; transparent netns residual |
 | Multi-replica production K8s | **No** until Postgres GA |
 | Full enterprise SOC console + OIDC | **No** until Wave B/C |
 

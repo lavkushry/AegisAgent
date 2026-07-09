@@ -47,9 +47,9 @@ Strongest current capabilities:
 
 ### Roadmap / not done
 
-- cage host Docker security review + Helm + e2e path (P0; execution binary exists)
+- cage narrative e2e residual hardening / transparent egress (P1; soft force + wave-a script done)
 - sensor real telemetry + host enforce (P0)
-- transparent / netns forced egress (no raw-socket bypass) (P0 residual after proxy-env force)
+- transparent / netns forced egress (no raw-socket bypass) (P1 residual; soft force + narrative e2e done)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
 - full Phase 9 console (cage, ban/quarantine centers, runtime timelines) (P2)
@@ -77,7 +77,7 @@ Strongest current capabilities:
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Partial | Bun SPA panel suite shipped; cage/ban/quarantine pages incomplete. |
 | Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
-| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; host security review / e2e still open. |
+| Agent cage runner | Partial | Binary + forced proxy egress + wave-a narrative e2e (isolation/deny/kill); transparent residual. |
 | Egress proxy | Partial | Binary + packaging; cage forced HTTP(S)_PROXY when configured; not transparent. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
 | Signed control commands | Partial | Issue + sensor poll path; full host enforce incomplete. |
