@@ -40,6 +40,17 @@ export async function openNav(page: Page, name: string | RegExp): Promise<void> 
   await nav.getByRole("link", { name }).click();
 }
 
+/**
+ * Agent fleet control button. Must use `exact: true` — Playwright string name
+ * matching is substring-based, so `{ name: "freeze" }` also matches "unfreeze".
+ */
+export function agentControlButton(
+  row: import("@playwright/test").Locator,
+  kind: "freeze" | "unfreeze" | "restore" | "revoke",
+) {
+  return row.getByRole("button", { name: kind, exact: true });
+}
+
 export interface TestAgent {
   /** The agent's gateway-assigned UUID — this is what `approvals.agent_id` renders in the UI. */
   id: string;
