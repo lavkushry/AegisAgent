@@ -46,7 +46,7 @@
 | Control commands (signed kill/pause/quarantine) | Partial | store + protocol + gateway issue routes; sensor poll/verify + **host ProcessEnforcer** (SIGTERM/STOP/CONT for registered PIDs); cage-runner Docker kill path | auto PID discovery/collectors; grace_period from command payload | Phased PR plan §5 | storage + sensor unit (real child kill) | beta | collectors |
 | Ban system (first-class store) | Partial | `lib/storage/src/db/agent_bans.rs`, migration `0029` | enforcement at every choke point + sensor prop | #1678 | storage | beta | preflight wire-up |
 | Quarantine records | Partial | `lib/storage/src/db/quarantine.rs`, migration `0030`; agent-status quarantine | workspace/sandbox quarantine (needs cage) | #1679 | storage | beta | cage integration |
-| Node sensor | Partial | process_enforcer + **process_collector** (`AEGIS_RUN_ID` via `/proc` environ → register_run + process_started/exited events); Dockerfile, Helm, compose | fs/network/secret collectors; richer process attribution | Phased PR plan §5 | unit (kill + collector parse) | beta | more collectors |
+| Node sensor | Partial | process_enforcer + process_collector + **net_collector** (ESTABLISHED TCP remotes for `AEGIS_RUN_ID` PIDs); Dockerfile, Helm, compose | fs/secret collectors | Phased PR plan §5 | unit (kill + process/net parse) | beta | fs/secret |
 | Agent cage runner | Partial | binary + DockerRuntime + Dockerfile + compose `cage` + Helm; gateway lifecycle smoke (`cage_run_lifecycle_*` + `scripts/cage-smoke.sh`) | Host Docker security review; sensor↔runner IPC; full Docker e2e untrusted→cage | Phased PR plan §6 | unit (lib) + claim lifecycle + helm lint | beta (local/k8s) | Docker e2e + security review |
 | Egress proxy | Partial | `bins/aegis-egress-proxy` binary + Dockerfile + Helm + compose; `POST /v1/egress/check` | forced cage netns integration; always-on path | Phased PR plan §7 | unit + proxy tests | beta | cage net integration |
 | Tool broker | Partial | `routes/broker.rs`, `lib/tool-broker-core`, `lib/tool-broker-connectors` | standalone broker binary; mandatory path for privileged tools | Phased PR plan §8 | unit + route | beta | binary + force-path |
@@ -65,7 +65,8 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done** (gateway unit + `scripts/cage-smoke.sh`); **remaining:** Docker host security review + full Docker e2e  
 2. Gateway claim/heartbeat/lease APIs — present (`/v1/agent-cage/runs/:id/{claim,heartbeat,status}`)  
-3. ~~Sensor host enforce~~ **Done**; ~~process collector (`AEGIS_RUN_ID` /proc scan → register_run)~~ **Done**; **remaining:** fs/net collectors  
+3. ~~Sensor host enforce~~ **Done**; ~~process + net collectors~~ **Done**; **remaining:** fs/secret collectors  
+
 
 
 4. E2E: untrusted agent → cage → egress deny → control action → receipt/incident (Docker)  

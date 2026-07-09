@@ -9,6 +9,7 @@
 //! tracks gateway reachability from heartbeats and consults the
 //! observe/enforce/lockdown decision engine on transitions. Process
 //! collector scans Linux `/proc` for `AEGIS_RUN_ID` and auto-registers PIDs.
+//! Net collector emits established TCP remotes for those processes.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,6 +24,7 @@ use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
 use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
+use aegis_node_sensor::net_collector::NetCollector;
 use aegis_node_sensor::process_collector::ProcessCollector;
 use aegis_node_sensor::process_enforcer::ProcessEnforcer;
 use aegis_node_sensor::shipper::EventShipper;
@@ -36,7 +38,8 @@ const SHIP_TICK_INTERVAL: Duration = Duration::from_secs(2);
 /// How often the sensor polls the gateway for commands addressed to it.
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// How often `/proc` (Linux) is scanned for `AEGIS_RUN_ID` host agents.
+/// How often `/proc` (Linux) is scanned for `AEGIS_RUN_ID` host agents
+/// and their established TCP remotes.
 const PROCESS_COLLECT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Registration is retried with linear backoff before giving up — the
@@ -193,6 +196,7 @@ async fn main() -> ExitCode {
     // register_run(run_id, pid) on the same map the control loop uses.
     let process_enforcer = Arc::new(ProcessEnforcer::new());
     let process_collector = ProcessCollector::new(process_enforcer.clone());
+    let net_collector = NetCollector::new();
     let command_receiver = CommandReceiver::with_enforcer(
         config.gateway_public_key_hex.as_deref(),
         config.tenant_id.clone(),
@@ -217,6 +221,7 @@ async fn main() -> ExitCode {
         tokio::select! {
             _ = process_collect_tick.tick() => {
                 process_collector.poll(&spool);
+                net_collector.poll(&spool);
             }
             _ = heartbeat_tick.tick() => {
                 let req = HeartbeatRequest {
