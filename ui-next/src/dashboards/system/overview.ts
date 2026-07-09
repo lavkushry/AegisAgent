@@ -1,0 +1,241 @@
+import { DEFAULT_DATASOURCE_ID } from "@/datasources/registry";
+import type { DashboardSchema } from "../schema";
+
+/**
+ * SOC Overview — schema-driven landing board.
+ * Phase B: gateway-entity snapshots + list entities only
+ * (timeseries/count_by aggregates → Phase C soc-query).
+ */
+export const overviewDashboard: DashboardSchema = {
+  uid: "overview",
+  title: "SOC Overview",
+  schemaVersion: 1,
+  variables: [],
+  time: { defaultRange: { from: "now-24h", to: "now" }, refreshSec: 10 },
+  layout: [
+    {
+      id: "vitals",
+      title: "Tenant posture",
+      panels: [
+        {
+          panel: {
+            id: "stat-protected-actions",
+            type: "stat",
+            title: "Protected actions",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "tenant-stats",
+            options: { valueField: "total_decisions" },
+            drilldowns: [
+              {
+                label: "Explore decisions",
+                target: { kind: "explore", aqlTemplate: "decision:*" },
+              },
+            ],
+          },
+          w: 2,
+          h: 1,
+        },
+        {
+          panel: {
+            id: "stat-blocked-actions",
+            type: "stat",
+            title: "Blocked actions",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "tenant-stats",
+            options: {
+              valueField: "decisions_deny",
+              thresholds: [1, 5],
+            },
+            drilldowns: [
+              {
+                label: "Explore denials",
+                target: { kind: "explore", aqlTemplate: "decision:deny" },
+              },
+            ],
+          },
+          w: 2,
+          h: 1,
+        },
+        {
+          panel: {
+            id: "stat-pending-approvals",
+            type: "stat",
+            title: "Pending approvals",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "soc-summary",
+            options: {
+              valueField: "approvals_pending",
+              thresholds: [1, 5],
+            },
+            drilldowns: [
+              {
+                label: "Open approvals",
+                target: { kind: "dashboard", uid: "approvals" },
+              },
+            ],
+          },
+          w: 2,
+          h: 1,
+        },
+        {
+          panel: {
+            id: "stat-open-incidents",
+            type: "stat",
+            title: "Open incidents",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "soc-summary",
+            options: {
+              valueField: "incidents_open",
+              thresholds: [1, 3],
+            },
+            drilldowns: [
+              {
+                label: "View incidents",
+                target: { kind: "dashboard", uid: "incidents" },
+              },
+            ],
+          },
+          w: 2,
+          h: 1,
+        },
+        {
+          panel: {
+            id: "stat-active-detections",
+            type: "stat",
+            title: "Active detections",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "soc-summary",
+            options: {
+              valueField: "alerts_total",
+              thresholds: [1, 3],
+            },
+            drilldowns: [
+              {
+                label: "View detections",
+                target: { kind: "dashboard", uid: "detections" },
+              },
+            ],
+          },
+          w: 2,
+          h: 1,
+        },
+        {
+          panel: {
+            id: "stat-untrusted-sources",
+            type: "stat",
+            title: "Untrusted sources",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "tenant-stats",
+            options: {
+              valueField: "untrusted_source_count",
+              thresholds: [1, 5],
+            },
+            drilldowns: [
+              {
+                label: "Explore untrusted",
+                target: {
+                  kind: "explore",
+                  aqlTemplate: "source_trust:untrusted_external",
+                },
+              },
+            ],
+          },
+          w: 2,
+          h: 1,
+        },
+      ],
+    },
+    {
+      id: "trust",
+      title: "Trust provenance",
+      panels: [
+        {
+          panel: {
+            id: "table-trust-distribution",
+            type: "table",
+            title: "Trust level distribution",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "trust-breakdown",
+            options: {
+              columns: ["trust_level", "count"],
+              maxRows: 6,
+            },
+          },
+          w: 12,
+          h: 2,
+        },
+      ],
+    },
+    {
+      id: "feeds",
+      title: "Live signals",
+      panels: [
+        {
+          panel: {
+            id: "feed-decisions",
+            type: "feed",
+            title: "Live authorization feed",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            entity: "decision",
+            limit: 8,
+            options: {
+              titleField: "decision",
+              detailField: "tool",
+              timeField: "created_at",
+              maxRows: 8,
+            },
+          },
+          w: 6,
+          h: 3,
+        },
+        {
+          panel: {
+            id: "feed-alerts",
+            type: "feed",
+            title: "Recent policy alerts",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            entity: "alert",
+            limit: 5,
+            options: {
+              titleField: "rule",
+              detailField: "summary",
+              timeField: "created_at",
+              maxRows: 5,
+            },
+          },
+          w: 6,
+          h: 3,
+        },
+      ],
+    },
+    {
+      id: "recent",
+      title: "Recent decisions",
+      panels: [
+        {
+          panel: {
+            id: "table-decisions",
+            type: "table",
+            title: "Latest authorization decisions",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            entity: "decision",
+            limit: 10,
+            options: {
+              columns: [
+                "decision",
+                "tool",
+                "agent_id",
+                "source_trust",
+                "action_hash",
+                "created_at",
+              ],
+              maxRows: 10,
+            },
+          },
+          w: 12,
+          h: 4,
+        },
+      ],
+    },
+  ],
+};
