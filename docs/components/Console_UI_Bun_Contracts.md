@@ -37,18 +37,28 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | 3 | Approvals (`GET/POST /v1/approvals…`) | Phase 2 |
 | 4 | Integrity / receipts (list + verify + verify-range) | Phase 2 |
 | 5 | Explore (chip query → `/v1/decisions`) | Phase 2 (simple AQL chips; full compiler later) |
+| 6 | Agents fleet + controls | Phase 3 |
+| 7 | Incidents + evidence pack | Phase 3 |
+| 8 | MCP registry + quarantine | Phase 3 |
+| 9 | Approval edit + evidence export | Phase 3 |
 
-### Phase 2 API map
+### Phase 2–3 API map
 
 | UI action | Gateway |
 |---|---|
 | List pending approvals | `GET /v1/approvals` |
 | Approve | `POST /v1/approvals/:id/approve` body `{approver_user_id, reason}` |
 | Reject | `POST /v1/approvals/:id/reject` body `{approver_user_id, reason}` |
+| Edit (re-hash) | `POST /v1/approvals/:id/edit` body `{approver_user_id, edited_tool_call, reason}` |
 | List receipts | `GET /v1/receipts?limit=` |
 | Verify one | `GET /v1/receipts/:id/verify` (`verified` boolean, fail-closed normalize) |
 | Verify range | `POST /v1/receipts/verify-range` |
+| Investigation export | `POST /v1/evidence/export` → ZIP |
+| Compliance export | `GET /v1/compliance/evidence-pack` → ZIP |
 | Explore | `GET /v1/decisions?limit=&q=&agent_id=&decision=&source_trust=&skill=` |
+| Agents | `GET /v1/agents`; `POST …/freeze|unfreeze|restore|revoke` |
+| Incidents | `GET /v1/incidents`; `GET /v1/incidents/:id`; `GET …/evidence-pack` |
+| MCP | `GET /v1/mcp/servers`; tools; quarantine/restore |
 
 ## 5. Build commands
 
@@ -60,10 +70,20 @@ bun run build
 # serve: gateway reads ui/dist (copy or cutover path)
 ```
 
-## 6. Dual-tree period
+## 6. Dual-tree period & cutover plan (Phase 4)
 
 Until cutover, **legacy `ui/` (Next)** remains the production console.  
-**`ui-next/`** is the rewrite scaffold. Do not delete Next until P0 Playwright passes.
+**`ui-next/`** is the rewrite SPA. Do not delete Next until P0 Playwright passes.
+
+### Cutover checklist (not executed in Phase 3)
+
+1. **CI:** `bun test` + `bun run build` in `ui-next/` on every PR; cache Bun.
+2. **Docker/gateway:** build stage uses Bun to emit `ui-next/dist` (or rename to `ui/dist`) with `base: /dashboard/`.
+3. **Gateway serve path:** `src/src/routes/dashboard.rs` continues to serve static `/dashboard/*` + inject CSRF meta on index — no API change required if asset base stays `/dashboard/`.
+4. **Parity gate:** Playwright P0: Settings tenant gate, Overview stats, Approvals list, Integrity verify, Explore search, Agents list, Incidents list, MCP list.
+5. **Feature flag (optional):** `AEGIS_UI_BUNDLE=next|legacy` during soak; default legacy until green.
+6. **Remove Next `ui/`** only after one release with Bun SPA as sole dashboard.
+7. **Rollback:** keep previous image tag with Next `ui/dist` for one release window.
 
 ## 7. Theme contract (product of record)
 

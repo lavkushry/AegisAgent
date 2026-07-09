@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Check,
+  Download,
   Loader2,
   ShieldCheck,
   X,
@@ -18,6 +19,11 @@ import {
   verifyReceiptRange,
   type VerifyResult,
 } from "@/domains/receipts";
+import {
+  downloadComplianceEvidencePack,
+  exportInvestigationEvidence,
+} from "@/domains/evidence";
+import { triggerBlobDownload } from "@/lib/http/client";
 import { errorMessage, formatTime } from "@/lib/format";
 
 type RowState =
@@ -44,6 +50,10 @@ export function IntegrityPage() {
 
   const [rowStates, setRowStates] = useState<Record<string, RowState>>({});
   const [rangeResult, setRangeResult] = useState<RowState>({ status: "idle" });
+  const [exporting, setExporting] = useState<"investigation" | "compliance" | null>(
+    null,
+  );
+  const [exportFlash, setExportFlash] = useState<string | null>(null);
 
   const { data, error, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["receipts", gatewayUrl, bearerToken, activeTenant],
@@ -82,6 +92,28 @@ export function IntegrityPage() {
     }
   };
 
+  const runExport = async (kind: "investigation" | "compliance") => {
+    setExporting(kind);
+    setExportFlash(null);
+    try {
+      const blob =
+        kind === "investigation"
+          ? await exportInvestigationEvidence(apiOpts, {})
+          : await downloadComplianceEvidencePack(apiOpts);
+      triggerBlobDownload(
+        blob,
+        kind === "investigation"
+          ? `aegis-investigation-evidence-${Date.now()}.zip`
+          : `aegis-compliance-evidence-${Date.now()}.zip`,
+      );
+      setExportFlash(`${kind} evidence pack downloaded.`);
+    } catch (err: unknown) {
+      setExportFlash(errorMessage(err));
+    } finally {
+      setExporting(null);
+    }
+  };
+
   if (!tenantReady) {
     return <TenantGate title="Select a tenant for Integrity" />;
   }
@@ -116,6 +148,26 @@ export function IntegrityPage() {
           </button>
           <button
             type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--border-default)] px-3 py-1.5 text-xs text-[var(--text-secondary)] disabled:opacity-50"
+            disabled={exporting !== null}
+            onClick={() => runExport("investigation")}
+            title="POST /v1/evidence/export"
+          >
+            <Download size={12} />
+            {exporting === "investigation" ? "Exporting…" : "Investigation pack"}
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--border-default)] px-3 py-1.5 text-xs text-[var(--text-secondary)] disabled:opacity-50"
+            disabled={exporting !== null}
+            onClick={() => runExport("compliance")}
+            title="GET /v1/compliance/evidence-pack"
+          >
+            <Download size={12} />
+            {exporting === "compliance" ? "Exporting…" : "Compliance pack"}
+          </button>
+          <button
+            type="button"
             className="rounded-md border border-[var(--border-default)] px-3 py-1.5 text-xs text-[var(--text-secondary)]"
             onClick={() => refetch()}
           >
@@ -123,6 +175,12 @@ export function IntegrityPage() {
           </button>
         </div>
       </div>
+
+      {exportFlash ? (
+        <p className="text-[11px] text-[var(--text-secondary)]" role="status">
+          {exportFlash}
+        </p>
+      ) : null}
 
       {rangeResult.status !== "idle" ? (
         <div

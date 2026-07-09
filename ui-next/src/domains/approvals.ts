@@ -132,3 +132,51 @@ export function rejectApproval(
     { approver_user_id: approverUserId, reason },
   );
 }
+
+export function editApproval(
+  opts: FetchOptions,
+  id: string,
+  approverUserId: string,
+  editedToolCall: AuthorizeToolCall,
+  reason: string,
+) {
+  return fetchFromGateway<Record<string, unknown>>(
+    opts,
+    `/v1/approvals/${encodeURIComponent(id)}/edit`,
+    "POST",
+    {
+      approver_user_id: approverUserId,
+      edited_tool_call: editedToolCall,
+      reason,
+    },
+  );
+}
+
+export type ParseEditedToolCallResult =
+  | { ok: true; editedToolCall: AuthorizeToolCall }
+  | { ok: false; error: string };
+
+/** Edit re-hashes + re-evaluates on the gateway (parameters JSON only). */
+export function parseEditedToolCall(
+  approval: ApprovalRecord,
+  parametersJson: string,
+): ParseEditedToolCallResult {
+  let parsedParameters: unknown;
+  try {
+    parsedParameters = JSON.parse(parametersJson);
+  } catch {
+    return { ok: false, error: "Parameters must be valid JSON." };
+  }
+  const call = currentToolCall(approval);
+  if (!call) {
+    return {
+      ok: false,
+      error:
+        "The gateway did not return the frozen tool call; editing is disabled.",
+    };
+  }
+  return {
+    ok: true,
+    editedToolCall: { ...call, parameters: parsedParameters },
+  };
+}

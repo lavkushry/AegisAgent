@@ -89,3 +89,50 @@ export async function probeLivez(
     return false;
   }
 }
+
+/** Binary download (evidence packs). Fail-closed on non-2xx. */
+export async function downloadFromGateway(
+  options: FetchOptions,
+  path: string,
+  method: "GET" | "POST" = "GET",
+  body?: unknown,
+): Promise<Blob> {
+  const url = `${options.gatewayUrl.replace(/\/+$/, "")}${path}`;
+  const hasBody = body !== undefined;
+  const headers = buildGatewayHeaders(options, hasBody);
+  // Prefer zip for export endpoints; Accept still ok as */*
+  headers.Accept = "application/zip, application/octet-stream, */*";
+  const response = await fetch(url, {
+    method,
+    headers,
+    signal: options.signal,
+    body: hasBody ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok) {
+    let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+    try {
+      const errJson: unknown = await response.json();
+      if (
+        typeof errJson === "object" &&
+        errJson !== null &&
+        "message" in errJson &&
+        typeof (errJson as { message: unknown }).message === "string"
+      ) {
+        errorMsg = (errJson as { message: string }).message;
+      }
+    } catch {
+      // keep status message
+    }
+    throw new GatewayRequestError(errorMsg, response.status);
+  }
+  return response.blob();
+}
+
+export function triggerBlobDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}

@@ -44,13 +44,16 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | 0 Contracts freeze | Done |
 | 1 Scaffold + Settings + Overview + Dark SOC shell | Done |
 | 2 Approvals / Integrity / Explore port | Done (simple Explore chips; full AQL later) |
-| 3 Full surface parity (fleet, incidents, dashboards, …) | Pending |
+| 3 Fleet / Incidents / MCP / edit / evidence export | Done |
 | 4 Gateway cutover `ui-next/dist` → production path | Pending |
 
-### Phase 2 routes
+### Routes
 
 | Path | Notes |
 |---|---|
-| `/dashboard/approvals` | Queue + approve/reject bound to `action_hash` |
-| `/dashboard/integrity` | Receipt list, per-row verify, verify-range |
+| `/dashboard/approvals` | Queue + approve / reject / **edit** (re-hash) |
+| `/dashboard/integrity` | Receipts, verify, range, investigation + compliance packs |
 | `/dashboard/explore` | Decision search with `field:value` chips |
+| `/dashboard/agents` | Fleet + freeze / unfreeze / restore / revoke |
+| `/dashboard/incidents` | Cases + per-incident evidence-pack ZIP |
+| `/dashboard/mcp` | MCP registry, tools, quarantine / restore |
