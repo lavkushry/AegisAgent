@@ -52,7 +52,12 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | D Dashboard editor + `/v1/soc/dashboards` | Done |
 | E E2E expansion + remove legacy Next `ui/` | Done |
 | F Hardening (a11y, redact, mocked #1638) | Done |
-| Post | System catalog templates, lazy routes, E2E fixes |
+| Post catalog — 10 system dashboard templates (#1815–#1820) | Done |
+| Charts — `timeseries` + `heatmap` via `soc-query` (#1821–#1822) | Done |
+| Differentiators — approval-card, provable-timeline, receipt-integrity (#1824–#1826) | Done |
+| Fleet graphs — agent-risk-map, decision-graph (#1827–#1828) | Done |
+
+Panel inventory and system boards: [`docs/components/Console_UI.md`](../docs/components/Console_UI.md).
 
 ### Routes
 
@@ -74,3 +79,7 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 ### System dashboard templates (editor copy-only)
 
 `overview`, `integrity`, `fleet`, `approvals`, `incidents`, `detections`, `mcp`, `rules`, `alerting`, `explore`
+
+### Registered panel types
+
+`stat` · `table` · `timeseries` · `heatmap` · `status` · `feed` · `note` · `approval-card` · `provable-timeline` · `receipt-integrity` · `agent-risk-map` · `decision-graph`

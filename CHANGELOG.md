@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **SOC console panel suite complete (`ui-next/`)** — allowlisted panel types
+  are all registered: pure-SVG `timeseries` / `heatmap` on `POST /v1/soc/query`
+  (#1821–#1822); differentiators `approval-card`, `provable-timeline`,
+  `receipt-integrity` (#1824–#1826); `agent-risk-map` (risk scoreboard) and
+  `decision-graph` (evidence graph SVG) (#1827–#1828). System boards in
+  `ui-next/src/dashboards/system/` embed these panels. Inventory:
+  `docs/components/Console_UI.md`.
+
 ### Performance
 
 - **#1337: MCP authorize-path latency** — bounded LRU caches for MCP server/tool
