@@ -1,29 +1,97 @@
-# Active tasks — pre-production
+# Active tasks — pre-production remaining work
+
+Source of truth for **shipped** features: root [`CLAUDE.md`](../../../CLAUDE.md)
+and [`docs/feature_history.md`](../../../docs/feature_history.md).
+
+Source of truth for **capability status**:
+[`docs/Implementation_Status.md`](../../../docs/Implementation_Status.md)
+(refreshed 2026-07-09 against `main` after #1793–#1795).
+
+This file tracks only **in-flight** and **verified remaining** production work.
+Do not re-list shipped items as open.
+
+**Verified against:** `origin/main` @ post-#1795 (investigation evidence export).
+
+---
 
 ## In flight
 
-- **Wave A (local branch `feat/cage-runner-execution-loop`)** — cage binary /
-  claim loop (P0). Not on main.
+- **`feat/cage-runner-execution-loop` (local)** — cage-runner binary / claim /
+  heartbeat / Docker execution loop. **P0.** Needs security review of host
+  Docker CLI access before merge. Not on `main` yet.
 
-## Wave B — progress
+---
 
-- [x] LLM gateway Dockerfile + Helm + compose.full
-- [x] Gateway Helm fail-closed multi-replica without Postgres
-- [x] `values-production.yaml` (JWT required, Postgres, REPLAY_STORE=db)
-- [x] JWT-only enterprise auth limitation documented (`production-hardening.md` §9)
-- [x] Postgres multi-replica guidance (§10)
-- [ ] Full Postgres GA ops path / multi-replica e2e still open (#1194 deep)
-- [ ] Native OIDC/SAML still open (edge SSO only)
+## Wave A — P0 (unknown-agent control plane)
 
-## Wave C — progress
+Blocks any claim of runtime control over non-cooperative agents.
 
-- [x] TypeScript receipt chain verifier (`sdk-typescript/src/receipts.ts`)
-- [x] Runtime Timeline console dashboard (ASE)
-- [ ] Ban/quarantine entity UI (needs entity catalog)
-- [ ] Cage runs UI (after Wave A binary)
-- [ ] Branch merge-or-close pass (~80 remotes)
+- [ ] **Cage-runner `main` + execution loop** — poll/claim runs, start Docker
+      sandbox, emit lifecycle events, report status; package Dockerfile/Helm.
+- [ ] **Gateway cage lease APIs on main** — claim / heartbeat / ownership-scoped
+      status (if not merged with cage PR).
+- [ ] **Sensor collectors + host enforcement** — real process/fs/net/secret
+      signals; execute signed pause/kill/quarantine against the host/workload.
+- [ ] **E2E unknown-agent path** — cage + egress deny + control action +
+      receipt/incident in compose or Playwright/integration harness.
+- [ ] **Egress forced path for caged runs** — not opt-in only (netns / default
+      route through proxy).
 
-## Recently closed on main
+---
 
-#1793 MCP signing · #1794 LLM gateway · #1795 evidence export · #1792 coverage
-gates · #1790/#1791 packaging
+## Wave B — P1 (production ops / HA)
+
+Blocks multi-replica and enterprise-ops claims.
+
+- [ ] **Postgres production mode (#1194)** — supported primary path, multi-
+      replica validation, Helm defaults safe for HA.
+- [ ] **Deploy packaging gaps** — Helm/Docker/compose for **cage-runner** and
+      **llm-gateway** (broker chart if split out); full-stack Helm story.
+- [ ] **OIDC/SAML for console/admin** — or explicit “JWT-only” enterprise
+      limitation in public docs.
+- [ ] **Production install checklist enforced** — `AEGIS_JWT_REQUIRED`,
+      `AEGIS_ADMIN_API_KEY`, `AEGIS_REPLAY_STORE=db`, TLS, demo mode off,
+      backups/retention (see `docs/production-hardening.md` §8).
+
+---
+
+## Wave C — P2 (product surface / honesty)
+
+- [ ] **UI Phase 9.2–9.3** — cage runs, ban/quarantine centers, prompt/model/
+      egress timelines, evidence export UX, policy center.
+- [ ] **TypeScript receipt chain verifier** parity with Python/Go.
+- [ ] **Go/TS prompt-model emit** parity with Python Phase 7.2.
+- [ ] **Ban/quarantine enforcement** at all choke points (egress, broker,
+      cage start, sensor), not only store + partial preflight.
+- [ ] **Standalone MCP proxy binary** (optional product line; Lite remains prod).
+- [ ] **Branch hygiene** — merge-or-close pass on ~80 remote branches (no bulk
+      delete without one-by-one review).
+- [ ] **Docs stay current** — update `Implementation_Status.md` in the same PR
+      as capability landings (validator enforces required row labels).
+
+---
+
+## Recently closed (do not re-open as missing)
+
+| Item | Landing |
+|------|---------|
+| MCP manifest Ed25519 signing (opt-in) | #1793 |
+| Coverage gates raised (Rust 80%, Python 78%) | #1792 |
+| Sensor + egress-proxy packaging (Docker/Helm/compose) | #1790 / #1791 |
+| Phase 7.1 prompt/model schemas | #1775 |
+| Phase 7.2 Python SDK capture | #1776 |
+| Phase 7.3 LLM gateway adapter | #1794 |
+| Phase 8.3 investigation evidence export + checkpoints | #1795 |
+| Dead `feat/1142-*-cursor` branches | deleted (session audit) |
+
+---
+
+## Production claim matrix (quick)
+
+| Claim | Status |
+|-------|--------|
+| Known-agent integrity gateway | **Shipable** (ops checklist still required) |
+| Integrity-anchored SOC evidence | **Mostly shipable** (UI beta) |
+| Unknown-agent sandbox control | **Blocked on Wave A** |
+| Multi-replica K8s | **Blocked on Wave B / Postgres** |
+| Full enterprise console + OIDC | **Blocked on Wave B/C** |
