@@ -51,6 +51,7 @@ pub async fn register_mcp_server(
         manifest_hash: String::new(),
         last_discovery_at: None,
         inspection_enabled: false,
+        manifest_signing_public_key: payload.manifest_signing_public_key.clone(),
         created_at: Utc::now(),
     };
 
@@ -104,6 +105,29 @@ pub async fn discover_mcp_tools(
             return StatusError::internal("Database error").into_response();
         }
     };
+
+    // Closes the trust-on-first-use gap in manifest_hash-based drift
+    // detection: without this, a forged manifest submitted before or during
+    // a server's first discovery is indistinguishable from a legitimate one.
+    // Runs before ANY other logic in this handler — a rejected signature
+    // must leave zero trace (no tools written, no snapshot, no drift event,
+    // no quarantine, no pinned hash), so it must precede all of them. A
+    // server with no pinned `manifest_signing_public_key` (every
+    // pre-existing/unconfigured server) is completely unaffected.
+    if let Some(pubkey) = server.manifest_signing_public_key.as_deref() {
+        let signed_hash = mcp_manifest_signed_hash(&payload.tools);
+        let sig_valid = payload
+            .manifest_signature
+            .as_deref()
+            .map(|sig| sign::verify_signature(pubkey, &signed_hash, sig))
+            .unwrap_or(false);
+        if !sig_valid {
+            return StatusError::forbidden(
+                "Invalid or missing MCP manifest signature for a server with a pinned signing key",
+            )
+            .into_response();
+        }
+    }
 
     let new_manifest_hash = compute_mcp_manifest_hash(&payload.tools);
 
@@ -243,6 +267,7 @@ pub async fn discover_mcp_tools(
                 None,
                 None,
                 Some("quarantined"),
+                None,
                 None,
             )
             .await
@@ -584,6 +609,7 @@ pub(crate) async fn update_mcp_server_quarantine(
             None,
             Some(status),
             None,
+            None,
         )
         .await
     {
@@ -724,6 +750,10 @@ pub async fn update_mcp_server(
             payload.endpoint.as_deref(),
             payload.status.as_deref(),
             payload.inspection_enabled,
+            payload
+                .manifest_signing_public_key
+                .as_ref()
+                .map(|o| o.as_deref()),
         )
         .await
     {
@@ -908,6 +938,506 @@ mod tests {
         assert!(compute_mcp_manifest_hash(&a).starts_with("sha256:"));
     }
 
+    /// MCP manifest signing: `mcp_manifest_signed_hash` is the same
+    /// order-independent, change-sensitive canonicalization as
+    /// `compute_mcp_manifest_hash` (proves the shared-helper refactor didn't
+    /// lose either property).
+    #[test]
+    fn mcp_manifest_signed_hash_is_order_independent_and_change_sensitive() {
+        let a = vec![
+            drift_tool("create_issue", "medium"),
+            drift_tool("merge", "high"),
+        ];
+        let b = vec![
+            drift_tool("merge", "high"),
+            drift_tool("create_issue", "medium"),
+        ];
+        assert_eq!(
+            mcp_manifest_signed_hash(&a),
+            mcp_manifest_signed_hash(&b),
+            "reordering tools must not change the signed hash"
+        );
+
+        let c = vec![
+            drift_tool("create_issue", "critical"),
+            drift_tool("merge", "high"),
+        ];
+        assert_ne!(
+            mcp_manifest_signed_hash(&a),
+            mcp_manifest_signed_hash(&c),
+            "changing a tool's risk must change the signed hash"
+        );
+
+        assert!(!mcp_manifest_signed_hash(&a).starts_with("sha256:"));
+    }
+
+    /// Fixed throwaway Ed25519 secret for MCP manifest-signing tests — never
+    /// used outside this test module. Mirrors `policy.rs`'s
+    /// `test_signing_key` for policy-bundle signing (#1280).
+    fn mcp_test_signing_key() -> crate::sign::ReceiptSigner {
+        crate::sign::ReceiptSigner::from_secret_hex(&"22".repeat(32)).unwrap()
+    }
+
+    fn sign_manifest(tools: &[McpToolManifestItem], signer: &crate::sign::ReceiptSigner) -> String {
+        signer.sign_hash(&mcp_manifest_signed_hash(tools))
+    }
+
+    /// Regression guard: a server with no pinned `manifest_signing_public_key`
+    /// (every pre-existing/unconfigured server) must behave exactly as before
+    /// this feature — discovery succeeds regardless of `manifest_signature`.
+    #[tokio::test]
+    async fn discover_mcp_tools_unsigned_server_ignores_signature_field() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_unsigned_server").await;
+        register_test_mcp_server(&state, &tenant_id, "mcp-unsigned").await;
+
+        let tools = vec![drift_tool("create_issue", "medium")];
+
+        // No signature at all.
+        let resp = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-unsigned".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: tools.clone(),
+                manifest_signature: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Garbage signature — still ignored, since no key is pinned.
+        let resp2 = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-unsigned".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools,
+                manifest_signature: Some("not-a-real-signature".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp2.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn discover_mcp_tools_rejects_missing_signature_when_key_pinned() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_missing_sig").await;
+        let signer = mcp_test_signing_key();
+        register_test_mcp_server_with_signing_key(
+            &state,
+            &tenant_id,
+            "mcp-signed",
+            &signer.public_key_hex(),
+        )
+        .await;
+
+        let tools = vec![drift_tool("create_issue", "medium")];
+        let resp = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools,
+                manifest_signature: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Nothing persisted: manifest hash still unpinned, no tools written.
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-signed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.manifest_hash, "");
+        assert!(state
+            .storage
+            .list_mcp_tools(&tenant_id, "mcp-signed")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn discover_mcp_tools_rejects_invalid_signature() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_invalid_sig").await;
+        let signer = mcp_test_signing_key();
+        register_test_mcp_server_with_signing_key(
+            &state,
+            &tenant_id,
+            "mcp-signed",
+            &signer.public_key_hex(),
+        )
+        .await;
+
+        let tools = vec![drift_tool("create_issue", "medium")];
+        let resp = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools,
+                manifest_signature: Some("deadbeef".repeat(16)), // well-formed hex, not valid
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-signed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.manifest_hash, "");
+    }
+
+    /// Proves the vulnerability this feature closes: an attacker who submits
+    /// a manifest whose signature doesn't cover it (signed one thing,
+    /// submitted another) must be rejected — not just outright-missing or
+    /// garbage signatures.
+    #[tokio::test]
+    async fn discover_mcp_tools_rejects_tampered_manifest_after_signing() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_tampered").await;
+        let signer = mcp_test_signing_key();
+        register_test_mcp_server_with_signing_key(
+            &state,
+            &tenant_id,
+            "mcp-signed",
+            &signer.public_key_hex(),
+        )
+        .await;
+
+        let signed_tools = vec![drift_tool("create_issue", "medium")];
+        let signature = sign_manifest(&signed_tools, &signer);
+
+        // Tamper: submit a different manifest than the one actually signed.
+        let tampered_tools = vec![drift_tool("create_issue", "critical")];
+        let resp = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: tampered_tools,
+                manifest_signature: Some(signature),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-signed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.manifest_hash, "");
+    }
+
+    #[tokio::test]
+    async fn discover_mcp_tools_accepts_valid_signature_and_pins_manifest() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_valid").await;
+        let signer = mcp_test_signing_key();
+        register_test_mcp_server_with_signing_key(
+            &state,
+            &tenant_id,
+            "mcp-signed",
+            &signer.public_key_hex(),
+        )
+        .await;
+
+        let tools = vec![drift_tool("create_issue", "medium")];
+        let signature = sign_manifest(&tools, &signer);
+        let resp = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: tools.clone(),
+                manifest_signature: Some(signature),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-signed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.manifest_hash, compute_mcp_manifest_hash(&tools));
+        assert_eq!(
+            state
+                .storage
+                .list_mcp_tools(&tenant_id, "mcp-signed")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// The signature is required on EVERY discovery call for a signed
+    /// server, not just as a one-time bootstrap check that a later,
+    /// already-pinned hash can bypass.
+    #[tokio::test]
+    async fn discover_mcp_tools_signature_required_on_every_call_not_just_first() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_every_call").await;
+        let signer = mcp_test_signing_key();
+        register_test_mcp_server_with_signing_key(
+            &state,
+            &tenant_id,
+            "mcp-signed",
+            &signer.public_key_hex(),
+        )
+        .await;
+
+        let tools = vec![drift_tool("create_issue", "medium")];
+        let signature = sign_manifest(&tools, &signer);
+
+        // First, correctly signed discovery pins the manifest.
+        let resp1 = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: tools.clone(),
+                manifest_signature: Some(signature),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp1.status(), StatusCode::OK);
+
+        // Second discovery of the SAME already-pinned manifest, unsigned —
+        // must still be rejected; a pinned hash is not a bypass.
+        let resp2 = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools,
+                manifest_signature: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp2.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Direct analog of `update_mcp_server_can_toggle_inspection_enabled`:
+    /// the PATCH endpoint can set, clear (`Some(None)`), or leave untouched
+    /// (field absent) the per-server signing key.
+    #[tokio::test]
+    async fn update_mcp_server_can_set_and_clear_manifest_signing_public_key() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_patch_toggle").await;
+        register_test_mcp_server(&state, &tenant_id, "mcp-patch-key").await;
+
+        // Set.
+        let resp = update_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-patch-key".to_string()),
+            Json(UpdateMcpServerRequest {
+                name: None,
+                owner_team: None,
+                transport: None,
+                source: None,
+                trust_level: None,
+                endpoint: None,
+                status: None,
+                inspection_enabled: None,
+                manifest_signing_public_key: Some(Some("aa".repeat(32))),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-patch-key")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.manifest_signing_public_key, Some("aa".repeat(32)));
+
+        // Field absent from the patch — must leave it untouched.
+        let resp2 = update_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-patch-key".to_string()),
+            Json(UpdateMcpServerRequest {
+                name: Some("renamed".to_string()),
+                owner_team: None,
+                transport: None,
+                source: None,
+                trust_level: None,
+                endpoint: None,
+                status: None,
+                inspection_enabled: None,
+                manifest_signing_public_key: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let server2 = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-patch-key")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server2.manifest_signing_public_key, Some("aa".repeat(32)));
+
+        // Clear.
+        let resp3 = update_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-patch-key".to_string()),
+            Json(UpdateMcpServerRequest {
+                name: None,
+                owner_team: None,
+                transport: None,
+                source: None,
+                trust_level: None,
+                endpoint: None,
+                status: None,
+                inspection_enabled: None,
+                manifest_signing_public_key: Some(None),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp3.status(), StatusCode::OK);
+        let server3 = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-patch-key")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server3.manifest_signing_public_key, None);
+    }
+
+    /// Closes the literal "forged manifest submitted on first registration"
+    /// scenario: a server can be signature-gated from its very first
+    /// discovery call, not just after a later PATCH.
+    #[tokio::test]
+    async fn register_mcp_server_can_set_manifest_signing_public_key_at_registration() {
+        let (state, tenant_id, _) = setup_state("mcp_sign_at_registration").await;
+        let signer = mcp_test_signing_key();
+        register_test_mcp_server_with_signing_key(
+            &state,
+            &tenant_id,
+            "mcp-signed-from-start",
+            &signer.public_key_hex(),
+        )
+        .await;
+
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-signed-from-start")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            server.manifest_signing_public_key,
+            Some(signer.public_key_hex())
+        );
+
+        let resp = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed-from-start".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: vec![drift_tool("create_issue", "medium")],
+                manifest_signature: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Proves check ordering end-to-end: a rejected signature must not leak
+    /// through to drift classification/SOC emission/auto-quarantine, even
+    /// when the (invalid-signature) payload would otherwise classify as
+    /// high-severity drift.
+    #[tokio::test]
+    async fn discover_mcp_tools_signature_rejection_does_not_emit_drift_event() {
+        let (state, tenant_id, _, mut events_rx) =
+            setup_state_with_events("mcp_sign_no_drift_leak").await;
+        let signer = mcp_test_signing_key();
+        register_test_mcp_server_with_signing_key(
+            &state,
+            &tenant_id,
+            "mcp-signed",
+            &signer.public_key_hex(),
+        )
+        .await;
+
+        let tools = vec![drift_tool("create_issue", "medium")];
+        let signature = sign_manifest(&tools, &signer);
+        let resp1 = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools,
+                manifest_signature: Some(signature),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp1.status(), StatusCode::OK);
+
+        // A genuinely drift-worthy change (new tool added, high severity),
+        // but with an invalid signature.
+        let drifted_tools = vec![
+            drift_tool("create_issue", "medium"),
+            drift_tool("delete_repo", "critical"),
+        ];
+        let resp2 = discover_mcp_tools(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path("mcp-signed".to_string()),
+            Json(DiscoverMcpToolsRequest {
+                tools: drifted_tools,
+                manifest_signature: Some("deadbeef".repeat(16)),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp2.status(), StatusCode::FORBIDDEN);
+
+        let mut drift_events = 0;
+        while let Ok(ev) = events_rx.try_recv() {
+            if ev.kind == "mcp_manifest_drift" {
+                drift_events += 1;
+            }
+        }
+        assert_eq!(
+            drift_events, 0,
+            "a rejected signature must never reach drift classification/emission"
+        );
+
+        let server = state
+            .storage
+            .get_mcp_server_by_key(&tenant_id, "mcp-signed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(server.status, "quarantined");
+    }
+
     /// #1336: a brand-new tool in the manifest classifies as `tool_added` (high).
     #[test]
     fn classify_manifest_drift_tool_added_is_high() {
@@ -1014,6 +1544,7 @@ mod tests {
         // 1) First discovery pins the manifest — no drift.
         let req1 = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "medium")],
+            manifest_signature: None,
         };
         discover_mcp_tools(
             State(state.clone()),
@@ -1026,6 +1557,7 @@ mod tests {
         // 2) Identical re-discovery — still no drift.
         let req2 = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "medium")],
+            manifest_signature: None,
         };
         discover_mcp_tools(
             State(state.clone()),
@@ -1038,6 +1570,7 @@ mod tests {
         // 3) Changed manifest (risk escalated) — must drift.
         let req3 = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "critical")],
+            manifest_signature: None,
         };
         discover_mcp_tools(
             State(state.clone()),
@@ -1110,6 +1643,7 @@ mod tests {
             Path("github-mcp".to_string()),
             Json(DiscoverMcpToolsRequest {
                 tools: vec![drift_tool("create_issue", "medium")],
+                manifest_signature: None,
             }),
         )
         .await;
@@ -1124,6 +1658,7 @@ mod tests {
                     drift_tool("create_issue", "medium"),
                     drift_tool("delete_repo", "critical"),
                 ],
+                manifest_signature: None,
             }),
         )
         .await;
@@ -1216,6 +1751,7 @@ mod tests {
             Path("github-mcp".to_string()),
             Json(DiscoverMcpToolsRequest {
                 tools: vec![create_issue_tool(false)],
+                manifest_signature: None,
             }),
         )
         .await;
@@ -1228,6 +1764,7 @@ mod tests {
             Path("github-mcp".to_string()),
             Json(DiscoverMcpToolsRequest {
                 tools: vec![create_issue_tool(true)],
+                manifest_signature: None,
             }),
         )
         .await;
@@ -1288,6 +1825,7 @@ mod tests {
 
         let req = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "medium")],
+            manifest_signature: None,
         };
         discover_mcp_tools(
             State(state.clone()),
@@ -1334,6 +1872,7 @@ mod tests {
         // First discovery.
         let req1 = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "medium")],
+            manifest_signature: None,
         };
         discover_mcp_tools(
             State(state.clone()),
@@ -1359,6 +1898,7 @@ mod tests {
         // snapshot — most-recent first.
         let req2 = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "critical")],
+            manifest_signature: None,
         };
         discover_mcp_tools(
             State(state.clone()),
@@ -1413,6 +1953,7 @@ mod tests {
             Path("github-mcp".to_string()),
             Json(DiscoverMcpToolsRequest {
                 tools: vec![drift_tool("create_issue", "medium")],
+                manifest_signature: None,
             }),
         )
         .await;
@@ -1422,6 +1963,7 @@ mod tests {
             Path("github-mcp".to_string()),
             Json(DiscoverMcpToolsRequest {
                 tools: vec![drift_tool("create_issue", "critical")],
+                manifest_signature: None,
             }),
         )
         .await;
@@ -1504,6 +2046,7 @@ mod tests {
 
         let req = DiscoverMcpToolsRequest {
             tools: vec![drift_tool("create_issue", "medium"), approval_required_tool],
+            manifest_signature: None,
         };
         let response = discover_mcp_tools(
             State(state.clone()),
@@ -1754,6 +2297,7 @@ mod tests {
             source: Some("npx".to_string()),
             trust_level: "semi_trusted".to_string(),
             endpoint: "http://localhost:5001".to_string(),
+            manifest_signing_public_key: None,
         };
         let _ = register_mcp_server(
             State(state.clone()),
@@ -1771,6 +2315,7 @@ mod tests {
             source: None,
             trust_level: "trusted_internal".to_string(),
             endpoint: "http://localhost:5002".to_string(),
+            manifest_signing_public_key: None,
         };
         let _ = register_mcp_server(
             State(state.clone()),
@@ -1816,6 +2361,7 @@ mod tests {
             endpoint: Some("http://internal-gateway:8081".to_string()),
             status: Some("active".to_string()),
             inspection_enabled: None,
+            manifest_signing_public_key: None,
         };
         let update_resp = update_mcp_server(
             State(state.clone()),
@@ -1847,6 +2393,7 @@ mod tests {
                 endpoint: None,
                 status: None,
                 inspection_enabled: None,
+                manifest_signing_public_key: None,
             }),
         )
         .await
@@ -1867,6 +2414,32 @@ mod tests {
                 source: None,
                 trust_level: "semi_trusted".to_string(),
                 endpoint: "http://localhost:5099".to_string(),
+                manifest_signing_public_key: None,
+            }),
+        )
+        .await;
+    }
+
+    /// Like [`register_test_mcp_server`], but pins `manifest_signing_public_key`
+    /// from registration onward, for the manifest-signing test suite.
+    async fn register_test_mcp_server_with_signing_key(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        server_key: &str,
+        signing_public_key_hex: &str,
+    ) {
+        let _ = register_mcp_server(
+            State(state.clone()),
+            TenantId(tenant_id.to_string()),
+            Json(RegisterMcpServerRequest {
+                server_key: server_key.to_string(),
+                name: "Signed Test MCP Server".to_string(),
+                owner_team: None,
+                transport: "http".to_string(),
+                source: None,
+                trust_level: "semi_trusted".to_string(),
+                endpoint: "http://localhost:5099".to_string(),
+                manifest_signing_public_key: Some(signing_public_key_hex.to_string()),
             }),
         )
         .await;
@@ -1901,6 +2474,7 @@ mod tests {
                 endpoint: None,
                 status: None,
                 inspection_enabled: Some(true),
+                manifest_signing_public_key: None,
             }),
         )
         .await
@@ -1924,6 +2498,7 @@ mod tests {
                 endpoint: None,
                 status: None,
                 inspection_enabled: Some(false),
+                manifest_signing_public_key: None,
             }),
         )
         .await

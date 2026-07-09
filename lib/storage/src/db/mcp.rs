@@ -347,13 +347,14 @@ pub async fn register_mcp_server(
     pool: &DbPool,
     record: &McpServerRecord,
 ) -> Result<(), sqlx::Error> {
-    crate::execute_query!(pool, "INSERT INTO mcp_servers (id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint, status, inspection_enabled, version) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+    crate::execute_query!(pool, "INSERT INTO mcp_servers (id, tenant_id, server_key, name, owner_team, transport, source, trust_level, endpoint, status, inspection_enabled, manifest_signing_public_key, version) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(tenant_id, server_key) DO UPDATE SET \
             name=excluded.name, owner_team=excluded.owner_team, transport=excluded.transport, \
             source=excluded.source, trust_level=excluded.trust_level, endpoint=excluded.endpoint, \
-            status=excluded.status, inspection_enabled=excluded.inspection_enabled, version=excluded.version, \
-            deleted_at=NULL", &record.id, &record.tenant_id, &record.server_key, &record.name, &record.owner_team, &record.transport, &record.source, &record.trust_level, &record.endpoint, &record.status, record.inspection_enabled, &record.version)?;
+            status=excluded.status, inspection_enabled=excluded.inspection_enabled, \
+            manifest_signing_public_key=excluded.manifest_signing_public_key, version=excluded.version, \
+            deleted_at=NULL", &record.id, &record.tenant_id, &record.server_key, &record.name, &record.owner_team, &record.transport, &record.source, &record.trust_level, &record.endpoint, &record.status, record.inspection_enabled, &record.manifest_signing_public_key, &record.version)?;
     Ok(())
 }
 
@@ -398,6 +399,7 @@ pub async fn update_mcp_server(
     trust_level: Option<&str>,
     endpoint: Option<&str>,
     status: Option<&str>,
+    manifest_signing_public_key: Option<Option<&str>>,
 ) -> Result<bool, sqlx::Error> {
     let mut query_str = "UPDATE mcp_servers SET ".to_string();
     let mut bindings = Vec::new();
@@ -429,6 +431,10 @@ pub async fn update_mcp_server(
     if let Some(st) = status {
         query_str.push_str("status = ?, ");
         bindings.push(Some(st.to_string()));
+    }
+    if let Some(k) = manifest_signing_public_key {
+        query_str.push_str("manifest_signing_public_key = ?, ");
+        bindings.push(k.map(|s| s.to_string()));
     }
 
     if bindings.is_empty() {

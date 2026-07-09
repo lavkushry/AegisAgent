@@ -1464,18 +1464,15 @@ pub(crate) fn normalize_tool_identifier(value: &str) -> String {
     decoded.nfc().collect::<String>().trim().to_lowercase()
 }
 
-/// Deterministic, order-independent hash of an MCP server's advertised tool
-/// manifest. Re-discovery recomputes this and compares it to the value pinned on
-/// the server row; a mismatch is tool-manifest drift (supply-chain / tool-hijack
-/// signal — the threat the `mcp_manifest_drift` SOC rule surfaces).
-///
-/// This is a server-integrity hash, NOT the byte-parity-locked `aegis-jcs-1`
-/// action/receipt hash, so it carries its own `mcp-manifest-1` scheme tag and is
-/// not covered by the cross-language corpus. It hashes only the security-relevant
-/// shape of each tool (key, name, description, risk, mutation, approval, input
-/// schema) — never any call payload. Tools are sorted by `tool_key` so discovery
-/// order never changes the hash.
-pub(crate) fn compute_mcp_manifest_hash(tools: &[McpToolManifestItem]) -> String {
+/// Order-independent, subset-extracted canonical value shared by
+/// [`compute_mcp_manifest_hash`] (drift-detection hash) and
+/// [`mcp_manifest_signed_hash`] (signature-verification message) — factored
+/// out so both hash the identical bytes, just with different final wrapping.
+/// Hashes only the security-relevant shape of each tool (key, name,
+/// description, risk, mutation, approval, input schema) — never any call
+/// payload. Tools are sorted by `tool_key` so discovery order never changes
+/// the result.
+fn mcp_manifest_canonical_value(tools: &[McpToolManifestItem]) -> Value {
     let mut entries: Vec<Value> = tools
         .iter()
         .map(|t| {
@@ -1500,8 +1497,34 @@ pub(crate) fn compute_mcp_manifest_hash(tools: &[McpToolManifestItem]) -> String
                     .unwrap_or_default(),
             )
     });
-    let canonical = canonical_value_string(&Value::Array(entries));
+    Value::Array(entries)
+}
+
+/// Deterministic, order-independent hash of an MCP server's advertised tool
+/// manifest. Re-discovery recomputes this and compares it to the value pinned on
+/// the server row; a mismatch is tool-manifest drift (supply-chain / tool-hijack
+/// signal — the threat the `mcp_manifest_drift` SOC rule surfaces).
+///
+/// This is a server-integrity hash, NOT the byte-parity-locked `aegis-jcs-1`
+/// action/receipt hash, so it carries its own `mcp-manifest-1` scheme tag and is
+/// not covered by the cross-language corpus.
+pub(crate) fn compute_mcp_manifest_hash(tools: &[McpToolManifestItem]) -> String {
+    let canonical = canonical_value_string(&mcp_manifest_canonical_value(tools));
     format!("sha256:{}", sha256_hex(canonical.as_bytes()))
+}
+
+/// The message an external MCP-server operator signs (and this gateway
+/// verifies via `sign::verify_signature`) to prove a discovered tool
+/// manifest actually came from them, not a forger — closes the
+/// first-discovery trust-on-first-use gap that `compute_mcp_manifest_hash`
+/// alone cannot close, since a hash only detects *drift* on servers that
+/// already have something pinned. Same canonical bytes as
+/// `compute_mcp_manifest_hash`, unprefixed plain sha256 hex (mirrors
+/// `policy_bundle_signed_hash`'s output style in `routes/policy.rs`), so
+/// this is a distinct signable message, not a hash-of-a-hash.
+pub(crate) fn mcp_manifest_signed_hash(tools: &[McpToolManifestItem]) -> String {
+    let canonical = canonical_value_string(&mcp_manifest_canonical_value(tools));
+    sha256_hex(canonical.as_bytes())
 }
 
 /// #1336: classify MCP manifest drift and describe what changed between the
