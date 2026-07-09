@@ -26,7 +26,11 @@ struct Cli {
     listen: String,
 
     /// Upstream model provider base URL (e.g. https://api.openai.com).
-    #[arg(long, env = "AEGIS_LLM_UPSTREAM", default_value = "https://api.openai.com")]
+    #[arg(
+        long,
+        env = "AEGIS_LLM_UPSTREAM",
+        default_value = "https://api.openai.com"
+    )]
     upstream: String,
 
     /// Provider label stored on lineage events (openai, anthropic, azure, …).

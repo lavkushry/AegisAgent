@@ -1,4 +1,4 @@
--- See lib/storage/migrations/0044_agent_run_cage_execution.sql for full
+-- See lib/storage/migrations/0045_agent_run_cage_execution.sql for full
 -- rationale. Kept in lockstep across both migration directories.
 ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS claimed_by TEXT;
 ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP WITH TIME ZONE;

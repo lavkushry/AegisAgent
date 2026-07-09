@@ -60,8 +60,7 @@ pub fn redact_text(text: &str, max_len: usize) -> String {
             // For "bearer " the marker already includes a trailing space; the
             // token follows. Consume the token as well.
             if marker.ends_with(' ') {
-                while end < bytes.len() && !bytes[end].is_ascii_whitespace() && bytes[end] != b'"'
-                {
+                while end < bytes.len() && !bytes[end].is_ascii_whitespace() && bytes[end] != b'"' {
                     end += 1;
                 }
             }

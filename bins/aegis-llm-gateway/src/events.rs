@@ -243,7 +243,9 @@ mod tests {
         sink.record(
             ModelCallEvent::finished("e1", "openai", "gpt-4o-mini", "success")
                 .with_response_hash("b".repeat(64))
-                .with_token_counts(serde_json::json!({"prompt_tokens": 10, "completion_tokens": 5})),
+                .with_token_counts(
+                    serde_json::json!({"prompt_tokens": 10, "completion_tokens": 5}),
+                ),
         );
         let events = sink.events();
         assert_eq!(events.len(), 2);

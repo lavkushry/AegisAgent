@@ -1434,7 +1434,6 @@ pub struct ReceiptCheckpointRecord {
     pub created_at: DateTime<Utc>,
 }
 
-
 /// #1312: tamper-evident, append-only transparency-log entry for a policy
 /// change (create/update/delete/rollback). Hash-chained like
 /// [`ActionReceiptRecord`] — `entry_hash` covers `prev_hash`, so the chain can
