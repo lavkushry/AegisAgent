@@ -1131,6 +1131,69 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn insert_agent_run_with_start_command(
+        &self,
+        run: &AgentRunRecord,
+        start_command: Option<&ControlCommandRecord>,
+    ) -> Result<(), AegisError> {
+        db::insert_agent_run_with_start_command(&self.pool, run, start_command)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn claim_agent_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        runner_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::claim_agent_run(&self.pool, tenant_id, run_id, runner_id, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn heartbeat_agent_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        runner_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AegisError> {
+        db::heartbeat_agent_run(&self.pool, tenant_id, run_id, runner_id, now)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn update_claimed_agent_run_status(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        runner_id: &str,
+        status: &str,
+        finished_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, AegisError> {
+        db::update_claimed_agent_run_status(
+            &self.pool,
+            tenant_id,
+            run_id,
+            runner_id,
+            status,
+            finished_at,
+        )
+        .await
+        .map_err(AegisError::Database)
+    }
+
+    async fn mark_stale_agent_runs_stalled(
+        &self,
+        threshold: DateTime<Utc>,
+    ) -> Result<u64, AegisError> {
+        db::mark_stale_agent_runs_stalled(&self.pool, threshold)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // Runtime events (Phase 2.2)
     async fn insert_runtime_event(&self, record: &RuntimeEventRecord) -> Result<bool, AegisError> {
         db::insert_runtime_event(&self.pool, record)

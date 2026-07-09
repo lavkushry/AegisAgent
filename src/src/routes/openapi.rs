@@ -130,6 +130,9 @@ use utoipa::OpenApi;
         pause_agent_cage_run_api,
         quarantine_agent_cage_run_api,
         resume_agent_cage_run_api,
+        claim_agent_cage_run_api,
+        heartbeat_agent_cage_run_api,
+        update_agent_cage_run_status_api,
         get_agent_risk_scoreboard_api,
         list_bans_api,
         get_ban_api,
@@ -1759,6 +1762,36 @@ fn quarantine_agent_cage_run_api() {}
     )
 )]
 fn resume_agent_cage_run_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agent-cage/runs/{id}/claim",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Atomically claim an agent cage run")
+    )
+)]
+fn claim_agent_cage_run_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agent-cage/runs/{id}/heartbeat",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Refresh the claiming runner's lease on an agent cage run")
+    )
+)]
+fn heartbeat_agent_cage_run_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/agent-cage/runs/{id}/status",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Report an agent cage run's status transition")
+    )
+)]
+fn update_agent_cage_run_status_api() {}
 
 #[utoipa::path(
     get,

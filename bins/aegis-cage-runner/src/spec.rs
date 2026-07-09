@@ -159,6 +159,15 @@ impl SandboxSpec {
         if self.image.image_ref.trim().is_empty() {
             return Err(CageError::InvalidSpec("image.ref must not be empty".into()));
         }
+        // Defense in depth alongside docker_cli.rs's `--` end-of-options
+        // marker: a leading `-` would otherwise let a spec masquerade as a
+        // docker CLI flag (e.g. "--privileged") if that guard were ever
+        // weakened or bypassed by a future refactor.
+        if self.image.image_ref.starts_with('-') {
+            return Err(CageError::InvalidSpec(
+                "image.ref must not start with '-'".into(),
+            ));
+        }
         if self.command.is_empty() {
             return Err(CageError::InvalidSpec("command must not be empty".into()));
         }
@@ -253,6 +262,14 @@ mod tests {
     #[test]
     fn minimal_spec_validates_cleanly() {
         minimal_spec().validate().unwrap();
+    }
+
+    #[test]
+    fn image_ref_starting_with_dash_is_rejected() {
+        let mut spec = minimal_spec();
+        spec.image.image_ref = "--privileged".to_string();
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("must not start with '-'"));
     }
 
     #[test]

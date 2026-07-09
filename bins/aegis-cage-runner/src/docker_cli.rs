@@ -81,6 +81,12 @@ fn build_create_args(
         args.push(format!("{key}={value}"));
     }
 
+    // `--` marks the end of docker-create's own flags: without it, an
+    // `image_ref` or leading `command` token starting with `-` (e.g.
+    // "--privileged") is parsed as a docker CLI flag instead of the image
+    // name, letting a tenant-supplied spec silently override the isolation
+    // flags set above (see security review, cage-runner execution loop PR).
+    args.push("--".to_string());
     args.push(spec.image.image_ref.clone());
     args.extend(spec.command.iter().cloned());
     args
@@ -160,4 +166,80 @@ pub async fn inspect_status(container_id: &str) -> Result<SandboxState, CageErro
             None
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::{ImageSpec, NetworkSpec, ResourceLimits, ToolingSpec, WorkspaceSpec};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn spec_with(image_ref: &str, command: Vec<&str>) -> SandboxSpec {
+        SandboxSpec {
+            tenant_id: "tenant_a".to_string(),
+            run_id: "run_1".to_string(),
+            agent_id: "anon".to_string(),
+            sandbox_id: "sandbox_1".to_string(),
+            mode: "observe".to_string(),
+            image: ImageSpec {
+                image_ref: image_ref.to_string(),
+                digest: "sha256:abc".to_string(),
+                read_only_rootfs: true,
+            },
+            command: command.into_iter().map(str::to_string).collect(),
+            working_dir: "/workspace".to_string(),
+            workspace: WorkspaceSpec {
+                template_id: None,
+                max_bytes: 104_857_600,
+                max_files: 10_000,
+                preserve_on_failure: false,
+            },
+            resources: ResourceLimits {
+                cpu_millis: 1000,
+                memory_bytes: 1_073_741_824,
+                process_limit: 128,
+                timeout_seconds: 900,
+                max_stdout_bytes: None,
+                max_stderr_bytes: None,
+            },
+            network: NetworkSpec::default(),
+            tooling: ToolingSpec::default(),
+            environment: HashMap::new(),
+            controlled_mounts: Vec::new(),
+        }
+    }
+
+    /// Regression test for the argument-injection finding from the
+    /// cage-runner execution-loop security review: without a `--`
+    /// end-of-options marker, an `image_ref`/`command` starting with `-`
+    /// would be parsed as docker CLI flags (e.g. `--privileged`) instead of
+    /// positional image/command arguments, silently overriding the
+    /// isolation flags set earlier in `build_create_args`.
+    #[test]
+    fn end_of_options_marker_precedes_the_image_ref() {
+        let spec = spec_with("--privileged", vec!["--pid=host", "alpine"]);
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+
+        let dash_dash_pos = args
+            .iter()
+            .position(|a| a == "--")
+            .expect("build_create_args must include a `--` end-of-options marker");
+        assert_eq!(
+            args[dash_dash_pos + 1],
+            "--privileged",
+            "image_ref must immediately follow the `--` marker"
+        );
+        assert_eq!(args[dash_dash_pos + 2], "--pid=host");
+        assert_eq!(args[dash_dash_pos + 3], "alpine");
+    }
+
+    #[test]
+    fn normal_image_ref_and_command_are_placed_after_the_marker() {
+        let spec = spec_with("alpine:latest", vec!["sleep", "5"]);
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+
+        let dash_dash_pos = args.iter().position(|a| a == "--").unwrap();
+        assert_eq!(&args[dash_dash_pos + 1..], &["alpine:latest", "sleep", "5"]);
+    }
 }

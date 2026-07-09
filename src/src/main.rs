@@ -1014,6 +1014,17 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/agent-cage/runs/:id/quarantine",
             post(routes::quarantine_run),
         )
+        // aegis-cage-runner execution loop: atomic claim + heartbeat +
+        // ownership-scoped status reporting.
+        .route("/agent-cage/runs/:id/claim", post(routes::claim_run))
+        .route(
+            "/agent-cage/runs/:id/heartbeat",
+            post(routes::heartbeat_run),
+        )
+        .route(
+            "/agent-cage/runs/:id/status",
+            post(routes::update_run_status),
+        )
         // Runtime control plane (Phase 2.7): bans, quarantine, control commands
         .route("/bans", post(routes::create_ban).get(routes::list_bans))
         .route("/bans/:id", get(routes::get_ban))
@@ -1690,6 +1701,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .abort_handle();
 
+    // aegis-cage-runner execution loop: periodically flip claimed/running
+    // agent_runs whose lease has gone stale (runner crashed/killed/lost
+    // network) to `stalled`, so an operator can see a stuck run rather than
+    // it being silently lost forever.
+    let agent_run_stall_sweep_interval_secs: u64 =
+        std::env::var("AEGIS_AGENT_RUN_STALL_SWEEP_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(jobs::DEFAULT_AGENT_RUN_STALL_SWEEP_INTERVAL_SECS);
+    let agent_run_lease_timeout_secs: i64 = std::env::var("AEGIS_AGENT_RUN_LEASE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(jobs::DEFAULT_AGENT_RUN_LEASE_TIMEOUT_SECS);
+    let agent_run_stall_sweep_abort_handle = tokio::spawn(jobs::run_agent_run_stall_sweep_job(
+        pool.clone(),
+        agent_run_stall_sweep_interval_secs,
+        agent_run_lease_timeout_secs,
+        is_leader.clone(),
+    ))
+    .abort_handle();
+
     // #0061: periodically VACUUM the database to reclaim free space left
     // behind by the audit-event archival and approval-cleanup jobs' deletes.
     // Gated on is_leader (#1149).
@@ -1780,6 +1812,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("investigation_job", investigation_abort_handle),
         ("audit_event_archival_job", audit_archival_abort_handle),
         ("approval_cleanup_job", approval_cleanup_abort_handle),
+        (
+            "agent_run_stall_sweep_job",
+            agent_run_stall_sweep_abort_handle,
+        ),
         ("vacuum_job", vacuum_abort_handle),
         ("pool_health_sampler", pool_health_sampler_abort_handle),
         ("heartbeat_flush_job", heartbeat_flush_abort_handle),
