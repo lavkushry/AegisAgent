@@ -1,7 +1,8 @@
 # Console UI contracts — Bun rewrite (product of record)
 
-**Status:** binding for `ui-next/` (production console)  
-**Related plan:** full Bun SPA rewrite (React 19 + Vite + Bun) — Phases 0–F complete
+**Status:** binding for `ui-next/` (production console) — **rewrite complete**  
+**Stack:** Bun + Vite + React 19 + TanStack Query + Zustand + react-router (`/dashboard/`)  
+**Phases:** 0–F shipped; post-phase catalog polish through Explore template (#1819)
 
 ## 1. Deploy / serve contract
 
@@ -44,7 +45,7 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | 10 | Detections / Rules / Alerting | Shipped (Phase 5) |
 | 11 | ControlsBar (time range + live stream) | Shipped (Phase C) |
 | 12 | Dashboard editor (`/v1/soc/dashboards`) | Shipped (Phase D) |
-| 13 | System dashboard catalog (copy templates) | Overview + Integrity + Fleet + Approvals + Incidents + Detections |
+| 13 | System dashboard catalog (copy templates) | Overview, Integrity, Fleet, Approvals, Incidents, Detections, MCP, Rules, Alerting, Explore |
 | 14 | Lazy routes + route error boundary | Shipped |
 
 ### Phase 2–3 API map
@@ -90,6 +91,28 @@ bun run build
 | Re-port mocked workflows (#1638) | **Done (Phase F)** — `e2e/tests/mocked-soc-workflows.spec.ts` against ui-next |
 | Display secret redaction | **Done (Phase F)** — `ui-next/src/lib/redact.ts` on Approvals tool-call previews |
 | A11y baseline | **Done (Phase F)** — skip link, `main#main-content`, Settings `aria-label`s, reduced-motion |
+| System catalog (10 boards) | **Done** — copy-only templates in `ui-next/src/dashboards/system/` |
+| Lazy routes + error boundary | **Done** — feature chunks + `RouteErrorBoundary` |
+| Playwright freeze/confirm fixes | **Done** — exact control names + ui-next Confirm labels |
+
+### 6.1 System dashboard catalog (editor)
+
+Read-only templates under **System (read-only)** on `/dashboard/dashboards`. Copy rewrites `uid`/`title`; reserved UIDs cannot be saved as tenant boards.
+
+| UID | Title |
+|-----|--------|
+| `overview` | SOC Overview |
+| `integrity` | Integrity |
+| `fleet` | Agent fleet |
+| `approvals` | Approvals |
+| `incidents` | Incidents |
+| `detections` | Detections |
+| `mcp` | MCP registry |
+| `rules` | Rules |
+| `alerting` | Alerting |
+| `explore` | Explore |
+
+Not templated (by design): `settings`, `dashboards` (chrome), `analytics`/`runtime` (future), `receipts` (use integrity).
 
 **Runtime env:**
 

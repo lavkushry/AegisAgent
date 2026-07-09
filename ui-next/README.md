@@ -52,6 +52,7 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | D Dashboard editor + `/v1/soc/dashboards` | Done |
 | E E2E expansion + remove legacy Next `ui/` | Done |
 | F Hardening (a11y, redact, mocked #1638) | Done |
+| Post | System catalog templates, lazy routes, E2E fixes |
 
 ### Routes
 
@@ -68,4 +69,8 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | `/dashboard/detections` | Triggered alerts |
 | `/dashboard/rules` | Detection rule catalogue |
 | `/dashboard/alerting` | Webhook subscriptions |
-| `/dashboard/dashboards` | Tenant dashboard JSON editor |
+| `/dashboard/dashboards` | Tenant dashboard JSON editor + system templates |
+
+### System dashboard templates (editor copy-only)
+
+`overview`, `integrity`, `fleet`, `approvals`, `incidents`, `detections`, `mcp`, `rules`, `alerting`, `explore`

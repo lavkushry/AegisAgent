@@ -1,11 +1,15 @@
 import type { DashboardSchema } from "../schema";
 import {
+  alertingDashboard,
   approvalsDashboard,
   detectionsDashboard,
+  exploreDashboard,
   fleetDashboard,
   incidentsDashboard,
   integrityDashboard,
+  mcpDashboard,
   overviewDashboard,
+  rulesDashboard,
 } from "../system";
 import type { PanelType } from "@/panels/types";
 
@@ -132,6 +136,30 @@ export const SYSTEM_DASHBOARD_CATALOG: readonly SystemDashboardEntry[] = [
     uid: detectionsDashboard.uid,
     title: detectionsDashboard.title,
     schema: detectionsDashboard,
+    readOnly: true,
+  },
+  {
+    uid: mcpDashboard.uid,
+    title: mcpDashboard.title,
+    schema: mcpDashboard,
+    readOnly: true,
+  },
+  {
+    uid: rulesDashboard.uid,
+    title: rulesDashboard.title,
+    schema: rulesDashboard,
+    readOnly: true,
+  },
+  {
+    uid: alertingDashboard.uid,
+    title: alertingDashboard.title,
+    schema: alertingDashboard,
+    readOnly: true,
+  },
+  {
+    uid: exploreDashboard.uid,
+    title: exploreDashboard.title,
+    schema: exploreDashboard,
     readOnly: true,
   },
 ];

@@ -186,8 +186,13 @@ test.describe("production SOC console data workflows (ui-next)", () => {
   test("Dashboard editor lists system templates for copy", async ({ page }) => {
     await openConfiguredConsole(page);
     await openNav(page, "Dashboards");
-    await expect(page.getByText("System (read-only)")).toBeVisible();
-    // Core catalog boards (Phase B overview + expanded templates)
+    // Scope to the system catalog list (avoid matching sidebar nav labels).
+    const systemList = page
+      .getByRole("heading", { name: /System \(read-only\)/i })
+      .locator("..")
+      .getByRole("list")
+      .first();
+    await expect(systemList).toBeVisible();
     for (const title of [
       "SOC Overview",
       "Integrity",
@@ -195,8 +200,33 @@ test.describe("production SOC console data workflows (ui-next)", () => {
       "Approvals",
       "Incidents",
       "Detections",
+      "MCP registry",
+      "Rules",
+      "Alerting",
+      "Explore",
     ]) {
-      await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
+      await expect(
+        systemList.getByText(title, { exact: true }),
+      ).toBeVisible();
     }
+  });
+
+  test("Dashboard editor can copy a system template into the JSON draft", async ({
+    page,
+  }) => {
+    await openConfiguredConsole(page);
+    await openNav(page, "Dashboards");
+    // Copy Integrity system board (button title="Copy integrity")
+    await page.getByRole("button", { name: /Copy integrity/i }).click();
+    await expect(
+      page.getByText(/Copied system dashboard 'integrity'/i),
+    ).toBeVisible({ timeout: 5_000 });
+    const editor = page.getByLabel("Dashboard JSON editor");
+    await expect(editor).toContainText('"title"');
+    await expect(editor).toContainText("integrity-copy-");
+    await page.getByRole("button", { name: "Validate" }).click();
+    await expect(page.getByText(/Schema is valid/i)).toBeVisible({
+      timeout: 5_000,
+    });
   });
 });

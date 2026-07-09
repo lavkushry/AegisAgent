@@ -49,6 +49,8 @@ export function PanelRuntime({
       definition.search,
       definition.query,
       definition.aggregate,
+      definition.groupBy,
+      definition.interval,
       activeTenant,
       timeRange,
       variables,

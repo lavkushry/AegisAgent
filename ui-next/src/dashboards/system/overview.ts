@@ -1,10 +1,12 @@
-import { DEFAULT_DATASOURCE_ID } from "@/datasources/registry";
+import {
+  DEFAULT_DATASOURCE_ID,
+  SOC_QUERY_DATASOURCE_ID,
+} from "@/datasources/registry";
 import type { DashboardSchema } from "../schema";
 
 /**
  * SOC Overview — schema-driven landing board.
- * Phase B: gateway-entity snapshots + list entities only
- * (timeseries/count_by aggregates → Phase C soc-query).
+ * Snapshots/lists via gateway-entity; decision volume via soc-query timeseries.
  */
 export const overviewDashboard: DashboardSchema = {
   uid: "overview",
@@ -146,23 +148,88 @@ export const overviewDashboard: DashboardSchema = {
       ],
     },
     {
-      id: "trust",
-      title: "Trust provenance",
+      id: "volume",
+      title: "Decision volume",
       panels: [
         {
           panel: {
-            id: "table-trust-distribution",
-            type: "table",
-            title: "Trust level distribution",
-            datasourceId: DEFAULT_DATASOURCE_ID,
-            snapshot: "trust-breakdown",
+            id: "ts-decisions",
+            type: "timeseries",
+            title: "Decisions over time",
+            datasourceId: SOC_QUERY_DATASOURCE_ID,
+            entity: "decision",
+            aggregate: "count_over_time",
+            interval: "hour",
             options: {
-              columns: ["trust_level", "count"],
-              maxRows: 6,
+              timeField: "bucket",
+              valueField: "count",
             },
+            drilldowns: [
+              {
+                label: "Explore decisions",
+                target: { kind: "explore", aqlTemplate: "decision:*" },
+              },
+            ],
           },
           w: 12,
-          h: 2,
+          h: 3,
+        },
+      ],
+    },
+    {
+      id: "facets",
+      title: "Decision mix",
+      panels: [
+        {
+          panel: {
+            id: "hm-decision",
+            type: "heatmap",
+            title: "By decision",
+            datasourceId: SOC_QUERY_DATASOURCE_ID,
+            entity: "decision",
+            aggregate: "count_by",
+            groupBy: "decision",
+            limit: 8,
+            options: {
+              categoryField: "value",
+              valueField: "count",
+            },
+            drilldowns: [
+              {
+                label: "Explore denials",
+                target: { kind: "explore", aqlTemplate: "decision:deny" },
+              },
+            ],
+          },
+          w: 6,
+          h: 3,
+        },
+        {
+          panel: {
+            id: "hm-trust",
+            type: "heatmap",
+            title: "By source trust",
+            datasourceId: SOC_QUERY_DATASOURCE_ID,
+            entity: "decision",
+            aggregate: "count_by",
+            groupBy: "source_trust",
+            limit: 8,
+            options: {
+              categoryField: "value",
+              valueField: "count",
+            },
+            drilldowns: [
+              {
+                label: "Explore untrusted",
+                target: {
+                  kind: "explore",
+                  aqlTemplate: "source_trust:untrusted_external",
+                },
+              },
+            ],
+          },
+          w: 6,
+          h: 3,
         },
       ],
     },

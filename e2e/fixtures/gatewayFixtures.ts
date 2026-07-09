@@ -367,22 +367,102 @@ export function resolveMockResponse(
   }
 
   if (method === "POST" && path === "/v1/soc/query") {
-    const request = (body ?? {}) as { entity?: string; aggregate?: string };
-    // Aggregate queries (count_by/count_over_time -- the Overview panel's
-    // "top agents by denial" widget) get the pre-aggregated shape; a plain
-    // decision search (Explore) needs real, decision-shaped rows so the UI
-    // can render an agent label, a tool/action, and a linked receipt to
-    // verify -- not just a bare count.
+    const request = (body ?? {}) as {
+      entity?: string;
+      aggregate?: string;
+      group_by?: string;
+    };
+    // count_over_time → timeseries envelope (matches gateway SocQueryResponse).
+    if (request.aggregate === "count_over_time") {
+      const rows =
+        tenantId === MOCK_TENANT_A
+          ? [
+              { bucket: "2026-06-28T10:00:00.000Z", count: 4 },
+              { bucket: "2026-06-28T11:00:00.000Z", count: 6 },
+              { bucket: "2026-06-28T12:00:00.000Z", count: 3 },
+            ]
+          : [{ bucket: "2026-06-28T10:00:00.000Z", count: 1 }];
+      return {
+        status: 200,
+        body: {
+          version: 1,
+          entity: request.entity ?? "decision",
+          aggregate: "count_over_time",
+          rows,
+          field_descriptors: [
+            { name: "bucket", type: "time", facetable: false },
+            { name: "count", type: "number", facetable: false },
+          ],
+          meta: {},
+        },
+      };
+    }
+    // count_by → gateway shape { value, count } (heatmap / facet panels).
+    if (request.aggregate === "count_by") {
+      const groupBy = request.group_by ?? "decision";
+      const rows =
+        tenantId === MOCK_TENANT_A
+          ? groupBy === "source_trust"
+            ? [
+                { value: "trusted_internal_unsigned", count: 8 },
+                { value: "semi_trusted_customer", count: 3 },
+                { value: "untrusted_external", count: 1 },
+              ]
+            : groupBy === "decision"
+              ? [
+                  { value: "allow", count: 10 },
+                  { value: "deny", count: 2 },
+                  { value: "require_approval", count: 1 },
+                ]
+              : [{ value: AGENT_ID, count: 3 }]
+          : [];
+      return {
+        status: 200,
+        body: {
+          version: 1,
+          entity: request.entity ?? "decision",
+          aggregate: "count_by",
+          group_by: groupBy,
+          rows,
+          field_descriptors: [
+            { name: "value", type: "string", facetable: true },
+            { name: "count", type: "number", facetable: false },
+          ],
+          meta: {},
+        },
+      };
+    }
+    // Other aggregates → envelope with empty/minimal rows.
     if (request.aggregate) {
       return {
         status: 200,
-        body: tenantId === MOCK_TENANT_A ? [{ agent_id: AGENT_ID, count: 3 }] : [],
+        body: {
+          version: 1,
+          entity: request.entity ?? "decision",
+          aggregate: request.aggregate,
+          group_by: request.group_by,
+          rows: [],
+          field_descriptors: [],
+          meta: {},
+        },
       };
     }
     if ((request.entity ?? "decision") === "decision") {
-      return { status: 200, body: tenantDecisions(tenantId) };
+      return {
+        status: 200,
+        body: {
+          version: 1,
+          entity: "decision",
+          rows: tenantDecisions(tenantId),
+          field_descriptors: [],
+          meta: { total: tenantDecisions(tenantId).length },
+        },
+      };
     }
-    return { status: 200, body: [] };
+    return {
+      status: 200,
+      body: { version: 1, entity: request.entity ?? "ase", rows: [], meta: {} },
+    };
   }
   if (path.startsWith("/v1/decisions")) return { status: 200, body: tenantDecisions(tenantId) };
   if (path === "/v1/alerts" || path.startsWith("/v1/alerts?")) return { status: 200, body: tenantAlerts(tenantId) };
