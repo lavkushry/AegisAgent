@@ -30,15 +30,26 @@ export function useDrilldownRouter(): (
         case "dashboard": {
           const uid = target.uid;
           if (uid === "approvals") navigate("/approvals");
-          else if (uid === "integrity") navigate("/integrity");
+          else if (uid === "integrity" || uid === "receipts")
+            navigate("/integrity");
           else if (uid === "incidents") navigate("/incidents");
           else if (uid === "detections") navigate("/detections");
-          else if (uid === "agents") navigate("/agents");
+          else if (uid === "agents" || uid === "fleet") navigate("/agents");
+          else if (uid === "mcp") navigate("/mcp");
+          else if (uid === "rules") navigate("/rules");
+          else if (uid === "alerting") navigate("/alerting");
+          else if (uid === "explore") navigate("/explore");
+          else if (uid === "dashboards") navigate("/dashboards");
           else navigate("/");
           break;
         }
         case "agent": {
-          navigate("/agents");
+          const id = row?.[target.agentIdField];
+          if (id != null && String(id).length > 0) {
+            navigate(`/agents/${encodeURIComponent(String(id))}`);
+          } else {
+            navigate("/agents");
+          }
           break;
         }
         case "receipt":

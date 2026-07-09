@@ -1,5 +1,11 @@
 import type { DashboardSchema } from "../schema";
-import { overviewDashboard } from "../system/overview";
+import {
+  approvalsDashboard,
+  fleetDashboard,
+  incidentsDashboard,
+  integrityDashboard,
+  overviewDashboard,
+} from "../system";
 import type { PanelType } from "@/panels/types";
 
 /** UIDs reserved for version-controlled system dashboards — tenants cannot claim them. */
@@ -95,6 +101,30 @@ export const SYSTEM_DASHBOARD_CATALOG: readonly SystemDashboardEntry[] = [
     uid: overviewDashboard.uid,
     title: overviewDashboard.title,
     schema: overviewDashboard,
+    readOnly: true,
+  },
+  {
+    uid: integrityDashboard.uid,
+    title: integrityDashboard.title,
+    schema: integrityDashboard,
+    readOnly: true,
+  },
+  {
+    uid: fleetDashboard.uid,
+    title: fleetDashboard.title,
+    schema: fleetDashboard,
+    readOnly: true,
+  },
+  {
+    uid: approvalsDashboard.uid,
+    title: approvalsDashboard.title,
+    schema: approvalsDashboard,
+    readOnly: true,
+  },
+  {
+    uid: incidentsDashboard.uid,
+    title: incidentsDashboard.title,
+    schema: incidentsDashboard,
     readOnly: true,
   },
 ];
