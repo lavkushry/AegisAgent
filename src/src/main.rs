@@ -1116,6 +1116,9 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/tenants/:id/export", get(routes::export_tenant))
         // Compliance Evidence Pack (#1298)
         .route("/compliance/evidence-pack", get(routes::get_evidence_pack))
+        // Phase 8.3: investigation evidence export (events+receipts+checkpoints+
+        // graph/redaction manifests; export emits its own receipt).
+        .route("/evidence/export", post(routes::export_evidence))
         // WebSocket live event stream
         .route("/ws/events", get(routes::ws_events))
         // Statistics

@@ -33,13 +33,11 @@ still missing, verified against the code, not assumed from an old plan doc.
   ships hashes + token metadata to `POST /v1/ingest/model-calls`; failure
   redaction). Phases 7.1/7.2 already shipped (#1775/#1776). PR not yet
   opened/merged.
-- **Phase 8.3 — Evidence export** (checkpoints + graph manifest +
-  redaction manifest, export action emits its own receipt) not built. The
-  existing `GET /v1/compliance/evidence-pack` (#1298) is a different,
-  earlier SOC2/GDPR-focused export (receipts/audit/policies/incidents/
-  approvals as a ZIP) — it doesn't include the timeline graph
-  (`src/src/graph.rs`), cage-runner checkpoints, a redaction manifest, or
-  emit a receipt for the export action itself.
+- **Phase 8.3 — Evidence export** — **implemented on branch** as
+  `POST /v1/evidence/export` (investigation pack: events, receipts,
+  receipt_checkpoints, graph_manifest, redaction_manifest; export appends
+  a durable self-receipt). Distinct from #1298 compliance pack. PR not yet
+  merged.
 - **Deployment packaging gaps (#1297 follow-up)** — `helm/` had only the
   gateway chart, `docker-compose.yml` had only gateway; being fixed in
   branch `deploy-1297-sensor-proxy-packaging` (Dockerfiles + Helm charts +

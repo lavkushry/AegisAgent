@@ -1365,6 +1365,30 @@ pub struct ActionReceiptRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Phase 8.3 (investigation evidence export): a checkpoint over a contiguous
+/// range of the tenant's hash-chained action receipts. Stores only hashes —
+/// the Merkle root of `receipt_hash` values plus the chain head — so an
+/// evidence pack can prove range integrity without re-emitting raw bodies.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct ReceiptCheckpointRecord {
+    pub id: String,
+    pub tenant_id: String,
+    /// Inclusive 0-based index into the tenant's chain-ordered receipts at
+    /// the time the checkpoint was cut.
+    pub sequence_start: i64,
+    /// Inclusive end index (same indexing as `sequence_start`).
+    pub sequence_end: i64,
+    /// `receipt_hash` of the last receipt in the range (chain head).
+    pub chain_head_hash: String,
+    /// Merkle root over the range's `receipt_hash` values (SHA-256 hex).
+    pub merkle_root: String,
+    pub receipt_count: i64,
+    pub signature: Option<String>,
+    pub signer_key_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+
 /// #1312: tamper-evident, append-only transparency-log entry for a policy
 /// change (create/update/delete/rollback). Hash-chained like
 /// [`ActionReceiptRecord`] — `entry_hash` covers `prev_hash`, so the chain can

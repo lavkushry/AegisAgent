@@ -639,6 +639,22 @@ pub trait StorageBackend: Send + Sync + 'static {
     ) -> Result<ActionReceiptRecord, AegisError>;
     async fn count_receipts(&self, tenant_id: &str) -> Result<i64, AegisError>;
 
+    // Receipt checkpoints (Phase 8.3: investigation evidence export)
+    async fn insert_receipt_checkpoint(
+        &self,
+        record: &ReceiptCheckpointRecord,
+    ) -> Result<(), AegisError>;
+    async fn get_receipt_checkpoint_by_id(
+        &self,
+        tenant_id: &str,
+        checkpoint_id: &str,
+    ) -> Result<Option<ReceiptCheckpointRecord>, AegisError>;
+    async fn list_receipt_checkpoints(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ReceiptCheckpointRecord>, AegisError>;
+
     // Replay nonces (PR8: durable, multi-instance-safe replay protection)
     /// Atomically record a `(tenant, agent, nonce)` triple. Returns `true` if it
     /// is a replay (already present and unexpired), `false` if first-seen now.

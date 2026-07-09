@@ -1073,6 +1073,36 @@ impl StorageBackend for SqlDbStorage {
     }
 
     // Replay nonces (PR8)
+    async fn insert_receipt_checkpoint(
+        &self,
+        record: &ReceiptCheckpointRecord,
+    ) -> Result<(), AegisError> {
+        db::insert_receipt_checkpoint(&self.pool, record)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn get_receipt_checkpoint_by_id(
+        &self,
+        tenant_id: &str,
+        checkpoint_id: &str,
+    ) -> Result<Option<ReceiptCheckpointRecord>, AegisError> {
+        db::get_receipt_checkpoint_by_id(&self.pool, tenant_id, checkpoint_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_receipt_checkpoints(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ReceiptCheckpointRecord>, AegisError> {
+        db::list_receipt_checkpoints(&self.pool, tenant_id, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+
     async fn check_and_insert_replay_nonce(
         &self,
         tenant_id: &str,
