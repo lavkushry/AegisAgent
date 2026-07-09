@@ -28,7 +28,10 @@ test.describe("SOC console security (ui-next)", () => {
     await agentControlButton(row, "freeze").click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(/Confirm freeze/i)).toBeVisible();
+    // Heading + button both say "Confirm freeze" — target the heading only.
+    await expect(
+      dialog.getByRole("heading", { name: "Confirm freeze" }),
+    ).toBeVisible();
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toBeHidden();
   });
@@ -48,7 +51,7 @@ test.describe("SOC console security (ui-next)", () => {
     const row = page.getByRole("row").filter({ hasText: agent.agentKey });
     await expect(row).toBeVisible({ timeout: 15_000 });
     await agentControlButton(row, "freeze").click();
-    await confirmDangerousAction(page, "e2e freeze test", /Confirm freeze/i);
+    await confirmDangerousAction(page, "e2e freeze test", "Confirm freeze");
     // Status may update after invalidate; tolerate network failure messaging.
     await expect(
       page.getByText(/freeze completed|Agent freeze|frozen|error|HTTP/i).first(),

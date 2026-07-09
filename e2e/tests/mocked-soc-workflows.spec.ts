@@ -82,11 +82,7 @@ test.describe("mocked SOC console workflows (#1638)", () => {
     await assertNoSecrets(page, [FAKE_SECRET]);
 
     await page.getByRole("button", { name: /Approve/i }).first().click();
-    await confirmDangerousAction(
-      page,
-      "Approved after evidence review",
-      /Confirm approve/i,
-    );
+    await confirmDangerousAction(page, "Approved after evidence review");
     await expect(page.getByText(/Approval recorded/i)).toBeVisible({
       timeout: 10_000,
     });
@@ -148,7 +144,7 @@ test.describe("mocked SOC console workflows (#1638)", () => {
     await confirmDangerousAction(
       page,
       "Containment during investigation",
-      /Confirm freeze/i,
+      "Confirm freeze",
     );
     await expect(
       page.getByText(/freeze completed|frozen|Agent freeze/i).first(),
@@ -165,11 +161,7 @@ test.describe("mocked SOC console workflows (#1638)", () => {
     await expect(card).toBeVisible({ timeout: 10_000 });
     await card.click();
     await page.getByRole("button", { name: /Quarantine/i }).click();
-    await confirmDangerousAction(
-      page,
-      "Manifest drift detected",
-      /Confirm quarantine|Quarantine/i,
-    );
+    await confirmDangerousAction(page, "Manifest drift detected");
     await expect(page.getByText(/quarantined/i).first()).toBeVisible({
       timeout: 10_000,
     });
