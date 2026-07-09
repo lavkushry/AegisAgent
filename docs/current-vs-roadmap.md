@@ -37,7 +37,7 @@ Strongest current capabilities:
 
 ### Partial (built, not end-to-end production)
 
-- **Node sensor** — ProcessEnforcer + process + net collectors (`AEGIS_RUN_ID`); not full fs/secret collectors
+- **Node sensor** — ProcessEnforcer + process/net/fs/secret collectors (`AEGIS_RUN_ID`-scoped)
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
 - **Agent cage runner** — binary + claim/execute loop; local compose profile `cage` + Helm chart; host Docker socket security review / e2e still open
@@ -48,7 +48,7 @@ Strongest current capabilities:
 ### Roadmap / not done
 
 - cage host Docker security review + Helm + e2e path (P0; execution binary exists)
-- sensor fs/secret collectors (P1 residual; process + net collectors done)
+- sensor collector productization / UDP / richer attribution (P2; core collectors done)
 - forced egress for unknown agents (P0)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
@@ -76,7 +76,7 @@ Strongest current capabilities:
 | TypeScript SDK | Available today | Canon + protect + client + receipt chain verifier (shared corpus). |
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Partial | Bun SPA panel suite shipped; cage/ban/quarantine pages incomplete. |
-| Node sensor | Partial | ProcessEnforcer + process + net collectors; fs/secret open. |
+| Node sensor | Partial | ProcessEnforcer + process/net/fs/secret collectors for AEGIS_RUN_ID agents. |
 | Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; host security review / e2e still open. |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |

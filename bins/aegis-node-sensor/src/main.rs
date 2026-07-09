@@ -9,7 +9,8 @@
 //! tracks gateway reachability from heartbeats and consults the
 //! observe/enforce/lockdown decision engine on transitions. Process
 //! collector scans Linux `/proc` for `AEGIS_RUN_ID` and auto-registers PIDs.
-//! Net collector emits established TCP remotes for those processes.
+//! Net/fs/secret collectors emit telemetry for those processes (no secret
+//! values — names/paths only).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,12 +22,14 @@ use clap::Parser;
 
 use aegis_node_sensor::command_receiver::{CommandReceiver, ExecutionOutcome};
 use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
+use aegis_node_sensor::fs_collector::FsCollector;
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
 use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
 use aegis_node_sensor::net_collector::NetCollector;
 use aegis_node_sensor::process_collector::ProcessCollector;
 use aegis_node_sensor::process_enforcer::ProcessEnforcer;
+use aegis_node_sensor::secret_collector::SecretCollector;
 use aegis_node_sensor::shipper::EventShipper;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
 
@@ -197,6 +200,8 @@ async fn main() -> ExitCode {
     let process_enforcer = Arc::new(ProcessEnforcer::new());
     let process_collector = ProcessCollector::new(process_enforcer.clone());
     let net_collector = NetCollector::new();
+    let fs_collector = FsCollector::new();
+    let secret_collector = SecretCollector::new();
     let command_receiver = CommandReceiver::with_enforcer(
         config.gateway_public_key_hex.as_deref(),
         config.tenant_id.clone(),
@@ -222,6 +227,8 @@ async fn main() -> ExitCode {
             _ = process_collect_tick.tick() => {
                 process_collector.poll(&spool);
                 net_collector.poll(&spool);
+                fs_collector.poll(&spool);
+                secret_collector.poll(&spool);
             }
             _ = heartbeat_tick.tick() => {
                 let req = HeartbeatRequest {

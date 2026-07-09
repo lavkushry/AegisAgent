@@ -10,11 +10,13 @@
 
 pub mod command_receiver;
 pub mod config;
+pub mod fs_collector;
 pub mod gateway_client;
 pub mod identity;
 pub mod mode_engine;
 pub mod net_collector;
 pub mod process_collector;
 pub mod process_enforcer;
+pub mod secret_collector;
 pub mod shipper;
 pub mod spool;
