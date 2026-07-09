@@ -313,7 +313,35 @@ export function resolveMockResponse(
     };
   }
   if (path === "/v1/agents") return { status: 200, body: tenantAgents(tenantId, runtime) };
-  if (path === "/v1/agents/risk-scoreboard") return { status: 200, body: [] };
+  if (path === "/v1/agents/risk-scoreboard") {
+    if (tenantId !== MOCK_TENANT_A) return { status: 200, body: [] };
+    return {
+      status: 200,
+      body: [
+        {
+          agent_id: AGENT_ID,
+          agent_key: AGENT_KEY,
+          current_avg_risk_score: 62.4,
+          decision_count_24h: 18,
+          trend: "rising",
+        },
+        {
+          agent_id: "agent-uuid-e2e-002",
+          agent_key: "batch-worker",
+          current_avg_risk_score: 28.1,
+          decision_count_24h: 40,
+          trend: "stable",
+        },
+        {
+          agent_id: "agent-uuid-e2e-003",
+          agent_key: "read-only-bot",
+          current_avg_risk_score: 8.5,
+          decision_count_24h: 5,
+          trend: "falling",
+        },
+      ],
+    };
+  }
   if (path === `/v1/agents/${AGENT_ID}`) {
     const agent = tenantAgents(tenantId, runtime).find((row) => row.id === AGENT_ID);
     return agent ? { status: 200, body: agent } : { status: 404, body: { error: "not found" } };

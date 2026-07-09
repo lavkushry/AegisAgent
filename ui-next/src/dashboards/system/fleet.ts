@@ -31,6 +31,30 @@ export const fleetDashboard: DashboardSchema = {
       ],
     },
     {
+      id: "risk",
+      title: "Risk scoreboard",
+      panels: [
+        {
+          panel: {
+            id: "risk-map",
+            type: "agent-risk-map",
+            title: "24h composite risk (advisory)",
+            datasourceId: DEFAULT_DATASOURCE_ID,
+            snapshot: "agent-scoreboard",
+            options: { maxRows: 10 },
+            drilldowns: [
+              {
+                label: "Open agent",
+                target: { kind: "agent", agentIdField: "agent_id" },
+              },
+            ],
+          },
+          w: 12,
+          h: 4,
+        },
+      ],
+    },
+    {
       id: "inventory",
       title: "Registered agents",
       panels: [
@@ -61,7 +85,7 @@ export const fleetDashboard: DashboardSchema = {
             ],
           },
           w: 12,
-          h: 5,
+          h: 4,
         },
       ],
     },
