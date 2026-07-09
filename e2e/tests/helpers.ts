@@ -59,19 +59,29 @@ export interface TestAgent {
   agentToken: string;
 }
 
-/** Fill the ConfirmDialog audit reason and confirm a dangerous action. */
+/**
+ * Fill the confirm dialog audit reason and submit.
+ * ui-next confirm buttons label is typically exact "Confirm" (or
+ * "Confirm freeze" on Agents). Prefer an exact string when possible.
+ */
 export async function confirmDangerousAction(
   page: Page,
   reason: string,
-  confirmLabel?: string | RegExp,
+  confirmLabel: string | RegExp = "Confirm",
 ): Promise<void> {
   // ui-next uses role=dialog; legacy Next used alertdialog.
   const dialog = page.getByRole("dialog").or(page.getByRole("alertdialog"));
   await expect(dialog).toBeVisible();
-  await dialog.locator("textarea").fill(reason);
+  const textarea = dialog.locator("textarea");
+  if ((await textarea.count()) > 0) {
+    await textarea.fill(reason);
+  }
   const confirm = dialog.getByRole("button", {
-    name: confirmLabel ?? /Confirm|Freeze|Quarantine|Approve|Reject|Revoke|Restore|Export/i,
+    name: confirmLabel,
+    exact: typeof confirmLabel === "string",
   });
+  // Approvals gates the button on non-empty reason — wait for enable.
+  await expect(confirm).toBeEnabled({ timeout: 5_000 });
   await confirm.click();
   await expect(dialog).toBeHidden({ timeout: 10_000 });
 }
