@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "aegis-node-sensor.fullname" . }}
+  labels:
+    {{- include "aegis-node-sensor.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "aegis-node-sensor.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "aegis-node-sensor.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "aegis-node-sensor.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: node-sensor
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The gateway bearer token is passed as a CLI arg sourced from the
+          # AEGIS_API_TOKEN env var (itself from the Secret) via Kubernetes'
+          # $(VAR) substitution — RawSensorConfig's TOML has no env-var
+          # override for api_token (`deny_unknown_fields` — see
+          # config.rs), so the ConfigMap alone can't carry it, and this
+          # keeps the token out of both the ConfigMap and the rendered
+          # manifest.
+          args:
+            - "--config"
+            - "/etc/aegis-sensor/sensor.toml"
+            - "--api-token"
+            - "$(AEGIS_API_TOKEN)"
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.config.logLevel | quote }}
+            - name: AEGIS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-node-sensor.secretName" . }}
+                  key: AEGIS_API_TOKEN
+                  optional: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/aegis-sensor
+              readOnly: true
+            - name: spool
+              mountPath: {{ .Values.persistence.hostPath }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "aegis-node-sensor.fullname" . }}
+        - name: spool
+          hostPath:
+            path: {{ .Values.persistence.hostPath }}
+            type: DirectoryOrCreate
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

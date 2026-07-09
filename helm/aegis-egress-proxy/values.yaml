@@ -1,0 +1,77 @@
+# Default values for aegis-egress-proxy.
+
+# -- Number of proxy replicas. Stateless (all decisions come from the
+# gateway or a static rule set baked into args) — safe to scale out.
+replicaCount: 1
+
+image:
+  repository: aegisagent-egress-proxy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag; defaults to .Chart.AppVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Matches the distroless:nonroot image's built-in uid/gid.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8888
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+config:
+  # -- Base URL of the AegisAgent gateway this proxy asks for egress
+  # decisions (POST /v1/egress/check). Leave empty to run in local
+  # standalone-rules mode (not recommended in production — no durable
+  # evidence, no ban/quarantine awareness).
+  gatewayUrl: ""
+  logLevel: "info"
+  # -- Repeatable domain/CIDR rules, only consulted when gatewayUrl is
+  # empty or as this proxy's own baseline (see main.rs's Cli::rules()).
+  allowDomains: []
+  denyDomains: []
+  allowCidrs: []
+  denyCidrs: []
+  allowByDefault: false
+
+secret:
+  # -- Set true to have this chart create the Secret from apiToken below.
+  # Leave false and set existingSecret to reference one you manage
+  # yourself (recommended for production — avoids the token in `helm
+  # get values`/release history).
+  create: false
+  existingSecret: ""
+  apiToken: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

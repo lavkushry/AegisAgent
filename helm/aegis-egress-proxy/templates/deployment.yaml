@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aegis-egress-proxy.fullname" . }}
+  labels:
+    {{- include "aegis-egress-proxy.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aegis-egress-proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "aegis-egress-proxy.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "aegis-egress-proxy.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: egress-proxy
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--listen"
+            - "0.0.0.0:{{ .Values.service.port }}"
+            {{- if .Values.config.gatewayUrl }}
+            - "--gateway-url"
+            - {{ .Values.config.gatewayUrl | quote }}
+            {{- end }}
+            {{- range .Values.config.allowDomains }}
+            - "--allow-domain"
+            - {{ . | quote }}
+            {{- end }}
+            {{- range .Values.config.denyDomains }}
+            - "--deny-domain"
+            - {{ . | quote }}
+            {{- end }}
+            {{- range .Values.config.allowCidrs }}
+            - "--allow-cidr"
+            - {{ . | quote }}
+            {{- end }}
+            {{- range .Values.config.denyCidrs }}
+            - "--deny-cidr"
+            - {{ . | quote }}
+            {{- end }}
+            {{- if .Values.config.allowByDefault }}
+            - "--allow-by-default"
+            {{- end }}
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.config.logLevel | quote }}
+            - name: AEGIS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-egress-proxy.secretName" . }}
+                  key: AEGIS_API_TOKEN
+                  optional: true
+          # No HTTP health endpoint on this binary (it's a CONNECT/forward
+          # proxy, not an HTTP server) — a TCP probe against the listen
+          # port confirms the process is accepting connections without
+          # needing a fabricated health-check flag.
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

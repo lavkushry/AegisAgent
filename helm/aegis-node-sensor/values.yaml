@@ -1,0 +1,84 @@
+# Default values for aegis-node-sensor.
+#
+# Deployed as a DaemonSet, not a Deployment — per
+# docs/AegisAgent_Runtime_Data_Plane.md section 17.2, the sensor runs one
+# instance per node to observe that node's runtime activity.
+
+image:
+  repository: aegisagent-node-sensor
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag; defaults to .Chart.AppVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Docs call for "narrow RBAC" — this chart creates a ServiceAccount
+  # with no Role/RoleBinding by default. Bind one yourself if/when the
+  # sensor needs the Kubernetes API for a specific narrow purpose.
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+
+config:
+  # -- Required: base URL of the gateway this sensor registers/heartbeats
+  # against.
+  gatewayUrl: ""
+  # -- Required: tenant this sensor belongs to.
+  tenantId: ""
+  # observe | enforce | lockdown — see docs/AegisAgent_Runtime_Data_Plane.md
+  # section 18 for the failure-mode behavior each implies.
+  mode: "observe"
+  logLevel: "info"
+  # -- Optional: pin the gateway's Ed25519 public key (hex) so this sensor
+  # only accepts control commands it can verify came from that gateway.
+  gatewayPublicKeyHex: ""
+
+secret:
+  # -- Set true to have this chart create the Secret from apiToken below.
+  # Leave false and set existingSecret for production (avoids the token
+  # in `helm get values`/release history).
+  create: false
+  existingSecret: ""
+  apiToken: ""
+
+# -- Spool + identity-key volume. hostPath is the DaemonSet-appropriate
+# default (survives pod restarts on the same node without a CSI driver);
+# switch to a PVC-backed emptyDir/CSI volume if your cluster disallows
+# hostPath.
+persistence:
+  hostPath: /var/lib/aegis/sensor
+
+nodeSelector: {}
+tolerations:
+  # DaemonSets typically need to run on every node, including control-plane
+  # nodes, to observe them too.
+  - effect: NoSchedule
+    operator: Exists
+affinity: {}

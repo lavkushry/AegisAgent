@@ -1,0 +1,57 @@
+# Without this file every `docker build` sends the *entire* repo as build
+# context — including target/ (tens of GB of local Rust build artifacts)
+# and .git/ (full history) — which is slow at best and can exhaust the
+# Docker VM's disk entirely at worst (as happened locally: a `COPY src
+# ./src` failed with "no space left on device" because target/ sat inside
+# src/ and got copied wholesale). None of these three Dockerfiles
+# (src/Dockerfile, bins/aegis-egress-proxy/Dockerfile,
+# bins/aegis-node-sensor/Dockerfile) need any of this — they each COPY only
+# the specific source directories they build.
+
+# Rust build output (matches .gitignore's **/target/ pattern)
+**/target/
+
+# Git metadata
+.git/
+.gitignore
+
+# Local runtime/dev data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Node.js
+node_modules/
+ui/dist/
+ui/.next/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editor/OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code / agent worktrees (large, irrelevant to any image build)
+.claude/worktrees/
+.worktrees/
+
+# Docs site build output
+/site/
+
+# E2E artifacts
+e2e/test-results/
+e2e/playwright-report/
+e2e/.cache/
+node_modules/
