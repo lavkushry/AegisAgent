@@ -72,3 +72,4 @@ e2e/.cache/
 # Claude Code agent worktrees (local, ephemeral)
 .claude/worktrees/
 /system_d
+data-e2e/
