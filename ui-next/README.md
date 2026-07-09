@@ -73,4 +73,4 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 
 ### System dashboard templates (editor copy-only)
 
-`overview`, `integrity`, `fleet`, `approvals`, `incidents`, `detections`, `mcp`, `rules`, `alerting`
+`overview`, `integrity`, `fleet`, `approvals`, `incidents`, `detections`, `mcp`, `rules`, `alerting`, `explore`

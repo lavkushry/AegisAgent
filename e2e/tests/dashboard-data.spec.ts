@@ -198,6 +198,7 @@ test.describe("production SOC console data workflows (ui-next)", () => {
       "MCP registry",
       "Rules",
       "Alerting",
+      "Explore",
     ]) {
       await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
     }

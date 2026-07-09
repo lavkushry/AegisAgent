@@ -6,6 +6,7 @@ import {
   alertingDashboard,
   approvalsDashboard,
   detectionsDashboard,
+  exploreDashboard,
   fleetDashboard,
   incidentsDashboard,
   integrityDashboard,
@@ -24,12 +25,14 @@ const SYSTEM = [
   mcpDashboard,
   rulesDashboard,
   alertingDashboard,
+  exploreDashboard,
 ] as const;
 
 const EXPECTED_UIDS = [
   "alerting",
   "approvals",
   "detections",
+  "explore",
   "fleet",
   "incidents",
   "integrity",

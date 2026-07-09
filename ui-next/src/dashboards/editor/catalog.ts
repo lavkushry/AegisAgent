@@ -3,6 +3,7 @@ import {
   alertingDashboard,
   approvalsDashboard,
   detectionsDashboard,
+  exploreDashboard,
   fleetDashboard,
   incidentsDashboard,
   integrityDashboard,
@@ -153,6 +154,12 @@ export const SYSTEM_DASHBOARD_CATALOG: readonly SystemDashboardEntry[] = [
     uid: alertingDashboard.uid,
     title: alertingDashboard.title,
     schema: alertingDashboard,
+    readOnly: true,
+  },
+  {
+    uid: exploreDashboard.uid,
+    title: exploreDashboard.title,
+    schema: exploreDashboard,
     readOnly: true,
   },
 ];
