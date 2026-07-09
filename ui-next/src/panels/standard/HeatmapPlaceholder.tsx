@@ -1,10 +1,5 @@
-import type { PanelProps } from "../types";
-
-/** Placeholder until ECharts heatmap lands. */
-export default function HeatmapPlaceholder(_props: PanelProps) {
-  return (
-    <div className="flex h-full items-center justify-center text-xs text-[var(--text-muted)]">
-      Heatmap unavailable in this build
-    </div>
-  );
-}
+/**
+ * @deprecated Replaced by HeatmapPanel (pure SVG count_by intensity grid).
+ * Kept as a thin re-export so any stale imports keep working during cutover.
+ */
+export { default } from "./HeatmapPanel";

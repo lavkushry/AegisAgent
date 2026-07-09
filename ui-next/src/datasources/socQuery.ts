@@ -94,8 +94,14 @@ function normalizeResponse(raw: unknown): DataFrame {
     const obj = raw as { rows?: unknown };
     if (Array.isArray(obj.rows)) {
       const rows = asRecordArray(obj.rows);
-      if (rows.length > 0 && "bucket" in rows[0]) {
+      if (rows.length === 0) return rowsToFrame([]);
+      // count_over_time → stable bucket/count columns
+      if ("bucket" in rows[0]) {
         return rowsToFrame(rows, ["bucket", "count"]);
+      }
+      // count_by → gateway shape { value, count }
+      if ("value" in rows[0] && "count" in rows[0]) {
+        return rowsToFrame(rows, ["value", "count"]);
       }
       return rowsToFrame(rows);
     }

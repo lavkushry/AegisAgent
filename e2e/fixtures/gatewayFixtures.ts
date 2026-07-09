@@ -397,7 +397,42 @@ export function resolveMockResponse(
         },
       };
     }
-    // count_by / other aggregates → row array used by tables.
+    // count_by → gateway shape { value, count } (heatmap / facet panels).
+    if (request.aggregate === "count_by") {
+      const groupBy = request.group_by ?? "decision";
+      const rows =
+        tenantId === MOCK_TENANT_A
+          ? groupBy === "source_trust"
+            ? [
+                { value: "trusted_internal_unsigned", count: 8 },
+                { value: "semi_trusted_customer", count: 3 },
+                { value: "untrusted_external", count: 1 },
+              ]
+            : groupBy === "decision"
+              ? [
+                  { value: "allow", count: 10 },
+                  { value: "deny", count: 2 },
+                  { value: "require_approval", count: 1 },
+                ]
+              : [{ value: AGENT_ID, count: 3 }]
+          : [];
+      return {
+        status: 200,
+        body: {
+          version: 1,
+          entity: request.entity ?? "decision",
+          aggregate: "count_by",
+          group_by: groupBy,
+          rows,
+          field_descriptors: [
+            { name: "value", type: "string", facetable: true },
+            { name: "count", type: "number", facetable: false },
+          ],
+          meta: {},
+        },
+      };
+    }
+    // Other aggregates → envelope with empty/minimal rows.
     if (request.aggregate) {
       return {
         status: 200,
@@ -406,10 +441,7 @@ export function resolveMockResponse(
           entity: request.entity ?? "decision",
           aggregate: request.aggregate,
           group_by: request.group_by,
-          rows:
-            tenantId === MOCK_TENANT_A
-              ? [{ agent_id: AGENT_ID, count: 3 }]
-              : [],
+          rows: [],
           field_descriptors: [],
           meta: {},
         },
