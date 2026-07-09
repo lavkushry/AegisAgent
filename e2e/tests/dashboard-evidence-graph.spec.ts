@@ -2,8 +2,8 @@ import { test, expect } from "../fixtures/guardedTest";
 import { openConfiguredConsole, openNav, registerTestAgent } from "./helpers";
 
 /**
- * Legacy Next evidence-graph deep nav is not yet ported to ui-next.
- * Keep a light fleet inventory smoke so the file remains green under cutover.
+ * Fleet inventory + agent detail deep-nav smoke (ui-next).
+ * Legacy Next evidence-graph panel harness is retired with the dual-tree cutover.
  */
 test.describe("fleet inventory navigation (ui-next)", () => {
   test("Agents page lists registered fleet members", async ({
@@ -21,5 +21,27 @@ test.describe("fleet inventory navigation (ui-next)", () => {
     await expect(
       page.getByRole("row").filter({ hasText: agent.agentKey }),
     ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("agent detail is reachable via in-app fleet link (no full reload)", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    const agent = await registerTestAgent(
+      request,
+      baseURL!,
+      `console-e2e-bookmark-${Date.now()}`,
+    );
+    // Bearer is memory-only in production — use SPA navigation so zustand state survives.
+    await openConfiguredConsole(page);
+    await openNav(page, "Agents");
+    const row = page.getByRole("row").filter({ hasText: agent.agentKey });
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await row.getByRole("link").first().click();
+    await expect(page).toHaveURL(new RegExp(`/dashboard/agents/${agent.id}`));
+    await expect(page.getByText(agent.agentKey).first()).toBeVisible({
+      timeout: 15_000,
+    });
   });
 });

@@ -2,7 +2,7 @@
 
 Playwright browser tests for the production SOC console served at `/dashboard/`.
 
-**Phase 4 cutover:** the gateway Docker image builds the **Bun SPA** (`ui-next/`) and serves it at `/dashboard/`. Specs target ui-next routes (React Router links, Settings form, Dark SOC shell). Legacy Next panel mocks (#1638) are skipped until re-ported.
+**Production console:** Bun SPA (`ui-next/`). The gateway Docker image builds `ui-next` and serves it at `/dashboard/`. Specs target React Router routes, Settings form, Dark SOC shell, ControlsBar, and the dashboard editor.
 
 ## Prerequisites
 
@@ -25,29 +25,22 @@ npx playwright install --with-deps chromium
 AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright test
 ```
 
-From the UI package:
-
-```bash
-cd ui
-npm run test:e2e
-```
-
 Run a single spec:
 
 ```bash
 cd e2e
-AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright test tests/mocked-soc-workflows.spec.ts
+AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright test tests/dashboard-shell.spec.ts
 ```
 
 ## Suite layout
 
 | Spec | Mode | Coverage |
 |------|------|----------|
-| `dashboard-shell.spec.ts` | Live gateway | CSP/CSRF, nav URL sync (incl. split Detections + Rules) |
-| `dashboard-data.spec.ts` | Live gateway | Fleet detail, rules, MCP, explore, receipts, approvals, overview |
-| `dashboard-evidence-graph.spec.ts` | Live gateway | Fleet inventory navigation |
-| `mocked-soc-workflows.spec.ts` | Mocked `/v1/*` | Overview, tenant switch, approve/reject, receipt verify states, explore expand, incident timeline, freeze/unfreeze, MCP quarantine/restore, rule backtest, alert redaction |
-| `soc-security.spec.ts` | Mocked `/v1/*` | RBAC-disabled controls, confirm-without-reason, API failures, secret redaction |
+| `dashboard-shell.spec.ts` | Live gateway | CSP/CSRF, full nav (incl. Dashboards), ControlsBar time range + live |
+| `dashboard-data.spec.ts` | Live gateway | Agents, MCP, Explore, Integrity, Approvals, Overview panels, agent detail, Detections/Rules/Alerting, dashboard editor validate |
+| `dashboard-evidence-graph.spec.ts` | Live gateway | Fleet inventory + bookmarkable agent detail |
+| `mocked-soc-workflows.spec.ts` | (skipped) | Legacy Next panel mocks (#1638) — re-port tracked separately |
+| `soc-security.spec.ts` | Live gateway | Freeze confirm dialog, operator id field |
 
 Mock fixtures live in `e2e/fixtures/`. They use fake credentials only (`fake-bearer-e2e-only`).
 
@@ -58,5 +51,5 @@ The `Dashboard E2E (Playwright)` job in `.github/workflows/ci.yml` builds Docker
 ## Guardrails
 
 - `e2e/fixtures/guardedTest.ts` fails tests on browser `console.error` and uncaught page exceptions.
-- Mocked suites assert `unhandled` gateway routes stay empty (no silent 501s).
+- Mocked suites assert `unhandled` gateway routes stay empty (no silent 501s) when re-enabled.
 - `assertNoSecrets()` scans the DOM for fixture secrets and `[REDACTED]` expectations.

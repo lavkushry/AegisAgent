@@ -102,7 +102,7 @@ test.describe("production SOC console data workflows (ui-next)", () => {
     await expect(page.getByText(/Operator ID/i).first()).toBeVisible();
   });
 
-  test("Overview loads stats grid for configured tenant", async ({
+  test("Overview loads schema-driven board for configured tenant", async ({
     page,
     request,
     baseURL,
@@ -116,10 +116,69 @@ test.describe("production SOC console data workflows (ui-next)", () => {
     expect(response.ok()).toBe(true);
     await openConfiguredConsole(page);
     await openNav(page, "Overview");
-    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
-    // Stat cards from /v1/stats
-    await expect(page.getByText("Decisions").first()).toBeVisible({
+    await expect(
+      page.getByRole("heading", { name: /SOC Overview/i }),
+    ).toBeVisible();
+    // Schema panels (gateway-entity snapshots)
+    await expect(page.getByText("Protected actions").first()).toBeVisible({
       timeout: 15_000,
+    });
+  });
+
+  test("Agent detail opens from fleet row", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    const agent = await registerTestAgent(
+      request,
+      baseURL!,
+      `console-e2e-detail-${Date.now()}`,
+    );
+    await openConfiguredConsole(page);
+    await openNav(page, "Agents");
+    const row = page.getByRole("row").filter({ hasText: agent.agentKey });
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await row.getByRole("link").first().click();
+    await expect(page).toHaveURL(new RegExp(`/dashboard/agents/${agent.id}`));
+    await expect(page.getByText(agent.agentKey).first()).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByRole("link", { name: /Fleet/i })).toBeVisible();
+  });
+
+  test("Detections, Rules, and Alerting surfaces load", async ({ page }) => {
+    await openConfiguredConsole(page);
+
+    await openNav(page, "Detections");
+    await expect(
+      page.getByRole("heading", { name: "Detections" }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Filter detections")).toBeVisible();
+
+    await openNav(page, "Rules");
+    await expect(page.getByRole("heading", { name: "Rules" })).toBeVisible();
+
+    await openNav(page, "Alerting");
+    await expect(
+      page.getByRole("heading", { name: "Alerting" }),
+    ).toBeVisible();
+  });
+
+  test("Dashboard editor validates a draft schema offline", async ({ page }) => {
+    await openConfiguredConsole(page);
+    await openNav(page, "Dashboards");
+    await expect(
+      page.getByRole("heading", { name: /Dashboard editor/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByLabel("Dashboard JSON editor"),
+    ).toBeVisible();
+    // Default draft uses reserved-safe uid my-dashboard; Validate should pass
+    // without requiring /v1/soc/dashboards to be available.
+    await page.getByRole("button", { name: "Validate" }).click();
+    await expect(page.getByText(/Schema is valid/i)).toBeVisible({
+      timeout: 5_000,
     });
   });
 });

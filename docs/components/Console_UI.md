@@ -1,6 +1,8 @@
 # UI Guide — the SOC Console
 
-**One sentence:** the console is a schema-driven Next.js app (`ui/`) served by the gateway at `/dashboard`, where dashboards are data, panels render frames, and every pixel maps to a `/v1` API.
+**One sentence:** the console is a schema-driven Bun SPA (`ui-next/`) served by the gateway at `/dashboard`, where dashboards are data, panels render frames, and every pixel maps to a `/v1` API.
+
+> **Cutover (Phase E):** production is `ui-next/` only. Binding contracts: [Console_UI_Bun_Contracts.md](./Console_UI_Bun_Contracts.md). Paths below that still say `ui/` refer to historical Next layout; use `ui-next/src/…` for current code.
 
 Hands-on onboarding: [onboarding/For_Frontend_Engineer.md](../onboarding/For_Frontend_Engineer.md). Design system: [AegisAgent_SOC_Console_Design_System.md](../AegisAgent_SOC_Console_Design_System.md). UX model: [AegisAgent_SOC_UI_Design.md](../AegisAgent_SOC_UI_Design.md).
 

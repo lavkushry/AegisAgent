@@ -1,9 +1,8 @@
-# Dashboard: Bun SPA rewrite (ui-next). Built with Bun and copied to
-# /app/ui/dist so the gateway's relative path resolution and compose
-# volumes keep working. Override at runtime with AEGIS_UI_DIST or
-# AEGIS_UI_BUNDLE=next|legacy if a dual-tree layout is mounted.
+# Dashboard: Bun SPA (ui-next). Built with Bun and copied to
+# /app/ui/dist and /app/ui-next/dist so gateway path resolution works
+# under AEGIS_UI_BUNDLE=next|legacy and AEGIS_UI_DIST overrides.
 #
-# See docs/components/Console_UI_Bun_Contracts.md §6 (Phase 4 cutover).
+# See docs/components/Console_UI_Bun_Contracts.md §6 (Phase E cutover).
 FROM oven/bun:1.3-debian AS ui-builder
 WORKDIR /build/ui-next
 COPY ui-next/package.json ui-next/bun.lock ./
