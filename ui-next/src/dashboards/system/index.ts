@@ -6,3 +6,4 @@ export { incidentsDashboard } from "./incidents";
 export { detectionsDashboard } from "./detections";
 export { mcpDashboard } from "./mcp";
 export { rulesDashboard } from "./rules";
+export { alertingDashboard } from "./alerting";
