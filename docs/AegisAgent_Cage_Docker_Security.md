@@ -99,9 +99,12 @@ Standard container isolation is not a hardware boundary. Kernel CVEs, misconfigu
 
 `--network none` blocks all egress. Product goal of *forced egress via proxy* (allowed destinations only) is **not** implemented as a netns/sidecar path yet. Enabling network later must re-run this review (no silent “bridge + hope”).
 
-### R5 — No full Docker e2e in CI
+### R5 — Docker finish/kill e2e exists; full product narrative still partial
 
-Claim/heartbeat lifecycle is covered without Docker (`cage_run_lifecycle_*`, `scripts/cage-smoke.sh`). End-to-end “untrusted agent → create sandbox → deny egress → control kill” against a real engine is still open Wave A work.
+Claim/heartbeat without Docker: `cage_run_lifecycle_*`, `scripts/cage-smoke.sh`.  
+Real Docker path: `scripts/cage-docker-e2e.sh` (+ CI job `Cage Docker E2E`) runs alpine finish + signed kill through gateway + runner against a live engine. HostConfig isolation is also asserted in `docker_runtime` tests when a daemon is present.
+
+Still open: forced egress (allowed destinations via proxy, not only `--network none`) and sensor host enforce as a single “untrusted → incident” story.
 
 ### R6 — Runner image ships Docker CLI against host engine
 
