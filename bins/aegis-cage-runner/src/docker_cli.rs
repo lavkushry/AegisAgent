@@ -42,12 +42,23 @@ pub async fn docker_available() -> bool {
 }
 
 /// Every flag here maps directly to an isolation guarantee from
-/// `docs/AegisAgent_Agent_Cage.md` section 8: `--network none` (no direct
-/// internet — the spec itself already forbids `direct_internet: true`, this
-/// is defense in depth at the runtime layer too), no `-v
-/// /var/run/docker.sock`, no host paths beyond the isolated workspace,
-/// `--read-only` when the image requests it, and best-effort resource caps
-/// so one sandbox can't starve the host.
+/// `docs/AegisAgent_Agent_Cage.md` section 8 and the host-Docker security
+/// review (`docs/AegisAgent_Cage_Docker_Security.md`):
+///
+/// - `--network none` — no direct internet (spec also forbids
+///   `direct_internet: true`; this is defense in depth at the runtime)
+/// - `--cap-drop ALL` — no Linux capabilities inside the sandbox
+/// - `--security-opt no-new-privileges:true` — block setuid/file-cap
+///   elevation after exec
+/// - no `-v /var/run/docker.sock`, no host paths beyond the isolated
+///   workspace
+/// - `--read-only` + a small `/tmp` tmpfs when the image requests a
+///   read-only rootfs
+/// - best-effort resource caps so one sandbox can't starve the host
+///
+/// Residual (documented): the **runner** process still needs host
+/// `docker.sock` access to create these sandboxes — that is root-equivalent
+/// on the runner node and is not mitigated by these sandbox flags.
 fn build_create_args(
     spec: &SandboxSpec,
     container_name: &str,
@@ -59,6 +70,14 @@ fn build_create_args(
         container_name.to_string(),
         "--network".to_string(),
         "none".to_string(),
+        // Drop every Linux capability. Sandboxes must not keep NET_ADMIN,
+        // SYS_ADMIN, etc. even if the image USER is root.
+        "--cap-drop".to_string(),
+        "ALL".to_string(),
+        // Prevent setuid binaries / file capabilities from elevating after
+        // exec (complements cap-drop for root-looking images).
+        "--security-opt".to_string(),
+        "no-new-privileges:true".to_string(),
         "--pids-limit".to_string(),
         spec.resources.process_limit.to_string(),
         "--memory".to_string(),
@@ -69,6 +88,11 @@ fn build_create_args(
 
     if spec.image.read_only_rootfs {
         args.push("--read-only".to_string());
+        // Writable scratch space that still blocks exec of dropped binaries
+        // and setuid bits. Size is intentionally small — work product goes
+        // on the isolated workspace volume, not /tmp.
+        args.push("--tmpfs".to_string());
+        args.push("/tmp:rw,nosuid,nodev,noexec,size=64m".to_string());
     }
 
     args.push("-v".to_string());
@@ -241,5 +265,109 @@ mod tests {
 
         let dash_dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(&args[dash_dash_pos + 1..], &["alpine:latest", "sleep", "5"]);
+    }
+
+    /// Host-Docker security review (2026-07): sandbox create must always
+    /// drop capabilities and block privilege escalation, independent of
+    /// the tenant-supplied image or command.
+    #[test]
+    fn create_args_always_drop_all_caps_and_no_new_privileges() {
+        let spec = spec_with("alpine:latest", vec!["true"]);
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--cap-drop", "ALL"]),
+            "expected --cap-drop ALL before image; got {flags_before_image:?}"
+        );
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--security-opt", "no-new-privileges:true"]),
+            "expected --security-opt no-new-privileges:true; got {flags_before_image:?}"
+        );
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--network", "none"]),
+            "expected --network none; got {flags_before_image:?}"
+        );
+    }
+
+    #[test]
+    fn create_args_never_enable_privileged_or_host_namespaces_as_flags() {
+        let spec = spec_with("alpine:latest", vec!["true"]);
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        for forbidden in [
+            "--privileged",
+            "--pid=host",
+            "--network=host",
+            "--ipc=host",
+            "--uts=host",
+            "--userns=host",
+        ] {
+            assert!(
+                !flags_before_image
+                    .iter()
+                    .any(|a| *a == forbidden || a.starts_with(&format!("{forbidden}="))),
+                "isolation flags must not include {forbidden}; got {flags_before_image:?}"
+            );
+        }
+        // Socket must never be mounted into the *sandbox* (runner host is separate).
+        assert!(
+            !flags_before_image.iter().any(|a| a.contains("docker.sock")),
+            "sandbox must not mount docker.sock; got {flags_before_image:?}"
+        );
+    }
+
+    #[test]
+    fn read_only_rootfs_adds_tmpfs_scratch_and_read_only_flag() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.image.read_only_rootfs = true;
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        assert!(flags_before_image.contains(&"--read-only"));
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w[0] == "--tmpfs" && w[1].starts_with("/tmp:") && w[1].contains("noexec")),
+            "expected /tmp tmpfs with noexec; got {flags_before_image:?}"
+        );
+    }
+
+    #[test]
+    fn writable_rootfs_skips_read_only_and_tmpfs() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.image.read_only_rootfs = false;
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        assert!(!flags_before_image.contains(&"--read-only"));
+        assert!(!flags_before_image.iter().any(|a| *a == "--tmpfs"));
+        // Hardening still applies when rootfs is writable.
+        assert!(flags_before_image
+            .windows(2)
+            .any(|w| w == ["--cap-drop", "ALL"]));
     }
 }
