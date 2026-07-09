@@ -394,6 +394,7 @@ pub async fn create_agent_run(
         environment_json,
         workspace_spec_json,
         controlled_mounts_json,
+        exit_code: None,
         created_at: now,
     };
     match state
@@ -495,6 +496,9 @@ pub struct UpdateRunStatusRequest {
     pub status: String,
     #[serde(default)]
     pub finished_at: Option<chrono::DateTime<Utc>>,
+    /// Optional process/container exit code (typically on finished/killed).
+    #[serde(default)]
+    pub exit_code: Option<i32>,
 }
 
 /// POST /v1/agent-cage/runs/:id/status — the claiming runner reports a
@@ -520,6 +524,7 @@ pub async fn update_run_status(
             &req.runner_id,
             &req.status,
             req.finished_at,
+            req.exit_code,
         )
         .await
     {
@@ -1597,6 +1602,7 @@ mod tests {
                 runner_id: runner.to_string(),
                 status: "running".to_string(),
                 finished_at: None,
+                exit_code: None,
             }),
         )
         .await
@@ -1614,6 +1620,7 @@ mod tests {
                 runner_id: runner.to_string(),
                 status: "finished".to_string(),
                 finished_at: Some(Utc::now()),
+                exit_code: None,
             }),
         )
         .await
@@ -1679,6 +1686,7 @@ mod tests {
                 runner_id: "runner-2".to_string(),
                 status: "running".to_string(),
                 finished_at: None,
+                exit_code: None,
             }),
         )
         .await
@@ -1725,6 +1733,7 @@ mod tests {
                 runner_id: "runner-1".to_string(),
                 status: "quarantined".to_string(),
                 finished_at: None,
+                exit_code: None,
             }),
         )
         .await

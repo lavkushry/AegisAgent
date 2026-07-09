@@ -246,7 +246,13 @@ async fn run_one(
         Err(e) => {
             tracing::error!(run_id = %run.id, error = %e, "failed to build sandbox spec from run, aborting");
             let _ = client
-                .update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()))
+                .update_run_status(
+                    &run.id,
+                    &runner_id,
+                    "killed",
+                    Some(chrono::Utc::now()),
+                    None,
+                )
                 .await;
             return;
         }
@@ -258,7 +264,13 @@ async fn run_one(
         Err(e) => {
             tracing::error!(run_id = %run.id, error = %e, "failed to create sandbox, aborting");
             let _ = client
-                .update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()))
+                .update_run_status(
+                    &run.id,
+                    &runner_id,
+                    "killed",
+                    Some(chrono::Utc::now()),
+                    None,
+                )
                 .await;
             return;
         }
@@ -268,12 +280,18 @@ async fn run_one(
         tracing::error!(run_id = %run.id, error = %e, "failed to start sandbox, cleaning up");
         let _ = runtime.destroy(&handle).await;
         let _ = client
-            .update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()))
+            .update_run_status(
+                &run.id,
+                &runner_id,
+                "killed",
+                Some(chrono::Utc::now()),
+                None,
+            )
             .await;
         return;
     }
     if let Err(e) = client
-        .update_run_status(&run.id, &runner_id, "running", None)
+        .update_run_status(&run.id, &runner_id, "running", None, None)
         .await
     {
         tracing::warn!(run_id = %run.id, error = %e, "failed to report running status");
@@ -297,7 +315,7 @@ async fn run_one(
                     tracing::info!(run_id = %run.id, "shutdown requested mid-run, killing sandbox");
                     let _ = runtime.kill(&handle, KillReason::OperatorRequest { actor: "runner-shutdown".to_string() }).await;
                     let _ = runtime.destroy(&handle).await;
-                    let _ = client.update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now())).await;
+                    let _ = client.update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()), None).await;
                     return;
                 }
             }
@@ -329,8 +347,10 @@ async fn run_one(
     };
 
     let control_status = control_terminal.lock().ok().and_then(|g| *g);
-    let (status_str, finished_at) = if let Some(status) = control_status {
-        (status, Some(chrono::Utc::now()))
+    let (status_str, finished_at, exit_code) = if let Some(status) = control_status {
+        // Prefer control outcome; still capture exit_code from wait if present.
+        let code = final_state.as_ref().ok().and_then(|s| s.exit_code);
+        (status, Some(chrono::Utc::now()), code)
     } else {
         match final_state {
             Ok(state) => {
@@ -338,11 +358,11 @@ async fn run_one(
                     SandboxStatus::Killed | SandboxStatus::TimedOut => "killed",
                     _ => "finished",
                 };
-                (status_str, Some(chrono::Utc::now()))
+                (status_str, Some(chrono::Utc::now()), state.exit_code)
             }
             Err(e) => {
                 tracing::error!(run_id = %run.id, error = %e, "error waiting on sandbox");
-                ("killed", Some(chrono::Utc::now()))
+                ("killed", Some(chrono::Utc::now()), None)
             }
         }
     };
@@ -351,7 +371,7 @@ async fn run_one(
         tracing::warn!(run_id = %run.id, error = %e, "failed to destroy sandbox");
     }
     if let Err(e) = client
-        .update_run_status(&run.id, &runner_id, status_str, finished_at)
+        .update_run_status(&run.id, &runner_id, status_str, finished_at, exit_code)
         .await
     {
         tracing::warn!(run_id = %run.id, error = %e, "failed to report final run status");
@@ -434,12 +454,12 @@ async fn poll_and_process_run_commands(
                 match cmd.action.as_str() {
                     "pause_run" => {
                         let _ = client
-                            .update_run_status(run_id, runner_id, "paused", None)
+                            .update_run_status(run_id, runner_id, "paused", None, None)
                             .await;
                     }
                     "resume_run" => {
                         let _ = client
-                            .update_run_status(run_id, runner_id, "running", None)
+                            .update_run_status(run_id, runner_id, "running", None, None)
                             .await;
                     }
                     "kill_run" | "quarantine_run" => {
@@ -457,6 +477,7 @@ async fn poll_and_process_run_commands(
                                 runner_id,
                                 terminal,
                                 Some(chrono::Utc::now()),
+                                None,
                             )
                             .await;
                     }

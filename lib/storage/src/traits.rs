@@ -726,6 +726,7 @@ pub trait StorageBackend: Send + Sync + 'static {
         runner_id: &str,
         status: &str,
         finished_at: Option<DateTime<Utc>>,
+        exit_code: Option<i32>,
     ) -> Result<bool, AegisError>;
     /// Global (cross-tenant) lease-expiry sweep. Returns rows flipped to
     /// `stalled`.

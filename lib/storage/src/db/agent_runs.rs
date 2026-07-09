@@ -21,7 +21,7 @@ const AGENT_RUN_COLUMNS: &str = "id, tenant_id, agent_id, run_key, source_compon
                 started_at, finished_at, root_trace_id, root_trust_level, policy_bundle_id,
                 claimed_by, claimed_at, last_heartbeat_at, image_ref, image_digest, command_json,
                 working_dir, resource_limits_json, network_spec_json, tooling_spec_json,
-                environment_json, workspace_spec_json, controlled_mounts_json, created_at";
+                environment_json, workspace_spec_json, controlled_mounts_json, exit_code, created_at";
 
 /// Insert a new agent run. The `(tenant_id, run_key)` unique index makes this
 /// the idempotency anchor — a duplicate `run_key` for the tenant is a conflict.
@@ -33,8 +33,8 @@ pub async fn insert_agent_run(pool: &DbPool, record: &AgentRunRecord) -> Result<
             started_at, finished_at, root_trace_id, root_trust_level, policy_bundle_id,
             claimed_by, claimed_at, last_heartbeat_at, image_ref, image_digest, command_json,
             working_dir, resource_limits_json, network_spec_json, tooling_spec_json,
-            environment_json, workspace_spec_json, controlled_mounts_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            environment_json, workspace_spec_json, controlled_mounts_json, exit_code, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         &record.id,
         &record.tenant_id,
         &record.agent_id,
@@ -60,6 +60,7 @@ pub async fn insert_agent_run(pool: &DbPool, record: &AgentRunRecord) -> Result<
         &record.environment_json,
         &record.workspace_spec_json,
         &record.controlled_mounts_json,
+        record.exit_code,
         record.created_at
     )?;
     Ok(())
@@ -124,8 +125,8 @@ async fn insert_agent_run_stmt(
             started_at, finished_at, root_trace_id, root_trust_level, policy_bundle_id,
             claimed_by, claimed_at, last_heartbeat_at, image_ref, image_digest, command_json,
             working_dir, resource_limits_json, network_spec_json, tooling_spec_json,
-            environment_json, workspace_spec_json, controlled_mounts_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            environment_json, workspace_spec_json, controlled_mounts_json, exit_code, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -152,6 +153,7 @@ async fn insert_agent_run_stmt(
     .bind(&record.environment_json)
     .bind(&record.workspace_spec_json)
     .bind(&record.controlled_mounts_json)
+    .bind(record.exit_code)
     .bind(record.created_at)
     .execute(&mut *conn)
     .await?;
@@ -199,9 +201,9 @@ async fn insert_agent_run_stmt_pg(
             started_at, finished_at, root_trace_id, root_trust_level, policy_bundle_id,
             claimed_by, claimed_at, last_heartbeat_at, image_ref, image_digest, command_json,
             working_dir, resource_limits_json, network_spec_json, tooling_spec_json,
-            environment_json, workspace_spec_json, controlled_mounts_json, created_at)
+            environment_json, workspace_spec_json, controlled_mounts_json, exit_code, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                 $19, $20, $21, $22, $23, $24, $25, $26)",
+                 $19, $20, $21, $22, $23, $24, $25, $26, $27)",
     )
     .bind(&record.id)
     .bind(&record.tenant_id)
@@ -228,6 +230,7 @@ async fn insert_agent_run_stmt_pg(
     .bind(&record.environment_json)
     .bind(&record.workspace_spec_json)
     .bind(&record.controlled_mounts_json)
+    .bind(record.exit_code)
     .bind(record.created_at)
     .execute(&mut **tx)
     .await?;
@@ -374,15 +377,19 @@ pub async fn update_claimed_agent_run_status(
     runner_id: &str,
     status: &str,
     finished_at: Option<DateTime<Utc>>,
+    exit_code: Option<i32>,
 ) -> Result<bool, sqlx::Error> {
     retry_on_busy(3, || async {
         let result = crate::execute_query!(
             pool,
             "UPDATE agent_runs
-             SET status = ?, finished_at = COALESCE(?, finished_at)
+             SET status = ?,
+                 finished_at = COALESCE(?, finished_at),
+                 exit_code = COALESCE(?, exit_code)
              WHERE tenant_id = ? AND id = ? AND claimed_by = ?",
             status,
             finished_at,
+            exit_code,
             tenant_id,
             run_id,
             runner_id
@@ -466,6 +473,7 @@ mod tests {
             environment_json: None,
             workspace_spec_json: None,
             controlled_mounts_json: None,
+            exit_code: None,
             created_at: now,
         }
     }
@@ -665,15 +673,31 @@ mod tests {
         claim_agent_run(&pool, "t_a", "run-1", "runner-1", Utc::now())
             .await
             .unwrap();
-        update_claimed_agent_run_status(&pool, "t_a", "run-1", "runner-1", "finished", None)
-            .await
-            .unwrap();
+        update_claimed_agent_run_status(
+            &pool,
+            "t_a",
+            "run-1",
+            "runner-1",
+            "finished",
+            None,
+            Some(0),
+        )
+        .await
+        .unwrap();
 
         assert!(
             !heartbeat_agent_run(&pool, "t_a", "run-1", "runner-1", Utc::now())
                 .await
                 .unwrap(),
             "a finished run must not accept a heartbeat"
+        );
+        assert_eq!(
+            get_agent_run(&pool, "t_a", "run-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .exit_code,
+            Some(0)
         );
     }
 
@@ -688,12 +712,12 @@ mod tests {
             .unwrap();
 
         assert!(!update_claimed_agent_run_status(
-            &pool, "t_a", "run-1", "runner-2", "running", None
+            &pool, "t_a", "run-1", "runner-2", "running", None, None
         )
         .await
         .unwrap());
         assert!(update_claimed_agent_run_status(
-            &pool, "t_a", "run-1", "runner-1", "running", None
+            &pool, "t_a", "run-1", "runner-1", "running", None, None
         )
         .await
         .unwrap());
@@ -727,9 +751,17 @@ mod tests {
         claim_agent_run(&pool, "t_a", "run-finished", "runner-3", stale_time)
             .await
             .unwrap();
-        update_claimed_agent_run_status(&pool, "t_a", "run-finished", "runner-3", "finished", None)
-            .await
-            .unwrap();
+        update_claimed_agent_run_status(
+            &pool,
+            "t_a",
+            "run-finished",
+            "runner-3",
+            "finished",
+            None,
+            Some(0),
+        )
+        .await
+        .unwrap();
 
         let threshold = Utc::now() - chrono::Duration::seconds(120);
         let flipped = mark_stale_agent_runs_stalled(&pool, threshold)
