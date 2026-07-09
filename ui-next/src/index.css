@@ -1,0 +1,93 @@
+@import "tailwindcss";
+@import "./design-system/tokens.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-app);
+  color: var(--text-primary);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Focus ring — brand, never severity colors */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.panel-card {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-panel);
+  background: var(--surface-panel);
+  padding: var(--space-panel-pad, 12px);
+}
+
+.input-field {
+  width: 100%;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-default);
+  background: var(--surface-app);
+  color: var(--text-primary);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.btn-primary {
+  border-radius: var(--radius-control);
+  background: var(--brand);
+  color: var(--text-on-brand);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.5rem 0.875rem;
+  border: none;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  background: var(--brand-emphasis);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.font-mono-evidence {
+  font-family:
+    ui-monospace,
+    "SFMono-Regular",
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
