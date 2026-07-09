@@ -1,14 +1,19 @@
 # #1297: local full-stack compose — everything docker-compose.yml starts
 # (gateway, seeded on demand via docker-compose.dev.yml) plus the runtime
 # data-plane components that ship as separate binaries/images
-# (aegis-egress-proxy, aegis-node-sensor) and Qdrant, the external vector
-# store lib/soc/src/qdrant.rs talks to. Kept as a separate file rather than
-# folded into docker-compose.yml so the base file (what CI's Docker Compose
-# E2E job runs) is untouched.
+# (aegis-egress-proxy, aegis-node-sensor, optional aegis-cage-runner) and
+# Qdrant, the external vector store lib/soc/src/qdrant.rs talks to. Kept as
+# a separate file rather than folded into docker-compose.yml so the base
+# file (what CI's Docker Compose E2E job runs) is untouched.
 #
-# aegis-cage-runner is deliberately absent: it currently has no `main.rs`/
-# binary target (lib-only crate — see bins/aegis-cage-runner/Cargo.toml),
-# so there is nothing yet to build an image from.
+# Cage runner (profile `cage`): binary + image exist (`bins/aegis-cage-runner`).
+# Start with:
+#   export AEGIS_COMMAND_SIGNING_KEY=<32-byte seed hex>
+#   export AEGIS_CAGE_GATEWAY_PUBLIC_KEY_HEX=<matching verifying key hex>
+#   export AEGIS_SENSOR_API_TOKEN=tenant_dev_alpha   # same bearer pattern
+#   docker compose -f docker-compose.full.yml --profile cage up --build -d
+# Gateway must receive AEGIS_COMMAND_SIGNING_KEY (override gateway.environment
+# or export before `up`) so create-run issues verifiable start_run commands.
 #
 # Prerequisite: aegis-node-sensor authenticates like any other API client
 # (bearer token, no sensor-specific auth mechanism — see
@@ -88,10 +93,39 @@ services:
       - "--mode"
       - "observe"
 
+  # Phase 4 cage executor — claims `/v1/agent-cage/runs` and runs Docker sandboxes.
+  # Opt-in profile so CI / default full stack stay free of docker.sock mounts.
+  cage-runner:
+    profiles: ["cage"]
+    build:
+      context: .
+      dockerfile: bins/aegis-cage-runner/Dockerfile
+    image: aegisagent-cage-runner:local
+    network_mode: host
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+    volumes:
+      # Host Docker engine — required for SandboxRuntime (create/start/kill).
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/cage-workspaces:/var/lib/aegis-cage/workspaces
+    command:
+      - "--gateway-url"
+      - "http://127.0.0.1:8080"
+      - "--tenant-id"
+      - "${AEGIS_DEMO_TENANT_ID:-tenant_dev_alpha}"
+      - "--api-token"
+      - "${AEGIS_CAGE_API_TOKEN:-${AEGIS_SENSOR_API_TOKEN:?Export AEGIS_CAGE_API_TOKEN or AEGIS_SENSOR_API_TOKEN (tenant bearer)}}"
+      - "--gateway-public-key-hex"
+      - "${AEGIS_CAGE_GATEWAY_PUBLIC_KEY_HEX:?Export the Ed25519 public key matching gateway AEGIS_COMMAND_SIGNING_KEY}"
+      - "--runner-id"
+      - "${AEGIS_CAGE_RUNNER_ID:-cage-runner-local}"
+
   # Phase 7.3 LLM gateway adapter — OpenAI-compatible reverse proxy.
   # Point agent SDK base URLs at 127.0.0.1:8090 instead of the provider.
-  # Set AEGIS_LLM_UPSTREAM / AEGIS_API_TOKEN as needed. Cage-runner is still
-  # lib-only on main (no image yet — see Wave A).
+  # Set AEGIS_LLM_UPSTREAM / AEGIS_API_TOKEN as needed.
   llm-gateway:
     build:
       context: .

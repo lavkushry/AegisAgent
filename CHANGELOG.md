@@ -23,6 +23,13 @@ All notable changes to this project are documented here. The format is based on
   already ships `receipts.ts` + shared corpus). Required CI job `ts-canon`
   now runs `test/receipts.test.ts` alongside canon vectors.
 
+### Added
+
+- **Cage-runner packaging** — `bins/aegis-cage-runner/Dockerfile` (Docker CLI
+  + mounted `docker.sock`), example TOML, and opt-in `docker-compose.full.yml`
+  profile `cage`. The execution binary already existed; packaging + docs
+  catch up so local full-stack can start a claim/execute loop.
+
 ### Performance
 
 - **#1337: MCP authorize-path latency** — bounded LRU caches for MCP server/tool

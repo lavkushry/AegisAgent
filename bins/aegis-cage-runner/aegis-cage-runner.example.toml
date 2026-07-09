@@ -1,0 +1,26 @@
+# Example configuration for aegis-cage-runner.
+# Copy and fill required fields, or pass the same values as CLI flags.
+#
+# Gateway must sign control commands with AEGIS_COMMAND_SIGNING_KEY (32-byte
+# Ed25519 seed hex). The runner pins the *public* key:
+#
+#   cargo run -p gateway --example …  # or use:
+#   python3 - <<'PY'
+#   from nacl.signing import SigningKey
+#   sk = SigningKey.generate()
+#   print("secret (gateway AEGIS_COMMAND_SIGNING_KEY):", sk.encode().hex())
+#   print("public (runner gateway_public_key_hex):", sk.verify_key.encode().hex())
+#   PY
+
+gateway_url = "http://127.0.0.1:8080"
+tenant_id = "tenant_dev_alpha"
+# Same tenant-bearer pattern as aegis-node-sensor (local: tenant id works when JWT is off).
+api_token = "tenant_dev_alpha"
+# Opaque claim id (defaults to hostname if omitted).
+# runner_id = "cage-runner-1"
+# REQUIRED: hex-encoded Ed25519 verifying key matching the gateway signing secret.
+gateway_public_key_hex = "REPLACE_WITH_64_HEX_PUBLIC_KEY"
+workspace_root = "/var/lib/aegis-cage/workspaces"
+claim_poll_interval_secs = 5
+control_poll_interval_secs = 5
+heartbeat_interval_secs = 15
