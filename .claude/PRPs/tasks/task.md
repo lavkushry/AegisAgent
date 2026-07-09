@@ -44,13 +44,23 @@ still missing, verified against the code, not assumed from an old plan doc.
   compose entries for `aegis-egress-proxy`/`aegis-node-sensor`, plus a
   repo-root `.dockerignore` that didn't exist — every prior `docker build`
   sent the whole repo, including `target/`, as build context).
-- **Coverage gate is 70%, project standard is 80%+** (`.github/workflows/
-  ci.yml`'s `--fail-under-lines 70` vs. `rules/common/testing.md`).
-- **68 unmerged local/remote branches**, several of which duplicate work
-  already re-landed on `main` under different PRs (confirmed for the five
-  `feat/1142-*-cursor` branches — all six #1142 pagination targets are
-  already merged via #1747–#1752; those branches are dead and should be
-  deleted, not merged).
+- **~85 unmerged local/remote branches** (164 total incl. main), several of
+  which duplicate work already re-landed on `main` under different PRs
+  (confirmed for the five `feat/1142-*-cursor` branches — all six #1142
+  pagination targets are already merged via #1747–#1752, including
+  `list_policy_templates_cursor`, which lives in `lib/policy/src/compiler.rs`
+  rather than `lib/storage` since templates come from an in-memory catalog,
+  not `StorageBackend` — those five branches are dead and should be deleted,
+  not merged; deletion is blocked pending explicit user
+  authorization/action, not a technical blocker).
+
+## Fixed (2026-07-09)
+
+- **Coverage gate raised to match the 80% standard.** `.github/workflows/
+  ci.yml`'s Rust gate was `--fail-under-lines 70` against an actual measured
+  87.62% — raised to 80 (comfortable margin). Python's was `--fail-under=75`
+  against an actual measured exactly 80% — raised to 78, not 80, to leave a
+  safety margin rather than sitting flush with the current number.
 
 ## Everything else previously listed here
 
