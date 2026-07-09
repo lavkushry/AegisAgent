@@ -6,6 +6,7 @@ import { incidentsDashboard } from "../system/incidents";
 import { integrityDashboard } from "../system/integrity";
 import { overviewDashboard } from "../system/overview";
 import { receiptsDashboard } from "../system/receipts";
+import { runtimeDashboard } from "../system/runtime";
 import type { PanelType } from "@/panels/types";
 
 /** UIDs reserved for version-controlled system dashboards — tenants cannot claim them. */
@@ -25,6 +26,7 @@ export const RESERVED_SYSTEM_UIDS = [
   "analytics",
   "settings",
   "fleet",
+  "runtime",
 ] as const;
 
 export const ALLOWED_PANEL_TYPES: readonly PanelType[] = [
@@ -86,6 +88,7 @@ export const SYSTEM_DASHBOARD_CATALOG: readonly SystemDashboardEntry[] = [
   { uid: fleetDashboard.uid, title: fleetDashboard.title, schema: fleetDashboard, readOnly: true },
   { uid: receiptsDashboard.uid, title: receiptsDashboard.title, schema: receiptsDashboard, readOnly: true },
   { uid: analyticsDashboard.uid, title: analyticsDashboard.title, schema: analyticsDashboard, readOnly: true },
+  { uid: runtimeDashboard.uid, title: runtimeDashboard.title, schema: runtimeDashboard, readOnly: true },
 ];
 
 export function copySystemDashboardAsTenant(uid: string, newUid: string, newTitle?: string): DashboardSchema | null {

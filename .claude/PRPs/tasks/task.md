@@ -1,68 +1,29 @@
-# Active tasks
+# Active tasks — pre-production
 
-Source of truth for shipped features: [`CLAUDE.md`](/CLAUDE.md) (root) — its
-"Current Status & Feature Parity History" section and
-[`docs/feature_history.md`](../../../docs/feature_history.md) are kept
-current per-PR. This file previously duplicated a feature checklist that
-rotted (most items below were checked off in PRs #1276, #1277, #1602,
-#1611–#1774, etc. without this file being updated) — don't re-duplicate
-that list here again. Track only what's genuinely in flight or genuinely
-still missing, verified against the code, not assumed from an old plan doc.
+## In flight
 
-## Verified still missing (2026-07-09 audit)
+- **Wave A (local branch `feat/cage-runner-execution-loop`)** — cage binary /
+  claim loop (P0). Not on main.
 
-- **MCP manifest signing** — `manifest_hash`-based drift *detection* exists
-  (`lib/storage/src/db/mcp.rs`, `src/src/routes/authorize.rs`), but there is
-  no cryptographic signature verification of MCP server manifests (unlike
-  policy bundles, which are Ed25519-signed — `src/src/routes/policy.rs`,
-  #1280). A manifest that "drifts" is detected and gated; a manifest that's
-  simply forged/never-signed is not distinguished from a legitimate one.
-- **`aegis-cage-runner` has no binary.** `bins/aegis-cage-runner` is a
-  lib-only crate (`SandboxRuntime` trait, Docker CLI wrapper, workspace
-  management, event emission — all unit-tested) with no `main.rs`/`[[bin]]`
-  target, and the gateway doesn't depend on it either. The
-  `/v1/agent-cage/runs` control-plane routes manage run *records*; nothing
-  polls them and actually invokes Docker to execute a sandboxed run yet.
-  This is a bigger lift than "add a Dockerfile" — it needs an execution
-  loop designed and reviewed (it shells out to the host Docker CLI, a
-  security-sensitive decision this project's own threat model would want
-  scrutinized before landing).
-- **Phase 7.3 — LLM gateway adapter** (prompt/model-call choke point) —
-  **implemented on branch** as `bins/aegis-llm-gateway` (OpenAI-compatible
-  reverse proxy; `model_call_started`/`model_call_finished` local events;
-  ships hashes + token metadata to `POST /v1/ingest/model-calls`; failure
-  redaction). Phases 7.1/7.2 already shipped (#1775/#1776). PR not yet
-  opened/merged.
-- **Phase 8.3 — Evidence export** — **implemented on branch** as
-  `POST /v1/evidence/export` (investigation pack: events, receipts,
-  receipt_checkpoints, graph_manifest, redaction_manifest; export appends
-  a durable self-receipt). Distinct from #1298 compliance pack. PR not yet
-  merged.
-- **Deployment packaging gaps (#1297 follow-up)** — `helm/` had only the
-  gateway chart, `docker-compose.yml` had only gateway; being fixed in
-  branch `deploy-1297-sensor-proxy-packaging` (Dockerfiles + Helm charts +
-  compose entries for `aegis-egress-proxy`/`aegis-node-sensor`, plus a
-  repo-root `.dockerignore` that didn't exist — every prior `docker build`
-  sent the whole repo, including `target/`, as build context).
-- **~85 unmerged local/remote branches** (164 total incl. main), several of
-  which duplicate work already re-landed on `main` under different PRs
-  (confirmed for the five `feat/1142-*-cursor` branches — all six #1142
-  pagination targets are already merged via #1747–#1752, including
-  `list_policy_templates_cursor`, which lives in `lib/policy/src/compiler.rs`
-  rather than `lib/storage` since templates come from an in-memory catalog,
-  not `StorageBackend` — those five branches are dead and should be deleted,
-  not merged; deletion is blocked pending explicit user
-  authorization/action, not a technical blocker).
+## Wave B — progress
 
-## Fixed (2026-07-09)
+- [x] LLM gateway Dockerfile + Helm + compose.full
+- [x] Gateway Helm fail-closed multi-replica without Postgres
+- [x] `values-production.yaml` (JWT required, Postgres, REPLAY_STORE=db)
+- [x] JWT-only enterprise auth limitation documented (`production-hardening.md` §9)
+- [x] Postgres multi-replica guidance (§10)
+- [ ] Full Postgres GA ops path / multi-replica e2e still open (#1194 deep)
+- [ ] Native OIDC/SAML still open (edge SSO only)
 
-- **Coverage gate raised to match the 80% standard.** `.github/workflows/
-  ci.yml`'s Rust gate was `--fail-under-lines 70` against an actual measured
-  87.62% — raised to 80 (comfortable margin). Python's was `--fail-under=75`
-  against an actual measured exactly 80% — raised to 78, not 80, to leave a
-  safety margin rather than sitting flush with the current number.
+## Wave C — progress
 
-## Everything else previously listed here
+- [x] TypeScript receipt chain verifier (`sdk-typescript/src/receipts.ts`)
+- [x] Runtime Timeline console dashboard (ASE)
+- [ ] Ban/quarantine entity UI (needs entity catalog)
+- [ ] Cage runs UI (after Wave A binary)
+- [ ] Branch merge-or-close pass (~80 remotes)
 
-Shipped. See `CLAUDE.md` and `git log --oneline --grep="<keyword>"` for the
-landing PR rather than trusting a static checklist again.
+## Recently closed on main
+
+#1793 MCP signing · #1794 LLM gateway · #1795 evidence export · #1792 coverage
+gates · #1790/#1791 packaging

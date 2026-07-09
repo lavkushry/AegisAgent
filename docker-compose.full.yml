@@ -87,3 +87,30 @@ services:
       - "${AEGIS_SENSOR_API_TOKEN:?Register an agent for the sensor and export its token as AEGIS_SENSOR_API_TOKEN first -- see the prerequisite note above}"
       - "--mode"
       - "observe"
+
+  # Phase 7.3 LLM gateway adapter — OpenAI-compatible reverse proxy.
+  # Point agent SDK base URLs at 127.0.0.1:8090 instead of the provider.
+  # Set AEGIS_LLM_UPSTREAM / AEGIS_API_TOKEN as needed. Cage-runner is still
+  # lib-only on main (no image yet — see Wave A).
+  llm-gateway:
+    build:
+      context: .
+      dockerfile: bins/aegis-llm-gateway/Dockerfile
+    image: aegisagent-llm-gateway:local
+    network_mode: host
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      AEGIS_API_TOKEN: ${AEGIS_API_TOKEN:-}
+    command:
+      - "--listen"
+      - "127.0.0.1:8090"
+      - "--upstream"
+      - "${AEGIS_LLM_UPSTREAM:-https://api.openai.com}"
+      - "--provider"
+      - "${AEGIS_LLM_PROVIDER:-openai}"
+      - "--gateway-url"
+      - "http://127.0.0.1:8080"
+

@@ -86,6 +86,12 @@ spec:
                   name: {{ include "aegis-gateway.secretName" . }}
                   key: AEGIS_GITHUB_WEBHOOK_SECRET
                   optional: true
+            - name: AEGIS_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-gateway.secretName" . }}
+                  key: AEGIS_ADMIN_API_KEY
+                  optional: true
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
