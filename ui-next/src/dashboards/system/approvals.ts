@@ -53,37 +53,30 @@ export const approvalsDashboard: DashboardSchema = {
       ],
     },
     {
-      id: "list",
-      title: "Queue rows",
+      id: "cards",
+      title: "HITL cards",
       panels: [
         {
           panel: {
-            id: "table-approvals",
-            type: "table",
-            title: "Pending approvals",
+            id: "cards-pending",
+            type: "approval-card",
+            title: "Frozen actions awaiting decision",
             datasourceId: DEFAULT_DATASOURCE_ID,
             entity: "approval",
-            limit: 50,
+            limit: 12,
             options: {
-              columns: [
-                "approval_id",
-                "agent_id",
-                "tool_name",
-                "source_trust",
-                "status",
-                "action_hash",
-              ],
-              maxRows: 50,
+              maxCards: 8,
+              interactive: true,
             },
             drilldowns: [
               {
-                label: "Open approvals",
+                label: "Edit on Approvals page",
                 target: { kind: "dashboard", uid: "approvals" },
               },
             ],
           },
           w: 12,
-          h: 5,
+          h: 6,
         },
       ],
     },
