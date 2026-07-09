@@ -5,6 +5,7 @@ import {
   persistBearerToken,
   persistConnection,
 } from "./runtimeConfig";
+import type { VariableValues } from "@/datasources/types";
 
 export type Theme = "dark-soc" | "light" | "oled";
 export type Density = "compact" | "cozy";
@@ -16,11 +17,14 @@ interface AppState {
   gatewayUrl: string;
   bearerToken: string;
   activeTenant: string;
-  /** Human operator identity for approval mutations (approver_user_id). */
   operatorId: string;
   theme: Theme;
   density: Density;
   activeView: string;
+  /** Relative range token for dashboard queries (e.g. "24h"). */
+  timeRange: string;
+  variables: VariableValues;
+  liveMode: boolean;
   setGatewayUrl: (url: string) => void;
   setBearerToken: (token: string) => void;
   setActiveTenant: (tenant: string) => void;
@@ -28,6 +32,9 @@ interface AppState {
   setTheme: (theme: Theme) => void;
   setDensity: (density: Density) => void;
   setActiveView: (view: string) => void;
+  setTimeRange: (range: string) => void;
+  setVariables: (variables: VariableValues) => void;
+  setLiveMode: (live: boolean) => void;
   applyConnection: (input: {
     gatewayUrl: string;
     activeTenant: string;
@@ -90,6 +97,9 @@ export const useAppStore = create<AppState>((set) => ({
   theme: initialTheme,
   density: initialDensity,
   activeView: "overview",
+  timeRange: "24h",
+  variables: {},
+  liveMode: false,
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
   setBearerToken: (token) => {
     persistBearerToken(
@@ -123,6 +133,9 @@ export const useAppStore = create<AppState>((set) => ({
     set({ density });
   },
   setActiveView: (view) => set({ activeView: view }),
+  setTimeRange: (timeRange) => set({ timeRange }),
+  setVariables: (variables) => set({ variables }),
+  setLiveMode: (liveMode) => set({ liveMode }),
   applyConnection: ({ gatewayUrl, activeTenant, bearerToken, operatorId }) => {
     persistConnection(
       typeof window !== "undefined" ? window.localStorage : null,
