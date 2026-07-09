@@ -264,9 +264,7 @@ mod tests {
         std::fs::write(p.join("environ"), b"AEGIS_RUN_ID=run-poll\0").unwrap();
 
         let enforcer = Arc::new(ProcessEnforcer::new());
-        let collector = ProcessCollector::new(enforcer.clone());
-        // Use a custom scan by temporarily only testing registration path:
-        // call internal logic via scan_proc_fs + manual register like poll does.
+        // Registration path via scan_proc_fs (same parser poll uses).
         let live = scan_proc_fs(root.path());
         assert_eq!(live.len(), 1);
         enforcer.register_run(&live[0].run_id, live[0].pid).unwrap();
