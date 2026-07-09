@@ -28,7 +28,7 @@
 | MCP gateway (registry, discovery, manifest pinning, drift) | Implemented | `src/src/routes/mcp.rs`, `lib/soc/src/mcp_inspect.rs`, migrations 0002–0003 | standalone MCP proxy binary 📐 | #1336, #1337 | unit + integration | prod (lite) | proxy-mode design |
 | Tool permissions (per-agent) | Implemented | migration `0013_agent_tool_permissions.sql`, `routes/agents.rs` | — | — | integration | prod | — |
 | SDK Python | Implemented | `sdk-python/aegisagent/*` (187 tests) | — | — | unit + parity vectors | prod | — |
-| SDK TypeScript | Implemented | `sdk-typescript/src/*` | feature parity gaps — see [sdk-parity-status.md](sdk-parity-status.md) | — | unit + parity vectors | beta | parity items |
+| SDK TypeScript | Implemented | `sdk-typescript/src/*` incl. `receipts.ts` verifier | remaining feature gaps if any — see [sdk-parity-status.md](sdk-parity-status.md) | — | unit + parity vectors | beta | — |
 | SDK Go | Implemented | `sdk-go/{canon,aegis}/` | parity gaps — see [sdk-parity-status.md](sdk-parity-status.md) | — | unit + parity vectors | beta | parity items |
 | UI: approvals | Implemented | `ui/src/dashboards/system/approvals.ts`, panels | — | — | vitest + Playwright e2e | beta | — |
 | UI: receipts/integrity | Implemented | `ui/src/datasources/receipt*.ts`, `dashboards/system/integrity.ts` | — | — | vitest | beta | — |
@@ -44,9 +44,9 @@
 | Egress proxy | Planned | design: [components/Egress_Proxy.md](components/Egress_Proxy.md) | the proxy (Phase 5) | Phased PR plan §7 | — | design | after cage |
 | Tool broker | Planned | design: [components/Tool_Broker.md](components/Tool_Broker.md) | the service (Phase 6) | Phased PR plan §8 | — | design | after egress |
 | Prompt capture | Planned | untrusted-content ingest ✅ (`POST /v1/ingest`); full prompt/model capture is Phase 7 | prompt/model event schema + SDK capture | Phased PR plan §9 | ingest tests | design | Phase 7 |
-| Model call capture | Planned | — | everything (Phase 7) | Phased PR plan §9 | — | design | Phase 7 |
+| Model call capture | Implemented | ingest + `bins/aegis-llm-gateway` + Dockerfile/Helm/compose | broader provider adapters | #1794 | unit | beta | adapters |
 | Runtime timeline (UI) | Partial | API: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline` | console visualization | — | route tests | beta | UI panel |
-| Deployment (Compose/Helm) | Implemented | `docker-compose*.yml`, `helm/aegis-gateway/` | multi-replica needs Postgres (#1194) | #1206 | helm lint + e2e stack | prod (single-writer) | Postgres GA |
+| Deployment (Compose/Helm) | Partial | gateway + sensor + egress + **llm-gateway** charts/images; compose full stack | cage Helm/image (Wave A); multi-replica needs Postgres | #1206, #1297 | helm lint | beta | cage packaging |
 | CI / testing / supply chain | Implemented | `.github/workflows/*` (fmt/clippy/tests/coverage/fuzz/mutation/SAST/scans; cosign+SLSA+SBOM) | — | #1172, #1174 | — | prod | — |
 
 ## How to update this matrix

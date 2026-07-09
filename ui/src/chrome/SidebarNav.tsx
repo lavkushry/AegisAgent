@@ -20,6 +20,7 @@ const NAV_ITEMS = [
   ["mcp", "MCP Servers", Server, null],
   ["receipts", "Receipts Log", FileCheck2, null],
   ["analytics", "Analytics", BarChart3, null],
+  ["runtime", "Runtime Timeline", Clock, null],
   ["dashboard-editor", "Dashboard editor", PencilRuler, null],
   ["settings", "Settings", Settings, null],
 ] as const;

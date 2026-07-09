@@ -1,0 +1,18 @@
+{{/*
+Fail closed when operators ask for multi-writer scale on SQLite.
+
+PostgreSQL (#1194) is the production path for concurrent MVCC writes.
+`replicaCount > 1` or HPA without a postgres DATABASE_URL would put multiple
+pods on one RWO SQLite volume — silent data corruption risk. Refuse the chart
+render instead.
+*/}}
+{{- $replicas := int .Values.replicaCount }}
+{{- $hpa := .Values.autoscaling.enabled }}
+{{- $db := lower (default "" .Values.config.databaseUrl) }}
+{{- $isPostgres := or (hasPrefix "postgres://" $db) (hasPrefix "postgresql://" $db) }}
+{{- if and (or (gt $replicas 1) $hpa) (not $isPostgres) }}
+{{- fail "aegis-gateway: multi-replica (replicaCount > 1 or autoscaling.enabled) requires config.databaseUrl to be a postgres:// or postgresql:// URL. SQLite is single-writer only. See helm/aegis-gateway/values-production.yaml and docs/production-hardening.md." }}
+{{- end }}
+{{- if and $isPostgres .Values.persistence.enabled }}
+{{- /* PVC still allowed for non-DB scratch, but warn via annotation in NOTES */ -}}
+{{- end }}

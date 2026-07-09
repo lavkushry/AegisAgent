@@ -1,0 +1,71 @@
+# Default values for aegis-llm-gateway.
+
+# -- Stateless reverse proxy (lineage is shipped to the gateway). Safe to scale.
+replicaCount: 1
+
+image:
+  repository: aegisagent-llm-gateway
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8090
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+config:
+  # -- Upstream model provider base URL (e.g. https://api.openai.com).
+  upstream: "https://api.openai.com"
+  # -- Provider label stored on lineage events.
+  provider: "openai"
+  # -- Control-plane base URL for POST /v1/ingest/model-calls. Empty = local capture only.
+  gatewayUrl: ""
+  logLevel: "info"
+  # -- Optional correlation IDs stamped on every capture.
+  runId: ""
+  traceId: ""
+  sourceTrust: ""
+  capturePrompts: true
+
+secret:
+  # -- When true, chart creates a Secret from apiToken below.
+  # Prefer existingSecret in production.
+  create: false
+  existingSecret: ""
+  apiToken: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

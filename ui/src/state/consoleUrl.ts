@@ -14,6 +14,7 @@ const BASE_CONSOLE_VIEWS = [
   "mcp",
   "receipts",
   "analytics",
+  "runtime",
   "dashboard-editor",
   "settings",
 ] as const;

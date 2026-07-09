@@ -110,9 +110,14 @@ persistence:
 cedarPolicy: ""
 
 config:
+  # -- sqlite:///... for single-replica local/dev. For multi-replica use a
+  # postgres:// or postgresql:// URL and values-production.yaml (template
+  # fails closed if replicaCount>1 or HPA on SQLite). Gateway binary must be
+  # built with `--features postgres` when using Postgres.
   databaseUrl: "sqlite:///data/aegis.db"
   logLevel: "info,gateway=debug,sqlx=info"
   corsOrigins: ""
+  # -- Production: true (see values-production.yaml). Dev chart default false.
   jwtRequired: false
 
 # -- Secret values for sensitive env vars. When `secret.create` is true, the
@@ -126,6 +131,9 @@ secret:
   jwtSecret: ""
   policySigningKey: ""
   githubWebhookSecret: ""
+  # -- Optional: also store AEGIS_ADMIN_API_KEY in the same Secret for
+  # non-loopback admin/metrics access (see docs/production-hardening.md).
+  adminApiKey: ""
 
 # -- Extra raw environment variables appended to the gateway container.
 extraEnv: []
