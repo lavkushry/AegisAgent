@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ComponentType } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/chrome/AppShell";
+import { RouteErrorBoundary } from "@/app/RouteErrorBoundary";
 // Eager: landing + connection config (critical path for cold start).
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
@@ -80,24 +81,26 @@ export function AppRouter() {
   return (
     <BrowserRouter basename="/dashboard">
       <AppShell>
-        <Suspense fallback={<RouteFallback />}>
-          <Routes>
-            <Route path="/" element={<OverviewPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/approvals" element={<ApprovalsPage />} />
-            <Route path="/integrity" element={<IntegrityPage />} />
-            <Route path="/explore" element={<ExplorePage />} />
-            <Route path="/detections" element={<DetectionsPage />} />
-            <Route path="/rules" element={<RulesPage />} />
-            <Route path="/alerting" element={<AlertingPage />} />
-            <Route path="/agents" element={<AgentsPage />} />
-            <Route path="/agents/:agentId" element={<AgentDetailPage />} />
-            <Route path="/incidents" element={<IncidentsPage />} />
-            <Route path="/mcp" element={<McpPage />} />
-            <Route path="/dashboards" element={<DashboardEditorPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+        <RouteErrorBoundary>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/" element={<OverviewPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/approvals" element={<ApprovalsPage />} />
+              <Route path="/integrity" element={<IntegrityPage />} />
+              <Route path="/explore" element={<ExplorePage />} />
+              <Route path="/detections" element={<DetectionsPage />} />
+              <Route path="/rules" element={<RulesPage />} />
+              <Route path="/alerting" element={<AlertingPage />} />
+              <Route path="/agents" element={<AgentsPage />} />
+              <Route path="/agents/:agentId" element={<AgentDetailPage />} />
+              <Route path="/incidents" element={<IncidentsPage />} />
+              <Route path="/mcp" element={<McpPage />} />
+              <Route path="/dashboards" element={<DashboardEditorPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </RouteErrorBoundary>
       </AppShell>
     </BrowserRouter>
   );

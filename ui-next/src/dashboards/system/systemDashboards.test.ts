@@ -4,6 +4,7 @@ import { SYSTEM_DASHBOARD_CATALOG } from "../editor/catalog";
 import { validateDashboardSchema } from "../editor/validate";
 import {
   approvalsDashboard,
+  detectionsDashboard,
   fleetDashboard,
   incidentsDashboard,
   integrityDashboard,
@@ -16,13 +17,21 @@ const SYSTEM = [
   fleetDashboard,
   approvalsDashboard,
   incidentsDashboard,
+  detectionsDashboard,
 ] as const;
 
 describe("system dashboards", () => {
   test("catalog lists all built-in boards", () => {
     const uids = SYSTEM_DASHBOARD_CATALOG.map((e) => e.uid).sort();
     expect(uids).toEqual(
-      ["approvals", "fleet", "incidents", "integrity", "overview"].sort(),
+      [
+        "approvals",
+        "detections",
+        "fleet",
+        "incidents",
+        "integrity",
+        "overview",
+      ].sort(),
     );
     for (const entry of SYSTEM_DASHBOARD_CATALOG) {
       expect(entry.readOnly).toBe(true);
