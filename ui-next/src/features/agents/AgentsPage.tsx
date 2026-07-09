@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/app/store";
 import { TenantGate } from "@/components/TenantGate";
@@ -127,9 +128,12 @@ export function AgentsPage() {
                 className="border-t border-[var(--border-default)] hover:bg-[var(--interactive-bg-hover)]"
               >
                 <td className="px-3 py-2">
-                  <div className="font-medium text-[var(--text-primary)]">
+                  <Link
+                    to={`/agents/${encodeURIComponent(a.id)}`}
+                    className="font-medium text-[var(--text-primary)] hover:text-[var(--brand)] hover:underline"
+                  >
                     {a.name || a.agent_key}
-                  </div>
+                  </Link>
                   <div className="font-mono text-[10px] text-[var(--text-muted)]">
                     {a.agent_key}
                   </div>

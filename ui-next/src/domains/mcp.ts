@@ -83,3 +83,32 @@ export function restoreMcpServer(
     body,
   );
 }
+
+export interface McpManifestSnapshot {
+  id?: string;
+  server_key?: string;
+  manifest_hash?: string;
+  created_at?: string;
+  manifest_json?: string;
+}
+
+export async function listMcpManifestHistory(
+  opts: FetchOptions,
+  serverKey: string,
+): Promise<McpManifestSnapshot[]> {
+  const raw = await fetchFromGateway<unknown>(
+    opts,
+    `/v1/mcp/servers/${encodeURIComponent(serverKey)}/manifest-history`,
+  );
+  if (Array.isArray(raw)) {
+    return raw as McpManifestSnapshot[];
+  }
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    Array.isArray((raw as { snapshots?: unknown }).snapshots)
+  ) {
+    return (raw as { snapshots: McpManifestSnapshot[] }).snapshots;
+  }
+  return [];
+}

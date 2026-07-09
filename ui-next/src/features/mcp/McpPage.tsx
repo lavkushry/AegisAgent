@@ -6,6 +6,7 @@ import { HashChip } from "@/components/security/HashChip";
 import { TrustBadge } from "@/components/security/TrustBadge";
 import { pillStyle } from "@/components/security/pill";
 import {
+  listMcpManifestHistory,
   listMcpServers,
   listMcpTools,
   quarantineMcpServer,
@@ -43,6 +44,13 @@ export function McpPage() {
   const toolsQuery = useQuery({
     queryKey: ["mcp-tools", selectedKey, gatewayUrl, activeTenant],
     queryFn: () => listMcpTools(apiOpts, selectedKey!),
+    enabled: tenantReady && Boolean(selectedKey),
+    retry: false,
+  });
+
+  const historyQuery = useQuery({
+    queryKey: ["mcp-history", selectedKey, gatewayUrl, activeTenant],
+    queryFn: () => listMcpManifestHistory(apiOpts, selectedKey!),
     enabled: tenantReady && Boolean(selectedKey),
     retry: false,
   });
@@ -215,6 +223,45 @@ export function McpPage() {
                 >
                   Restore
                 </button>
+              </div>
+
+              <div>
+                <h3 className="mb-2 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                  Manifest history
+                </h3>
+                {historyQuery.isLoading ? (
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    Loading history…
+                  </p>
+                ) : historyQuery.error ? (
+                  <p className="text-[11px] text-[var(--sev-high)]">
+                    {errorMessage(historyQuery.error)}
+                  </p>
+                ) : (
+                  <ul className="mb-4 max-h-32 space-y-1 overflow-auto text-[11px]">
+                    {(historyQuery.data ?? []).map((snap, i) => (
+                      <li
+                        key={snap.id ?? `${snap.manifest_hash}-${i}`}
+                        className="flex flex-wrap items-center gap-2 rounded border border-[var(--border-default)] bg-[var(--surface-app)] px-2 py-1"
+                      >
+                        <HashChip hash={snap.manifest_hash} kind="manifest" />
+                        <span className="text-[var(--text-muted)]">
+                          {formatTime(snap.created_at) || "—"}
+                        </span>
+                        {i === 0 ? (
+                          <span className="text-[10px] text-[var(--state-verified)]">
+                            latest
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                    {(historyQuery.data ?? []).length === 0 ? (
+                      <li className="text-[var(--text-muted)]">
+                        No history snapshots.
+                      </li>
+                    ) : null}
+                  </ul>
+                )}
               </div>
 
               <div>

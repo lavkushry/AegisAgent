@@ -30,6 +30,40 @@ export function listAgents(opts: FetchOptions): Promise<AgentRecord[]> {
   );
 }
 
+export function getAgent(
+  opts: FetchOptions,
+  id: string,
+): Promise<AgentRecord> {
+  return fetchFromGateway<AgentRecord>(
+    opts,
+    `/v1/agents/${encodeURIComponent(id)}`,
+  );
+}
+
+export interface AgentToolPermission {
+  id?: string;
+  tool_key: string;
+  created_at?: string;
+}
+
+export async function listAgentPermissions(
+  opts: FetchOptions,
+  agentId: string,
+): Promise<AgentToolPermission[]> {
+  const raw = await fetchFromGateway<unknown>(
+    opts,
+    `/v1/agents/${encodeURIComponent(agentId)}/permissions`,
+  );
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    Array.isArray((raw as { permissions?: unknown }).permissions)
+  ) {
+    return (raw as { permissions: AgentToolPermission[] }).permissions;
+  }
+  return asRecordArray(raw).map((r) => r as unknown as AgentToolPermission);
+}
+
 export function freezeAgent(opts: FetchOptions, id: string, reason?: string) {
   const body = reason?.trim() ? { reason: reason.trim() } : undefined;
   return fetchFromGateway<AgentRecord>(

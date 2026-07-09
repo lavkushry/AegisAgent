@@ -44,6 +44,7 @@ No SOC fetch may run with empty `tenantId`. Client throws:
 | 10 | Detections / Rules / Alerting | Phase 5 |
 | 11 | Full AQL + frame/types field catalog | Phase A (datasource spine) |
 | 12 | PanelRuntime + gateway-entity + schema Overview | Phase B |
+| 13 | ControlsBar + live poll stream + agent detail + MCP history | Phase C |
 
 ### Phase 2–3 API map
 

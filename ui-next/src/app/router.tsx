@@ -6,6 +6,7 @@ import { ApprovalsPage } from "@/features/approvals/ApprovalsPage";
 import { IntegrityPage } from "@/features/integrity/IntegrityPage";
 import { ExplorePage } from "@/features/explore/ExplorePage";
 import { AgentsPage } from "@/features/agents/AgentsPage";
+import { AgentDetailPage } from "@/features/agents/AgentDetailPage";
 import { IncidentsPage } from "@/features/incidents/IncidentsPage";
 import { McpPage } from "@/features/mcp/McpPage";
 import { DetectionsPage } from "@/features/detections/DetectionsPage";
@@ -26,6 +27,7 @@ export function AppRouter() {
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/alerting" element={<AlertingPage />} />
           <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/agents/:agentId" element={<AgentDetailPage />} />
           <Route path="/incidents" element={<IncidentsPage />} />
           <Route path="/mcp" element={<McpPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
