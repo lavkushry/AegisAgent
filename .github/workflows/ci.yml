@@ -316,8 +316,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-      - name: TS canon corpus tests (node --test, no deps required)
-        run: node --test test/canon.test.ts
+      - name: TS canon + receipt corpus tests (node --test, no deps required)
+        # Receipt verifier is production code (`src/receipts.ts`); keep it on the
+        # required byte-parity job so a broken shared corpus fails CI hard.
+        run: node --test test/canon.test.ts test/receipts.test.ts
         working-directory: sdk-typescript
 
   # ── PR-052: Cross-language byte-equality corpus gate ──────────────────────────

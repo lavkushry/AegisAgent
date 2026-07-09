@@ -41,7 +41,7 @@ Strongest current capabilities:
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
 - **Agent cage runner** — Docker runtime **library** only on main (execution binary WIP)
-- **Console UI** — approvals/receipts/incidents/overview; missing cage/ban/quarantine/timeline product pages
+- **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph); missing cage/ban/quarantine product pages
 - **Deploy** — gateway + sensor + egress Helm; missing cage/llm-gateway charts; single-writer SQLite default
 - **Postgres** — feature + migrations exist; not the default HA production path
 
@@ -52,8 +52,7 @@ Strongest current capabilities:
 - forced egress for unknown agents (P0)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
-- full Phase 9 console (cage, ban/quarantine centers, timelines) (P2)
-- TypeScript receipt chain verifier parity (P2)
+- full Phase 9 console (cage, ban/quarantine centers, runtime timelines) (P2)
 
 ---
 
@@ -68,15 +67,15 @@ Strongest current capabilities:
 | Canonical action hashing | Available today | `aegis-jcs-1` byte-identical across languages. |
 | Approval workflow | Available today | Pause, approve, reject, edit, consume; hash-bound. |
 | Action receipts | Available today | Hash-chained evidence; optional Ed25519/KMS signing. |
-| Receipt verification | Available today | HTTP + Python/Go CLI/SDK; TS verifier still incomplete. |
+| Receipt verification | Available today | HTTP + Python/Go/TS SDK verifiers; shared `receipt_chain_vectors.json` corpus. |
 | MCP Gateway Lite | Available today | Register/discover/pin/drift; optional manifest signature verify. |
 | Prompt/model capture | Available today | Ingest APIs + Python SDK + LLM reverse-proxy adapter. |
-| Evidence graph | Available today | `/v1/graph/*` for run/incident/agent lineage. |
-| Investigation evidence export | Available today | `POST /v1/evidence/export` with checkpoints + self-receipt. |
-| SOC query / incidents | Available today | Async detect/correlate + query API + beta UI. |
-| TypeScript SDK | Partial | Canon + protect + client shipped; receipt verifier gap. |
+| Evidence graph | Available today | `/v1/graph/*` for run/incident/agent lineage; console `decision-graph` panel. |
+| Investigation evidence export | Available today | `POST /v1/evidence/export` + Integrity UI export. |
+| SOC query / incidents | Available today | Async detect/correlate + query API + schema-driven UI. |
+| TypeScript SDK | Available today | Canon + protect + client + receipt chain verifier (shared corpus). |
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
-| Full web console | Partial / roadmap | Core dashboards exist; cage/ban/quarantine/timeline product pages incomplete. |
+| Full web console | Partial | Bun SPA panel suite shipped; cage/ban/quarantine pages incomplete. |
 | Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
 | Agent cage runner | Partial / roadmap | Lib on main; execution binary not merged. |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |

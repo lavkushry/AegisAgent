@@ -16,6 +16,13 @@ All notable changes to this project are documented here. The format is based on
   `ui-next/src/dashboards/system/` embed these panels. Inventory:
   `docs/components/Console_UI.md`.
 
+### Fixed
+
+- **Status docs + CI: TypeScript receipt verifier** — `current-vs-roadmap` /
+  `Implementation_Status` no longer claim a TS receipt gap (`sdk-typescript`
+  already ships `receipts.ts` + shared corpus). Required CI job `ts-canon`
+  now runs `test/receipts.test.ts` alongside canon vectors.
+
 ### Performance
 
 - **#1337: MCP authorize-path latency** — bounded LRU caches for MCP server/tool
