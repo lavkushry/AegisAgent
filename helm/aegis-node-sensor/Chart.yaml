@@ -1,0 +1,15 @@
+apiVersion: v2
+name: aegis-node-sensor
+description: AegisAgent runtime sensor — telemetry heartbeat, durable event spool, and signed command enforcement, kept as a separate process from the gateway and any sandboxed workload it observes.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/lavkushry/AegisAgent
+sources:
+  - https://github.com/lavkushry/AegisAgent
+keywords:
+  - ai-agent-security
+  - runtime-sensor
+  - telemetry
+maintainers:
+  - name: AegisAgent

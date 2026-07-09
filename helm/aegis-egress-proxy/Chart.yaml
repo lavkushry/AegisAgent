@@ -1,0 +1,15 @@
+apiVersion: v2
+name: aegis-egress-proxy
+description: AegisAgent network egress choke point — an HTTP CONNECT/forward proxy that gates every outbound connection agents make on a gateway egress decision.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/lavkushry/AegisAgent
+sources:
+  - https://github.com/lavkushry/AegisAgent
+keywords:
+  - ai-agent-security
+  - egress-proxy
+  - network-policy
+maintainers:
+  - name: AegisAgent

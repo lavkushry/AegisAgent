@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aegis-node-sensor.fullname" . }}
+  labels:
+    {{- include "aegis-node-sensor.labels" . | nindent 4 }}
+data:
+  # config.rs's RawSensorConfig uses `#[serde(deny_unknown_fields)]` — keep
+  # this to exactly the fields that struct declares. api_token deliberately
+  # excluded (goes via --api-token arg sourced from the Secret, not this
+  # ConfigMap) so the bearer token never lands in `kubectl get configmap`.
+  sensor.toml: |
+    gateway_url = {{ .Values.config.gatewayUrl | quote }}
+    tenant_id = {{ .Values.config.tenantId | quote }}
+    mode = {{ .Values.config.mode | quote }}
+    identity_key_path = "{{ .Values.persistence.hostPath }}/identity.key"
+    spool_dir = "{{ .Values.persistence.hostPath }}/spool"
+    {{- if .Values.config.gatewayPublicKeyHex }}
+    gateway_public_key_hex = {{ .Values.config.gatewayPublicKeyHex | quote }}
+    {{- end }}

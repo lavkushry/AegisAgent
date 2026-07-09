@@ -1,0 +1,58 @@
+# #1297: local full-stack compose — everything docker-compose.yml starts
+# (gateway, seeded on demand via docker-compose.dev.yml) plus the runtime
+# data-plane components that ship as separate binaries/images
+# (aegis-egress-proxy, aegis-node-sensor) and Qdrant, the external vector
+# store lib/soc/src/qdrant.rs talks to. Kept as a separate file rather than
+# folded into docker-compose.yml so the base file (what CI's Docker Compose
+# E2E job runs) is untouched.
+#
+# aegis-cage-runner is deliberately absent: it currently has no `main.rs`/
+# binary target (lib-only crate — see bins/aegis-cage-runner/Cargo.toml),
+# so there is nothing yet to build an image from.
+include:
+  - docker-compose.yml
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    network_mode: host
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: bins/aegis-egress-proxy/Dockerfile
+    image: aegisagent-egress-proxy:local
+    network_mode: host
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+    command:
+      - "--listen"
+      - "127.0.0.1:8888"
+      - "--gateway-url"
+      - "http://127.0.0.1:8080"
+
+  node-sensor:
+    build:
+      context: .
+      dockerfile: bins/aegis-node-sensor/Dockerfile
+    image: aegisagent-node-sensor:local
+    network_mode: host
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./data/sensor:/var/lib/aegis-sensor
+    command:
+      - "--gateway-url"
+      - "http://127.0.0.1:8080"
+      - "--tenant-id"
+      - "${AEGIS_DEMO_TENANT_ID:-tenant_dev_alpha}"
+      - "--mode"
+      - "observe"
