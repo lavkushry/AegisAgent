@@ -3,10 +3,10 @@
 //!
 //! This is deliberately narrow: it defines what a given mode + gateway
 //! reachability combination *implies* for a controlled action or an
-//! unaccounted-for run. Wiring it to real actions (process control, egress,
-//! tool calls) lands with the cage runner, egress proxy, and tool broker
-//! (Phases 4-6) — none of which exist yet. This phase's job is the decision
-//! matrix itself and its tests against mock inputs.
+//! unaccounted-for run. Signed control commands are applied by
+//! [`crate::process_enforcer::ProcessEnforcer`] (host PIDs) and the cage
+//! runner (Docker sandboxes). This module stays the decision *matrix* for
+//! local gateway-down / mode posture — not the signal applicator.
 
 use crate::config::SensorMode;
 

@@ -37,7 +37,7 @@ Strongest current capabilities:
 
 ### Partial (built, not end-to-end production)
 
-- **Node sensor** — binary, register/heartbeat, command poll, shipper; not full process/fs/net collectors
+- **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs); not full process/fs/net collectors
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
 - **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e still open
@@ -80,7 +80,7 @@ Strongest current capabilities:
 | Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; e2e still open. |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
-| Signed control commands | Partial | Issue + sensor poll path; full host enforce incomplete. |
+| Signed control commands | Partial | Issue + sensor poll + host PID enforce; auto discovery incomplete. |
 | Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
 | Postgres production mode | Roadmap / partial | Code path exists; SQLite single-writer is still the default deploy. |
 | Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |

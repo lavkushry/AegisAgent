@@ -43,7 +43,7 @@
 | UI: agent-cage console | Planned | — | cage runs page, control actions UX (Phase 9.2–9.3) | Phased PR plan §11 | — | design | after cage binary lands |
 | Agent runs registry (cage control-plane API) | Partial | `lib/storage/src/db/agent_runs.rs`, migration `0026`; `routes/runtime.rs` (`/v1/agent-cage/runs` + controls) | claim/heartbeat/lease APIs + executor not on main (WIP branch) | #1681 | route + storage | beta | cage execution PR |
 | Runtime events ingest + timeline | Partial | `POST /v1/ingest/runtime-events`, `list/query` ASE APIs | rich producers (process/fs/net) on sensor | #1681 | storage + route | beta | sensor collectors |
-| Control commands (signed kill/pause/quarantine) | Partial | store + protocol + gateway issue routes; sensor poll/verify path skeleton | full host enforcement for all actions; broader command set | Phased PR plan §5 | storage + sensor unit | beta | sensor enforcement |
+| Control commands (signed kill/pause/quarantine) | Partial | store + protocol + gateway issue routes; sensor poll/verify + **host ProcessEnforcer** (SIGTERM/STOP/CONT for registered PIDs); cage-runner Docker kill path | auto PID discovery/collectors; grace_period from command payload | Phased PR plan §5 | storage + sensor unit (real child kill) | beta | collectors |
 | Ban system (first-class store) | Partial | `lib/storage/src/db/agent_bans.rs`, migration `0029` | enforcement at every choke point + sensor prop | #1678 | storage | beta | preflight wire-up |
 | Quarantine records | Partial | `lib/storage/src/db/quarantine.rs`, migration `0030`; agent-status quarantine | workspace/sandbox quarantine (needs cage) | #1679 | storage | beta | cage integration |
 | Node sensor | Partial | `bins/aegis-node-sensor` (main, spool, shipper, command_receiver), Dockerfile, Helm, compose | **real** process/fs/network/secret collectors; full local enforce | Phased PR plan §5 | unit | beta (skeleton) | collectors + e2e |
@@ -66,7 +66,8 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~host Docker security review + sandbox create hardening~~ **Done** (`docs/AegisAgent_Cage_Docker_Security.md`); **remaining:** full Docker e2e  
 
 2. Gateway claim/heartbeat/lease APIs — present (`/v1/agent-cage/runs/:id/{claim,heartbeat,status}`)  
-3. Sensor: minimal real telemetry + enforce kill/pause/quarantine on host  
+3. ~~Sensor host enforce kill/pause/resume/quarantine~~ **Done** (`process_enforcer` + command_receiver); **remaining:** process collectors that `register_run`  
+
 4. E2E: untrusted agent → cage → egress deny → control action → receipt/incident (Docker)  
 
 ### Wave B — P1 production ops (blocks multi-tenant HA claim)
