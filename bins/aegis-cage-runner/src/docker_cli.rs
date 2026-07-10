@@ -192,6 +192,19 @@ pub async fn inspect_status(container_id: &str) -> Result<SandboxState, CageErro
     })
 }
 
+/// HostConfig isolation fields used by Docker-daemon e2e checks (cap drop,
+/// security opt, network mode). Format is tab-separated so callers can
+/// assert without depending on full JSON.
+pub async fn inspect_isolation(container_id: &str) -> Result<String, CageError> {
+    run_docker(&[
+        "inspect".to_string(),
+        "--format".to_string(),
+        "{{.HostConfig.NetworkMode}}\t{{json .HostConfig.CapDrop}}\t{{json .HostConfig.SecurityOpt}}\t{{.HostConfig.Privileged}}".to_string(),
+        container_id.to_string(),
+    ])
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
