@@ -90,7 +90,7 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 |---|---|
 | Known-agent integrity (SDK authorize / approval hash / fail-closed / receipts) | **Yes** |
 | Integrity-anchored SOC on gateway evidence | **Mostly yes** (beta UI) |
-| Unknown-agent sandbox + forced egress + host kill | **No** until Wave A |
+| Unknown-agent sandbox + forced egress + host kill | **Partial** — soft force + narrative e2e; transparent netns residual |
 | Multi-replica production K8s | **No** until Postgres GA |
 | Full enterprise SOC console + OIDC | **No** until Wave B/C |
 
