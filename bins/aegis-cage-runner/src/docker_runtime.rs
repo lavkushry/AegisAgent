@@ -419,4 +419,51 @@ mod tests {
             assert_eq!(event.sandbox_id, handle.sandbox_id);
         }
     }
+
+    /// Daemon-level regression for host-Docker security review: the
+    /// container HostConfig must reflect cap-drop ALL, no-new-privileges,
+    /// and network none (not just the argv we built client-side).
+    #[tokio::test]
+    async fn created_container_hostconfig_enforces_isolation() {
+        skip_without_docker!();
+        let root = tempfile::tempdir().unwrap();
+        let runtime = DockerRuntime::new(root.path().to_path_buf());
+        let mut spec = sleep_spec("cage-test-hostconfig", 30);
+        // Prefer read-only path so tmpfs hardening is also exercised when
+        // the image supports it; alpine rootfs works with --read-only + /tmp.
+        spec.image.read_only_rootfs = true;
+        spec.command = vec!["sleep".to_string(), "30".to_string()];
+
+        let handle = runtime.create(&spec).await.unwrap();
+        let isolation = docker_cli::inspect_isolation(&handle.backend_id)
+            .await
+            .unwrap();
+        // network \t CapDrop JSON \t SecurityOpt JSON \t Privileged
+        let parts: Vec<&str> = isolation.split('\t').collect();
+        assert!(
+            parts.len() >= 4,
+            "unexpected inspect_isolation output: {isolation}"
+        );
+        assert_eq!(
+            parts[0], "none",
+            "NetworkMode must be none; got {isolation}"
+        );
+        let cap_drop = parts[1].to_ascii_uppercase();
+        assert!(
+            cap_drop.contains("ALL"),
+            "CapDrop must include ALL; got {isolation}"
+        );
+        let sec_opt = parts[2].to_ascii_lowercase();
+        assert!(
+            sec_opt.contains("no-new-privileges"),
+            "SecurityOpt must include no-new-privileges; got {isolation}"
+        );
+        assert_eq!(
+            parts[3].to_ascii_lowercase(),
+            "false",
+            "Privileged must be false; got {isolation}"
+        );
+
+        runtime.destroy(&handle).await.unwrap();
+    }
 }
