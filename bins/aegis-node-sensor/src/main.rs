@@ -34,6 +34,9 @@ const SHIP_TICK_INTERVAL: Duration = Duration::from_secs(2);
 /// How often the sensor polls the gateway for commands addressed to it.
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How often `/proc` (Linux) is scanned for `AEGIS_RUN_ID` host agents.
+const PROCESS_COLLECT_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Registration is retried with linear backoff before giving up — the
 /// gateway may not be reachable yet on a fresh deployment (container
 /// ordering, DNS propagation). Indefinite retry/buffering while running is
@@ -205,9 +208,13 @@ async fn main() -> ExitCode {
     let mut heartbeat_tick = tokio::time::interval(heartbeat_interval);
     let mut ship_tick = tokio::time::interval(SHIP_TICK_INTERVAL);
     let mut command_poll_tick = tokio::time::interval(COMMAND_POLL_INTERVAL);
+    let mut process_collect_tick = tokio::time::interval(PROCESS_COLLECT_INTERVAL);
     let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
     loop {
         tokio::select! {
+            _ = process_collect_tick.tick() => {
+                process_collector.poll(&spool);
+            }
             _ = heartbeat_tick.tick() => {
                 let req = HeartbeatRequest {
                     mode: config.mode.to_string(),
