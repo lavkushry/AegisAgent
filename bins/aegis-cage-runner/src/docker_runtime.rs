@@ -31,6 +31,9 @@ pub struct DockerRuntime {
     /// knows what to clean up without re-deriving the path (and so a
     /// caller can't accidentally point cleanup at an arbitrary directory).
     workspaces: Mutex<HashMap<String, PathBuf>>,
+    /// Maps `sandbox_id` -> dedicated no-masquerade Docker network name
+    /// (forced-egress path only). Removed on `destroy`.
+    networks: Mutex<HashMap<String, String>>,
     event_sink: Arc<dyn CageEventSink>,
 }
 
@@ -39,6 +42,7 @@ impl DockerRuntime {
         Self {
             workspace_root,
             workspaces: Mutex::new(HashMap::new()),
+            networks: Mutex::new(HashMap::new()),
             event_sink: Arc::new(NullEventSink),
         }
     }
@@ -51,6 +55,7 @@ impl DockerRuntime {
         Self {
             workspace_root,
             workspaces: Mutex::new(HashMap::new()),
+            networks: Mutex::new(HashMap::new()),
             event_sink,
         }
     }
@@ -118,20 +123,27 @@ impl SandboxRuntime for DockerRuntime {
         let workspace_dir = create_isolated_workspace(&self.workspace_root, &spec.sandbox_id)?;
         let container_name = Self::container_name(&spec.sandbox_id);
 
-        let container_id = match docker_cli::create(spec, &container_name, &workspace_dir).await {
-            Ok(id) => id,
-            Err(e) => {
-                // Don't leak the workspace directory if container creation
-                // failed partway through.
-                let _ = destroy_workspace(&workspace_dir);
-                return Err(e);
-            }
-        };
+        let (container_id, network) =
+            match docker_cli::create(spec, &container_name, &workspace_dir).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    // Don't leak the workspace directory if container creation
+                    // failed partway through.
+                    let _ = destroy_workspace(&workspace_dir);
+                    return Err(e);
+                }
+            };
 
         self.workspaces
             .lock()
             .unwrap()
             .insert(spec.sandbox_id.clone(), workspace_dir);
+        if let Some(net) = network {
+            self.networks
+                .lock()
+                .unwrap()
+                .insert(spec.sandbox_id.clone(), net);
+        }
 
         Ok(SandboxHandle {
             sandbox_id: spec.sandbox_id.clone(),
@@ -195,6 +207,11 @@ impl SandboxRuntime for DockerRuntime {
         docker_cli::remove(&handle.backend_id).await?;
         if let Some(workspace_dir) = self.workspaces.lock().unwrap().remove(&handle.sandbox_id) {
             destroy_workspace(&workspace_dir)?;
+        }
+        // Drop the MutexGuard before await (Send bound on SandboxRuntime).
+        let network = self.networks.lock().unwrap().remove(&handle.sandbox_id);
+        if let Some(network) = network {
+            let _ = docker_cli::remove_network(&network).await;
         }
         self.emit(CageEventType::AgentRunFinished, handle, None);
         Ok(())

@@ -148,6 +148,7 @@ fn build_create_args(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
+    egress: &EgressNetworkPlan,
 ) -> Vec<String> {
     let egress = plan_egress_network(spec);
 
@@ -238,15 +239,34 @@ fn build_create_args(
 }
 
 /// `docker create` — allocates the container without starting it, so the
-/// caller controls exactly when it begins running. Returns the backend
-/// container ID.
+/// caller controls exactly when it begins running. Returns
+/// `(container_id, optional_network_name_to_cleanup)`.
 pub async fn create(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
-) -> Result<String, CageError> {
-    let args = build_create_args(spec, container_name, workspace_dir);
-    run_docker(&args).await
+) -> Result<(String, Option<String>), CageError> {
+    let egress = plan_egress_network(spec);
+    if egress.create_isolated_network {
+        create_egress_network(&egress.docker_network).await?;
+    }
+    let args = build_create_args(spec, container_name, workspace_dir, &egress);
+    match run_docker(&args).await {
+        Ok(id) => {
+            let net = if egress.create_isolated_network {
+                Some(egress.docker_network)
+            } else {
+                None
+            };
+            Ok((id, net))
+        }
+        Err(e) => {
+            if egress.create_isolated_network {
+                let _ = remove_network(&egress.docker_network).await;
+            }
+            Err(e)
+        }
+    }
 }
 
 pub async fn start(container_id: &str) -> Result<(), CageError> {
@@ -377,7 +397,12 @@ mod tests {
     #[test]
     fn end_of_options_marker_precedes_the_image_ref() {
         let spec = spec_with("--privileged", vec!["--pid=host", "alpine"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
 
         let dash_dash_pos = args
             .iter()
@@ -395,7 +420,12 @@ mod tests {
     #[test]
     fn normal_image_ref_and_command_are_placed_after_the_marker() {
         let spec = spec_with("alpine:latest", vec!["sleep", "5"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
 
         let dash_dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(&args[dash_dash_pos + 1..], &["alpine:latest", "sleep", "5"]);
