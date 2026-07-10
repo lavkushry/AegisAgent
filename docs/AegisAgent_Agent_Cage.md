@@ -248,13 +248,16 @@ No raw secret files should be exported unless explicitly authorized and redacted
 
 ### 9.1 Docker-first approach
 
-Initial Docker implementation:
+Initial Docker implementation (`aegis-cage-runner` / `docker_cli`):
 
-- create per-run Docker network
-- no default bridge egress unless routed through egress proxy
-- inject `HTTP_PROXY`/`HTTPS_PROXY`
-- optionally run a sidecar egress proxy in the same network
-- block raw outbound at iptables/network namespace where feasible
+- **Default:** `--network none` (no egress at all) when `egress_proxy_url` is unset
+- **Forced proxy mode:** when `network.egress_proxy_url` is set:
+  - `--network bridge` so the sandbox can reach the proxy
+  - force-inject `HTTP_PROXY` / `HTTPS_PROXY` / empty `NO_PROXY` (tenant values for those keys are stripped)
+  - rewrite loopback proxy hosts to `host.docker.internal` + `--add-host host.docker.internal:host-gateway`
+  - surface `allowed_destinations` as `AEGIS_EGRESS_ALLOWED_DESTINATIONS` (proxy must still enforce allowlist via `--allow-domain` / gateway check)
+- `direct_internet: true` is rejected at validate time (gateway + runner)
+- **Residual:** bridge + env force is soft force — raw sockets can bypass HTTP_PROXY until transparent proxy / internal network + sidecar lands
 
 ### 9.2 Kubernetes approach
 

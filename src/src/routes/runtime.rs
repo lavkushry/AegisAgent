@@ -201,6 +201,38 @@ fn validate_cage_spec(spec: &CageRunSpecRequest) -> Result<(), String> {
                 .to_string(),
         );
     }
+    let proxy = spec
+        .network
+        .egress_proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if !spec.network.allowed_destinations.is_empty() && proxy.is_none() {
+        return Err(
+            "cage_spec.network.allowed_destinations requires egress_proxy_url \
+             (allowlists are enforced at the egress proxy)"
+                .to_string(),
+        );
+    }
+    if let Some(url) = proxy {
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(
+                "cage_spec.network.egress_proxy_url must be an http:// or https:// URL".to_string(),
+            );
+        }
+        if url.contains(char::is_whitespace) {
+            return Err(
+                "cage_spec.network.egress_proxy_url must not contain whitespace".to_string(),
+            );
+        }
+    } else if spec
+        .network
+        .egress_proxy_url
+        .as_ref()
+        .is_some_and(|s| s.trim().is_empty())
+    {
+        return Err("cage_spec.network.egress_proxy_url must not be empty when set".to_string());
+    }
     for mount in &spec.controlled_mounts {
         for forbidden in FORBIDDEN_MOUNT_PATH_PREFIXES {
             if mount.target_path.starts_with(forbidden) {

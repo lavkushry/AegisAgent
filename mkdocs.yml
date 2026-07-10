@@ -156,6 +156,7 @@ nav:
       - Runtime data plane (target design):
           - Overview: AegisAgent_Runtime_Data_Plane.md
           - Agent cage: AegisAgent_Agent_Cage.md
+          - Cage Docker security review: AegisAgent_Cage_Docker_Security.md
           - Control command protocol: AegisAgent_Control_Command_Protocol.md
           - World-class HLD: AegisAgent_World_Class_HLD.md
           - World-class LLD: AegisAgent_World_Class_LLD.md

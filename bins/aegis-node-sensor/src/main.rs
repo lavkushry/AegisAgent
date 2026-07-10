@@ -7,8 +7,7 @@
 //! executes them (host `ProcessEnforcer` applies real SIGTERM/STOP/CONT for
 //! registered run PIDs; Docker cages remain `aegis-cage-runner`). Phase 3.6:
 //! tracks gateway reachability from heartbeats and consults the
-//! observe/enforce/lockdown decision engine on transitions. Process
-//! collector scans Linux `/proc` for `AEGIS_RUN_ID` and auto-registers PIDs.
+//! observe/enforce/lockdown decision engine on transitions.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,7 +22,6 @@ use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
 use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
-use aegis_node_sensor::process_collector::ProcessCollector;
 use aegis_node_sensor::process_enforcer::ProcessEnforcer;
 use aegis_node_sensor::shipper::EventShipper;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
@@ -192,7 +190,6 @@ async fn main() -> ExitCode {
     // Shared with CommandReceiver so future process collectors can
     // register_run(run_id, pid) on the same map the control loop uses.
     let process_enforcer = Arc::new(ProcessEnforcer::new());
-    let process_collector = ProcessCollector::new(process_enforcer.clone());
     let command_receiver = CommandReceiver::with_enforcer(
         config.gateway_public_key_hex.as_deref(),
         config.tenant_id.clone(),
