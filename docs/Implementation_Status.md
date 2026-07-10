@@ -43,17 +43,17 @@
 | UI: agent-cage console | Planned | — | cage runs page, control actions UX (Phase 9.2–9.3) | Phased PR plan §11 | — | design | after cage binary lands |
 | Agent runs registry (cage control-plane API) | Partial | `lib/storage/src/db/agent_runs.rs`, migration `0026`; `routes/runtime.rs` (`/v1/agent-cage/runs` + controls) | claim/heartbeat/lease APIs + executor not on main (WIP branch) | #1681 | route + storage | beta | cage execution PR |
 | Runtime events ingest + timeline | Partial | `POST /v1/ingest/runtime-events`, `list/query` ASE APIs | rich producers (process/fs/net) on sensor | #1681 | storage + route | beta | sensor collectors |
-| Control commands (signed kill/pause/quarantine) | Partial | store + protocol + gateway issue routes; sensor poll/verify path skeleton | full host enforcement for all actions; broader command set | Phased PR plan §5 | storage + sensor unit | beta | sensor enforcement |
+| Control commands (signed kill/pause/quarantine) | Partial | store + protocol + gateway issue routes; sensor poll/verify + **host ProcessEnforcer** (SIGTERM/STOP/CONT for registered PIDs); cage-runner Docker kill path | auto PID discovery/collectors; grace_period from command payload | Phased PR plan §5 | storage + sensor unit (real child kill) | beta | collectors |
 | Ban system (first-class store) | Partial | `lib/storage/src/db/agent_bans.rs`, migration `0029` | enforcement at every choke point + sensor prop | #1678 | storage | beta | preflight wire-up |
 | Quarantine records | Partial | `lib/storage/src/db/quarantine.rs`, migration `0030`; agent-status quarantine | workspace/sandbox quarantine (needs cage) | #1679 | storage | beta | cage integration |
 | Node sensor | Partial | `bins/aegis-node-sensor` (main, spool, shipper, command_receiver), Dockerfile, Helm, compose | **real** process/fs/network/secret collectors; full local enforce | Phased PR plan §5 | unit | beta (skeleton) | collectors + e2e |
-| Agent cage runner | Partial | forced proxy egress + wave-a e2e; **exit_code** on agent_runs (runner-reported) | transparent/netns bypass | Phased PR plan §6 | unit + CI wave-a e2e | beta (local/k8s) | hard net isolation |
-| Egress proxy | Partial | binary + Helm + compose + check API; cage injects forced proxy env when `egress_proxy_url` set | always-on transparent path; per-run allowlist auto-wired to proxy CLI | Phased PR plan §7 | unit + proxy tests | beta | transparent force |
+| Agent cage runner | Partial | binary + DockerRuntime + Dockerfile + compose `cage` + Helm; claim lifecycle smoke; host-Docker review + hardened create; `scripts/cage-docker-e2e.sh` + CI job (quick finish + signed kill against real Docker) | sensor↔runner IPC; forced egress netns; product “untrusted→incident” narrative e2e | Phased PR plan §6 | unit (lib) + claim lifecycle + cage-docker-e2e + helm lint | beta (local/k8s) | forced egress + sensor enforce |
+| Egress proxy | Partial | `bins/aegis-egress-proxy` binary + Dockerfile + Helm + compose; `POST /v1/egress/check` | forced cage netns integration; always-on path | Phased PR plan §7 | unit + proxy tests | beta | cage net integration |
 | Tool broker | Partial | `routes/broker.rs`, `lib/tool-broker-core`, `lib/tool-broker-connectors` | standalone broker binary; mandatory path for privileged tools | Phased PR plan §8 | unit + route | beta | binary + force-path |
 | Prompt capture | Implemented | `POST /v1/ingest/prompt-events` (`routes/prompt_capture.rs`), Python SDK emit | Go/TS emit; UI timeline | #1775/#1776 | unit + SDK | beta | UI + SDK parity |
 | Model call capture | Implemented | `POST /v1/ingest/model-calls`; `bins/aegis-llm-gateway` (Phase 7.3) | Dockerfile/Helm/compose for LLM gateway; broader provider adapters | #1775/#1776/#1794 | unit + gateway tests | beta | packaging + adapters |
 | Runtime timeline (UI) | Partial | APIs: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline`; `provable-timeline` panel (receipts) | full console pages (prompt/model/egress/cage) | Phase 9.2 | route + bun test | beta | Phase 9 UI |
-| Deployment (Compose/Helm) | Partial | gateway + sensor + egress-proxy charts/images; compose full stack | cage + llm-gateway + broker + UI Helm; multi-replica | #1206, #1297/#1790 | helm lint + e2e | beta (single-writer) | packaging + Postgres |
+| Deployment (Compose/Helm) | Partial | gateway + sensor + egress-proxy + cage-runner + llm-gateway charts/images; compose full (+ `cage` profile) | broker + UI Helm; multi-replica | #1206, #1297/#1790 | helm lint + e2e | beta (single-writer) | Postgres + multi-replica |
 | Postgres production mode | Partial | `features = postgres`, `migrations_postgres/*` (29 files) | full parity ops path, multi-replica validation, default Helm | #1194 | migration + feature tests | design→beta | Postgres GA |
 | CI / testing / supply chain | Implemented | `.github/workflows/*` (fmt/clippy/tests/coverage/deny; release cosign/SLSA/SBOM) | — | #1172, #1174, #1792 | — | prod | — |
 
@@ -63,17 +63,17 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave A — P0 unknown-agent control (blocks full control-plane claim)
 
-1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~forced proxy egress injection~~ **Done**  
-2. Gateway claim/heartbeat/lease APIs — present  
-3. Sensor host enforce + process collector (open PRs)  
-4. ~~Narrative e2e (isolation + egress deny path + signed kill)~~ **Done** (`scripts/cage-wave-a-e2e.sh`, CI job)  
+1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~host Docker security review + sandbox create hardening~~ **Done** (`docs/AegisAgent_Cage_Docker_Security.md`); **remaining:** full Docker e2e  
 
+2. Gateway claim/heartbeat/lease APIs — present (`/v1/agent-cage/runs/:id/{claim,heartbeat,status}`)  
+3. ~~Sensor host enforce kill/pause/resume/quarantine~~ **Done** (`process_enforcer` + command_receiver); **remaining:** process collectors that `register_run`  
 
+4. E2E: untrusted agent → cage → egress deny → control action → receipt/incident (Docker)  
 
 ### Wave B — P1 production ops (blocks multi-tenant HA claim)
 
 5. Postgres as supported production backend + multi-replica validation (#1194)  
-6. Helm/Docker packaging: cage, llm-gateway (+ broker if split)  
+6. Helm/Docker packaging: broker (+ UI if split); ~~cage + llm-gateway~~ **Done**
 7. OIDC for console/admin **or** documented JWT-only enterprise limitation  
 8. Operator runbook gates: `JWT_REQUIRED`, admin key, `REPLAY_STORE=db`, TLS, backups  
 

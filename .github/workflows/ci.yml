@@ -388,9 +388,13 @@ jobs:
         if: always()
         run: docker compose down
 
-  # ── Wave A narrative: isolation + egress deny path + signed kill ─────────────
-  cage-wave-a-e2e:
-    name: Cage Wave A E2E
+  # ── Wave A: cage Docker e2e (claim → real sandbox → kill) ────────────────────
+  # Self-contained: builds gateway + aegis-cage-runner, starts both with a
+  # deterministic command-signing key, exercises alpine sandboxes via the
+  # host Docker engine. Skipped only if docker is unavailable (should not
+  # happen on ubuntu-latest).
+  cage-docker-e2e:
+    name: Cage Docker E2E
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -400,15 +404,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          key: cage-wave-a-e2e
+          key: cage-docker-e2e
       - name: Pull sandbox image
         run: docker pull alpine:3
-      - name: Wave A narrative e2e (managed stack)
+      - name: Cage Docker e2e (managed stack)
         env:
           AEGIS_CAGE_E2E_MANAGE: "1"
-          AEGIS_CAGE_E2E_TIMEOUT_SECS: "240"
+          AEGIS_CAGE_E2E_TIMEOUT_SECS: "180"
           RUST_LOG: info
-        run: bash scripts/cage-wave-a-e2e.sh
+        run: bash scripts/cage-docker-e2e.sh
 
   # ── #1326: Dashboard end-to-end test (Playwright) ─────────────────────────────
   dashboard-e2e:
