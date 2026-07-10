@@ -139,4 +139,4 @@ local/dev path.
 | node-sensor | yes | `helm/aegis-node-sensor` | yes |
 | egress-proxy | yes | `helm/aegis-egress-proxy` | yes |
 | llm-gateway | yes (`bins/aegis-llm-gateway/Dockerfile`) | `helm/aegis-llm-gateway` | yes |
-| cage-runner | **no** (lib-only on main — Wave A) | **no** | **no** |
+| cage-runner | yes (`bins/aegis-cage-runner/Dockerfile`) | `helm/aegis-cage-runner` | yes (`--profile cage`; mounts host `docker.sock` — see `docs/AegisAgent_Cage_Docker_Security.md`) |

@@ -29,11 +29,16 @@ podLabels: {}
 
 # Docker socket access typically requires root or a matching docker group GID.
 # Prefer dockerGroupGid + runAsNonRoot when your node image documents the GID.
+#
+# RESIDUAL RISK: a mounted docker.sock is root-equivalent on the node (R1 in
+# docs/AegisAgent_Cage_Docker_Security.md). Sandbox create flags (cap-drop,
+# no-new-privileges, network none) isolate *claimed workloads*, not the runner.
 podSecurityContext: {}
 
 securityContext:
   # Root default is intentional for host docker.sock on bare nodes; tighten
-  # with dockerGroupGid + runAsUser when you can.
+  # with dockerGroupGid + runAsUser when you can. This securityContext
+  # hardens the *runner* container process; it does not remove socket power.
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: false
   capabilities:
@@ -45,6 +50,7 @@ securityContext:
 
 # -- If set, run as this GID (supplementalGroups) so the process can open
 # the host docker.sock without full root. Example: 999 on many Ubuntu nodes.
+# Strongly preferred over uid 0 when your node documents the docker group GID.
 dockerGroupGid: null
 
 resources:
@@ -80,7 +86,9 @@ secret:
   apiToken: ""
 
 dockerSocket:
-  # -- Mount the host Docker engine socket (required for SandboxRuntime).
+  # -- Mount the host Docker engine socket (required for Docker SandboxRuntime).
+  # Enabling this is an operator trust decision: the runner can create/kill
+  # containers on the node. See docs/AegisAgent_Cage_Docker_Security.md §3 R1.
   enabled: true
   hostPath: /var/run/docker.sock
 
