@@ -246,7 +246,13 @@ async fn run_one(
         Err(e) => {
             tracing::error!(run_id = %run.id, error = %e, "failed to build sandbox spec from run, aborting");
             let _ = client
-                .update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()))
+                .update_run_status(
+                    &run.id,
+                    &runner_id,
+                    "killed",
+                    Some(chrono::Utc::now()),
+                    None,
+                )
                 .await;
             return;
         }
@@ -258,7 +264,13 @@ async fn run_one(
         Err(e) => {
             tracing::error!(run_id = %run.id, error = %e, "failed to create sandbox, aborting");
             let _ = client
-                .update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()))
+                .update_run_status(
+                    &run.id,
+                    &runner_id,
+                    "killed",
+                    Some(chrono::Utc::now()),
+                    None,
+                )
                 .await;
             return;
         }
@@ -268,12 +280,18 @@ async fn run_one(
         tracing::error!(run_id = %run.id, error = %e, "failed to start sandbox, cleaning up");
         let _ = runtime.destroy(&handle).await;
         let _ = client
-            .update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()))
+            .update_run_status(
+                &run.id,
+                &runner_id,
+                "killed",
+                Some(chrono::Utc::now()),
+                None,
+            )
             .await;
         return;
     }
     if let Err(e) = client
-        .update_run_status(&run.id, &runner_id, "running", None)
+        .update_run_status(&run.id, &runner_id, "running", None, None)
         .await
     {
         tracing::warn!(run_id = %run.id, error = %e, "failed to report running status");
@@ -283,6 +301,10 @@ async fn run_one(
     let mut control_tick = tokio::time::interval(control_poll_interval);
     let wait_future = runtime.wait_or_kill_on_timeout(&handle, Duration::from_secs(timeout_secs));
     tokio::pin!(wait_future);
+    // Set by signed kill/quarantine so the final status report is not
+    // collapsed to "finished" when Docker only exposes "exited".
+    let control_terminal: Arc<std::sync::Mutex<Option<&'static str>>> =
+        Arc::new(std::sync::Mutex::new(None));
 
     let final_state = loop {
         tokio::select! {
@@ -293,7 +315,7 @@ async fn run_one(
                     tracing::info!(run_id = %run.id, "shutdown requested mid-run, killing sandbox");
                     let _ = runtime.kill(&handle, KillReason::OperatorRequest { actor: "runner-shutdown".to_string() }).await;
                     let _ = runtime.destroy(&handle).await;
-                    let _ = client.update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now())).await;
+                    let _ = client.update_run_status(&run.id, &runner_id, "killed", Some(chrono::Utc::now()), None).await;
                     return;
                 }
             }
@@ -310,22 +332,36 @@ async fn run_one(
                 }
             }
             _ = control_tick.tick() => {
-                poll_and_process_run_commands(&client, &receiver, &runtime, &handle, &run.id, &runner_id).await;
+                poll_and_process_run_commands(
+                    &client,
+                    &receiver,
+                    &runtime,
+                    &handle,
+                    &run.id,
+                    &runner_id,
+                    &control_terminal,
+                )
+                .await;
             }
         }
     };
 
-    let (status_str, finished_at) = match final_state {
-        Ok(state) => {
-            let status_str = match state.status {
-                SandboxStatus::Killed | SandboxStatus::TimedOut => "killed",
-                _ => "finished",
-            };
-            (status_str, Some(chrono::Utc::now()))
-        }
-        Err(e) => {
-            tracing::error!(run_id = %run.id, error = %e, "error waiting on sandbox");
-            ("killed", Some(chrono::Utc::now()))
+    let control_status = control_terminal.lock().ok().and_then(|g| *g);
+    let (status_str, finished_at) = if let Some(status) = control_status {
+        (status, Some(chrono::Utc::now()))
+    } else {
+        match final_state {
+            Ok(state) => {
+                let status_str = match state.status {
+                    SandboxStatus::Killed | SandboxStatus::TimedOut => "killed",
+                    _ => "finished",
+                };
+                (status_str, Some(chrono::Utc::now()))
+            }
+            Err(e) => {
+                tracing::error!(run_id = %run.id, error = %e, "error waiting on sandbox");
+                ("killed", Some(chrono::Utc::now()))
+            }
         }
     };
 
@@ -333,7 +369,7 @@ async fn run_one(
         tracing::warn!(run_id = %run.id, error = %e, "failed to destroy sandbox");
     }
     if let Err(e) = client
-        .update_run_status(&run.id, &runner_id, status_str, finished_at)
+        .update_run_status(&run.id, &runner_id, status_str, finished_at, exit_code)
         .await
     {
         tracing::warn!(run_id = %run.id, error = %e, "failed to report final run status");
@@ -342,10 +378,8 @@ async fn run_one(
 
 /// Poll for kill/pause/resume/quarantine commands addressed to this
 /// specific run, verify each, and map it onto the corresponding
-/// `SandboxRuntime` method. `quarantine_run` deliberately does not report
-/// a status back here — the gateway's own `quarantine_run` route already
-/// sets `agent_runs.status = "quarantined"` unconditionally (gateway-
-/// authoritative), so this only needs to actually stop the sandbox.
+/// `SandboxRuntime` method. Successful kill/quarantine also records a
+/// terminal status override so the outer loop does not report `finished`.
 async fn poll_and_process_run_commands(
     client: &GatewayClient,
     receiver: &CommandReceiver,
@@ -353,6 +387,7 @@ async fn poll_and_process_run_commands(
     handle: &SandboxHandle,
     run_id: &str,
     runner_id: &str,
+    control_terminal: &std::sync::Mutex<Option<&'static str>>,
 ) {
     let commands = match client.list_control_commands().await {
         Ok(commands) => commands,
@@ -410,14 +445,40 @@ async fn poll_and_process_run_commands(
         let new_status = match outcome {
             Ok(()) => {
                 tracing::info!(command_id = %cmd.command_id, action = %cmd.action, "command executed");
-                if cmd.action == "pause_run" {
-                    let _ = client
-                        .update_run_status(run_id, runner_id, "paused", None)
-                        .await;
-                } else if cmd.action == "resume_run" {
-                    let _ = client
-                        .update_run_status(run_id, runner_id, "running", None)
-                        .await;
+                // Report run lifecycle status so operators/e2e see the control
+                // outcome, not only the Docker "exited" → finished path from
+                // wait_or_kill_on_timeout (which cannot distinguish a signed
+                // kill from a clean process exit).
+                match cmd.action.as_str() {
+                    "pause_run" => {
+                        let _ = client
+                            .update_run_status(run_id, runner_id, "paused", None)
+                            .await;
+                    }
+                    "resume_run" => {
+                        let _ = client
+                            .update_run_status(run_id, runner_id, "running", None)
+                            .await;
+                    }
+                    "kill_run" | "quarantine_run" => {
+                        let terminal = if cmd.action == "quarantine_run" {
+                            "quarantined"
+                        } else {
+                            "killed"
+                        };
+                        if let Ok(mut slot) = control_terminal.lock() {
+                            *slot = Some(terminal);
+                        }
+                        let _ = client
+                            .update_run_status(
+                                run_id,
+                                runner_id,
+                                terminal,
+                                Some(chrono::Utc::now()),
+                            )
+                            .await;
+                    }
+                    _ => {}
                 }
                 "acked"
             }

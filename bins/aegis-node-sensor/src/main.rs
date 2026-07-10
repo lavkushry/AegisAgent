@@ -7,10 +7,7 @@
 //! executes them (host `ProcessEnforcer` applies real SIGTERM/STOP/CONT for
 //! registered run PIDs; Docker cages remain `aegis-cage-runner`). Phase 3.6:
 //! tracks gateway reachability from heartbeats and consults the
-//! observe/enforce/lockdown decision engine on transitions. Process
-//! collector scans Linux `/proc` for `AEGIS_RUN_ID` and auto-registers PIDs.
-//! Net/fs/secret collectors emit telemetry for those processes (no secret
-//! values — names/paths only).
+//! observe/enforce/lockdown decision engine on transitions.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -26,10 +23,7 @@ use aegis_node_sensor::fs_collector::FsCollector;
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
 use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
-use aegis_node_sensor::net_collector::NetCollector;
-use aegis_node_sensor::process_collector::ProcessCollector;
 use aegis_node_sensor::process_enforcer::ProcessEnforcer;
-use aegis_node_sensor::secret_collector::SecretCollector;
 use aegis_node_sensor::shipper::EventShipper;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
 
@@ -41,8 +35,7 @@ const SHIP_TICK_INTERVAL: Duration = Duration::from_secs(2);
 /// How often the sensor polls the gateway for commands addressed to it.
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// How often `/proc` (Linux) is scanned for `AEGIS_RUN_ID` host agents
-/// and their established TCP remotes.
+/// How often `/proc` (Linux) is scanned for `AEGIS_RUN_ID` host agents.
 const PROCESS_COLLECT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Registration is retried with linear backoff before giving up — the
@@ -198,10 +191,6 @@ async fn main() -> ExitCode {
     // Shared with CommandReceiver so future process collectors can
     // register_run(run_id, pid) on the same map the control loop uses.
     let process_enforcer = Arc::new(ProcessEnforcer::new());
-    let process_collector = ProcessCollector::new(process_enforcer.clone());
-    let net_collector = NetCollector::new();
-    let fs_collector = FsCollector::new();
-    let secret_collector = SecretCollector::new();
     let command_receiver = CommandReceiver::with_enforcer(
         config.gateway_public_key_hex.as_deref(),
         config.tenant_id.clone(),
@@ -226,9 +215,6 @@ async fn main() -> ExitCode {
         tokio::select! {
             _ = process_collect_tick.tick() => {
                 process_collector.poll(&spool);
-                net_collector.poll(&spool);
-                fs_collector.poll(&spool);
-                secret_collector.poll(&spool);
             }
             _ = heartbeat_tick.tick() => {
                 let req = HeartbeatRequest {
