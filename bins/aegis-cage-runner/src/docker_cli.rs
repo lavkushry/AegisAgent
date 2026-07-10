@@ -41,24 +41,131 @@ pub async fn docker_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Proxy env keys the cage **forces** when `egress_proxy_url` is set.
+/// Tenant-supplied values for these keys are stripped and replaced so a
+/// compromised agent cannot point itself at a different proxy or clear them.
+const FORCED_PROXY_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
+/// How the sandbox reaches the egress proxy (if any).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EgressNetworkPlan {
+    /// Docker `--network` value: `none` (no egress) or `bridge` (proxy path).
+    docker_network: &'static str,
+    /// Proxy URL injected into the container (loopback rewritten for Docker).
+    proxy_url: Option<String>,
+    /// When true, add `host.docker.internal:host-gateway` so containers can
+    /// reach a proxy bound on the host loopback.
+    add_host_gateway: bool,
+}
+
+/// Plan forced egress for a validated [`SandboxSpec`].
+///
+/// | `egress_proxy_url` | Docker network | Proxy env |
+/// |--------------------|----------------|-----------|
+/// | unset              | `none`         | none (no egress at all) |
+/// | set                | `bridge`       | forced HTTP(S)_PROXY to that URL |
+///
+/// Residual: with `bridge`, a malicious process can still open raw sockets
+/// that bypass HTTP_PROXY. Hard network isolation (internal netns + sidecar,
+/// or always-on transparent proxy) remains a follow-up. Soft forced egress
+/// still beats open internet: cooperative HTTP clients and most agent SDKs
+/// honor the injected proxy, and `direct_internet` stays forbidden.
+fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
+    let raw = spec
+        .network
+        .egress_proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    match raw {
+        None => EgressNetworkPlan {
+            docker_network: "none",
+            proxy_url: None,
+            add_host_gateway: false,
+        },
+        Some(url) => {
+            let (container_url, add_host_gateway) = rewrite_loopback_proxy_for_container(url);
+            EgressNetworkPlan {
+                docker_network: "bridge",
+                proxy_url: Some(container_url),
+                add_host_gateway,
+            }
+        }
+    }
+}
+
+/// Map host-loopback proxy URLs to `host.docker.internal` so a container on
+/// the Docker bridge can reach a proxy listening on the host (compose
+/// `network_mode: host`, local `aegis-egress-proxy` on 127.0.0.1:8888).
+fn rewrite_loopback_proxy_for_container(proxy_url: &str) -> (String, bool) {
+    const LOOPBACK_HOSTS: &[&str] = &["127.0.0.1", "localhost", "[::1]"];
+    for scheme in ["http://", "https://"] {
+        let Some(rest) = proxy_url.strip_prefix(scheme) else {
+            continue;
+        };
+        for host in LOOPBACK_HOSTS {
+            if rest == *host
+                || rest.starts_with(&format!("{host}:"))
+                || rest.starts_with(&format!("{host}/"))
+            {
+                let after_host = &rest[host.len()..];
+                return (format!("{scheme}host.docker.internal{after_host}"), true);
+            }
+        }
+    }
+    (proxy_url.to_string(), false)
+}
+
 /// Every flag here maps directly to an isolation guarantee from
-/// `docs/AegisAgent_Agent_Cage.md` section 8: `--network none` (no direct
-/// internet — the spec itself already forbids `direct_internet: true`, this
-/// is defense in depth at the runtime layer too), no `-v
-/// /var/run/docker.sock`, no host paths beyond the isolated workspace,
-/// `--read-only` when the image requests it, and best-effort resource caps
-/// so one sandbox can't starve the host.
+/// `docs/AegisAgent_Agent_Cage.md` section 8 and the host-Docker security
+/// review (`docs/AegisAgent_Cage_Docker_Security.md`):
+///
+/// - `--network none` — no direct internet (spec also forbids
+///   `direct_internet: true`; this is defense in depth at the runtime)
+/// - `--cap-drop ALL` — no Linux capabilities inside the sandbox
+/// - `--security-opt no-new-privileges:true` — block setuid/file-cap
+///   elevation after exec
+/// - no `-v /var/run/docker.sock`, no host paths beyond the isolated
+///   workspace
+/// - `--read-only` + a small `/tmp` tmpfs when the image requests a
+///   read-only rootfs
+/// - best-effort resource caps so one sandbox can't starve the host
+///
+/// Residual (documented): the **runner** process still needs host
+/// `docker.sock` access to create these sandboxes — that is root-equivalent
+/// on the runner node and is not mitigated by these sandbox flags.
 fn build_create_args(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
+    egress: &EgressNetworkPlan,
 ) -> Vec<String> {
+    let egress = plan_egress_network(spec);
+
     let mut args = vec![
         "create".to_string(),
         "--name".to_string(),
         container_name.to_string(),
         "--network".to_string(),
         "none".to_string(),
+        // Drop every Linux capability. Sandboxes must not keep NET_ADMIN,
+        // SYS_ADMIN, etc. even if the image USER is root.
+        "--cap-drop".to_string(),
+        "ALL".to_string(),
+        // Prevent setuid binaries / file capabilities from elevating after
+        // exec (complements cap-drop for root-looking images).
+        "--security-opt".to_string(),
+        "no-new-privileges:true".to_string(),
         "--pids-limit".to_string(),
         spec.resources.process_limit.to_string(),
         "--memory".to_string(),
@@ -67,8 +174,18 @@ fn build_create_args(
         format!("{:.3}", spec.resources.cpu_millis as f64 / 1000.0),
     ];
 
+    if egress.add_host_gateway {
+        args.push("--add-host".to_string());
+        args.push("host.docker.internal:host-gateway".to_string());
+    }
+
     if spec.image.read_only_rootfs {
         args.push("--read-only".to_string());
+        // Writable scratch space that still blocks exec of dropped binaries
+        // and setuid bits. Size is intentionally small — work product goes
+        // on the isolated workspace volume, not /tmp.
+        args.push("--tmpfs".to_string());
+        args.push("/tmp:rw,nosuid,nodev,noexec,size=64m".to_string());
     }
 
     args.push("-v".to_string());
@@ -76,9 +193,38 @@ fn build_create_args(
     args.push("-w".to_string());
     args.push(spec.working_dir.clone());
 
+    // Tenant env first, but drop keys we will force below so a compromised
+    // agent cannot clear or retarget the proxy.
     for (key, value) in &spec.environment {
+        if FORCED_PROXY_ENV_KEYS
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+        {
+            continue;
+        }
         args.push("-e".to_string());
         args.push(format!("{key}={value}"));
+    }
+
+    if let Some(proxy_url) = &egress.proxy_url {
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            args.push("-e".to_string());
+            args.push(format!("{key}={proxy_url}"));
+        }
+        // Empty NO_PROXY: do not let the workload bypass the proxy for
+        // "local" destinations by default.
+        args.push("-e".to_string());
+        args.push("NO_PROXY=".to_string());
+        args.push("-e".to_string());
+        args.push("no_proxy=".to_string());
+
+        if !spec.network.allowed_destinations.is_empty() {
+            args.push("-e".to_string());
+            args.push(format!(
+                "AEGIS_EGRESS_ALLOWED_DESTINATIONS={}",
+                spec.network.allowed_destinations.join(",")
+            ));
+        }
     }
 
     // `--` marks the end of docker-create's own flags: without it, an
@@ -93,15 +239,34 @@ fn build_create_args(
 }
 
 /// `docker create` — allocates the container without starting it, so the
-/// caller controls exactly when it begins running. Returns the backend
-/// container ID.
+/// caller controls exactly when it begins running. Returns
+/// `(container_id, optional_network_name_to_cleanup)`.
 pub async fn create(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
-) -> Result<String, CageError> {
-    let args = build_create_args(spec, container_name, workspace_dir);
-    run_docker(&args).await
+) -> Result<(String, Option<String>), CageError> {
+    let egress = plan_egress_network(spec);
+    if egress.create_isolated_network {
+        create_egress_network(&egress.docker_network).await?;
+    }
+    let args = build_create_args(spec, container_name, workspace_dir, &egress);
+    match run_docker(&args).await {
+        Ok(id) => {
+            let net = if egress.create_isolated_network {
+                Some(egress.docker_network)
+            } else {
+                None
+            };
+            Ok((id, net))
+        }
+        Err(e) => {
+            if egress.create_isolated_network {
+                let _ = remove_network(&egress.docker_network).await;
+            }
+            Err(e)
+        }
+    }
 }
 
 pub async fn start(container_id: &str) -> Result<(), CageError> {
@@ -168,6 +333,19 @@ pub async fn inspect_status(container_id: &str) -> Result<SandboxState, CageErro
     })
 }
 
+/// HostConfig isolation fields used by Docker-daemon e2e checks (cap drop,
+/// security opt, network mode). Format is tab-separated so callers can
+/// assert without depending on full JSON.
+pub async fn inspect_isolation(container_id: &str) -> Result<String, CageError> {
+    run_docker(&[
+        "inspect".to_string(),
+        "--format".to_string(),
+        "{{.HostConfig.NetworkMode}}\t{{json .HostConfig.CapDrop}}\t{{json .HostConfig.SecurityOpt}}\t{{.HostConfig.Privileged}}".to_string(),
+        container_id.to_string(),
+    ])
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,7 +397,12 @@ mod tests {
     #[test]
     fn end_of_options_marker_precedes_the_image_ref() {
         let spec = spec_with("--privileged", vec!["--pid=host", "alpine"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
 
         let dash_dash_pos = args
             .iter()
@@ -237,9 +420,118 @@ mod tests {
     #[test]
     fn normal_image_ref_and_command_are_placed_after_the_marker() {
         let spec = spec_with("alpine:latest", vec!["sleep", "5"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
 
         let dash_dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(&args[dash_dash_pos + 1..], &["alpine:latest", "sleep", "5"]);
+    }
+
+    /// Host-Docker security review (2026-07): sandbox create must always
+    /// drop capabilities and block privilege escalation, independent of
+    /// the tenant-supplied image or command.
+    #[test]
+    fn create_args_always_drop_all_caps_and_no_new_privileges() {
+        let spec = spec_with("alpine:latest", vec!["true"]);
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--cap-drop", "ALL"]),
+            "expected --cap-drop ALL before image; got {flags_before_image:?}"
+        );
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--security-opt", "no-new-privileges:true"]),
+            "expected --security-opt no-new-privileges:true; got {flags_before_image:?}"
+        );
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--network", "none"]),
+            "expected --network none; got {flags_before_image:?}"
+        );
+    }
+
+    #[test]
+    fn create_args_never_enable_privileged_or_host_namespaces_as_flags() {
+        let spec = spec_with("alpine:latest", vec!["true"]);
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        for forbidden in [
+            "--privileged",
+            "--pid=host",
+            "--network=host",
+            "--ipc=host",
+            "--uts=host",
+            "--userns=host",
+        ] {
+            assert!(
+                !flags_before_image
+                    .iter()
+                    .any(|a| *a == forbidden || a.starts_with(&format!("{forbidden}="))),
+                "isolation flags must not include {forbidden}; got {flags_before_image:?}"
+            );
+        }
+        // Socket must never be mounted into the *sandbox* (runner host is separate).
+        assert!(
+            !flags_before_image.iter().any(|a| a.contains("docker.sock")),
+            "sandbox must not mount docker.sock; got {flags_before_image:?}"
+        );
+    }
+
+    #[test]
+    fn read_only_rootfs_adds_tmpfs_scratch_and_read_only_flag() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.image.read_only_rootfs = true;
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        assert!(flags_before_image.contains(&"--read-only"));
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w[0] == "--tmpfs" && w[1].starts_with("/tmp:") && w[1].contains("noexec")),
+            "expected /tmp tmpfs with noexec; got {flags_before_image:?}"
+        );
+    }
+
+    #[test]
+    fn writable_rootfs_skips_read_only_and_tmpfs() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.image.read_only_rootfs = false;
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        assert!(!flags_before_image.contains(&"--read-only"));
+        assert!(!flags_before_image.contains(&"--tmpfs"));
+        // Hardening still applies when rootfs is writable.
+        assert!(flags_before_image
+            .windows(2)
+            .any(|w| w == ["--cap-drop", "ALL"]));
     }
 }

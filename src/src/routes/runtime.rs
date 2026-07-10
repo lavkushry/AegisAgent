@@ -201,6 +201,38 @@ fn validate_cage_spec(spec: &CageRunSpecRequest) -> Result<(), String> {
                 .to_string(),
         );
     }
+    let proxy = spec
+        .network
+        .egress_proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if !spec.network.allowed_destinations.is_empty() && proxy.is_none() {
+        return Err(
+            "cage_spec.network.allowed_destinations requires egress_proxy_url \
+             (allowlists are enforced at the egress proxy)"
+                .to_string(),
+        );
+    }
+    if let Some(url) = proxy {
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(
+                "cage_spec.network.egress_proxy_url must be an http:// or https:// URL".to_string(),
+            );
+        }
+        if url.contains(char::is_whitespace) {
+            return Err(
+                "cage_spec.network.egress_proxy_url must not contain whitespace".to_string(),
+            );
+        }
+    } else if spec
+        .network
+        .egress_proxy_url
+        .as_ref()
+        .is_some_and(|s| s.trim().is_empty())
+    {
+        return Err("cage_spec.network.egress_proxy_url must not be empty when set".to_string());
+    }
     for mount in &spec.controlled_mounts {
         for forbidden in FORBIDDEN_MOUNT_PATH_PREFIXES {
             if mount.target_path.starts_with(forbidden) {
@@ -362,6 +394,7 @@ pub async fn create_agent_run(
         environment_json,
         workspace_spec_json,
         controlled_mounts_json,
+        exit_code: None,
         created_at: now,
     };
     match state
@@ -463,6 +496,9 @@ pub struct UpdateRunStatusRequest {
     pub status: String,
     #[serde(default)]
     pub finished_at: Option<chrono::DateTime<Utc>>,
+    /// Optional process/container exit code (typically on finished/killed).
+    #[serde(default)]
+    pub exit_code: Option<i32>,
 }
 
 /// POST /v1/agent-cage/runs/:id/status — the claiming runner reports a
@@ -488,6 +524,7 @@ pub async fn update_run_status(
             &req.runner_id,
             &req.status,
             req.finished_at,
+            req.exit_code,
         )
         .await
     {
@@ -1565,6 +1602,7 @@ mod tests {
                 runner_id: runner.to_string(),
                 status: "running".to_string(),
                 finished_at: None,
+                exit_code: None,
             }),
         )
         .await
@@ -1582,6 +1620,7 @@ mod tests {
                 runner_id: runner.to_string(),
                 status: "finished".to_string(),
                 finished_at: Some(Utc::now()),
+                exit_code: None,
             }),
         )
         .await
@@ -1647,6 +1686,7 @@ mod tests {
                 runner_id: "runner-2".to_string(),
                 status: "running".to_string(),
                 finished_at: None,
+                exit_code: None,
             }),
         )
         .await
@@ -1693,6 +1733,7 @@ mod tests {
                 runner_id: "runner-1".to_string(),
                 status: "quarantined".to_string(),
                 finished_at: None,
+                exit_code: None,
             }),
         )
         .await
