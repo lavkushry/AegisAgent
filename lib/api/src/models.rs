@@ -671,6 +671,10 @@ pub struct AgentRunRecord {
     pub workspace_spec_json: Option<String>,
     #[serde(default)]
     pub controlled_mounts_json: Option<String>,
+    /// Process/container exit code reported by the claiming runner on
+    /// terminal status (`finished` / `killed`). `None` until reported.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
     pub created_at: DateTime<Utc>,
 }
 

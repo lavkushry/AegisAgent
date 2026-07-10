@@ -58,6 +58,8 @@ pub struct AgentRunPayload {
     pub environment_json: Option<String>,
     pub workspace_spec_json: Option<String>,
     pub controlled_mounts_json: Option<String>,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
 }
 
 impl AgentRunPayload {
@@ -159,6 +161,8 @@ struct UpdateRunStatusRequest<'a> {
     status: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     finished_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
 }
 
 /// Mirrors the gateway's `ControlCommandRecord` — the wire shape returned
@@ -295,6 +299,7 @@ impl GatewayClient {
         runner_id: &str,
         status: &str,
         finished_at: Option<DateTime<Utc>>,
+        exit_code: Option<i32>,
     ) -> Result<AgentRunPayload, GatewayClientError> {
         let url = self
             .base_url
@@ -308,6 +313,7 @@ impl GatewayClient {
                 runner_id,
                 status,
                 finished_at,
+                exit_code,
             })
             .send()
             .await?;
@@ -541,7 +547,7 @@ mod tests {
             "tok".to_string(),
         );
         let run = client
-            .update_run_status("run-1", "runner-1", "running", None)
+            .update_run_status("run-1", "runner-1", "running", None, None)
             .await
             .unwrap();
         assert_eq!(run.status, "running");

@@ -1201,6 +1201,7 @@ impl StorageBackend for SqlDbStorage {
         runner_id: &str,
         status: &str,
         finished_at: Option<DateTime<Utc>>,
+        exit_code: Option<i32>,
     ) -> Result<bool, AegisError> {
         db::update_claimed_agent_run_status(
             &self.pool,
@@ -1209,6 +1210,7 @@ impl StorageBackend for SqlDbStorage {
             runner_id,
             status,
             finished_at,
+            exit_code,
         )
         .await
         .map_err(AegisError::Database)
