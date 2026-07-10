@@ -19,6 +19,7 @@ use clap::Parser;
 
 use aegis_node_sensor::command_receiver::{CommandReceiver, ExecutionOutcome};
 use aegis_node_sensor::config::{CliOverrides, RawSensorConfig, SensorConfig};
+use aegis_node_sensor::fs_collector::FsCollector;
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
 use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
