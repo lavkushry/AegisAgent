@@ -18,13 +18,14 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::json;
 
 use crate::gateway_client::SignedCommand;
+use crate::process_enforcer::ProcessEnforcer;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CommandError {
@@ -74,6 +75,8 @@ pub struct CommandReceiver {
     verifying_key: Option<VerifyingKey>,
     tenant_id: String,
     seen_nonces: Mutex<HashSet<String>>,
+    /// Host process control — real SIGTERM/STOP/CONT for registered runs.
+    enforcer: Arc<ProcessEnforcer>,
 }
 
 impl CommandReceiver {
@@ -84,6 +87,20 @@ impl CommandReceiver {
     /// sensor cannot verify anything and every command is rejected —
     /// failing closed rather than trusting an unverifiable command.
     pub fn new(gateway_public_key_hex: Option<&str>, tenant_id: String) -> Self {
+        Self::with_enforcer(
+            gateway_public_key_hex,
+            tenant_id,
+            Arc::new(ProcessEnforcer::new()),
+        )
+    }
+
+    /// Same as [`Self::new`], with an explicit shared enforcer so the
+    /// poll loop and collectors can register host PIDs against the same map.
+    pub fn with_enforcer(
+        gateway_public_key_hex: Option<&str>,
+        tenant_id: String,
+        enforcer: Arc<ProcessEnforcer>,
+    ) -> Self {
         let verifying_key = gateway_public_key_hex.and_then(|hex_key| {
             let bytes = hex::decode(hex_key).ok()?;
             let arr: [u8; 32] = bytes.try_into().ok()?;
@@ -93,7 +110,12 @@ impl CommandReceiver {
             verifying_key,
             tenant_id,
             seen_nonces: Mutex::new(HashSet::new()),
+            enforcer,
         }
+    }
+
+    pub fn enforcer(&self) -> &Arc<ProcessEnforcer> {
+        &self.enforcer
     }
 
     /// Verify a command's signature, tenant binding, freshness, and nonce
@@ -133,14 +155,33 @@ impl CommandReceiver {
         Ok(())
     }
 
-    /// Execute a verified command. Only `kill_run` exists today — the mock
-    /// handler this phase requires; the cage runner (Phase 4) provides real
-    /// process control. Any other action NACKs as unsupported rather than
-    /// silently no-op'ing.
+    /// Execute a verified command against the host process enforcer.
+    ///
+    /// Supported actions (Control Command Protocol §4 / §17):
+    /// - `kill_run` / `pause_run` / `resume_run` / `quarantine_run` on
+    ///   `target_type=run` → signal the registered host PID
+    /// - `kill_run` on `target_type=sensor` → kill **all** runs registered
+    ///   on this sensor (host-wide containment)
+    ///
+    /// Missing runs ACK (idempotent terminal). Signal failures NACK.
+    /// Docker sandboxes remain the cage-runner's job; this path is host PID
+    /// enforcement for unknown/host agents the sensor tracks.
     pub fn execute(&self, cmd: &SignedCommand) -> ExecutionOutcome {
-        match cmd.action.as_str() {
-            "kill_run" => ExecutionOutcome::Acked,
-            other => ExecutionOutcome::Nacked(format!("unsupported action: {other}")),
+        let result = match (cmd.action.as_str(), cmd.target_type.as_str()) {
+            ("kill_run", "run") => self.enforcer.kill_run(&cmd.target_id),
+            ("pause_run", "run") => self.enforcer.pause_run(&cmd.target_id),
+            ("resume_run", "run") => self.enforcer.resume_run(&cmd.target_id),
+            ("quarantine_run", "run") => self.enforcer.quarantine_run(&cmd.target_id),
+            ("kill_run", "sensor") => self.enforcer.kill_all_registered(),
+            (action, target_type) => {
+                return ExecutionOutcome::Nacked(format!(
+                    "unsupported action/target: {action}/{target_type}"
+                ));
+            }
+        };
+        match result {
+            Ok(()) => ExecutionOutcome::Acked,
+            Err(e) => ExecutionOutcome::Nacked(e.to_string()),
         }
     }
 }
@@ -190,11 +231,43 @@ mod tests {
     fn valid_signed_command_verifies_and_executes() {
         let key = signing_key();
         let now = Utc::now();
+        // Sensor-scoped kill_run with no registered runs still ACKs (empty set).
         let cmd = signed_command(now, &key);
         let receiver = receiver(&key);
 
         receiver.verify(&cmd, now).unwrap();
         assert!(matches!(receiver.execute(&cmd), ExecutionOutcome::Acked));
+    }
+
+    #[test]
+    fn kill_run_on_registered_host_pid_terminates_process() {
+        use std::process::{Command, Stdio};
+
+        let key = signing_key();
+        let now = Utc::now();
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let run_id = "host-run-1";
+        let mut cmd = base_command(now);
+        cmd.target_type = "run".to_string();
+        cmd.target_id = run_id.to_string();
+        cmd.action = "kill_run".to_string();
+        let sig = key.sign(&canonical_bytes(&cmd));
+        cmd.signature = hex::encode(sig.to_bytes());
+
+        let receiver = receiver(&key);
+        receiver
+            .enforcer()
+            .register_run(run_id, child.id() as i32)
+            .unwrap();
+        receiver.verify(&cmd, now).unwrap();
+        assert!(matches!(receiver.execute(&cmd), ExecutionOutcome::Acked));
+        let _ = child.wait();
+        assert!(!crate::process_enforcer::process_alive(child.id() as i32));
     }
 
     #[test]
@@ -302,5 +375,52 @@ mod tests {
             ExecutionOutcome::Nacked(reason) => assert!(reason.contains("reformat_disk")),
             ExecutionOutcome::Acked => panic!("must not execute an unsupported action"),
         }
+    }
+
+    #[test]
+    fn pause_and_resume_run_update_enforcer_state() {
+        use std::process::{Command, Stdio};
+
+        let key = signing_key();
+        let now = Utc::now();
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let run_id = "host-run-pause";
+        let receiver = receiver(&key);
+        receiver
+            .enforcer()
+            .register_run(run_id, child.id() as i32)
+            .unwrap();
+
+        let mut pause = base_command(now);
+        pause.target_type = "run".to_string();
+        pause.target_id = run_id.to_string();
+        pause.action = "pause_run".to_string();
+        pause.nonce = "nonce-pause".to_string();
+        let sig = key.sign(&canonical_bytes(&pause));
+        pause.signature = hex::encode(sig.to_bytes());
+        receiver.verify(&pause, now).unwrap();
+        assert!(matches!(receiver.execute(&pause), ExecutionOutcome::Acked));
+        assert_eq!(
+            receiver.enforcer().state_for(run_id),
+            Some(crate::process_enforcer::RunState::Paused)
+        );
+
+        let mut resume = base_command(now);
+        resume.target_type = "run".to_string();
+        resume.target_id = run_id.to_string();
+        resume.action = "resume_run".to_string();
+        resume.nonce = "nonce-resume".to_string();
+        let sig = key.sign(&canonical_bytes(&resume));
+        resume.signature = hex::encode(sig.to_bytes());
+        receiver.verify(&resume, now).unwrap();
+        assert!(matches!(receiver.execute(&resume), ExecutionOutcome::Acked));
+
+        receiver.enforcer().kill_run(run_id).unwrap();
+        let _ = child.wait();
     }
 }

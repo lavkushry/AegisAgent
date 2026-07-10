@@ -139,6 +139,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hostname",
+ "libc",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "serde",

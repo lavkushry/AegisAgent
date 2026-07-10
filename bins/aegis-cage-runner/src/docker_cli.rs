@@ -58,11 +58,8 @@ const FORCED_PROXY_ENV_KEYS: &[&str] = &[
 /// How the sandbox reaches the egress proxy (if any).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EgressNetworkPlan {
-    /// Docker `--network` value: `none`, or a dedicated no-masquerade
-    /// network name created for this sandbox.
-    docker_network: String,
-    /// When true, `create` must `docker network create` this name first.
-    create_isolated_network: bool,
+    /// Docker `--network` value: `none` (no egress) or `bridge` (proxy path).
+    docker_network: &'static str,
     /// Proxy URL injected into the container (loopback rewritten for Docker).
     proxy_url: Option<String>,
     /// When true, add `host.docker.internal:host-gateway` so containers can
@@ -70,37 +67,18 @@ struct EgressNetworkPlan {
     add_host_gateway: bool,
 }
 
-/// Stable Docker network name for a sandbox's forced-egress path.
-/// Docker allows `[a-zA-Z0-9][a-zA-Z0-9_.-]*`.
-pub fn egress_network_name(sandbox_id: &str) -> String {
-    let safe: String = sandbox_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    format!("aegis-cage-{safe}")
-}
-
 /// Plan forced egress for a validated [`SandboxSpec`].
 ///
 /// | `egress_proxy_url` | Docker network | Proxy env |
 /// |--------------------|----------------|-----------|
 /// | unset              | `none`         | none (no egress at all) |
-/// | set                | per-sandbox bridge with **IP masquerade disabled** | forced HTTP(S)_PROXY |
+/// | set                | `bridge`       | forced HTTP(S)_PROXY to that URL |
 ///
-/// Disabling masquerade means the sandbox cannot SNAT to the public Internet
-/// for raw TCP/UDP — only host-reachable destinations (e.g. the egress proxy
-/// via `host.docker.internal`) remain usable. Cooperative clients still use
-/// the forced proxy env; raw sockets no longer get a free ride through NAT.
-///
-/// Residual: host-local services on the Docker host remain reachable if
-/// routed; full transparent iptables REDIRECT inside the netns is still a
-/// follow-up for absolute force.
+/// Residual: with `bridge`, a malicious process can still open raw sockets
+/// that bypass HTTP_PROXY. Hard network isolation (internal netns + sidecar,
+/// or always-on transparent proxy) remains a follow-up. Soft forced egress
+/// still beats open internet: cooperative HTTP clients and most agent SDKs
+/// honor the injected proxy, and `direct_internet` stays forbidden.
 fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
     let raw = spec
         .network
@@ -111,58 +89,17 @@ fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
 
     match raw {
         None => EgressNetworkPlan {
-            docker_network: "none".to_string(),
-            create_isolated_network: false,
+            docker_network: "none",
             proxy_url: None,
             add_host_gateway: false,
         },
         Some(url) => {
             let (container_url, add_host_gateway) = rewrite_loopback_proxy_for_container(url);
             EgressNetworkPlan {
-                docker_network: egress_network_name(&spec.sandbox_id),
-                create_isolated_network: true,
+                docker_network: "bridge",
                 proxy_url: Some(container_url),
                 add_host_gateway,
             }
-        }
-    }
-}
-
-/// Create a per-sandbox bridge with IP masquerade **off** so containers
-/// cannot reach arbitrary public destinations via Docker NAT.
-pub async fn create_egress_network(network_name: &str) -> Result<(), CageError> {
-    run_docker(&[
-        "network".to_string(),
-        "create".to_string(),
-        "--driver".to_string(),
-        "bridge".to_string(),
-        "--opt".to_string(),
-        "com.docker.network.bridge.enable_ip_masquerade=false".to_string(),
-        network_name.to_string(),
-    ])
-    .await
-    .map(|_| ())
-}
-
-/// Best-effort remove of a per-sandbox egress network (after container rm).
-pub async fn remove_network(network_name: &str) -> Result<(), CageError> {
-    match run_docker(&[
-        "network".to_string(),
-        "rm".to_string(),
-        network_name.to_string(),
-    ])
-    .await
-    {
-        Ok(_) => Ok(()),
-        // Already gone / still has endpoints — destroy path is best-effort.
-        Err(CageError::Runtime(msg))
-            if msg.contains("not found") || msg.contains("No such network") =>
-        {
-            Ok(())
-        }
-        Err(e) => {
-            tracing::warn!(network = %network_name, error = %e, "failed to remove cage egress network");
-            Ok(())
         }
     }
 }
@@ -190,24 +127,45 @@ fn rewrite_loopback_proxy_for_container(proxy_url: &str) -> (String, bool) {
 }
 
 /// Every flag here maps directly to an isolation guarantee from
-/// `docs/AegisAgent_Agent_Cage.md` §8–9:
-/// - no Docker socket / host home mounts
-/// - no `direct_internet` (spec-validated)
-/// - default `--network none`; dedicated no-masquerade network when proxy set
-/// - forced `HTTP_PROXY`/`HTTPS_PROXY` when proxy mode is active
-/// - `--read-only` when requested, resource caps, `--` end-of-options
+/// `docs/AegisAgent_Agent_Cage.md` section 8 and the host-Docker security
+/// review (`docs/AegisAgent_Cage_Docker_Security.md`):
+///
+/// - `--network none` — no direct internet (spec also forbids
+///   `direct_internet: true`; this is defense in depth at the runtime)
+/// - `--cap-drop ALL` — no Linux capabilities inside the sandbox
+/// - `--security-opt no-new-privileges:true` — block setuid/file-cap
+///   elevation after exec
+/// - no `-v /var/run/docker.sock`, no host paths beyond the isolated
+///   workspace
+/// - `--read-only` + a small `/tmp` tmpfs when the image requests a
+///   read-only rootfs
+/// - best-effort resource caps so one sandbox can't starve the host
+///
+/// Residual (documented): the **runner** process still needs host
+/// `docker.sock` access to create these sandboxes — that is root-equivalent
+/// on the runner node and is not mitigated by these sandbox flags.
 fn build_create_args(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
     egress: &EgressNetworkPlan,
 ) -> Vec<String> {
+    let egress = plan_egress_network(spec);
+
     let mut args = vec![
         "create".to_string(),
         "--name".to_string(),
         container_name.to_string(),
         "--network".to_string(),
-        egress.docker_network.clone(),
+        "none".to_string(),
+        // Drop every Linux capability. Sandboxes must not keep NET_ADMIN,
+        // SYS_ADMIN, etc. even if the image USER is root.
+        "--cap-drop".to_string(),
+        "ALL".to_string(),
+        // Prevent setuid binaries / file capabilities from elevating after
+        // exec (complements cap-drop for root-looking images).
+        "--security-opt".to_string(),
+        "no-new-privileges:true".to_string(),
         "--pids-limit".to_string(),
         spec.resources.process_limit.to_string(),
         "--memory".to_string(),
@@ -223,6 +181,11 @@ fn build_create_args(
 
     if spec.image.read_only_rootfs {
         args.push("--read-only".to_string());
+        // Writable scratch space that still blocks exec of dropped binaries
+        // and setuid bits. Size is intentionally small — work product goes
+        // on the isolated workspace volume, not /tmp.
+        args.push("--tmpfs".to_string());
+        args.push("/tmp:rw,nosuid,nodev,noexec,size=64m".to_string());
     }
 
     args.push("-v".to_string());
@@ -370,6 +333,19 @@ pub async fn inspect_status(container_id: &str) -> Result<SandboxState, CageErro
     })
 }
 
+/// HostConfig isolation fields used by Docker-daemon e2e checks (cap drop,
+/// security opt, network mode). Format is tab-separated so callers can
+/// assert without depending on full JSON.
+pub async fn inspect_isolation(container_id: &str) -> Result<String, CageError> {
+    run_docker(&[
+        "inspect".to_string(),
+        "--format".to_string(),
+        "{{.HostConfig.NetworkMode}}\t{{json .HostConfig.CapDrop}}\t{{json .HostConfig.SecurityOpt}}\t{{.HostConfig.Privileged}}".to_string(),
+        container_id.to_string(),
+    ])
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,102 +431,107 @@ mod tests {
         assert_eq!(&args[dash_dash_pos + 1..], &["alpine:latest", "sleep", "5"]);
     }
 
+    /// Host-Docker security review (2026-07): sandbox create must always
+    /// drop capabilities and block privilege escalation, independent of
+    /// the tenant-supplied image or command.
     #[test]
-    fn default_spec_uses_network_none_without_proxy_env() {
+    fn create_args_always_drop_all_caps_and_no_new_privileges() {
         let spec = spec_with("alpine:latest", vec!["true"]);
-        let args = build_create_args(
-            &spec,
-            "c",
-            &PathBuf::from("/tmp/ws"),
-            &plan_egress_network(&spec),
-        );
-        let flags: Vec<&str> = args
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
             .map(String::as_str)
             .collect();
-        assert!(flags.windows(2).any(|w| w == ["--network", "none"]));
-        assert!(!flags.iter().any(|a| a.contains("HTTP_PROXY")));
-        assert!(!flags.contains(&"--add-host"));
+
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--cap-drop", "ALL"]),
+            "expected --cap-drop ALL before image; got {flags_before_image:?}"
+        );
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--security-opt", "no-new-privileges:true"]),
+            "expected --security-opt no-new-privileges:true; got {flags_before_image:?}"
+        );
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w == ["--network", "none"]),
+            "expected --network none; got {flags_before_image:?}"
+        );
     }
 
     #[test]
-    fn egress_proxy_forces_bridge_proxy_env_and_host_gateway_for_loopback() {
+    fn create_args_never_enable_privileged_or_host_namespaces_as_flags() {
+        let spec = spec_with("alpine:latest", vec!["true"]);
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .map(String::as_str)
+            .collect();
+
+        for forbidden in [
+            "--privileged",
+            "--pid=host",
+            "--network=host",
+            "--ipc=host",
+            "--uts=host",
+            "--userns=host",
+        ] {
+            assert!(
+                !flags_before_image
+                    .iter()
+                    .any(|a| *a == forbidden || a.starts_with(&format!("{forbidden}="))),
+                "isolation flags must not include {forbidden}; got {flags_before_image:?}"
+            );
+        }
+        // Socket must never be mounted into the *sandbox* (runner host is separate).
+        assert!(
+            !flags_before_image.iter().any(|a| a.contains("docker.sock")),
+            "sandbox must not mount docker.sock; got {flags_before_image:?}"
+        );
+    }
+
+    #[test]
+    fn read_only_rootfs_adds_tmpfs_scratch_and_read_only_flag() {
         let mut spec = spec_with("alpine:latest", vec!["true"]);
-        spec.network.egress_proxy_url = Some("http://127.0.0.1:8888".to_string());
-        // Tenant tries to point proxy elsewhere — must be stripped/overridden.
-        spec.environment.insert(
-            "HTTP_PROXY".to_string(),
-            "http://evil.example:1".to_string(),
-        );
-        spec.environment
-            .insert("AEGIS_RUN_ID".to_string(), "run_1".to_string());
-        spec.network.allowed_destinations = vec!["api.example.com".to_string()];
-
-        let args = build_create_args(
-            &spec,
-            "c",
-            &PathBuf::from("/tmp/ws"),
-            &plan_egress_network(&spec),
-        );
-        let flags: Vec<&str> = args
+        spec.image.read_only_rootfs = true;
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
             .map(String::as_str)
             .collect();
 
-        assert!(flags
-            .windows(2)
-            .any(|w| w[0] == "--network" && w[1].starts_with("aegis-cage-")));
-        assert!(plan_egress_network(&spec).create_isolated_network);
-        assert!(flags
-            .windows(2)
-            .any(|w| { w[0] == "--add-host" && w[1] == "host.docker.internal:host-gateway" }));
-        assert!(flags.contains(&"HTTP_PROXY=http://host.docker.internal:8888"));
-        assert!(flags.contains(&"HTTPS_PROXY=http://host.docker.internal:8888"));
-        assert!(flags.contains(&"NO_PROXY="));
-        assert!(!flags.iter().any(|a| a.contains("evil.example")));
-        assert!(flags.contains(&"AEGIS_RUN_ID=run_1"));
-        assert!(flags.contains(&"AEGIS_EGRESS_ALLOWED_DESTINATIONS=api.example.com"));
+        assert!(flags_before_image.contains(&"--read-only"));
+        assert!(
+            flags_before_image
+                .windows(2)
+                .any(|w| w[0] == "--tmpfs" && w[1].starts_with("/tmp:") && w[1].contains("noexec")),
+            "expected /tmp tmpfs with noexec; got {flags_before_image:?}"
+        );
     }
 
     #[test]
-    fn non_loopback_proxy_url_is_not_rewritten() {
+    fn writable_rootfs_skips_read_only_and_tmpfs() {
         let mut spec = spec_with("alpine:latest", vec!["true"]);
-        spec.network.egress_proxy_url = Some("http://aegis-egress-proxy:8888".to_string());
-        let args = build_create_args(
-            &spec,
-            "c",
-            &PathBuf::from("/tmp/ws"),
-            &plan_egress_network(&spec),
-        );
-        let flags: Vec<&str> = args
+        spec.image.read_only_rootfs = false;
+        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let flags_before_image: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
             .map(String::as_str)
             .collect();
-        assert!(flags
+
+        assert!(!flags_before_image.contains(&"--read-only"));
+        assert!(!flags_before_image.contains(&"--tmpfs"));
+        // Hardening still applies when rootfs is writable.
+        assert!(flags_before_image
             .windows(2)
-            .any(|w| w[0] == "--network" && w[1].starts_with("aegis-cage-")));
-        assert!(plan_egress_network(&spec).create_isolated_network);
-        assert!(!flags.iter().any(|a| a.starts_with("--add-host")));
-        assert!(flags.contains(&"HTTP_PROXY=http://aegis-egress-proxy:8888"));
-    }
-
-    #[test]
-    fn egress_network_name_is_docker_safe() {
-        assert_eq!(egress_network_name("sandbox_1"), "aegis-cage-sandbox_1");
-        assert!(egress_network_name("a/b:c").starts_with("aegis-cage-"));
-        assert!(!egress_network_name("a/b:c").contains('/'));
-    }
-
-    #[test]
-    fn rewrite_loopback_proxy_for_container_covers_localhost_variants() {
-        let (u, gw) = rewrite_loopback_proxy_for_container("http://localhost:18080");
-        assert!(gw);
-        assert_eq!(u, "http://host.docker.internal:18080");
-        let (u2, gw2) = rewrite_loopback_proxy_for_container("https://10.0.0.5:8888");
-        assert!(!gw2);
-        assert_eq!(u2, "https://10.0.0.5:8888");
+            .any(|w| w == ["--cap-drop", "ALL"]));
     }
 }

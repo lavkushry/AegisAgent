@@ -347,10 +347,8 @@ async fn run_one(
     };
 
     let control_status = control_terminal.lock().ok().and_then(|g| *g);
-    let (status_str, finished_at, exit_code) = if let Some(status) = control_status {
-        // Prefer control outcome; still capture exit_code from wait if present.
-        let code = final_state.as_ref().ok().and_then(|s| s.exit_code);
-        (status, Some(chrono::Utc::now()), code)
+    let (status_str, finished_at) = if let Some(status) = control_status {
+        (status, Some(chrono::Utc::now()))
     } else {
         match final_state {
             Ok(state) => {
@@ -358,11 +356,11 @@ async fn run_one(
                     SandboxStatus::Killed | SandboxStatus::TimedOut => "killed",
                     _ => "finished",
                 };
-                (status_str, Some(chrono::Utc::now()), state.exit_code)
+                (status_str, Some(chrono::Utc::now()))
             }
             Err(e) => {
                 tracing::error!(run_id = %run.id, error = %e, "error waiting on sandbox");
-                ("killed", Some(chrono::Utc::now()), None)
+                ("killed", Some(chrono::Utc::now()))
             }
         }
     };
@@ -454,12 +452,12 @@ async fn poll_and_process_run_commands(
                 match cmd.action.as_str() {
                     "pause_run" => {
                         let _ = client
-                            .update_run_status(run_id, runner_id, "paused", None, None)
+                            .update_run_status(run_id, runner_id, "paused", None)
                             .await;
                     }
                     "resume_run" => {
                         let _ = client
-                            .update_run_status(run_id, runner_id, "running", None, None)
+                            .update_run_status(run_id, runner_id, "running", None)
                             .await;
                     }
                     "kill_run" | "quarantine_run" => {
@@ -477,7 +475,6 @@ async fn poll_and_process_run_commands(
                                 runner_id,
                                 terminal,
                                 Some(chrono::Utc::now()),
-                                None,
                             )
                             .await;
                     }

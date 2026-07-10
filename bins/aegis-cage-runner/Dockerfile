@@ -35,6 +35,9 @@ COPY --from=builder /var/lib/aegis-cage /var/lib/aegis-cage
 ENV RUST_LOG=info
 
 # Root is intentional for local/dev docker.sock access. Production should
-# run as a dedicated user in the docker group matching the host socket GID.
+# run as a dedicated user in the docker group matching the host socket GID
+# (Helm: dockerGroupGid + securityContext.runAsUser). Sandbox isolation
+# flags are applied by the binary at `docker create` time — not by this
+# image USER (see docs/AegisAgent_Cage_Docker_Security.md).
 ENTRYPOINT ["/usr/local/bin/aegis-cage-runner"]
 CMD ["--config", "/etc/aegis-cage/runner.toml"]
