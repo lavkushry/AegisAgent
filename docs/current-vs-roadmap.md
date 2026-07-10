@@ -40,14 +40,14 @@ Strongest current capabilities:
 - **Node sensor** — binary, register/heartbeat, command poll, shipper; not full process/fs/net collectors
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
-- **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create; Docker e2e script/CI (finish + kill) shipped; forced egress still open
+- **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e still open
 - **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph); missing cage/ban/quarantine product pages
 - **Deploy** — gateway + sensor + egress + cage + llm-gateway Helm; single-writer SQLite default
 - **Postgres** — feature + migrations exist; not the default HA production path
 
 ### Roadmap / not done
 
-- cage forced egress + sensor host enforce (P0; Docker finish/kill e2e done)
+- cage full Docker e2e (untrusted → cage → control) (P0; security review + packaging done)
 - sensor real telemetry + host enforce (P0)
 - forced egress for unknown agents (P0)
 - Postgres multi-replica GA (#1194) (P1)
@@ -77,7 +77,7 @@ Strongest current capabilities:
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Partial | Bun SPA panel suite shipped; cage/ban/quarantine pages incomplete. |
 | Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
-| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening + finish/kill e2e done; forced egress open. |
+| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; e2e still open. |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
 | Signed control commands | Partial | Issue + sensor poll path; full host enforce incomplete. |

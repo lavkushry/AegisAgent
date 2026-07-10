@@ -63,8 +63,7 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave A — P0 unknown-agent control (blocks full control-plane claim)
 
-1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~host Docker security review + create hardening~~ **Done**; ~~Docker e2e (finish + kill)~~ **Done** (`scripts/cage-docker-e2e.sh`, CI `Cage Docker E2E`); **remaining:** forced egress + sensor host enforce narrative  
-
+1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~host Docker security review + sandbox create hardening~~ **Done** (`docs/AegisAgent_Cage_Docker_Security.md`); **remaining:** full Docker e2e  
 
 2. Gateway claim/heartbeat/lease APIs — present (`/v1/agent-cage/runs/:id/{claim,heartbeat,status}`)  
 3. Sensor: minimal real telemetry + enforce kill/pause/quarantine on host  
