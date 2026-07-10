@@ -41,6 +41,91 @@ pub async fn docker_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Proxy env keys the cage **forces** when `egress_proxy_url` is set.
+/// Tenant-supplied values for these keys are stripped and replaced so a
+/// compromised agent cannot point itself at a different proxy or clear them.
+const FORCED_PROXY_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
+/// How the sandbox reaches the egress proxy (if any).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EgressNetworkPlan {
+    /// Docker `--network` value: `none` (no egress) or `bridge` (proxy path).
+    docker_network: &'static str,
+    /// Proxy URL injected into the container (loopback rewritten for Docker).
+    proxy_url: Option<String>,
+    /// When true, add `host.docker.internal:host-gateway` so containers can
+    /// reach a proxy bound on the host loopback.
+    add_host_gateway: bool,
+}
+
+/// Plan forced egress for a validated [`SandboxSpec`].
+///
+/// | `egress_proxy_url` | Docker network | Proxy env |
+/// |--------------------|----------------|-----------|
+/// | unset              | `none`         | none (no egress at all) |
+/// | set                | `bridge`       | forced HTTP(S)_PROXY to that URL |
+///
+/// Residual: with `bridge`, a malicious process can still open raw sockets
+/// that bypass HTTP_PROXY. Hard network isolation (internal netns + sidecar,
+/// or always-on transparent proxy) remains a follow-up. Soft forced egress
+/// still beats open internet: cooperative HTTP clients and most agent SDKs
+/// honor the injected proxy, and `direct_internet` stays forbidden.
+fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
+    let raw = spec
+        .network
+        .egress_proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    match raw {
+        None => EgressNetworkPlan {
+            docker_network: "none",
+            proxy_url: None,
+            add_host_gateway: false,
+        },
+        Some(url) => {
+            let (container_url, add_host_gateway) = rewrite_loopback_proxy_for_container(url);
+            EgressNetworkPlan {
+                docker_network: "bridge",
+                proxy_url: Some(container_url),
+                add_host_gateway,
+            }
+        }
+    }
+}
+
+/// Map host-loopback proxy URLs to `host.docker.internal` so a container on
+/// the Docker bridge can reach a proxy listening on the host (compose
+/// `network_mode: host`, local `aegis-egress-proxy` on 127.0.0.1:8888).
+fn rewrite_loopback_proxy_for_container(proxy_url: &str) -> (String, bool) {
+    const LOOPBACK_HOSTS: &[&str] = &["127.0.0.1", "localhost", "[::1]"];
+    for scheme in ["http://", "https://"] {
+        let Some(rest) = proxy_url.strip_prefix(scheme) else {
+            continue;
+        };
+        for host in LOOPBACK_HOSTS {
+            if rest == *host
+                || rest.starts_with(&format!("{host}:"))
+                || rest.starts_with(&format!("{host}/"))
+            {
+                let after_host = &rest[host.len()..];
+                return (format!("{scheme}host.docker.internal{after_host}"), true);
+            }
+        }
+    }
+    (proxy_url.to_string(), false)
+}
+
 /// Every flag here maps directly to an isolation guarantee from
 /// `docs/AegisAgent_Agent_Cage.md` section 8 and the host-Docker security
 /// review (`docs/AegisAgent_Cage_Docker_Security.md`):
@@ -64,6 +149,8 @@ fn build_create_args(
     container_name: &str,
     workspace_dir: &Path,
 ) -> Vec<String> {
+    let egress = plan_egress_network(spec);
+
     let mut args = vec![
         "create".to_string(),
         "--name".to_string(),
@@ -86,6 +173,11 @@ fn build_create_args(
         format!("{:.3}", spec.resources.cpu_millis as f64 / 1000.0),
     ];
 
+    if egress.add_host_gateway {
+        args.push("--add-host".to_string());
+        args.push("host.docker.internal:host-gateway".to_string());
+    }
+
     if spec.image.read_only_rootfs {
         args.push("--read-only".to_string());
         // Writable scratch space that still blocks exec of dropped binaries
@@ -100,9 +192,38 @@ fn build_create_args(
     args.push("-w".to_string());
     args.push(spec.working_dir.clone());
 
+    // Tenant env first, but drop keys we will force below so a compromised
+    // agent cannot clear or retarget the proxy.
     for (key, value) in &spec.environment {
+        if FORCED_PROXY_ENV_KEYS
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+        {
+            continue;
+        }
         args.push("-e".to_string());
         args.push(format!("{key}={value}"));
+    }
+
+    if let Some(proxy_url) = &egress.proxy_url {
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            args.push("-e".to_string());
+            args.push(format!("{key}={proxy_url}"));
+        }
+        // Empty NO_PROXY: do not let the workload bypass the proxy for
+        // "local" destinations by default.
+        args.push("-e".to_string());
+        args.push("NO_PROXY=".to_string());
+        args.push("-e".to_string());
+        args.push("no_proxy=".to_string());
+
+        if !spec.network.allowed_destinations.is_empty() {
+            args.push("-e".to_string());
+            args.push(format!(
+                "AEGIS_EGRESS_ALLOWED_DESTINATIONS={}",
+                spec.network.allowed_destinations.join(",")
+            ));
+        }
     }
 
     // `--` marks the end of docker-create's own flags: without it, an

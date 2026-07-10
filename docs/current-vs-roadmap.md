@@ -49,7 +49,7 @@ Strongest current capabilities:
 
 - cage full Docker e2e (untrusted → cage → control) (P0; security review + packaging done)
 - sensor real telemetry + host enforce (P0)
-- forced egress for unknown agents (P0)
+- transparent / netns forced egress (no raw-socket bypass) (P0 residual after proxy-env force)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
 - full Phase 9 console (cage, ban/quarantine centers, runtime timelines) (P2)
