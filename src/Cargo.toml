@@ -144,6 +144,12 @@ proptest = "1"
 # mTLS (#1310): generates throwaway CA/leaf certs in unit tests without
 # shelling out to openssl.
 rcgen = "0.14"
+# OIDC (routes::oidc tests): generates a fresh throwaway RSA keypair per test
+# run for the mock IdP's ID-token signing, rather than committing a static
+# PEM fixture (which trips gitleaks' `private-key` rule even though it's
+# test-only — a freshly generated key at test time has nothing to flag).
+rsa = { version = "0.9", features = ["pem"] }
+rand = "0.8"
 
 [[bench]]
 name = "authorize_benchmark"

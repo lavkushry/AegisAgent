@@ -303,53 +303,46 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    // A fixed, test-only RSA keypair (generated once via `openssl genrsa`, not
-    // a production secret). `n`/`e` back the JWK served for ID-token
-    // signature verification; the PEM signs the mock IdP's ID tokens.
-    const TEST_RSA_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCJeiRgsRN9wEut
-IBsQSCWSpBuMe1WhwOk8Vh+P+sjFVWVzT+RzRb7+myv+ePBYj3+C+LR/IIwU6OO6
-Tg95oOAHLamXIju5FdBNNBm2/Gvk7NOKofx/aKYtD86MM8HVqqRMBfWsqomXqdxL
-j5BqJZNEMRr/sRT5GoKoh+jLiZfRFKJxyS5oAgMxJtFGbPoOFldJzlF94L/r0jah
-l4gABgqZiMxE2eW3huzd87r2gy+z8cB4gTfnMCXRMyCTyvj/AeBeMT7A7QdDJhAo
-MNmTsts88NsTSseNncqlJKmL979sia2cyNirTD80eb/KJPXBG6YBtas5tjW0gsVS
-axx7krOvAgMBAAECggEAAjJ3VfhE661g4dgLUEizsp+rm3FcXmTUrwf6IluLgLCr
-TQF83cuPXUa7mEPBWGXKthwlcYnioAu5mZoMk0QOVu8HsKIPOrEHjp3p8n7sQ1D2
-b71dz+d4DtMbpcMtMnrMr2f0+jJ4V0bGsSQO1pnZ70Z3PDKA6rSqwk8rWePNqL2N
-Fiiveodup/ylqEH3tvJj9Z2o/177FTjbCdjiiYBsFpJanRjTgQO0LCy2Eq7t3zTc
-gTlenemE2AhAxfSY9tTBiVCj8nP+QSDnuo+xTE2tdH6OTTvqrolZtLQ0JLmn1sWC
-DsMzXp7VlFQFWDclRfhSyK7s+6q/NuepHJOXW+qBSQKBgQC+v1QQ4RAa63V59YT+
-BDVrS8RPMouskKajDAUaLWvq7jcAdABLyrjsimDKS0oimN4EkhocTlcCRdRubMZv
-6l1+YqB0zSJR4ljIKxryq0A9CBVhdCSPN5zLsNNApBS7Dpf/lUQ3SpXVyB+DR1u1
-XGfr49Ngf70m6CqgvtKcP3MMAwKBgQC4ga3b+Lekd4cxdHyk8zhY82088jlYhllQ
-7oJAqHmR9YN2/dAFHYoCHa87UH7d8w7qj/Wj9eNduiCQeFE0HXXnK94bRUtXl0Rx
-nuIFzZFspWIZhTAdb/PvDdtlD7oDVXON/mley0bDYIXSeZL4Q0RVg5UjbSVf7mW6
-cU25yvGn5QKBgC1/VX3xMPY603qTpXUxa8x79gct90Lh/d1GMLFdxC/1QglJoghy
-Aknpd8zIyJYYAFz2vGOkC/zuywzLxUlMjaBnxf4WL+l4I9Ua8wKO9nOYSgFEwrOm
-gC/VrY3tlURI5th/shW+JJ8pbNrTWnyX3fHWFcUesu9k0UYmPfYm7DohAoGAGMnr
-duNaoPEiK8XPvUWkK2dBJPASPk+GjnYM7+zysGaA7Cq7mQRX92LPmTN+aAlw1pjS
-0t2FV6FbIK3ZkxvmLFHbfGR58+Gx42YKTedJg4RQwsb/KOVSq6p78H8Fac9AQDKP
-K5o5/qPoNtf4o/w9oROVpPXUEKhx6HOykqSuhPUCgYAuq7/h5qWnPDeQCJOvF5c7
-xZYW9LwfosWW3nY0gYkcwdJ+5j1JshdFI1FBvOFcbEXYhjkaNuDXOiu8g1Aa3i4k
-bbA1hKuJ6giqQ0JSgH8uFRe5QVU2wUz9H/udDUnlo7M16fSncYoDfyVedEQFvXIz
-k1VaoXnfuP2TC0cxpA0nKg==
------END PRIVATE KEY-----
-";
-    const TEST_RSA_MODULUS_HEX: &str = "897A2460B1137DC04BAD201B10482592A41B8C7B55A1C0E93C561F8FFAC8C55565734FE47345BEFE9B2BFE78F0588F7F82F8B47F208C14E8E3BA4E0F79A0E0072DA997223BB915D04D3419B6FC6BE4ECD38AA1FC7F68A62D0FCE8C33C1D5AAA44C05F5ACAA8997A9DC4B8F906A259344311AFFB114F91A82A887E8CB8997D114A271C92E6802033126D1466CFA0E165749CE517DE0BFEBD236A1978800060A9988CC44D9E5B786ECDDF3BAF6832FB3F1C0788137E73025D1332093CAF8FF01E05E313EC0ED074326102830D993B2DB3CF0DB134AC78D9DCAA524A98BF7BF6C89AD9CC8D8AB4C3F3479BFCA24F5C11BA601B5AB39B635B482C5526B1C7B92B3AF";
-    const TEST_RSA_EXPONENT: [u8; 3] = [0x01, 0x00, 0x01];
     const TEST_KID: &str = "test-key-1";
     const TEST_JWT_SECRET: &str = "test-jwt-secret-for-oidc";
 
-    fn hex_to_bytes(hex: &str) -> Vec<u8> {
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-            .collect()
+    struct TestRsaKey {
+        pkcs1_pem: String,
+        modulus: Vec<u8>,
+        exponent: Vec<u8>,
+    }
+
+    /// Generates a fresh throwaway RSA keypair the first time it's needed and
+    /// reuses it for the rest of the test binary's run (keygen is too slow to
+    /// redo per-test). Deliberately generated at test time rather than a
+    /// committed PEM fixture -- a static private-key-shaped string literal
+    /// trips secret scanners (gitleaks' `private-key` rule) even when it's
+    /// test-only and never signs anything but an in-memory mock IdP's tokens.
+    fn test_rsa_key() -> &'static TestRsaKey {
+        static KEY: std::sync::OnceLock<TestRsaKey> = std::sync::OnceLock::new();
+        KEY.get_or_init(|| {
+            use rsa::traits::PublicKeyParts;
+            let mut rng = rand::thread_rng();
+            let private_key =
+                rsa::RsaPrivateKey::new(&mut rng, 2048).expect("RSA keygen must not fail");
+            let pkcs1_pem = rsa::pkcs1::EncodeRsaPrivateKey::to_pkcs1_pem(
+                &private_key,
+                rsa::pkcs1::LineEnding::LF,
+            )
+            .expect("PKCS1 PEM encoding must not fail")
+            .to_string();
+            let public_key = private_key.to_public_key();
+            TestRsaKey {
+                pkcs1_pem,
+                modulus: public_key.n().to_bytes_be(),
+                exponent: public_key.e().to_bytes_be(),
+            }
+        })
     }
 
     /// Signs a minimal OIDC ID token (`iss`/`sub`/`aud`/`exp`/`iat`/`nonce`)
-    /// with the fixed test RSA key and `TEST_KID`, matching what a real IdP's
-    /// token endpoint would return.
+    /// with the throwaway test RSA key and `TEST_KID`, matching what a real
+    /// IdP's token endpoint would return.
     fn sign_test_id_token(issuer: &str, subject: &str, client_id: &str, nonce: &str) -> String {
         let now = chrono::Utc::now().timestamp();
         let claims = serde_json::json!({
@@ -365,7 +358,7 @@ k1VaoXnfuP2TC0cxpA0nKg==
         jsonwebtoken::encode(
             &header,
             &claims,
-            &jsonwebtoken::EncodingKey::from_rsa_pem(TEST_RSA_PRIVATE_KEY_PEM.as_bytes()).unwrap(),
+            &jsonwebtoken::EncodingKey::from_rsa_pem(test_rsa_key().pkcs1_pem.as_bytes()).unwrap(),
         )
         .unwrap()
     }
@@ -417,8 +410,8 @@ k1VaoXnfuP2TC0cxpA0nKg==
         let token_url = format!("http://{addr}/token");
 
         let jwk = CoreJsonWebKey::new_rsa(
-            hex_to_bytes(TEST_RSA_MODULUS_HEX),
-            TEST_RSA_EXPONENT.to_vec(),
+            test_rsa_key().modulus.clone(),
+            test_rsa_key().exponent.clone(),
             Some(JsonWebKeyId::new(TEST_KID.to_string())),
         );
 
