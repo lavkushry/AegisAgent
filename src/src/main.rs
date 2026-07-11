@@ -1005,6 +1005,15 @@ fn api_routes() -> Router<Arc<AppState>> {
         // a caller-redacted preview, never a raw prompt/request/response body
         .route("/ingest/prompt-events", post(routes::ingest_prompt_event))
         .route("/ingest/model-calls", post(routes::ingest_model_call))
+        // Phase 9.2 console read side for the above (run-scoped, tenant-scoped).
+        .route(
+            "/runtime/runs/:id/prompt-events",
+            get(routes::list_prompt_events),
+        )
+        .route(
+            "/runtime/runs/:id/model-calls",
+            get(routes::list_model_calls),
+        )
         // Cage-run control (Phase 4.3): each issues a gateway-signed control
         // command targeting the run rather than mutating it directly.
         .route("/agent-cage/runs/:id/pause", post(routes::pause_run))

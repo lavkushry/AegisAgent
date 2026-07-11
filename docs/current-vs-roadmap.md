@@ -41,7 +41,7 @@ Strongest current capabilities:
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
 - **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e still open
-- **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph); missing cage/ban/quarantine product pages
+- **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph) plus cage runs / ban / quarantine / egress / evidence-graph / policy product pages; missing prompt/model timeline pages (backend has no query API yet)
 - **Deploy** — gateway + sensor + egress + cage + llm-gateway Helm; single-writer SQLite default
 - **Postgres** — feature + migrations exist; not the default HA production path
 
@@ -52,7 +52,7 @@ Strongest current capabilities:
 - transparent / netns forced egress (no raw-socket bypass) (P0 residual after proxy-env force)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
-- full Phase 9 console (cage, ban/quarantine centers, runtime timelines) (P2)
+- prompt/model timeline console pages, blocked on a backend query API for prompt-events/model-calls (P2)
 
 ---
 
@@ -70,12 +70,12 @@ Strongest current capabilities:
 | Receipt verification | Available today | HTTP + Python/Go/TS SDK verifiers; shared `receipt_chain_vectors.json` corpus. |
 | MCP Gateway Lite | Available today | Register/discover/pin/drift; optional manifest signature verify. |
 | Prompt/model capture | Available today | Ingest APIs + Python SDK + LLM reverse-proxy adapter. |
-| Evidence graph | Available today | `/v1/graph/*` for run/incident/agent lineage; console `decision-graph` panel. |
+| Evidence graph | Available today | `/v1/graph/*` for run/incident/agent lineage; console `decision-graph` panel + standalone `/dashboard/graph` page. |
 | Investigation evidence export | Available today | `POST /v1/evidence/export` + Integrity UI export. |
 | SOC query / incidents | Available today | Async detect/correlate + query API + schema-driven UI. |
 | TypeScript SDK | Available today | Canon + protect + client + receipt chain verifier (shared corpus). |
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
-| Full web console | Partial | Bun SPA panel suite shipped; cage/ban/quarantine pages incomplete. |
+| Full web console | Available today | Bun SPA panel suite + cage runs / ban / quarantine / egress / evidence-graph / policy pages shipped; prompt/model timeline pages pending a backend query API. |
 | Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
 | Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; e2e still open. |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |

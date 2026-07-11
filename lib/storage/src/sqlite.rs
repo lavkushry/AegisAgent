@@ -1316,6 +1316,17 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_prompt_events_for_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        limit: i64,
+    ) -> Result<Vec<PromptEventRecord>, AegisError> {
+        db::list_prompt_events_for_run(&self.pool, tenant_id, run_id, limit)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn insert_model_call_event(
         &self,
         record: &ModelCallEventRecord,
@@ -1331,6 +1342,17 @@ impl StorageBackend for SqlDbStorage {
         event_id: &str,
     ) -> Result<Option<ModelCallEventRecord>, AegisError> {
         db::get_model_call_event_by_event_id(&self.pool, tenant_id, event_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_model_call_events_for_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ModelCallEventRecord>, AegisError> {
+        db::list_model_call_events_for_run(&self.pool, tenant_id, run_id, limit)
             .await
             .map_err(AegisError::Database)
     }

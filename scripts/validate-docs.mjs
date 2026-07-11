@@ -79,6 +79,8 @@ const REQUIRED_DOCS = [
   "onboarding/For_New_Engineer.md", "onboarding/For_Security_Architect.md",
   "onboarding/For_SOC_Analyst.md", "onboarding/For_SDK_Developer.md",
   "onboarding/For_Frontend_Engineer.md", "onboarding/For_DevOps_Engineer.md",
+  // authoring system
+  "contributing/documentation-standard.md", "templates/component-page.md",
   // machine-readable + explorer
   "architecture-map.json", "explorer/index.html",
 ];
@@ -194,6 +196,35 @@ const matrixText = existsSync(join(DOCS, "Implementation_Status.md"))
   ? readFileSync(join(DOCS, "Implementation_Status.md"), "utf8") : "";
 for (const cap of REQUIRED_CAPABILITIES) {
   if (!matrixText.includes(cap)) errors.push(`Implementation_Status.md missing capability row: ${cap}`);
+}
+
+// The Gateway is the canonical worked example for the component-page
+// documentation standard. Enforce presence and order here before rolling the
+// standard out to other component pages as they are substantially rewritten.
+const REQUIRED_COMPONENT_SECTIONS = [
+  "Overview", "Why This Exists", "Problem Statement", "Solution",
+  "Architecture", "Component Breakdown", "Data Flow", "Request Flow",
+  "Control Flow", "Sequence Diagram", "State Diagram", "Class Diagram",
+  "Deployment Architecture", "Folder Structure", "Configuration",
+  "Installation", "Quick Start", "Detailed Walkthrough", "Code Explanation",
+  "Live Example", "API", "CLI", "Configuration Reference", "Security",
+  "Performance", "Scaling", "Monitoring", "Logging", "Alerting",
+  "Troubleshooting", "Common Mistakes", "Best Practices", "FAQ", "References",
+];
+for (const rel of ["components/Gateway.md", "templates/component-page.md"]) {
+  const path = join(DOCS, rel);
+  if (!existsSync(path)) continue;
+  const page = readFileSync(path, "utf8");
+  let previous = -1;
+  for (const section of REQUIRED_COMPONENT_SECTIONS) {
+    const position = page.indexOf(`\n## ${section}\n`);
+    if (position === -1) {
+      errors.push(`docs/${rel} missing required section: ${section}`);
+    } else if (position < previous) {
+      errors.push(`docs/${rel} section out of order: ${section}`);
+    }
+    previous = Math.max(previous, position);
+  }
 }
 // Status vocabulary check: the status column must use only these words.
 const STATUS_WORDS = ["Implemented", "Partial", "Planned", "Missing"];

@@ -56,6 +56,9 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | Charts — `timeseries` + `heatmap` via `soc-query` (#1821–#1822) | Done |
 | Differentiators — approval-card, provable-timeline, receipt-integrity (#1824–#1826) | Done |
 | Fleet graphs — agent-risk-map, decision-graph (#1827–#1828) | Done |
+| 9.2 Runtime pages — Agent Cage Runs + run detail (timeline/events) | Done |
+| 9.2 Runtime pages — Prompt Timeline / Model Calls | Blocked — no query API yet (ingest-only) |
+| 9.3 Control pages — Ban Center, Quarantine Center, Egress Events, Evidence Graph, Policy Center | Done |
 
 Panel inventory and system boards: [`docs/components/Console_UI.md`](../docs/components/Console_UI.md).
 
@@ -75,6 +78,13 @@ Panel inventory and system boards: [`docs/components/Console_UI.md`](../docs/com
 | `/dashboard/rules` | Detection rule catalogue |
 | `/dashboard/alerting` | Webhook subscriptions |
 | `/dashboard/dashboards` | Tenant dashboard JSON editor + system templates |
+| `/dashboard/runs` | Agent Cage Runs — list + pause / resume / kill / quarantine |
+| `/dashboard/runs/:id` | Run detail — decision timeline + runtime events |
+| `/dashboard/bans` | Ban Center — record / list / revoke |
+| `/dashboard/quarantine` | Quarantine Center — record / list / release |
+| `/dashboard/egress` | Egress Events — event feed + block / unblock destination |
+| `/dashboard/graph` | Evidence Graph — incident / agent / run scoped SVG graph |
+| `/dashboard/policies` | Policy Center — Cedar body edit, rollback, delete, audit log |
 
 ### System dashboard templates (editor copy-only)
 

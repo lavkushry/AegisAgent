@@ -8,7 +8,12 @@
 //! rejects a preview containing an obvious secret-shaped substring, mirroring
 //! `register_broker_tool`'s rejection of a raw-secret-looking `credential_ref`.
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{Path, RawQuery, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
@@ -19,7 +24,7 @@ use uuid::Uuid;
 use crate::error::StatusError;
 use crate::models::*;
 
-use super::{AppState, TenantId};
+use super::{parse_pagination, AppState, TenantId};
 
 const MAX_PREVIEW_LEN: usize = 2000;
 
@@ -134,6 +139,29 @@ pub async fn ingest_prompt_event(
     }
 }
 
+/// GET /v1/runtime/runs/:id/prompt-events — the console's Prompt Timeline
+/// page. Tenant-scoped; oldest first. Returns hashes/redacted previews only,
+/// same as the ingest side — there is no raw-prompt column to leak.
+pub async fn list_prompt_events(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(run_id): Path<String>,
+    RawQuery(raw_query): RawQuery,
+) -> impl IntoResponse {
+    let (limit, _offset) = parse_pagination(raw_query.as_deref());
+    match state
+        .storage
+        .list_prompt_events_for_run(&tenant_id, &run_id, limit)
+        .await
+    {
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
+        Err(e) => {
+            error!("Failed to list prompt events: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
 fn is_valid_model_call_status(status: &str) -> bool {
     matches!(status, "success" | "error" | "timeout" | "cancelled")
 }
@@ -222,6 +250,28 @@ pub async fn ingest_model_call(
         Ok(ingested) => (StatusCode::OK, Json(json!({ "ingested": ingested }))).into_response(),
         Err(e) => {
             error!("Failed to ingest model call event: {:?}", e);
+            StatusError::internal("Database error").into_response()
+        }
+    }
+}
+
+/// GET /v1/runtime/runs/:id/model-calls — the console's Model Calls page.
+/// Tenant-scoped; oldest first.
+pub async fn list_model_calls(
+    State(state): State<Arc<AppState>>,
+    TenantId(tenant_id): TenantId,
+    Path(run_id): Path<String>,
+    RawQuery(raw_query): RawQuery,
+) -> impl IntoResponse {
+    let (limit, _offset) = parse_pagination(raw_query.as_deref());
+    match state
+        .storage
+        .list_model_call_events_for_run(&tenant_id, &run_id, limit)
+        .await
+    {
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
+        Err(e) => {
+            error!("Failed to list model call events: {:?}", e);
             StatusError::internal("Database error").into_response()
         }
     }

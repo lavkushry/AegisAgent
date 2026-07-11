@@ -786,6 +786,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         event_id: &str,
     ) -> Result<Option<PromptEventRecord>, AegisError>;
+    /// Tenant-scoped, run-scoped listing for the console's Prompt Timeline
+    /// page. Oldest first.
+    async fn list_prompt_events_for_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        limit: i64,
+    ) -> Result<Vec<PromptEventRecord>, AegisError>;
     /// Idempotently append a model-call event; `true` = newly inserted,
     /// `false` = deduped (the `(tenant_id, event_id)` was already present).
     async fn insert_model_call_event(
@@ -797,6 +805,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         tenant_id: &str,
         event_id: &str,
     ) -> Result<Option<ModelCallEventRecord>, AegisError>;
+    /// Tenant-scoped, run-scoped listing for the console's Model Calls page.
+    /// Oldest first.
+    async fn list_model_call_events_for_run(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ModelCallEventRecord>, AegisError>;
 
     // Control commands (Phase 2.3: signed gateway->sensor commands)
     async fn insert_control_command(&self, record: &ControlCommandRecord)

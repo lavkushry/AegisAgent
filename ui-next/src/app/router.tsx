@@ -64,6 +64,34 @@ const DashboardEditorPage = lazyPage(
   () => import("@/features/dashboards/DashboardEditorPage"),
   "DashboardEditorPage",
 );
+const AgentCageRunsPage = lazyPage(
+  () => import("@/features/runs/AgentCageRunsPage"),
+  "AgentCageRunsPage",
+);
+const AgentCageRunDetailPage = lazyPage(
+  () => import("@/features/runs/AgentCageRunDetailPage"),
+  "AgentCageRunDetailPage",
+);
+const BanCenterPage = lazyPage(
+  () => import("@/features/bans/BanCenterPage"),
+  "BanCenterPage",
+);
+const QuarantineCenterPage = lazyPage(
+  () => import("@/features/quarantine/QuarantineCenterPage"),
+  "QuarantineCenterPage",
+);
+const EgressEventsPage = lazyPage(
+  () => import("@/features/egress/EgressEventsPage"),
+  "EgressEventsPage",
+);
+const EvidenceGraphPage = lazyPage(
+  () => import("@/features/graph/EvidenceGraphPage"),
+  "EvidenceGraphPage",
+);
+const PolicyCenterPage = lazyPage(
+  () => import("@/features/policies/PolicyCenterPage"),
+  "PolicyCenterPage",
+);
 
 function RouteFallback() {
   return (
@@ -97,6 +125,13 @@ export function AppRouter() {
               <Route path="/incidents" element={<IncidentsPage />} />
               <Route path="/mcp" element={<McpPage />} />
               <Route path="/dashboards" element={<DashboardEditorPage />} />
+              <Route path="/runs" element={<AgentCageRunsPage />} />
+              <Route path="/runs/:runId" element={<AgentCageRunDetailPage />} />
+              <Route path="/bans" element={<BanCenterPage />} />
+              <Route path="/quarantine" element={<QuarantineCenterPage />} />
+              <Route path="/egress" element={<EgressEventsPage />} />
+              <Route path="/graph" element={<EvidenceGraphPage />} />
+              <Route path="/policies" element={<PolicyCenterPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
