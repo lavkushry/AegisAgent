@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { KeyRound, Server, User } from "lucide-react";
+import { KeyRound, Server, ShieldCheck, User } from "lucide-react";
 import { DEMO_MODE } from "@/app/runtimeConfig";
 import { useAppStore } from "@/app/store";
+import { oidcLoginUrl, startOidcLink } from "@/domains/oidc";
+import { errorMessage } from "@/lib/format";
 import { probeLivez } from "@/lib/http/client";
 
 export function SettingsPage() {
@@ -18,6 +20,8 @@ export function SettingsPage() {
   const [localTenant, setLocalTenant] = useState(activeTenant);
   const [localToken, setLocalToken] = useState("");
   const [localOperator, setLocalOperator] = useState(operatorId);
+  const [ssoLinkError, setSsoLinkError] = useState<string | null>(null);
+  const [ssoLinkPending, setSsoLinkPending] = useState(false);
 
   const { data: live } = useQuery({
     queryKey: ["livez", gatewayUrl],
@@ -33,6 +37,26 @@ export function SettingsPage() {
       operatorId: localOperator,
     });
     setLocalToken("");
+  };
+
+  const onSignInWithSso = () => {
+    window.location.href = oidcLoginUrl(gatewayUrl);
+  };
+
+  const onLinkSsoIdentity = async () => {
+    setSsoLinkError(null);
+    setSsoLinkPending(true);
+    try {
+      const loginUrl = await startOidcLink({
+        gatewayUrl,
+        bearerToken,
+        tenantId: activeTenant,
+      });
+      window.location.href = loginUrl;
+    } catch (err: unknown) {
+      setSsoLinkError(errorMessage(err));
+      setSsoLinkPending(false);
+    }
   };
 
   return (
@@ -132,6 +156,35 @@ export function SettingsPage() {
         <button type="button" className="btn-primary" onClick={onApply}>
           Apply Config
         </button>
+      </section>
+
+      <section className="panel-card space-y-3">
+        <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)]">
+          <ShieldCheck size={14} className="text-[var(--brand)]" />
+          SSO login
+        </h2>
+        <p className="text-[11px] text-[var(--text-muted)]">
+          Only available if this gateway has OIDC configured
+          (<code className="font-mono">AEGIS_OIDC_*</code>). An unrecognized
+          identity fails closed &mdash; link it to a tenant first using an
+          existing bearer token.
+        </p>
+        {ssoLinkError ? (
+          <p className="text-[11px] text-[var(--sev-high)]">{ssoLinkError}</p>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="rounded-md border border-[var(--border-default)] px-3 py-1.5 text-xs hover:bg-[var(--interactive-bg)] disabled:opacity-40" onClick={onSignInWithSso}>
+            Sign in with SSO
+          </button>
+          <button
+            type="button"
+            className="rounded-md border border-[var(--border-default)] px-3 py-1.5 text-xs hover:bg-[var(--interactive-bg)] disabled:opacity-40"
+            disabled={!bearerToken.trim() || !activeTenant.trim() || ssoLinkPending}
+            onClick={() => void onLinkSsoIdentity()}
+          >
+            {ssoLinkPending ? "Redirecting…" : "Link SSO identity to this tenant"}
+          </button>
+        </div>
       </section>
     </div>
   );

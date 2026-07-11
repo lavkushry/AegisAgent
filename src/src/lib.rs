@@ -58,6 +58,7 @@ pub mod grpc;
 pub mod jobs;
 pub mod kms_receipt_signer;
 pub mod mtls;
+pub mod oidc;
 pub mod otel;
 pub mod policy_watcher;
 pub mod routes;

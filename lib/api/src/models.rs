@@ -808,6 +808,20 @@ pub struct AgentBanRecord {
     pub revoked_by: Option<String>,
 }
 
+/// OIDC console login: a self-service link between one external identity
+/// (`issuer` + `subject`, from a verified ID token) and exactly one tenant.
+/// `UNIQUE(issuer, subject)` at the DB layer -- there is no auto-provisioning,
+/// an unrecognized identity at login fails closed rather than guessing a
+/// tenant or creating one.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, ToSchema)]
+pub struct OidcIdentityRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub issuer: String,
+    pub subject: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Phase 2.5 (runtime control plane): a quarantine. Preserves evidence while
 /// freezing a target (agent / run / workspace / file / mcp_server / tool /
 /// credential / destination / prompt_lineage) for review; optionally linked to

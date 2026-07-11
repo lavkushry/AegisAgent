@@ -865,6 +865,27 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: i64,
     ) -> Result<Vec<AgentBanRecord>, AegisError>;
 
+    // OIDC console login: self-service identity linking. `link_oidc_identity`
+    // is idempotent for the same tenant and returns `AegisError::Conflict`
+    // if the identity is already linked to a *different* tenant.
+    async fn link_oidc_identity(
+        &self,
+        tenant_id: &str,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<(), AegisError>;
+    /// The hot login-time lookup. `None` means fail closed: the caller must
+    /// not auto-provision a tenant for an unrecognized identity.
+    async fn get_oidc_identity(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<OidcIdentityRecord>, AegisError>;
+    async fn list_oidc_identities_for_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<OidcIdentityRecord>, AegisError>;
+
     // Quarantine (Phase 2.5: freeze + preserve evidence for review)
     async fn insert_quarantine(&self, record: &QuarantineRecord) -> Result<(), AegisError>;
     async fn is_quarantined(
