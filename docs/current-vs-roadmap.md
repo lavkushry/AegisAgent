@@ -75,7 +75,7 @@ Strongest current capabilities:
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Available today | Bun SPA panel suite + cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls pages shipped (Phase 9.2/9.3 complete). |
 | Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
-| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; e2e still open. |
+| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, CI-wired). |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
 | Signed control commands | Partial | Issue + sensor poll + host PID enforce; auto discovery incomplete. |

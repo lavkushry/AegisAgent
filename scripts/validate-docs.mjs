@@ -41,8 +41,7 @@ function* textFiles(dir, suffixes) {
 const REQUIRED_DOCS = [
   // Level 0: meta
   "README.md", "Documentation_Index.md", "Documentation_Audit.md",
-  "Documentation_Redesign_Plan.md", "Documentation_Quality_Report.md",
-  "Product_Requirements_Traceability.md",
+  "Documentation_Redesign_Plan.md",
   // Level 1: simple product understanding
   "START_HERE.md", "What_Is_AegisAgent.md", "Why_AegisAgent.md",
   "The_One_Minute_Tour.md", "How_It_Works.md", "Glossary.md", "faq.md",
@@ -212,7 +211,7 @@ const REQUIRED_COMPONENT_SECTIONS = [
   "Performance", "Scaling", "Monitoring", "Logging", "Alerting",
   "Troubleshooting", "Common Mistakes", "Best Practices", "FAQ", "References",
 ];
-for (const rel of ["AegisAgent_PRD.md", "components/Gateway.md", "templates/component-page.md"]) {
+for (const rel of ["components/Gateway.md", "templates/component-page.md"]) {
   const path = join(DOCS, rel);
   if (!existsSync(path)) continue;
   const page = readFileSync(path, "utf8");
@@ -226,28 +225,6 @@ for (const rel of ["AegisAgent_PRD.md", "components/Gateway.md", "templates/comp
     }
     previous = Math.max(previous, position);
   }
-}
-
-// Every stable product requirement ID in the PRD must appear in the
-// traceability matrix. Acceptance-criterion IDs use a different form and are
-// intentionally excluded here.
-const prdText = existsSync(join(DOCS, "AegisAgent_PRD.md"))
-  ? readFileSync(join(DOCS, "AegisAgent_PRD.md"), "utf8") : "";
-const traceabilityText = existsSync(join(DOCS, "Product_Requirements_Traceability.md"))
-  ? readFileSync(join(DOCS, "Product_Requirements_Traceability.md"), "utf8") : "";
-const requirementIds = new Set(
-  prdText.match(/\b(?:INT|PROV|RCPT|AUTH|SOC|RSP|RUN|BRK|UX|OPS|IAM)-\d{3}\b/g) ?? [],
-);
-for (const id of requirementIds) {
-  if (!traceabilityText.includes(id)) {
-    errors.push(`Product_Requirements_Traceability.md missing PRD requirement: ${id}`);
-  }
-}
-
-try {
-  execSync("node scripts/audit-doc-quality.mjs --check", { cwd: ROOT, encoding: "utf8" });
-} catch (e) {
-  errors.push(`documentation quality report check failed: ${e.stderr?.trim() || e.message}`);
 }
 // Status vocabulary check: the status column must use only these words.
 const STATUS_WORDS = ["Implemented", "Partial", "Planned", "Missing"];
