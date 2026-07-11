@@ -76,7 +76,7 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 5. Postgres as supported production backend + multi-replica validation (#1194)  
 6. Helm/Docker packaging: broker (+ UI if split); ~~cage + llm-gateway~~ **Done**
 7. ~~OIDC for console/admin~~ **Done (beta)** — self-service login/link flow (`src/src/oidc.rs`, `routes/oidc.rs`); **remaining:** SAML, per-SSO-user attribution/revocation, multi-IdP  
-8. Operator runbook gates: `JWT_REQUIRED`, admin key, `REPLAY_STORE=db`, TLS, backups  
+8. ~~Operator runbook gates~~ **Done (beta)** — `JWT_REQUIRED`+bind was already fail-closed (`assert_bind_security`); startup now also *warns* (not fail-closed — these have legitimate reasons to be absent, e.g. TLS terminated at a reverse proxy) on a non-loopback bind missing admin key / `REPLAY_STORE=db` / TLS (`warn_on_incomplete_production_hardening`, `src/src/main.rs`); **remaining:** backups has no runtime-observable "is it actually scheduled" signal, stays a doc-only runbook item (`docs/deployment-guide.md`)  
 
 ### Wave C — P2 product surface / honesty
 
