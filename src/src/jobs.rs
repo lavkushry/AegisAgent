@@ -447,6 +447,36 @@ pub async fn run_vacuum_job(pool: DbPool, interval_secs: u64, is_leader: Arc<Ato
     }
 }
 
+/// Default interval between local tenant-existence bloom filter refreshes
+/// (#917 follow-up).
+pub const DEFAULT_TENANT_BLOOM_REFRESH_INTERVAL_SECS: u64 = 300;
+
+/// Re-warm this process's in-memory tenant-existence bloom filter (#917) on
+/// a fixed interval, for as long as the process runs.
+///
+/// Unlike `run_vacuum_job`/`run_agent_run_stall_sweep_job` above, this is
+/// deliberately NOT `is_leader`-gated: on a multi-replica Postgres
+/// deployment each replica holds its own local, in-memory filter, so a
+/// tenant inserted via a different replica's `insert_tenant` never reaches
+/// this process's copy. Every replica must independently re-warm from the
+/// shared `tenants` table to bound that cross-replica staleness window to
+/// `interval_secs` instead of leaving it open until the process restarts.
+/// Re-warming is safe to run redundantly on every replica: it only ever
+/// inserts bits (bloom filters never remove), so a repeated warm of an
+/// already-known tenant is a no-op.
+pub async fn run_tenant_bloom_refresh_job(
+    storage: Arc<aegis_storage::sqlite::SqlDbStorage>,
+    interval_secs: u64,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    loop {
+        interval.tick().await;
+        if let Err(e) = storage.warm_tenant_bloom_filter().await {
+            warn!("tenant bloom filter refresh failed: {:?}", e);
+        }
+    }
+}
+
 /// Default interval between agent-run lease-expiry sweeps.
 pub const DEFAULT_AGENT_RUN_STALL_SWEEP_INTERVAL_SECS: u64 = 60;
 
@@ -1234,6 +1264,60 @@ mod tests {
         );
 
         handle.abort();
+    }
+
+    /// #917 follow-up: reproduces the multi-replica staleness gap directly.
+    /// Two `SqlDbStorage` instances share one pool (standing in for two
+    /// gateway replicas against one Postgres primary). Once replica A's
+    /// filter is warmed, a tenant inserted via replica B is invisible to
+    /// replica A's `get_tenant_by_id` (a false "not found") until the
+    /// refresh job's next tick re-warms it from the shared table.
+    #[tokio::test]
+    async fn tenant_bloom_refresh_job_picks_up_tenants_created_by_another_replica() {
+        use aegis_storage::sqlite::SqlDbStorage;
+        use aegis_storage::traits::StorageBackend;
+
+        let pool = setup_pool("tenant_bloom_refresh").await;
+        let replica_a = Arc::new(SqlDbStorage::new(pool.clone()));
+        let replica_b = SqlDbStorage::new(pool.clone());
+
+        db::register_tenant(&pool, "tenant_seed", "Seed Tenant", "developer")
+            .await
+            .unwrap();
+        replica_a.warm_tenant_bloom_filter().await.unwrap();
+
+        let new_tenant = aegis_api::models::TenantRecord {
+            id: "tenant_created_on_replica_b".to_string(),
+            name: "Created On Replica B".to_string(),
+            plan: "developer".to_string(),
+            created_at: Utc::now(),
+            auto_respond_enabled: true,
+            auto_rotate_token_on_leak_enabled: true,
+            slack_approver_group: None,
+        };
+        replica_b.insert_tenant(&new_tenant).await.unwrap();
+
+        assert!(
+            replica_a
+                .get_tenant_by_id(&new_tenant.id)
+                .await
+                .unwrap()
+                .is_none(),
+            "replica A's stale filter must not yet know about replica B's insert"
+        );
+
+        let handle = tokio::spawn(run_tenant_bloom_refresh_job(replica_a.clone(), 1));
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        handle.abort();
+
+        assert!(
+            replica_a
+                .get_tenant_by_id(&new_tenant.id)
+                .await
+                .unwrap()
+                .is_some(),
+            "refresh job must re-warm replica A's filter with replica B's tenant"
+        );
     }
 
     // ── #1286: Splunk HEC export job ────────────────────────────────────

@@ -729,11 +729,16 @@ pub async fn health_check(pool: &DbPool) -> Result<(), sqlx::Error> {
         DbPool::Sqlite(_) => fetch_one_scalar!(i64, pool, "SELECT 1").map(|_| ()),
         #[cfg(feature = "postgres")]
         DbPool::Postgres(pools) => {
-            sqlx::query_scalar::<_, i64>("SELECT 1")
+            // Postgres infers the untyped literal `1` as `INT4`, not `INT8`
+            // like SQLite's dynamic typing — decoding it as `i64` without an
+            // explicit cast fails with a ColumnDecode mismatch at runtime
+            // (caught by the live-Postgres smoke test, #1194). `::bigint`
+            // makes the column type match the `i64` scalar type param.
+            sqlx::query_scalar::<_, i64>("SELECT 1::bigint")
                 .fetch_one(pools.write_pool())
                 .await?;
             if pools.has_read_replica() {
-                let result = sqlx::query_scalar::<_, i64>("SELECT 1")
+                let result = sqlx::query_scalar::<_, i64>("SELECT 1::bigint")
                     .fetch_one(pools.read_pool())
                     .await;
                 match result {
@@ -743,7 +748,7 @@ pub async fn health_check(pool: &DbPool) -> Result<(), sqlx::Error> {
                             error = %e,
                             "read replica health check failed; retrying on primary (#914)"
                         );
-                        sqlx::query_scalar::<_, i64>("SELECT 1")
+                        sqlx::query_scalar::<_, i64>("SELECT 1::bigint")
                             .fetch_one(pools.write_pool())
                             .await?;
                     }

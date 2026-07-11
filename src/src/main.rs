@@ -2089,14 +2089,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `get_tenant_by_id` is active from the first request. Best-effort: a
     // failure here just leaves the filter inert (every lookup falls
     // through to the real query, identical to pre-#917 behavior).
-    let sql_storage = aegis_storage::sqlite::SqlDbStorage::new(pool);
+    let sql_storage = Arc::new(aegis_storage::sqlite::SqlDbStorage::new(pool));
     if let Err(e) = sql_storage.warm_tenant_bloom_filter().await {
         warn!("Failed to warm tenant bloom filter: {:?}", e);
     }
 
+    // #917 follow-up: on a multi-replica Postgres deployment, a tenant
+    // created via another replica's `insert_tenant` never reaches this
+    // process's own in-memory bloom filter, so `get_tenant_by_id` here could
+    // wrongly report "definitely absent" until the process restarts.
+    // Periodically re-warming from the authoritative `tenants` table bounds
+    // that staleness window instead. `0` disables the refresh (matches the
+    // "0 = disable" convention used by the other tunable interval env vars
+    // in this file), leaving single-replica/SQLite behavior unchanged.
+    let tenant_bloom_refresh_secs = std::env::var("AEGIS_TENANT_BLOOM_REFRESH_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(jobs::DEFAULT_TENANT_BLOOM_REFRESH_INTERVAL_SECS);
+    if tenant_bloom_refresh_secs > 0 {
+        tokio::spawn(jobs::run_tenant_bloom_refresh_job(
+            sql_storage.clone(),
+            tenant_bloom_refresh_secs,
+        ));
+    }
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
-        storage: Arc::new(sql_storage),
+        storage: sql_storage,
         policy_engine,
         events,
         metrics,

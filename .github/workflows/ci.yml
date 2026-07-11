@@ -104,6 +104,48 @@ jobs:
             --estimates target/criterion/receipt_hash/compute_receipt_hash_mid_chain/new/estimates.json \
             --threshold 0.20
 
+  # ── #1194 (Postgres GA): live Postgres integration smoke test ────────────
+  # Closes the biggest concrete gap named in
+  # docs/adr/0002-sqlite-first-storage.md for Postgres GA: until this job,
+  # `--features postgres` was only ever compile-checked, never run against a
+  # real database — exactly how a 528-line compile break in the read-replica
+  # failover path went unnoticed for a period (#1297), and how the
+  # `health_check` INT4/INT8 decode mismatch fixed alongside this job went
+  # undetected. Runs lib/storage/tests/postgres_smoke.rs against a real
+  # postgres:16 service container, with AEGIS_DB_READ_REPLICA_URL pointed at
+  # the same instance to also exercise the read/write pool-routing plumbing
+  # (not true cross-instance replication — see the test file's doc comment;
+  # real failover/replication-lag validation remains a separate follow-up).
+  postgres-integration:
+    name: Postgres integration smoke test (#1194)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: aegis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: postgres-integration
+      - name: Run Postgres smoke tests
+        env:
+          DATABASE_URL: postgres://postgres:aegis@127.0.0.1:5432/postgres
+          AEGIS_DB_READ_REPLICA_URL: postgres://postgres:aegis@127.0.0.1:5432/postgres
+        run: cargo test -p aegis-storage --features postgres --test postgres_smoke -- --test-threads=1
+
   # ── CI-004 (#1173): Rust code coverage gate (blocking, threshold 80%) ────────
   # Raised from 70% to the project's 80% standard (rules/common/testing.md) on
   # 2026-07-09 — actual coverage measured at 87.62% lines, so this only closes
