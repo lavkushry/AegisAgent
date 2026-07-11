@@ -44,13 +44,14 @@ Strongest current capabilities:
 - **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph) plus cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls product pages — Phase 9.2/9.3 complete
 - **Deploy** — gateway + sensor + egress + cage + llm-gateway Helm; single-writer SQLite default
 - **Postgres** — feature + migrations exist; read/write pool split with replica failover, DB-backed replay store, cross-replica correlation windows, and a live `postgres-integration` CI job now exercise it against a real Postgres instance (not just compile-checked) — but not the default HA production path; real cross-instance failover/load validation still pending
+- **OIDC console login** — self-service login/link flow (`src/src/oidc.rs`, `routes/oidc.rs`), gated on `AEGIS_OIDC_*` + `AEGIS_JWT_SECRET`, fails closed for unrecognized identities (no auto-provisioning); single-IdP-per-gateway, no SAML, no per-SSO-user attribution/revocation
 
 ### Roadmap / not done
 
 - sensor collectors proven against a real live host, not just synthetic `/proc` trees (P0)
 - transparent / netns forced egress (no raw-socket bypass) (P0 residual after proxy-env force)
 - Postgres multi-replica GA (#1194) (P1) — remaining: real cross-instance failover/replication-lag validation, load validation, default Helm bundling
-- OIDC/SAML for console/admin (P1)
+- SAML, multi-IdP, and per-SSO-user attribution/revocation for console login (P1)
 
 ---
 
@@ -119,7 +120,7 @@ Do not claim that the current `main` already provides:
 - raw credential isolation for every tool path
 - complete unknown-agent sandboxing (cage executor not on main)
 - multi-replica production Kubernetes on SQLite
-- full enterprise SOC console with OIDC
+- full enterprise SSO (SAML, RBAC, multi-IdP) — a beta self-service OIDC login/link flow exists (single IdP, no per-user attribution/revocation), see Implementation Status
 
 Those remain target architecture goals or incomplete waves (see Implementation Status).
 

@@ -48,6 +48,7 @@ pub mod egress;
 pub mod evidence_export;
 pub mod graph;
 pub mod mcp;
+pub mod oidc;
 pub mod openapi;
 pub mod playbook;
 pub mod policy;
@@ -1327,6 +1328,13 @@ pub struct AppState {
     /// thin adapter that consumes the approval atomically via storage, then
     /// delegates here.
     pub broker_executor: Arc<aegis_tool_broker_connectors::BrokerExecutor>,
+    /// OIDC console login (roadmap: "OIDC/SAML for console/admin"), built
+    /// once at startup via `crate::oidc::discover` if every `AEGIS_OIDC_*`
+    /// env var is set (see `crate::oidc::OidcConfig::from_env`). `None`
+    /// (the default, and also the outcome of a failed discovery call) makes
+    /// every `/v1/auth/oidc/*` and `/v1/oidc/*` route fail closed with 501 —
+    /// no other route or behavior is affected.
+    pub oidc: Option<Arc<crate::oidc::OidcState>>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -1334,6 +1342,52 @@ struct Claims {
     sub: String,
     tenant_id: Option<String>,
     exp: usize,
+}
+
+/// The current/primary signing secret from `AEGIS_JWT_SECRET` (the first
+/// entry — see [`jwt_secret_candidates`] for the rotation-window format).
+/// `None` if the env var is unset or contains only the disabled
+/// `"default_secret"` sentinel. Shared by [`mint_jwt`] (JWT signing) and
+/// `routes::oidc`'s flow-state cookie HMAC (a different use of the same
+/// secret, not a different secret) — both need "prove the gateway itself
+/// produced this value," so reusing one configured secret avoids a second
+/// piece of required configuration for OIDC login to become usable.
+pub(crate) fn jwt_signing_secret() -> Option<String> {
+    let raw_secret = std::env::var("AEGIS_JWT_SECRET").ok()?;
+    jwt_secret_candidates(&raw_secret).into_iter().next()
+}
+
+/// Mints a gateway-issued JWT for `tenant_id`, signed with
+/// [`jwt_signing_secret`]. Used by the OIDC login/callback routes
+/// (`routes::oidc`), which are the first thing in this gateway to ever mint
+/// a token rather than only verify one. Fails if there is no usable
+/// signing secret — a caller must treat that as "OIDC login is not usable
+/// on this deployment" rather than falling back to an insecure default.
+///
+/// Known limitation (security review, not yet addressed): the minted token
+/// carries full tenant authority (`sub`/`tenant_id` = the tenant, same as
+/// any other tenant-scoped bearer token) with no claim identifying the
+/// human who authenticated via the IdP and no per-token revocation —
+/// verification is `AEGIS_JWT_SECRET`-based like every other JWT this
+/// gateway accepts. Attributing gateway actions to the specific SSO user
+/// (not just the tenant) and adding session revocation are both real gaps,
+/// deliberately left as follow-up work rather than expanding this MVP
+/// slice's scope.
+pub(crate) fn mint_jwt(tenant_id: &str, ttl: chrono::Duration) -> Result<String, String> {
+    let secret =
+        jwt_signing_secret().ok_or_else(|| "AEGIS_JWT_SECRET has no usable secret".to_string())?;
+
+    let claims = Claims {
+        sub: tenant_id.to_string(),
+        tenant_id: Some(tenant_id.to_string()),
+        exp: (chrono::Utc::now() + ttl).timestamp() as usize,
+    };
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| format!("JWT encode failed: {e}"))
 }
 
 /// Splits `AEGIS_JWT_SECRET` on `,` for zero-downtime rotation (#1211): during
@@ -1985,6 +2039,7 @@ pub mod benchutil {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         Ok((state, tenant_id, agent_token))
@@ -2292,6 +2347,7 @@ pub(crate) mod test_helpers {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         (state, tenant_id, agent_token)
@@ -2358,6 +2414,7 @@ pub(crate) mod test_helpers {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         (state, tenant_id, agent_token, checks_client)
@@ -2415,6 +2472,7 @@ pub(crate) mod test_helpers {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         (state, tenant_id, agent_token)
@@ -2472,6 +2530,7 @@ pub(crate) mod test_helpers {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         (state, tenant_id, agent_token)
@@ -2535,6 +2594,7 @@ pub(crate) mod test_helpers {
             ))),
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         (state, tenant_id, agent_token)
@@ -2592,6 +2652,7 @@ pub(crate) mod test_helpers {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         (state, tenant_id, agent_token)
@@ -2704,6 +2765,7 @@ pub(crate) mod test_helpers {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         register_default_test_fixtures(&state, &tenant_id).await;
@@ -2837,6 +2899,7 @@ pub(crate) mod test_helpers {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         (state, tenant_id, agent_token)

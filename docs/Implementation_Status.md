@@ -29,7 +29,8 @@
 | Incidents (correlate, narrate, close) | Implemented | `lib/soc/src/correlate.rs`, `narrate.rs`, `routes/soc.rs` | — | — | unit + integration | prod | — |
 | SOC query API | Implemented | `POST /v1/soc/query`, `lib/soc/src/query.rs`, runtime_events storage | — | #1623, #1674/#1680/#1682/#1688 | route + storage + UI | prod | — |
 | Tenant isolation | Implemented | every `lib/storage/src/db/*` binds `tenant_id`; `TenantId` extractor | continuous audit | — | isolation tests | prod | audit on every storage PR |
-| Auth: bearer/JWT, rotation, admin bootstrap | Implemented | JWT required gates, admin key, public-bind fail-closed | **OIDC/SAML** for console humans 📐 | #1211 | unit + integration | prod (JWT) | OIDC (Phase 10.1) |
+| Auth: bearer/JWT, rotation, admin bootstrap | Implemented | JWT required gates, admin key, public-bind fail-closed | full RBAC/admin-role distinction | #1211 | unit + integration | prod (JWT) | — |
+| OIDC console login | Partial | `src/src/oidc.rs` (discovery/PKCE/ID-token verify via `openidconnect`), `routes/oidc.rs` (`GET /v1/auth/oidc/login`, `POST /v1/oidc/link/start`, `GET /v1/auth/oidc/callback`), `oidc_identities` self-service link table (no auto-provisioning — an unrecognized identity fails closed); gated on `AEGIS_OIDC_*` + `AEGIS_JWT_SECRET`; flow-state cookie HMAC-signed | SAML; per-SSO-user attribution/revocation (minted JWT carries only tenant authority, like any other bearer token); single-IdP-per-gateway | roadmap "OIDC/SAML for console/admin" | unit + route (incl. a forged-cookie cross-tenant-linking regression test) | beta | SAML, multi-IdP, session revocation |
 | Agent mTLS identity | Implemented | `src/src/mtls.rs`, migration `0021_agent_mtls_cn.sql` | — | #1310 | integration | beta | — |
 | MCP gateway (registry, discovery, pin, drift, optional Ed25519 sign) | Implemented | `routes/mcp.rs`, `lib/soc/src/mcp_inspect.rs`, migration `0043_mcp_server_manifest_signing_key.sql` | standalone MCP proxy binary 📐 | #1793, #1336 | unit + integration | prod (lite) | proxy-mode |
 | Tool permissions (per-agent) | Implemented | migration `0013_agent_tool_permissions.sql`, `routes/agents.rs` | — | — | integration | prod | — |
@@ -74,7 +75,7 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 5. Postgres as supported production backend + multi-replica validation (#1194)  
 6. Helm/Docker packaging: broker (+ UI if split); ~~cage + llm-gateway~~ **Done**
-7. OIDC for console/admin **or** documented JWT-only enterprise limitation  
+7. ~~OIDC for console/admin~~ **Done (beta)** — self-service login/link flow (`src/src/oidc.rs`, `routes/oidc.rs`); **remaining:** SAML, per-SSO-user attribution/revocation, multi-IdP  
 8. Operator runbook gates: `JWT_REQUIRED`, admin key, `REPLAY_STORE=db`, TLS, backups  
 
 ### Wave C — P2 product surface / honesty

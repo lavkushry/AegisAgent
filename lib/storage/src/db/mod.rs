@@ -662,6 +662,7 @@ pub mod github_repos;
 pub mod investigation_playbooks;
 pub mod leader;
 pub mod mcp;
+pub mod oidc;
 pub mod permission_review;
 pub mod playbooks;
 pub mod policies;

@@ -180,6 +180,9 @@ use utoipa::OpenApi;
         get_repo_sensitivity_label_api,
         set_repo_sensitivity_label_api,
         delete_repo_sensitivity_label_api,
+        oidc_login_api,
+        oidc_link_start_api,
+        oidc_callback_api,
     ),
     components(
         schemas(
@@ -2287,3 +2290,38 @@ fn set_repo_sensitivity_label_api() {}
     )
 )]
 fn delete_repo_sensitivity_label_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/auth/oidc/login",
+    responses(
+        (status = 302, description = "Redirect to the configured IdP's authorization endpoint"),
+        (status = 501, description = "OIDC login is not configured on this gateway")
+    )
+)]
+fn oidc_login_api() {}
+
+#[utoipa::path(
+    post,
+    path = "/v1/oidc/link/start",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "IdP authorization URL for linking the caller's tenant to a new OIDC identity"),
+        (status = 501, description = "OIDC login is not configured on this gateway")
+    )
+)]
+fn oidc_link_start_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/auth/oidc/callback",
+    params(
+        ("code" = Option<String>, Query, description = "Authorization code returned by the IdP"),
+        ("state" = Option<String>, Query, description = "CSRF state round-tripped from the login request")
+    ),
+    responses(
+        (status = 302, description = "Redirect to the console UI with a minted token or #error= reason"),
+        (status = 501, description = "OIDC login is not configured on this gateway")
+    )
+)]
+fn oidc_callback_api() {}

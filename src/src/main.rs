@@ -30,6 +30,7 @@ use gateway::jobs;
 use gateway::kms_receipt_signer;
 use gateway::metrics;
 use gateway::mtls;
+use gateway::oidc;
 use gateway::otel;
 use gateway::policy;
 use gateway::policy_watcher;
@@ -1156,6 +1157,15 @@ fn api_routes() -> Router<Arc<AppState>> {
         // OpenAPI Specification
         .route("/openapi.json", get(routes::get_openapi_spec))
         .route("/version", get(version_handler))
+        // OIDC console login (roadmap: "OIDC/SAML for console/admin").
+        // login/callback are deliberately unauthenticated (there's no prior
+        // session to authenticate before a login flow starts); link/start
+        // requires the caller's existing bearer token via the `TenantId`
+        // extractor, since that's what determines which tenant the new
+        // identity link applies to.
+        .route("/auth/oidc/login", get(routes::oidc::oidc_login))
+        .route("/auth/oidc/callback", get(routes::oidc::oidc_callback))
+        .route("/oidc/link/start", post(routes::oidc::oidc_link_start))
 }
 
 fn load_certs(path: &str) -> std::io::Result<Vec<CertificateDer<'static>>> {
@@ -2113,6 +2123,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
 
+    // OIDC console login (roadmap: "OIDC/SAML for console/admin"). Inert
+    // unless every AEGIS_OIDC_* env var is set; a discovery failure (e.g.
+    // the IdP is unreachable at startup) is logged and also leaves it
+    // inert rather than aborting gateway startup, since authorize/approve/
+    // receipt traffic has nothing to do with console login.
+    let oidc = match oidc::OidcConfig::from_env() {
+        Some(config) => match oidc::discover(&config).await {
+            Ok(discovered) => {
+                info!("AEGIS_OIDC_* configured: OIDC console login is enabled.");
+                if !jwt_required {
+                    warn!(
+                        "OIDC login is configured but AEGIS_JWT_REQUIRED is not \"true\": the \
+                         pre-existing raw `Bearer tenant_<id>` fallback still authenticates any \
+                         caller who knows a tenant ID, bypassing OIDC login entirely. Set \
+                         AEGIS_JWT_REQUIRED=true for OIDC login to be a real access-control \
+                         boundary rather than just a convenience."
+                    );
+                }
+                Some(Arc::new(discovered))
+            }
+            Err(e) => {
+                warn!("OIDC discovery failed; OIDC console login stays disabled: {e}");
+                None
+            }
+        },
+        None => {
+            info!("AEGIS_OIDC_* env vars not fully set. OIDC console login is disabled.");
+            None
+        }
+    };
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         storage: sql_storage,
@@ -2149,6 +2190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         admission_webhook,
         background_task_handles: std::sync::Mutex::new(background_task_handles),
         broker_executor: routes::broker::default_broker_executor(),
+        oidc,
     });
 
     // #883: Cedar policy hot-reload — opt-in background watcher that calls
@@ -2895,6 +2937,7 @@ mod tests {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         let app = Router::new()
@@ -3197,6 +3240,7 @@ mod tests {
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
             broker_executor: crate::routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         let app = Router::new()
@@ -3543,6 +3587,7 @@ mod tests {
                 doomed_abort_handle,
             )]),
             broker_executor: routes::broker::default_broker_executor(),
+            oidc: None,
         });
 
         let app = Router::new()
