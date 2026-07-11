@@ -110,7 +110,7 @@ export function createMockRuntimeState(): MockRuntimeState {
     policies: [
       {
         id: POLICY_ID,
-        policy_key: "e2e-fixture-policy",
+        policy_key: "e2e_fixture_policy_mock",
         name: "E2E Fixture Policy",
         language: "cedar",
         body: 'permit(principal, action, resource) when { context.trust_level == "trusted_internal_signed" };',

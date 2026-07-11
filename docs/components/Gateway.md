@@ -529,8 +529,9 @@ Expected result: HTTP `200` and `{"status":"alive"}`. This proves only that the 
 
 ```bash
 make demo
+TENANT_ID="tenant_123"
 curl -fsS http://127.0.0.1:8080/v1/audit/events \
-  -H "Authorization: Bearer tenant_123" | python3 -m json.tool
+  -H "Authorization: Bearer ${TENANT_ID}" | python3 -m json.tool
 ```
 
 The demo's local tenant bearer token is intentionally non-production. The response should contain the denied malicious merge attempt and related evidence.
