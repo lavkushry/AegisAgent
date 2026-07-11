@@ -34,6 +34,12 @@ pub struct DockerRuntime {
     /// Maps `sandbox_id` -> dedicated no-masquerade Docker network name
     /// (forced-egress path only). Removed on `destroy`.
     networks: Mutex<HashMap<String, String>>,
+    /// Docker container name of a running `aegis-egress-proxy` sidecar,
+    /// joined to each forced-egress sandbox's dedicated `--internal`
+    /// bridge — see `docker_cli::plan_egress_network` for why this is the
+    /// only way such a sandbox can reach it at all. `None` means
+    /// forced-egress sandboxes get no proxy connectivity (fail closed).
+    egress_proxy_container: Option<String>,
     event_sink: Arc<dyn CageEventSink>,
 }
 
@@ -43,6 +49,7 @@ impl DockerRuntime {
             workspace_root,
             workspaces: Mutex::new(HashMap::new()),
             networks: Mutex::new(HashMap::new()),
+            egress_proxy_container: None,
             event_sink: Arc::new(NullEventSink),
         }
     }
@@ -56,8 +63,17 @@ impl DockerRuntime {
             workspace_root,
             workspaces: Mutex::new(HashMap::new()),
             networks: Mutex::new(HashMap::new()),
+            egress_proxy_container: None,
             event_sink,
         }
+    }
+
+    /// Sets the egress-proxy sidecar container name (see
+    /// [`Self::egress_proxy_container`]'s doc comment). Consuming builder —
+    /// chain after [`Self::new`] / [`Self::with_event_sink`].
+    pub fn with_egress_proxy_container(mut self, container: impl Into<String>) -> Self {
+        self.egress_proxy_container = Some(container.into());
+        self
     }
 
     fn emit(&self, event_type: CageEventType, handle: &SandboxHandle, exit_code: Option<i32>) {
@@ -123,16 +139,22 @@ impl SandboxRuntime for DockerRuntime {
         let workspace_dir = create_isolated_workspace(&self.workspace_root, &spec.sandbox_id)?;
         let container_name = Self::container_name(&spec.sandbox_id);
 
-        let (container_id, network) =
-            match docker_cli::create(spec, &container_name, &workspace_dir).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    // Don't leak the workspace directory if container creation
-                    // failed partway through.
-                    let _ = destroy_workspace(&workspace_dir);
-                    return Err(e);
-                }
-            };
+        let (container_id, network) = match docker_cli::create(
+            spec,
+            &container_name,
+            &workspace_dir,
+            self.egress_proxy_container.as_deref(),
+        )
+        .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                // Don't leak the workspace directory if container creation
+                // failed partway through.
+                let _ = destroy_workspace(&workspace_dir);
+                return Err(e);
+            }
+        };
 
         self.workspaces
             .lock()
@@ -211,6 +233,23 @@ impl SandboxRuntime for DockerRuntime {
         // Drop the MutexGuard before await (Send bound on SandboxRuntime).
         let network = self.networks.lock().unwrap().remove(&handle.sandbox_id);
         if let Some(network) = network {
+            if let Some(proxy_container) = &self.egress_proxy_container {
+                // Docker refuses to remove a network with a container still
+                // attached — the sandbox's own container is already gone
+                // (`remove` above), but the proxy sidecar isn't, since it
+                // outlives any single sandbox.
+                if let Err(e) =
+                    docker_cli::disconnect_container_from_network(&network, proxy_container).await
+                {
+                    tracing::warn!(
+                        sandbox_id = %handle.sandbox_id,
+                        network = %network,
+                        proxy_container = %proxy_container,
+                        error = %e,
+                        "failed to disconnect egress-proxy sidecar before network removal"
+                    );
+                }
+            }
             if let Err(e) = docker_cli::remove_network(&network).await {
                 // Non-fatal: the sandbox itself is already torn down. But a
                 // leaked egress network is otherwise invisible — surface it
@@ -357,6 +396,85 @@ mod tests {
 
         runtime.destroy(&handle_a).await.unwrap();
         runtime.destroy(&handle_b).await.unwrap();
+    }
+
+    /// Regression for the forced-egress network bug found while wiring up
+    /// the Wave A e2e (#1848/#1849): a sandbox's dedicated `--internal`
+    /// bridge has no route to the host at all, so `host.docker.internal`
+    /// never worked. This proves the fix — joining a proxy *container* to
+    /// that bridge — actually lets the sandbox reach it, using a real
+    /// Docker daemon end to end (no gateway/cage-runner-loop involved,
+    /// just this crate's own network wiring).
+    #[tokio::test]
+    async fn forced_egress_sandbox_reaches_the_sidecar_proxy_container() {
+        skip_without_docker!();
+        let proxy_container = "aegis-cage-runtime-test-proxy-sidecar";
+        let _ = tokio::process::Command::new("docker")
+            .args(["rm", "-f", proxy_container])
+            .output()
+            .await;
+        let started = tokio::process::Command::new("docker")
+            .args([
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                proxy_container,
+                "alpine:3",
+                "sh",
+                "-c",
+                // Minimal always-200 HTTP responder using busybox nc (alpine:3
+                // has no httpd applet) — enough to prove a real TCP+HTTP
+                // round trip reached this container.
+                "while true; do printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok' | nc -l -p 8080; done",
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            started.status.success(),
+            "failed to start proxy sidecar container: {}",
+            String::from_utf8_lossy(&started.stderr)
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let runtime = DockerRuntime::new(root.path().to_path_buf())
+            .with_egress_proxy_container(proxy_container);
+
+        let mut spec = sleep_spec("cage-test-forced-egress", 20);
+        spec.command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            // HTTP_PROXY is forced by build_create_args to the rewritten
+            // sidecar URL regardless of what egress_proxy_url says here —
+            // any reachable-looking value proves the rewrite ran.
+            "wget -q -O /dev/null --timeout=5 http://example.invalid/; echo EXIT=$?".to_string(),
+        ];
+        spec.network.egress_proxy_url = Some("http://127.0.0.1:8080".to_string());
+        spec.network.direct_internet = false;
+
+        let handle = runtime.create(&spec).await.unwrap();
+        runtime.start(&handle).await.unwrap();
+        let state = runtime
+            .wait_or_kill_on_timeout(&handle, Duration::from_secs(15))
+            .await
+            .unwrap();
+        assert_eq!(state.status, SandboxStatus::Exited);
+        // busybox httpd 404s a path it doesn't have, but that's a completed
+        // HTTP round trip through the proxy — the whole point is that the
+        // TCP connection to the sidecar succeeded at all (the pre-fix bug
+        // was "Network unreachable", not a 404).
+        assert_eq!(
+            state.exit_code,
+            Some(0),
+            "wget must reach the sidecar proxy and complete an HTTP round trip"
+        );
+
+        runtime.destroy(&handle).await.unwrap();
+        let _ = tokio::process::Command::new("docker")
+            .args(["rm", "-f", proxy_container])
+            .output()
+            .await;
     }
 
     #[tokio::test]

@@ -133,10 +133,11 @@ async fn main() -> ExitCode {
         config.tenant_id.clone(),
     ));
     let event_sink = Arc::new(HttpEventSink::new(client.clone()));
-    let runtime = Arc::new(DockerRuntime::with_event_sink(
-        config.workspace_root.clone(),
-        event_sink,
-    ));
+    let mut runtime = DockerRuntime::with_event_sink(config.workspace_root.clone(), event_sink);
+    if let Some(proxy_container) = &config.egress_proxy_container {
+        runtime = runtime.with_egress_proxy_container(proxy_container.clone());
+    }
+    let runtime = Arc::new(runtime);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {

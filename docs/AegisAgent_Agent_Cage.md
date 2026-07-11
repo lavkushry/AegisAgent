@@ -252,12 +252,12 @@ Initial Docker implementation (`aegis-cage-runner` / `docker_cli`):
 
 - **Default:** `--network none` (no egress at all) when `egress_proxy_url` is unset
 - **Forced proxy mode:** when `network.egress_proxy_url` is set:
-  - `--network bridge` so the sandbox can reach the proxy
+  - a dedicated per-sandbox `--internal`, no-masquerade bridge (not the shared default `bridge` — an `--internal` network has no external route, the actual isolation primitive)
   - force-inject `HTTP_PROXY` / `HTTPS_PROXY` / empty `NO_PROXY` (tenant values for those keys are stripped)
-  - rewrite loopback proxy hosts to `host.docker.internal` + `--add-host host.docker.internal:host-gateway`
+  - **sidecar join, not `host.docker.internal`:** an `--internal` network has no route to the host at all, so a host-run proxy was never reachable. `egress_proxy_container` config names a running proxy container; the runner `docker network connect`s it to the sandbox's dedicated bridge and rewrites the injected proxy URL's host to the container name (Docker's embedded per-network DNS resolves it once joined). Without `egress_proxy_container` configured, the sandbox gets no proxy connectivity at all — fail closed, not a silently-unreachable `host.docker.internal`.
   - surface `allowed_destinations` as `AEGIS_EGRESS_ALLOWED_DESTINATIONS` (proxy must still enforce allowlist via `--allow-domain` / gateway check)
 - `direct_internet: true` is rejected at validate time (gateway + runner)
-- **Residual:** bridge + env force is soft force — raw sockets can bypass HTTP_PROXY until transparent proxy / internal network + sidecar lands
+- **Residual:** a cooperative HTTP client is still required to honor `HTTP_PROXY` — a raw socket that ignores it can still reach the joined proxy container (the only thing reachable at all from the `--internal` bridge), but not NAT out to the public Internet without masquerade
 
 ### 9.2 Kubernetes approach
 

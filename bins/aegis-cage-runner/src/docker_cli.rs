@@ -61,11 +61,9 @@ struct EgressNetworkPlan {
     /// Docker `--network` value: `none` (no egress) or a dedicated
     /// per-sandbox bridge name (proxy path).
     docker_network: String,
-    /// Proxy URL injected into the container (loopback rewritten for Docker).
+    /// Proxy URL injected into the container (host rewritten to the
+    /// sidecar container's name — see [`rewrite_proxy_for_sidecar`]).
     proxy_url: Option<String>,
-    /// When true, add `host.docker.internal:host-gateway` so containers can
-    /// reach a proxy bound on the host loopback.
-    add_host_gateway: bool,
     /// When true, `docker_network` names a dedicated network this sandbox's
     /// caller must create before `docker create` and remove on cleanup
     /// (rather than a built-in Docker network like `none`).
@@ -74,29 +72,42 @@ struct EgressNetworkPlan {
 
 /// Plan forced egress for a validated [`SandboxSpec`].
 ///
-/// | `egress_proxy_url` | Docker network | Proxy env |
-/// |--------------------|----------------|-----------|
-/// | unset              | `none`         | none (no egress at all) |
-/// | set                | dedicated internal, no-masquerade bridge | forced HTTP(S)_PROXY to that URL |
+/// | `egress_proxy_url` set? | `egress_proxy_container` configured? | Docker network | Proxy env |
+/// |---|---|---|---|
+/// | no | — | `none` | none (no egress at all) |
+/// | yes | no | dedicated internal, no-masquerade bridge | none — fail closed, see below |
+/// | yes | yes | dedicated internal, no-masquerade bridge, **with the proxy container joined to it** | forced HTTP(S)_PROXY to `http://<container>:<port>` |
 ///
 /// The dedicated bridge is created `--internal` (Docker never wires it to an
 /// external route) *and* with IP masquerade disabled — belt and suspenders,
 /// since `--internal` alone is the primitive that actually withholds
 /// outbound routing (masquerade-off by itself only breaks the NAT return
-/// path, not the initial outbound leg: on a network with an external route,
-/// a plain UDP/TCP socket can still send packets out and rely on an
-/// upstream device to NAT them, e.g. a VPC or home router without strict
-/// source/destination checking). The container can still reach the host
-/// (where the proxy listens) via the bridge gateway / `host.docker.internal`
-/// — that path is intra-bridge, not an "external route".
+/// path, not the initial outbound leg: a plain UDP/TCP socket can still send
+/// packets out and rely on an upstream device to NAT them).
+///
+/// `--internal` also means the sandbox has **no route to the host at all**
+/// — not just no internet. `host.docker.internal:host-gateway` does not
+/// exist on an `--internal` network (verified: a container there gets
+/// "Network unreachable" resolving it), so a host-run proxy process is
+/// unreachable no matter how it's addressed. The only thing an `--internal`
+/// network *can* reach is another container joined to that same network —
+/// so the proxy must run as a container and be explicitly connected
+/// (`docker network connect`) to each sandbox's dedicated bridge as a
+/// peer. Without `egress_proxy_container` configured, a forced-egress
+/// sandbox simply gets no proxy connectivity — fail closed (isolated but
+/// non-functional) rather than silently falling back to an unreachable
+/// host address that looks configured but never works.
 ///
 /// Residual: `--cap-drop ALL` already removes `CAP_NET_RAW`, so the residual
-/// vector here is ordinary (non-raw) sockets to any address still reachable
-/// from an internal bridge (bridge gateway / host loopback only, by design).
+/// vector here is ordinary (non-raw) sockets to any address reachable from
+/// the internal bridge — by construction, only the joined proxy container.
 /// An attacker who controls the proxy's own onward path, or a destination
 /// the proxy explicitly allows, is out of scope for this Docker-level
 /// control — `allowed_destinations` enforcement lives in the proxy itself.
-fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
+fn plan_egress_network(
+    spec: &SandboxSpec,
+    egress_proxy_container: Option<&str>,
+) -> EgressNetworkPlan {
     let raw = spec
         .network
         .egress_proxy_url
@@ -108,15 +119,13 @@ fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
         None => EgressNetworkPlan {
             docker_network: "none".to_string(),
             proxy_url: None,
-            add_host_gateway: false,
             create_isolated_network: false,
         },
         Some(url) => {
-            let (container_url, add_host_gateway) = rewrite_loopback_proxy_for_container(url);
+            let proxy_url = egress_proxy_container.and_then(|c| rewrite_proxy_for_sidecar(url, c));
             EgressNetworkPlan {
                 docker_network: format!("aegis-cage-egress-{}", spec.sandbox_id),
-                proxy_url: Some(container_url),
-                add_host_gateway,
+                proxy_url,
                 create_isolated_network: true,
             }
         }
@@ -149,26 +158,52 @@ pub async fn remove_network(name: &str) -> Result<(), CageError> {
         .map(|_| ())
 }
 
-/// Map host-loopback proxy URLs to `host.docker.internal` so a container on
-/// the Docker bridge can reach a proxy listening on the host (compose
-/// `network_mode: host`, local `aegis-egress-proxy` on 127.0.0.1:8888).
-fn rewrite_loopback_proxy_for_container(proxy_url: &str) -> (String, bool) {
-    const LOOPBACK_HOSTS: &[&str] = &["127.0.0.1", "localhost", "[::1]"];
+/// Join an already-running container (the egress-proxy sidecar) to a
+/// sandbox's dedicated `--internal` bridge, so the sandbox's forced-egress
+/// traffic has exactly one reachable peer. Idempotent-ish: Docker errors if
+/// already connected, but callers only invoke this once per fresh network.
+pub async fn connect_container_to_network(network: &str, container: &str) -> Result<(), CageError> {
+    run_docker(&[
+        "network".to_string(),
+        "connect".to_string(),
+        network.to_string(),
+        container.to_string(),
+    ])
+    .await
+    .map(|_| ())
+}
+
+/// Undo [`connect_container_to_network`] before [`remove_network`] — Docker
+/// refuses to remove a network that still has a container attached.
+pub async fn disconnect_container_from_network(
+    network: &str,
+    container: &str,
+) -> Result<(), CageError> {
+    run_docker(&[
+        "network".to_string(),
+        "disconnect".to_string(),
+        network.to_string(),
+        container.to_string(),
+    ])
+    .await
+    .map(|_| ())
+}
+
+/// Rewrite a proxy URL's host to the egress-proxy sidecar container's name,
+/// keeping the original scheme and port (and any path). Docker's embedded
+/// DNS resolves a container by name on any network it's joined to — once
+/// [`connect_container_to_network`] has attached the proxy to the sandbox's
+/// bridge, `http://<container>:<port>` resolves there regardless of what
+/// host the operator originally wrote (typically `127.0.0.1`, the address
+/// the proxy binds to on its own home network).
+fn rewrite_proxy_for_sidecar(proxy_url: &str, container: &str) -> Option<String> {
     for scheme in ["http://", "https://"] {
-        let Some(rest) = proxy_url.strip_prefix(scheme) else {
-            continue;
-        };
-        for host in LOOPBACK_HOSTS {
-            if rest == *host
-                || rest.starts_with(&format!("{host}:"))
-                || rest.starts_with(&format!("{host}/"))
-            {
-                let after_host = &rest[host.len()..];
-                return (format!("{scheme}host.docker.internal{after_host}"), true);
-            }
+        if let Some(rest) = proxy_url.strip_prefix(scheme) {
+            let after_host = rest.find([':', '/']).map(|i| &rest[i..]).unwrap_or("");
+            return Some(format!("{scheme}{container}{after_host}"));
         }
     }
-    (proxy_url.to_string(), false)
+    None
 }
 
 /// Every flag here maps directly to an isolation guarantee from
@@ -216,11 +251,6 @@ fn build_create_args(
         "--cpus".to_string(),
         format!("{:.3}", spec.resources.cpu_millis as f64 / 1000.0),
     ];
-
-    if egress.add_host_gateway {
-        args.push("--add-host".to_string());
-        args.push("host.docker.internal:host-gateway".to_string());
-    }
 
     if spec.image.read_only_rootfs {
         args.push("--read-only".to_string());
@@ -284,14 +314,28 @@ fn build_create_args(
 /// `docker create` — allocates the container without starting it, so the
 /// caller controls exactly when it begins running. Returns
 /// `(container_id, optional_network_name_to_cleanup)`.
+///
+/// `egress_proxy_container`, when the spec requests forced egress, is
+/// joined to the sandbox's fresh `--internal` bridge as a peer (see
+/// [`plan_egress_network`] for why that's the only way the sandbox can
+/// reach it at all).
 pub async fn create(
     spec: &SandboxSpec,
     container_name: &str,
     workspace_dir: &Path,
+    egress_proxy_container: Option<&str>,
 ) -> Result<(String, Option<String>), CageError> {
-    let egress = plan_egress_network(spec);
+    let egress = plan_egress_network(spec, egress_proxy_container);
     if egress.create_isolated_network {
         create_egress_network(&egress.docker_network).await?;
+        if let Some(proxy_container) = egress_proxy_container {
+            if let Err(e) =
+                connect_container_to_network(&egress.docker_network, proxy_container).await
+            {
+                let _ = remove_network(&egress.docker_network).await;
+                return Err(e);
+            }
+        }
     }
     let args = build_create_args(spec, container_name, workspace_dir, &egress);
     match run_docker(&args).await {
@@ -305,6 +349,11 @@ pub async fn create(
         }
         Err(e) => {
             if egress.create_isolated_network {
+                if let Some(proxy_container) = egress_proxy_container {
+                    let _ =
+                        disconnect_container_from_network(&egress.docker_network, proxy_container)
+                            .await;
+                }
                 let _ = remove_network(&egress.docker_network).await;
             }
             Err(e)
@@ -434,21 +483,37 @@ mod tests {
     #[test]
     fn plan_egress_network_is_none_and_not_isolated_without_a_proxy_url() {
         let spec = spec_with("alpine:latest", vec!["true"]);
-        let plan = plan_egress_network(&spec);
+        let plan = plan_egress_network(&spec, None);
         assert_eq!(plan.docker_network, "none");
         assert!(plan.proxy_url.is_none());
         assert!(!plan.create_isolated_network);
     }
 
     #[test]
-    fn plan_egress_network_uses_a_dedicated_isolated_network_when_proxy_url_is_set() {
+    fn plan_egress_network_isolates_but_fails_closed_without_a_sidecar_container() {
+        // egress_proxy_url alone, with no egress_proxy_container configured
+        // for this runtime, gets the isolated bridge (so it's not
+        // accidentally --network none either) but no proxy env at all —
+        // there is nothing on that bridge for it to reach.
         let mut spec = spec_with("alpine:latest", vec!["true"]);
         spec.network.egress_proxy_url = Some("http://10.0.0.5:8888".to_string());
-        let plan = plan_egress_network(&spec);
+        let plan = plan_egress_network(&spec, None);
         assert_ne!(plan.docker_network, "none");
         assert_ne!(plan.docker_network, "bridge");
         assert!(plan.docker_network.contains(&spec.sandbox_id));
-        assert_eq!(plan.proxy_url.as_deref(), Some("http://10.0.0.5:8888"));
+        assert!(plan.proxy_url.is_none());
+        assert!(plan.create_isolated_network);
+    }
+
+    #[test]
+    fn plan_egress_network_rewrites_proxy_host_to_the_sidecar_container_name() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.network.egress_proxy_url = Some("http://127.0.0.1:8888".to_string());
+        let plan = plan_egress_network(&spec, Some("aegis-egress-proxy-e2e"));
+        assert_eq!(
+            plan.proxy_url.as_deref(),
+            Some("http://aegis-egress-proxy-e2e:8888")
+        );
         assert!(plan.create_isolated_network);
     }
 
@@ -458,7 +523,7 @@ mod tests {
         spec.network.egress_proxy_url = Some("http://10.0.0.5:8888".to_string());
         spec.environment
             .insert("HTTP_PROXY".to_string(), "http://attacker:1".to_string());
-        let plan = plan_egress_network(&spec);
+        let plan = plan_egress_network(&spec, Some("aegis-egress-proxy-e2e"));
         let args = build_create_args(
             &spec,
             "test-container",
@@ -472,8 +537,24 @@ mod tests {
 
         assert!(args
             .windows(2)
-            .any(|w| w == ["-e", "HTTP_PROXY=http://10.0.0.5:8888"]));
+            .any(|w| w == ["-e", "HTTP_PROXY=http://aegis-egress-proxy-e2e:8888"]));
         assert!(!args.iter().any(|a| a.contains("attacker")));
+    }
+
+    #[test]
+    fn rewrite_proxy_for_sidecar_preserves_path_and_rejects_unknown_scheme() {
+        assert_eq!(
+            rewrite_proxy_for_sidecar("http://127.0.0.1:8888/probe", "proxy-c"),
+            Some("http://proxy-c:8888/probe".to_string())
+        );
+        assert_eq!(
+            rewrite_proxy_for_sidecar("https://10.0.0.5", "proxy-c"),
+            Some("https://proxy-c".to_string())
+        );
+        assert_eq!(
+            rewrite_proxy_for_sidecar("ftp://127.0.0.1:8888", "proxy-c"),
+            None
+        );
     }
 
     /// Regression test for the argument-injection finding from the
@@ -489,7 +570,7 @@ mod tests {
             &spec,
             "test-container",
             &PathBuf::from("/tmp/workspace"),
-            &plan_egress_network(&spec),
+            &plan_egress_network(&spec, None),
         );
 
         let dash_dash_pos = args
@@ -512,7 +593,7 @@ mod tests {
             &spec,
             "test-container",
             &PathBuf::from("/tmp/workspace"),
-            &plan_egress_network(&spec),
+            &plan_egress_network(&spec, None),
         );
 
         let dash_dash_pos = args.iter().position(|a| a == "--").unwrap();
@@ -529,7 +610,7 @@ mod tests {
             &spec,
             "test-container",
             &PathBuf::from("/tmp/workspace"),
-            &plan_egress_network(&spec),
+            &plan_egress_network(&spec, None),
         );
         let flags_before_image: Vec<&str> = args
             .iter()
@@ -564,7 +645,7 @@ mod tests {
             &spec,
             "test-container",
             &PathBuf::from("/tmp/workspace"),
-            &plan_egress_network(&spec),
+            &plan_egress_network(&spec, None),
         );
         let flags_before_image: Vec<&str> = args
             .iter()
@@ -602,7 +683,7 @@ mod tests {
             &spec,
             "test-container",
             &PathBuf::from("/tmp/workspace"),
-            &plan_egress_network(&spec),
+            &plan_egress_network(&spec, None),
         );
         let flags_before_image: Vec<&str> = args
             .iter()
@@ -627,7 +708,7 @@ mod tests {
             &spec,
             "test-container",
             &PathBuf::from("/tmp/workspace"),
-            &plan_egress_network(&spec),
+            &plan_egress_network(&spec, None),
         );
         let flags_before_image: Vec<&str> = args
             .iter()
