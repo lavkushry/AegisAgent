@@ -1221,6 +1221,77 @@ fn assert_bind_security(
     ))
 }
 
+/// Roadmap Wave B item 8 ("operator runbook gates"): on a non-loopback
+/// bind, warn about any of `docs/deployment-guide.md`'s production
+/// checklist items that don't have a runtime-observable signal configured.
+///
+/// Deliberately a *warning*, not a fail-closed check like
+/// [`assert_bind_security`]: these are hardening recommendations with
+/// legitimate reasons to be absent in a given deployment (e.g. TLS
+/// terminated at a reverse proxy in front of this gateway, or a
+/// single-replica deployment that doesn't need the shared replay store) —
+/// unlike "publicly reachable with no authentication at all," none of these
+/// three is unconditionally unsafe on its own.
+///
+/// `AEGIS_BACKUP_DIR` (the fifth runbook item) is deliberately not checked
+/// here: it always resolves to a value (defaults to `"backups"`, see
+/// `routes/tenant.rs`), so its mere presence can't distinguish "operator
+/// configured backups" from "operator never thought about it" — checking
+/// that for real would need new state (e.g. a last-backup timestamp), which
+/// is out of scope for this warning. Backups stay a doc-only runbook item.
+///
+/// Pure function for unit testing; env reads happen in the caller.
+/// Pure decision function behind [`warn_on_incomplete_production_hardening`]:
+/// which runbook gates (if any) are missing for this configuration. Empty on
+/// a loopback bind or when everything is configured.
+fn missing_production_hardening_gates(
+    bind_addr: &str,
+    admin_key_configured: bool,
+    replay_store_db: bool,
+    tls_enabled: bool,
+) -> Vec<&'static str> {
+    if host_is_loopback(bind_addr) {
+        return Vec::new();
+    }
+    let mut missing = Vec::new();
+    if !admin_key_configured {
+        missing
+            .push("AEGIS_ADMIN_API_KEY (admin/debug/metrics endpoints stay disabled without it)");
+    }
+    if !replay_store_db {
+        missing.push(
+            "AEGIS_REPLAY_STORE=db (replay-nonce dedup is per-process only, unsafe across multiple replicas)",
+        );
+    }
+    if !tls_enabled {
+        missing.push(
+            "AEGIS_TLS_CERT/AEGIS_TLS_KEY (or terminate TLS at a reverse proxy in front of this gateway)",
+        );
+    }
+    missing
+}
+
+fn warn_on_incomplete_production_hardening(
+    bind_addr: &str,
+    admin_key_configured: bool,
+    replay_store_db: bool,
+    tls_enabled: bool,
+) {
+    let missing = missing_production_hardening_gates(
+        bind_addr,
+        admin_key_configured,
+        replay_store_db,
+        tls_enabled,
+    );
+    if !missing.is_empty() {
+        tracing::warn!(
+            "AEGIS_BIND_ADDR='{bind_addr}' is network-reachable but the following operator \
+             runbook gates (docs/deployment-guide.md) are not configured: {}",
+            missing.join("; ")
+        );
+    }
+}
+
 /// Whether a `host:port` bind address is a loopback (not network-reachable)
 /// address — `127.0.0.0/8`, `::1`, or `localhost`. Shared by the public-bind
 /// safety check and the admin-route guard.
@@ -2348,6 +2419,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (None, None) => None,
     };
 
+    warn_on_incomplete_production_hardening(
+        &bind_addr,
+        std::env::var("AEGIS_ADMIN_API_KEY").is_ok_and(|v| !v.trim().is_empty()),
+        replay_store_db,
+        use_tls.is_some(),
+    );
+
     // Startup is complete: DB pool + migrations, policy engine, and background
     // jobs are all initialized. /startupz now reports ready (#1208).
     state
@@ -2710,6 +2788,36 @@ mod tests {
     #[test]
     fn bind_security_allows_public_bind_in_explicit_demo_mode() {
         assert!(assert_bind_security("0.0.0.0:8080", false, true).is_ok());
+    }
+
+    #[test]
+    fn production_hardening_gates_are_all_inert_on_loopback() {
+        assert!(
+            missing_production_hardening_gates("127.0.0.1:8080", false, false, false).is_empty()
+        );
+    }
+
+    #[test]
+    fn production_hardening_gates_are_empty_when_everything_is_configured() {
+        assert!(missing_production_hardening_gates("0.0.0.0:8080", true, true, true).is_empty());
+    }
+
+    #[test]
+    fn production_hardening_gates_flags_each_missing_item_on_a_public_bind() {
+        let missing = missing_production_hardening_gates("0.0.0.0:8080", false, false, false);
+        assert_eq!(missing.len(), 3);
+        assert!(missing.iter().any(|m| m.contains("AEGIS_ADMIN_API_KEY")));
+        assert!(missing.iter().any(|m| m.contains("AEGIS_REPLAY_STORE")));
+        assert!(missing.iter().any(|m| m.contains("AEGIS_TLS_CERT")));
+    }
+
+    #[test]
+    fn production_hardening_gates_flags_only_the_specific_missing_items() {
+        // Admin key + replay store configured, TLS not -- only TLS should surface.
+        let missing = missing_production_hardening_gates("0.0.0.0:8080", true, true, false);
+        assert_eq!(missing, vec![
+            "AEGIS_TLS_CERT/AEGIS_TLS_KEY (or terminate TLS at a reverse proxy in front of this gateway)"
+        ]);
     }
 
     #[test]
