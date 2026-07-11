@@ -23,7 +23,10 @@ use aegis_node_sensor::fs_collector::FsCollector;
 use aegis_node_sensor::gateway_client::{GatewayClient, HeartbeatRequest, RegisterRequest};
 use aegis_node_sensor::identity::SensorIdentity;
 use aegis_node_sensor::mode_engine::{GatewayReachability, ModeEngine};
+use aegis_node_sensor::net_collector::NetCollector;
+use aegis_node_sensor::process_collector::ProcessCollector;
 use aegis_node_sensor::process_enforcer::ProcessEnforcer;
+use aegis_node_sensor::secret_collector::SecretCollector;
 use aegis_node_sensor::shipper::EventShipper;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
 
@@ -196,6 +199,10 @@ async fn main() -> ExitCode {
         config.tenant_id.clone(),
         process_enforcer.clone(),
     );
+    let process_collector = ProcessCollector::new(process_enforcer.clone());
+    let net_collector = NetCollector::new();
+    let fs_collector = FsCollector::new();
+    let secret_collector = SecretCollector::new();
     if config.gateway_public_key_hex.is_none() {
         tracing::warn!(
             "no gateway_public_key_hex configured — all incoming control commands will be rejected fail-closed"
@@ -215,6 +222,9 @@ async fn main() -> ExitCode {
         tokio::select! {
             _ = process_collect_tick.tick() => {
                 process_collector.poll(&spool);
+                net_collector.poll(&spool);
+                fs_collector.poll(&spool);
+                secret_collector.poll(&spool);
             }
             _ = heartbeat_tick.tick() => {
                 let req = HeartbeatRequest {

@@ -211,7 +211,18 @@ impl SandboxRuntime for DockerRuntime {
         // Drop the MutexGuard before await (Send bound on SandboxRuntime).
         let network = self.networks.lock().unwrap().remove(&handle.sandbox_id);
         if let Some(network) = network {
-            let _ = docker_cli::remove_network(&network).await;
+            if let Err(e) = docker_cli::remove_network(&network).await {
+                // Non-fatal: the sandbox itself is already torn down. But a
+                // leaked egress network is otherwise invisible — surface it
+                // so an operator can `docker network rm` it manually rather
+                // than silently accumulating dead networks over time.
+                tracing::warn!(
+                    sandbox_id = %handle.sandbox_id,
+                    network = %network,
+                    error = %e,
+                    "failed to remove egress network on destroy"
+                );
+            }
         }
         self.emit(CageEventType::AgentRunFinished, handle, None);
         Ok(())

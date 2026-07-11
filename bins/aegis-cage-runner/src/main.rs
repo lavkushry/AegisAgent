@@ -347,8 +347,10 @@ async fn run_one(
     };
 
     let control_status = control_terminal.lock().ok().and_then(|g| *g);
-    let (status_str, finished_at) = if let Some(status) = control_status {
-        (status, Some(chrono::Utc::now()))
+    let (status_str, finished_at, exit_code) = if let Some(status) = control_status {
+        // A signed kill/quarantine tears the container down by signal —
+        // Docker never reports a normal exit code for that path.
+        (status, Some(chrono::Utc::now()), None)
     } else {
         match final_state {
             Ok(state) => {
@@ -356,11 +358,11 @@ async fn run_one(
                     SandboxStatus::Killed | SandboxStatus::TimedOut => "killed",
                     _ => "finished",
                 };
-                (status_str, Some(chrono::Utc::now()))
+                (status_str, Some(chrono::Utc::now()), state.exit_code)
             }
             Err(e) => {
                 tracing::error!(run_id = %run.id, error = %e, "error waiting on sandbox");
-                ("killed", Some(chrono::Utc::now()))
+                ("killed", Some(chrono::Utc::now()), None)
             }
         }
     };
@@ -452,12 +454,12 @@ async fn poll_and_process_run_commands(
                 match cmd.action.as_str() {
                     "pause_run" => {
                         let _ = client
-                            .update_run_status(run_id, runner_id, "paused", None)
+                            .update_run_status(run_id, runner_id, "paused", None, None)
                             .await;
                     }
                     "resume_run" => {
                         let _ = client
-                            .update_run_status(run_id, runner_id, "running", None)
+                            .update_run_status(run_id, runner_id, "running", None, None)
                             .await;
                     }
                     "kill_run" | "quarantine_run" => {
@@ -469,12 +471,14 @@ async fn poll_and_process_run_commands(
                         if let Ok(mut slot) = control_terminal.lock() {
                             *slot = Some(terminal);
                         }
+                        // Signal-based teardown — no normal Docker exit code.
                         let _ = client
                             .update_run_status(
                                 run_id,
                                 runner_id,
                                 terminal,
                                 Some(chrono::Utc::now()),
+                                None,
                             )
                             .await;
                     }

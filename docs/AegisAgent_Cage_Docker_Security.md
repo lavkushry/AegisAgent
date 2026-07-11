@@ -95,9 +95,13 @@ Standard container isolation is not a hardware boundary. Kernel CVEs, misconfigu
 
 **Follow-up:** gVisor/Firecracker/Kata backends per `docs/AegisAgent_Agent_Cage.md`.
 
-### R4 — Network is “none”, not “proxy-forced”
+### R4 — Network is “none” by default; proxy-forced path now uses an internal, no-masquerade bridge
 
-`--network none` blocks all egress. Product goal of *forced egress via proxy* (allowed destinations only) is **not** implemented as a netns/sidecar path yet. Enabling network later must re-run this review (no silent “bridge + hope”).
+Default remains `--network none` (no egress at all). When `network.egress_proxy_url` is set, the runner creates a dedicated per-sandbox Docker bridge with **`--internal`** (Docker never wires an external route for this network — the actual isolation primitive) plus `com.docker.network.bridge.enable_ip_masquerade=false` (defense in depth against the NAT return path) via `docker_cli::create_egress_network`, instead of the shared default `bridge` network. The container can still reach the host (where the proxy listens) via the bridge gateway / `host.docker.internal`, since that path is intra-bridge, not an external route. `HTTP(S)_PROXY`/`NO_PROXY` are force-injected and tenant-supplied overrides for those keys are stripped. The network is removed on `destroy` (`docker_runtime.rs`'s `networks` map).
+
+**Residual:** `--cap-drop ALL` already removes `CAP_NET_RAW`, so raw sockets are not the relevant residual vector (an earlier draft of this doc said so — corrected here). The residual vector is an ordinary (non-raw) UDP/TCP socket reaching anything still routable from an internal bridge — by design that's only the bridge gateway / host loopback, so this is expected to be a dead end for the sandbox, but it depends on `--internal` behaving as documented on the CI/production Docker version in use; this is exercised by `scripts/cage-wave-a-e2e.sh`'s forced-egress phase (`wget` to the public Internet must fail). `allowed_destinations` enforcement itself still lives entirely in the proxy (`aegis-egress-proxy`), not in this Docker-level control.
+
+**Residual:** this is not a full netns/sidecar solution — a cooperative HTTP client is required to honor `HTTP_PROXY` (a raw socket that ignores it and only targets the bridge gateway/host is still possible, though it can no longer NAT out to the public Internet without masquerade). `allowed_destinations` enforcement lives entirely in the proxy (`aegis-egress-proxy`), not in this Docker-level control — a compromised proxy or a destination it explicitly allows is out of scope for this control.
 
 ### R5 — Docker finish/kill e2e exists; full product narrative still partial
 

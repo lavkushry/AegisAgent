@@ -168,6 +168,24 @@ impl SandboxSpec {
                 "image.ref must not start with '-'".into(),
             ));
         }
+        // sandbox_id is runner-generated today (never tenant-supplied), but
+        // it flows unescaped into both the container name
+        // (`aegis-cage-{sandbox_id}`) and, for forced-egress runs, a
+        // generated Docker network name (`aegis-cage-egress-{sandbox_id}`).
+        // Constrain its charset as defense in depth so a future caller that
+        // starts accepting a caller-supplied sandbox_id can't smuggle a
+        // docker CLI flag or shell metacharacter through either path.
+        if self.sandbox_id.is_empty()
+            || !self
+                .sandbox_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(CageError::InvalidSpec(
+                "sandbox_id must be non-empty and contain only ASCII alphanumerics, '-', or '_'"
+                    .into(),
+            ));
+        }
         if self.command.is_empty() {
             return Err(CageError::InvalidSpec("command must not be empty".into()));
         }
@@ -332,6 +350,29 @@ mod tests {
         let mut spec = minimal_spec();
         spec.image.image_ref = String::new();
         assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn empty_sandbox_id_is_rejected() {
+        let mut spec = minimal_spec();
+        spec.sandbox_id = String::new();
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("sandbox_id"));
+    }
+
+    #[test]
+    fn sandbox_id_with_disallowed_characters_is_rejected() {
+        let mut spec = minimal_spec();
+        spec.sandbox_id = "sandbox;rm -rf /".to_string();
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("sandbox_id"));
+    }
+
+    #[test]
+    fn sandbox_id_with_alphanumeric_hyphen_underscore_is_accepted() {
+        let mut spec = minimal_spec();
+        spec.sandbox_id = "sandbox_1-abc-123".to_string();
+        spec.validate().unwrap();
     }
 
     #[test]
