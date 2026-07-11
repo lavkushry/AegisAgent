@@ -58,13 +58,18 @@ const FORCED_PROXY_ENV_KEYS: &[&str] = &[
 /// How the sandbox reaches the egress proxy (if any).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EgressNetworkPlan {
-    /// Docker `--network` value: `none` (no egress) or `bridge` (proxy path).
-    docker_network: &'static str,
+    /// Docker `--network` value: `none` (no egress) or a dedicated
+    /// per-sandbox bridge name (proxy path).
+    docker_network: String,
     /// Proxy URL injected into the container (loopback rewritten for Docker).
     proxy_url: Option<String>,
     /// When true, add `host.docker.internal:host-gateway` so containers can
     /// reach a proxy bound on the host loopback.
     add_host_gateway: bool,
+    /// When true, `docker_network` names a dedicated network this sandbox's
+    /// caller must create before `docker create` and remove on cleanup
+    /// (rather than a built-in Docker network like `none`).
+    create_isolated_network: bool,
 }
 
 /// Plan forced egress for a validated [`SandboxSpec`].
@@ -72,13 +77,25 @@ struct EgressNetworkPlan {
 /// | `egress_proxy_url` | Docker network | Proxy env |
 /// |--------------------|----------------|-----------|
 /// | unset              | `none`         | none (no egress at all) |
-/// | set                | `bridge`       | forced HTTP(S)_PROXY to that URL |
+/// | set                | dedicated internal, no-masquerade bridge | forced HTTP(S)_PROXY to that URL |
 ///
-/// Residual: with `bridge`, a malicious process can still open raw sockets
-/// that bypass HTTP_PROXY. Hard network isolation (internal netns + sidecar,
-/// or always-on transparent proxy) remains a follow-up. Soft forced egress
-/// still beats open internet: cooperative HTTP clients and most agent SDKs
-/// honor the injected proxy, and `direct_internet` stays forbidden.
+/// The dedicated bridge is created `--internal` (Docker never wires it to an
+/// external route) *and* with IP masquerade disabled — belt and suspenders,
+/// since `--internal` alone is the primitive that actually withholds
+/// outbound routing (masquerade-off by itself only breaks the NAT return
+/// path, not the initial outbound leg: on a network with an external route,
+/// a plain UDP/TCP socket can still send packets out and rely on an
+/// upstream device to NAT them, e.g. a VPC or home router without strict
+/// source/destination checking). The container can still reach the host
+/// (where the proxy listens) via the bridge gateway / `host.docker.internal`
+/// — that path is intra-bridge, not an "external route".
+///
+/// Residual: `--cap-drop ALL` already removes `CAP_NET_RAW`, so the residual
+/// vector here is ordinary (non-raw) sockets to any address still reachable
+/// from an internal bridge (bridge gateway / host loopback only, by design).
+/// An attacker who controls the proxy's own onward path, or a destination
+/// the proxy explicitly allows, is out of scope for this Docker-level
+/// control — `allowed_destinations` enforcement lives in the proxy itself.
 fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
     let raw = spec
         .network
@@ -89,19 +106,47 @@ fn plan_egress_network(spec: &SandboxSpec) -> EgressNetworkPlan {
 
     match raw {
         None => EgressNetworkPlan {
-            docker_network: "none",
+            docker_network: "none".to_string(),
             proxy_url: None,
             add_host_gateway: false,
+            create_isolated_network: false,
         },
         Some(url) => {
             let (container_url, add_host_gateway) = rewrite_loopback_proxy_for_container(url);
             EgressNetworkPlan {
-                docker_network: "bridge",
+                docker_network: format!("aegis-cage-egress-{}", spec.sandbox_id),
                 proxy_url: Some(container_url),
                 add_host_gateway,
+                create_isolated_network: true,
             }
         }
     }
+}
+
+/// Create a dedicated `--internal` bridge network (no external route — the
+/// actual isolation primitive) with IP masquerade also disabled (defense in
+/// depth against the NAT return path) so containers attached to it can reach
+/// only the bridge gateway / host, never the public Internet.
+async fn create_egress_network(name: &str) -> Result<(), CageError> {
+    run_docker(&[
+        "network".to_string(),
+        "create".to_string(),
+        "--driver".to_string(),
+        "bridge".to_string(),
+        "--internal".to_string(),
+        "-o".to_string(),
+        "com.docker.network.bridge.enable_ip_masquerade=false".to_string(),
+        name.to_string(),
+    ])
+    .await
+    .map(|_| ())
+}
+
+/// Remove a dedicated egress network created by [`create_egress_network`].
+pub async fn remove_network(name: &str) -> Result<(), CageError> {
+    run_docker(&["network".to_string(), "rm".to_string(), name.to_string()])
+        .await
+        .map(|_| ())
 }
 
 /// Map host-loopback proxy URLs to `host.docker.internal` so a container on
@@ -150,14 +195,12 @@ fn build_create_args(
     workspace_dir: &Path,
     egress: &EgressNetworkPlan,
 ) -> Vec<String> {
-    let egress = plan_egress_network(spec);
-
     let mut args = vec![
         "create".to_string(),
         "--name".to_string(),
         container_name.to_string(),
         "--network".to_string(),
-        "none".to_string(),
+        egress.docker_network.clone(),
         // Drop every Linux capability. Sandboxes must not keep NET_ADMIN,
         // SYS_ADMIN, etc. even if the image USER is root.
         "--cap-drop".to_string(),
@@ -388,6 +431,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn plan_egress_network_is_none_and_not_isolated_without_a_proxy_url() {
+        let spec = spec_with("alpine:latest", vec!["true"]);
+        let plan = plan_egress_network(&spec);
+        assert_eq!(plan.docker_network, "none");
+        assert!(plan.proxy_url.is_none());
+        assert!(!plan.create_isolated_network);
+    }
+
+    #[test]
+    fn plan_egress_network_uses_a_dedicated_isolated_network_when_proxy_url_is_set() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.network.egress_proxy_url = Some("http://10.0.0.5:8888".to_string());
+        let plan = plan_egress_network(&spec);
+        assert_ne!(plan.docker_network, "none");
+        assert_ne!(plan.docker_network, "bridge");
+        assert!(plan.docker_network.contains(&spec.sandbox_id));
+        assert_eq!(plan.proxy_url.as_deref(), Some("http://10.0.0.5:8888"));
+        assert!(plan.create_isolated_network);
+    }
+
+    #[test]
+    fn build_create_args_uses_the_planned_network_and_forces_proxy_env() {
+        let mut spec = spec_with("alpine:latest", vec!["true"]);
+        spec.network.egress_proxy_url = Some("http://10.0.0.5:8888".to_string());
+        spec.environment
+            .insert("HTTP_PROXY".to_string(), "http://attacker:1".to_string());
+        let plan = plan_egress_network(&spec);
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan,
+        );
+
+        let network_pos = args.iter().position(|a| a == "--network").unwrap();
+        assert_eq!(args[network_pos + 1], plan.docker_network);
+        assert_ne!(args[network_pos + 1], "none");
+
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["-e", "HTTP_PROXY=http://10.0.0.5:8888"]));
+        assert!(!args.iter().any(|a| a.contains("attacker")));
+    }
+
     /// Regression test for the argument-injection finding from the
     /// cage-runner execution-loop security review: without a `--`
     /// end-of-options marker, an `image_ref`/`command` starting with `-`
@@ -437,7 +525,12 @@ mod tests {
     #[test]
     fn create_args_always_drop_all_caps_and_no_new_privileges() {
         let spec = spec_with("alpine:latest", vec!["true"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
         let flags_before_image: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
@@ -467,7 +560,12 @@ mod tests {
     #[test]
     fn create_args_never_enable_privileged_or_host_namespaces_as_flags() {
         let spec = spec_with("alpine:latest", vec!["true"]);
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
         let flags_before_image: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
@@ -500,7 +598,12 @@ mod tests {
     fn read_only_rootfs_adds_tmpfs_scratch_and_read_only_flag() {
         let mut spec = spec_with("alpine:latest", vec!["true"]);
         spec.image.read_only_rootfs = true;
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
         let flags_before_image: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
@@ -520,7 +623,12 @@ mod tests {
     fn writable_rootfs_skips_read_only_and_tmpfs() {
         let mut spec = spec_with("alpine:latest", vec!["true"]);
         spec.image.read_only_rootfs = false;
-        let args = build_create_args(&spec, "test-container", &PathBuf::from("/tmp/workspace"));
+        let args = build_create_args(
+            &spec,
+            "test-container",
+            &PathBuf::from("/tmp/workspace"),
+            &plan_egress_network(&spec),
+        );
         let flags_before_image: Vec<&str> = args
             .iter()
             .take_while(|a| a.as_str() != "--")
