@@ -65,3 +65,20 @@ A customer requires Rego policy portability (e.g., migrating from an
 existing OPA-based control plane) at a scale where an adapter is worth
 building, or Cedar's roadmap diverges from AegisAgent's annotation-based
 extension needs.
+
+## Security consequences
+
+Cedar is the final deterministic authorization authority. Risk scores and LLM output cannot grant permission. Policy validation fails closed, trust provenance can only tighten, signed bundles protect remote updates, and a bad reload does not replace the last-known-good policy.
+
+## Verification
+
+```bash
+cargo test -p aegis-policy
+cargo tree -p aegis-policy
+```
+
+The dependency tree must not include `aegis-storage`; policy and storage remain sibling layers.
+
+## References
+
+[Policy Engine](../components/Policy_Engine.md) · [Architecture Patterns](../architecture.md) · [Fail-Closed Behavior](../fail-closed-behavior.md)

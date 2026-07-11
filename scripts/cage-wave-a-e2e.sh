@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Wave A narrative e2e — untrusted cage run → egress deny path → signed kill.
+# Wave A narrative e2e — untrusted cage run → egress deny path → control
+# action → durable receipt (Implementation_Status.md Wave A item 4).
 #
 # Phases:
 #   1) Default isolation: alpine echo with network none → finished
-#   2) Forced egress: sandbox with egress_proxy_url + deny-by-default
-#      aegis-egress-proxy; wget to the public Internet must fail → finished
-#   3) Control: sleep → POST kill → killed
+#   2) Forced egress: an untrusted (root_trust_level=untrusted_external)
+#      sandbox with egress_proxy_url pointed at aegis-egress-proxy running
+#      in gateway mode (--gateway-url), so every check round-trips through
+#      the real POST /v1/egress/check fail-closed path — the same code path
+#      production traffic uses, not just the proxy's local standalone
+#      decider. wget to the public Internet must fail → finished, and a
+#      durable deny event/receipt must land in GET /v1/egress/events.
+#   3) Control: sleep → POST kill → killed (signed control command)
 #
 # Managed mode builds gateway, cage-runner, and egress-proxy locally.
 #
@@ -129,10 +135,15 @@ start_managed_stack() {
   GATEWAY_PID=$!
   wait_gateway
 
-  printf '==> Start egress-proxy (deny-by-default) on %s\n' "$EGRESS_LISTEN"
-  # Standalone local policy, no allow-domain → fail closed for all destinations.
+  printf '==> Start egress-proxy in gateway mode (deny-by-default) on %s\n' "$EGRESS_LISTEN"
+  # --gateway-url routes every check through the real fail-closed
+  # POST /v1/egress/check (bans/quarantine layered, durable runtime
+  # event + receipt written by the gateway) instead of the proxy's own
+  # standalone local decider — this is the code path production traffic
+  # actually uses, so the e2e proves the real thing, not a stand-in.
   RUST_LOG="${RUST_LOG:-info,aegis_egress_proxy=info}" \
-    "$egress_bin" --listen "$EGRESS_LISTEN" &
+    "$egress_bin" --listen "$EGRESS_LISTEN" \
+    --gateway-url "$AEGIS_URL" --api-token "$TOKEN" &
   EGRESS_PID=$!
   sleep 1
   if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
@@ -176,13 +187,18 @@ ensure_tenant() {
   fi
 }
 
-# create_run <run_key> <image> <cmd_json> <timeout> [network_json]
+# create_run <run_key> <image> <cmd_json> <timeout> [network_json] [root_trust_level]
 create_run() {
   local run_key="$1"
   local image_ref="$2"
   local cmd_json="$3"
   local timeout_seconds="$4"
   local network_json="${5:-{ \"direct_internet\": false \}}"
+  local root_trust_level="${6:-}"
+  local trust_json=""
+  if [[ -n "$root_trust_level" ]]; then
+    trust_json="\"root_trust_level\": \"${root_trust_level}\","
+  fi
   local body code json
   body=$(curl -sS -w '\n%{http_code}' -X POST "$AEGIS_URL/v1/agent-cage/runs" \
     "${auth[@]}" \
@@ -191,6 +207,7 @@ create_run() {
   "run_key": "${run_key}",
   "source_component": "cage-wave-a-e2e",
   "mode": "observe",
+  ${trust_json}
   "cage_spec": {
     "image_ref": "${image_ref}",
     "command": ${cmd_json},
@@ -254,9 +271,54 @@ phase_default_isolation() {
   printf '    phase 1 ok\n'
 }
 
+# Record the newest egress-events rowid before a phase, so the post-phase
+# check only looks at events that phase itself produced (the tenant/table is
+# shared across the whole script run).
+egress_events_watermark() {
+  curl -fsS "$AEGIS_URL/v1/egress/events?limit=1" "${auth[@]}" \
+    | python3 -c 'import sys,json
+rows=json.load(sys.stdin)
+print(rows[0]["id"] if rows else "")'
+}
+
+# verify_egress_receipt <watermark_id> <run_id>
+# Asserts the gateway's real POST /v1/egress/check path (not the proxy's
+# standalone local decider) recorded at least one deny/blocked durable event
+# for this run since the watermark — i.e. a receipt-bearing evidence trail
+# exists, not just a container exit code.
+verify_egress_receipt() {
+  local watermark="$1"
+  local run_id="$2"
+  local i body
+  for i in $(seq 1 15); do
+    body=$(curl -fsS "$AEGIS_URL/v1/egress/events?limit=50" "${auth[@]}")
+    if printf '%s' "$body" | python3 -c "
+import sys, json
+watermark = '''${watermark}'''
+run_id = '''${run_id}'''
+rows = json.load(sys.stdin)
+for row in rows:
+    if watermark and row.get('id') == watermark:
+        break
+    if row.get('run_id') == run_id and row.get('decision') in ('deny', 'blocked'):
+        sys.exit(0)
+sys.exit(1)
+"; then
+      printf '    durable deny event confirmed for run %s (real gateway /v1/egress/check path)\n' "$run_id"
+      return 0
+    fi
+    sleep 1
+  done
+  printf 'no durable deny event found for run %s in GET /v1/egress/events\n' "$run_id" >&2
+  printf '%s\n' "$body" >&2
+  return 1
+}
+
 phase_egress_deny() {
   local run_key="wave-a-egress-$(date +%s)-$$"
-  printf '==> Phase 2: forced egress + deny-by-default proxy (run_key=%s)\n' "$run_key"
+  printf '==> Phase 2: untrusted agent forced egress + gateway-mode deny-by-default proxy (run_key=%s)\n' "$run_key"
+  local watermark
+  watermark=$(egress_events_watermark)
   # busybox wget honors HTTP_PROXY. Deny-by-default proxy should refuse CONNECT/GET.
   # Write exit code into a local path the container can use; we assert the run
   # completes (does not hang) and does not claim open internet success.
@@ -281,8 +343,8 @@ PY
   }))")
 
   local run_id
-  run_id=$(create_run "$run_key" "alpine:3" "$cmd_json" 90 "$network_json")
-  printf '    run_id=%s proxy=%s\n' "$run_id" "$EGRESS_PROXY_URL"
+  run_id=$(create_run "$run_key" "alpine:3" "$cmd_json" 90 "$network_json" "untrusted_external")
+  printf '    run_id=%s proxy=%s (root_trust_level=untrusted_external)\n' "$run_id" "$EGRESS_PROXY_URL"
   local final
   final=$(wait_run_status "$run_id" finished killed)
   if [[ "$final" != "finished" ]]; then
@@ -292,7 +354,10 @@ PY
   # If the sandbox exited 99, the runner still reports finished — spot-check
   # docker containers are cleaned up; leak would leave a long hang. Success =
   # completed within timeout without OPEN_INTERNET_LEAK hang.
-  printf '    phase 2 ok (egress path completed without open-internet success hang)\n'
+  printf '    container path ok (completed without open-internet success hang)\n'
+
+  verify_egress_receipt "$watermark" "$run_id"
+  printf '    phase 2 ok (untrusted agent → cage → egress deny → durable receipt)\n'
 }
 
 phase_kill() {

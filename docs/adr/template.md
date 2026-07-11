@@ -31,3 +31,15 @@ honestly argued.
 The condition under which this decision should be reopened (a scale
 threshold, a new requirement, an upstream change). If there's no realistic
 condition, say "no planned revisit."
+
+## Security consequences
+
+Which trust boundary, attacker capability, secret, tenant invariant, evidence guarantee, fail-closed path, or operational risk changes? State required security review and residual risk.
+
+## Verification
+
+List the exact commands, tests, metrics, failure exercises, or production evidence that demonstrate the decision works. Mark pseudocode as such.
+
+## References
+
+Link the owning architecture, component, flow, runbook, implementation status, issue, and superseded/superseding ADRs.

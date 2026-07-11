@@ -2,6 +2,10 @@
 
 **Issue:** [#1197](https://github.com/lavkushry/AegisAgent/issues/1197)
 
+> **Status:** ADR-0001 through ADR-0005 are Accepted. A changed decision requires a new ADR and a supersedes link; do not silently rewrite historical rationale.
+
+## Why ADRs Exist
+
 Records of significant architectural decisions and the reasoning behind them
 — not a design spec (see [Technical design](../AegisAgent_Technical_Design.md)
 for that) but the *why*, so a later reader doesn't have to re-derive a
@@ -21,3 +25,19 @@ a new ADR and mark the old one "Superseded by ADR-NNNN."
 | [0003](0003-aegis-jcs-1-canonicalization.md) | `aegis-jcs-1` canonicalization scheme for `action_hash` |
 | [0004](0004-ed25519-receipt-signing.md) | Ed25519 for optional receipt signing |
 | [0005](0005-fail-closed-defaults.md) | Fail-closed defaults for unknown/ambiguous state |
+
+## Security and Review
+
+An ADR affecting identity, tenant isolation, canonicalization, approvals, receipts, policy authority, cryptography, runtime isolation, storage consistency, or fail-closed behavior requires security review and negative acceptance tests. Record residual risk and operational consequences, not only architectural elegance.
+
+## Creating an ADR
+
+```bash
+cp docs/adr/template.md docs/adr/0006-short-decision-name.md
+```
+
+Replace every placeholder, link the issue/design, compare alternatives, name verification, and add the new record here and to MkDocs navigation.
+
+## References
+
+[Architecture Patterns](../architecture.md) · [Technical Design](../AegisAgent_Technical_Design.md) · [Threat Model](../AegisAgent_Threat_Model.md) · [Documentation Standard](../contributing/documentation-standard.md)

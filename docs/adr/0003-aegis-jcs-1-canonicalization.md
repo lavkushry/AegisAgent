@@ -68,3 +68,22 @@ A fifth language SDK is added (the corpus and byte-equality CI gate need to
 extend to it before it ships), or a real-world canonicalization edge case is
 found that the current spec doesn't cover (in which case it becomes
 `aegis-jcs-2`, never a silent edit to `aegis-jcs-1`).
+
+## Security consequences
+
+Canonicalization is a security protocol, not formatting. Silent changes invalidate approval and receipt identity, Unicode/number ambiguity can create cross-language mismatches, and non-finite values fail closed. Logs and UI renderings are not substitutes for canonical bytes and the declared version.
+
+## Verification
+
+```bash
+cargo test -p aegis-canon
+python3 -m unittest discover -s sdk-python/tests
+(cd sdk-go && go test ./...)
+(cd sdk-typescript && npm test)
+```
+
+Every supported implementation must pass the shared canonical-action and receipt corpora.
+
+## References
+
+[Approval Engine](../components/Approval_Engine.md) · [SDK Guide](../components/SDK.md) · [Receipt Specification](../action-receipt-spec.md)
