@@ -58,6 +58,7 @@ See [`docs/components/Console_UI_Bun_Contracts.md`](../docs/components/Console_U
 | Fleet graphs — agent-risk-map, decision-graph (#1827–#1828) | Done |
 | 9.2 Runtime pages — Agent Cage Runs + run detail (timeline / events / prompt / model calls) | Done |
 | 9.3 Control pages — Ban Center, Quarantine Center, Egress Events, Evidence Graph, Policy Center | Done |
+| Pagination — offset-based Previous/Next on Bans / Quarantine / Agent Cage Runs (PR 9.2 acceptance: "handles large lists") | Done |
 
 Panel inventory and system boards: [`docs/components/Console_UI.md`](../docs/components/Console_UI.md).
 

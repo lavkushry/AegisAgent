@@ -3,6 +3,7 @@ import {
   AGENT_KEY,
   RUN_ID,
   RUN_KEY,
+  type MockBanRecord,
 } from "../fixtures/gatewayFixtures";
 import {
   installMockGateway,
@@ -89,6 +90,59 @@ test.describe("mocked Phase 9 control pages", () => {
     await expect(page.getByText("Ban revoked.")).toBeVisible({
       timeout: 10_000,
     });
+    await mock.dispose();
+    expect(mock.unhandled).toEqual([]);
+  });
+
+  test("Ban Center paginates past the first page", async ({ page }) => {
+    const mock = await installMockGateway(page, { role: "analyst" });
+    // Seed 51 bans (page size is 50) so "Next" is genuinely reachable —
+    // regression for the PR 9.2 acceptance criterion ("handles large lists
+    // with pagination"), which the initial Phase 9 pages shipped without.
+    const seeded: MockBanRecord[] = Array.from({ length: 50 }, (_, i) => ({
+      id: `seed-ban-${i}`,
+      target_type: "agent",
+      target_value: `seed-target-${i}`,
+      scope: "tenant",
+      reason: null,
+      actor: "seed",
+      status: "active",
+      created_at: "2026-06-28T12:00:00.000Z",
+      expires_at: null,
+      revoked_at: null,
+      revoked_by: null,
+    }));
+    mock.runtime.bans.unshift(...seeded);
+
+    await openMockedConsole(page);
+    await openNav(page, "Bans");
+    await expect(page.getByText("seed-target-0")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    const nextButton = page.getByRole("button", { name: "Next", exact: true });
+    const prevButton = page.getByRole("button", {
+      name: "Previous",
+      exact: true,
+    });
+    await expect(prevButton).toBeDisabled();
+    await expect(nextButton).toBeEnabled();
+
+    await nextButton.click();
+    // Page 2 holds the original fixture ban (pushed after the 50 seeded
+    // ones — newest-first ordering in the real gateway puts it there too).
+    await expect(page.getByText(AGENT_KEY).first()).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByText("seed-target-0")).toHaveCount(0);
+    await expect(prevButton).toBeEnabled();
+    await expect(nextButton).toBeDisabled();
+
+    await prevButton.click();
+    await expect(page.getByText("seed-target-0")).toBeVisible({
+      timeout: 10_000,
+    });
+
     await mock.dispose();
     expect(mock.unhandled).toEqual([]);
   });

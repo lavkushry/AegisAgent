@@ -49,6 +49,7 @@ export async function installMockGateway(
       scenario,
       runtime,
       body,
+      url.search,
     );
     if (!resolved) {
       unhandled.push(`${request.method()} ${path}`);

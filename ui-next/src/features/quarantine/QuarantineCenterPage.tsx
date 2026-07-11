@@ -4,6 +4,7 @@ import { useAppStore } from "@/app/store";
 import { TenantGate } from "@/components/TenantGate";
 import { pillStyle } from "@/components/security/pill";
 import {
+  QUARANTINE_PAGE_SIZE,
   QUARANTINE_TARGET_TYPES,
   createQuarantine,
   listQuarantine,
@@ -35,10 +36,12 @@ export function QuarantineCenterPage() {
   const [flash, setFlash] = useState<{ ok: boolean; message: string } | null>(
     null,
   );
+  const [page, setPage] = useState(0);
 
   const { data, error, isLoading, isFetching } = useQuery({
-    queryKey: ["quarantine", gatewayUrl, bearerToken, activeTenant],
-    queryFn: () => listQuarantine(apiOpts),
+    queryKey: ["quarantine", gatewayUrl, bearerToken, activeTenant, page],
+    queryFn: () =>
+      listQuarantine(apiOpts, QUARANTINE_PAGE_SIZE, page * QUARANTINE_PAGE_SIZE),
     enabled: tenantReady,
     refetchInterval: 15_000,
     retry: false,
@@ -56,6 +59,7 @@ export function QuarantineCenterPage() {
     onSuccess: () => {
       setFlash({ ok: true, message: "Quarantine recorded." });
       setForm(EMPTY_FORM);
+      setPage(0);
       queryClient.invalidateQueries({ queryKey: ["quarantine"] });
     },
     onError: (err: unknown) => setFlash({ ok: false, message: errorMessage(err) }),
@@ -264,6 +268,28 @@ export function QuarantineCenterPage() {
             ) : null}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+        <span>Page {page + 1}</span>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded border border-[var(--border-default)] px-2 py-1 disabled:opacity-40"
+            disabled={page === 0 || isFetching}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="rounded border border-[var(--border-default)] px-2 py-1 disabled:opacity-40"
+            disabled={rows.length < QUARANTINE_PAGE_SIZE || isFetching}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+          </button>
+        </div>
       </div>
 
       {releasing ? (

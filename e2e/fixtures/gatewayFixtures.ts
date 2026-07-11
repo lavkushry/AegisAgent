@@ -558,6 +558,19 @@ export function receiptVerifyResponse(mode: ReceiptVerifyMode, receiptId?: strin
   return { status: "unknown", message: "The gateway did not explicitly confirm receipt verification." };
 }
 
+/** Parse `?limit=&offset=` from the request's query string, matching the
+ * gateway's own `parse_pagination` defaults closely enough for
+ * pagination-aware fixtures (Ban/Quarantine/Agent-Cage-Runs
+ * "Next"/"Previous" paging). `search` is `location.search`-shaped (leading
+ * `?` or empty) — `resolveMockResponse`'s `path` param is pathname-only, so
+ * this can't be parsed out of `path` itself. */
+function parsePagination(search: string): { limit: number; offset: number } {
+  const params = new URLSearchParams(search);
+  const limit = Number(params.get("limit")) || 1000;
+  const offset = Number(params.get("offset")) || 0;
+  return { limit, offset };
+}
+
 export function resolveMockResponse(
   method: string,
   path: string,
@@ -565,6 +578,7 @@ export function resolveMockResponse(
   scenario: MockScenario,
   runtime: MockRuntimeState = createMockRuntimeState(),
   body?: unknown,
+  search = "",
 ): { status: number; body: unknown } | null {
   const failPaths = scenario.failingPaths ?? [];
   if (failPaths.includes(path)) {
@@ -847,7 +861,9 @@ export function resolveMockResponse(
       runtime.bans.push(created);
       return { status: 201, body: created };
     }
-    return { status: 200, body: tenantId === MOCK_TENANT_A ? runtime.bans : [] };
+    const all = tenantId === MOCK_TENANT_A ? runtime.bans : [];
+    const { limit, offset } = parsePagination(search);
+    return { status: 200, body: all.slice(offset, offset + limit) };
   }
   const revokeBanMatch = path.match(/^\/v1\/bans\/([^/]+)\/revoke$/);
   if (method === "POST" && revokeBanMatch) {
@@ -879,7 +895,9 @@ export function resolveMockResponse(
       runtime.quarantines.push(created);
       return { status: 201, body: created };
     }
-    return { status: 200, body: tenantId === MOCK_TENANT_A ? runtime.quarantines : [] };
+    const all = tenantId === MOCK_TENANT_A ? runtime.quarantines : [];
+    const { limit, offset } = parsePagination(search);
+    return { status: 200, body: all.slice(offset, offset + limit) };
   }
   const releaseQuarantineMatch = path.match(/^\/v1\/quarantine\/([^/]+)\/release$/);
   if (method === "POST" && releaseQuarantineMatch) {

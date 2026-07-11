@@ -43,13 +43,16 @@ export interface RuntimeEventRecord {
 
 export type RunControlKind = "pause" | "resume" | "kill" | "quarantine";
 
+export const AGENT_RUNS_PAGE_SIZE = 50;
+
 export function listAgentRuns(
   opts: FetchOptions,
-  limit = 100,
+  limit = AGENT_RUNS_PAGE_SIZE,
+  offset = 0,
 ): Promise<AgentRunRecord[]> {
   return fetchFromGateway<unknown>(
     opts,
-    `/v1/agent-cage/runs?limit=${limit}`,
+    `/v1/agent-cage/runs?limit=${limit}&offset=${offset}`,
   ).then((raw) => asRecordArray(raw).map((r) => r as unknown as AgentRunRecord));
 }
 

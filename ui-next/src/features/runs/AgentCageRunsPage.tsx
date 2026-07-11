@@ -5,6 +5,7 @@ import { useAppStore } from "@/app/store";
 import { TenantGate } from "@/components/TenantGate";
 import { pillStyle } from "@/components/security/pill";
 import {
+  AGENT_RUNS_PAGE_SIZE,
   controlAgentRun,
   listAgentRuns,
   runControlDisabledReason,
@@ -31,10 +32,12 @@ export function AgentCageRunsPage() {
   const [flash, setFlash] = useState<{ ok: boolean; message: string } | null>(
     null,
   );
+  const [page, setPage] = useState(0);
 
   const { data, error, isLoading, isFetching } = useQuery({
-    queryKey: ["agent-runs", gatewayUrl, bearerToken, activeTenant],
-    queryFn: () => listAgentRuns(apiOpts, 100),
+    queryKey: ["agent-runs", gatewayUrl, bearerToken, activeTenant, page],
+    queryFn: () =>
+      listAgentRuns(apiOpts, AGENT_RUNS_PAGE_SIZE, page * AGENT_RUNS_PAGE_SIZE),
     enabled: tenantReady,
     refetchInterval: 8_000,
     retry: false,
@@ -192,6 +195,28 @@ export function AgentCageRunsPage() {
             ) : null}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+        <span>Page {page + 1}</span>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded border border-[var(--border-default)] px-2 py-1 disabled:opacity-40"
+            disabled={page === 0 || isFetching}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="rounded border border-[var(--border-default)] px-2 py-1 disabled:opacity-40"
+            disabled={rows.length < AGENT_RUNS_PAGE_SIZE || isFetching}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+          </button>
+        </div>
       </div>
 
       {pending ? (

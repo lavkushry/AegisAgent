@@ -22,8 +22,17 @@ export interface CreateQuarantineInput {
   incident_id?: string;
 }
 
-export function listQuarantine(opts: FetchOptions): Promise<QuarantineRecord[]> {
-  return fetchFromGateway<unknown>(opts, "/v1/quarantine").then((raw) =>
+export const QUARANTINE_PAGE_SIZE = 50;
+
+export function listQuarantine(
+  opts: FetchOptions,
+  limit = QUARANTINE_PAGE_SIZE,
+  offset = 0,
+): Promise<QuarantineRecord[]> {
+  return fetchFromGateway<unknown>(
+    opts,
+    `/v1/quarantine?limit=${limit}&offset=${offset}`,
+  ).then((raw) =>
     asRecordArray(raw).map((r) => r as unknown as QuarantineRecord),
   );
 }

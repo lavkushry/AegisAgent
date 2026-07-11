@@ -24,10 +24,17 @@ export interface CreateBanInput {
   expires_at?: string;
 }
 
-export function listBans(opts: FetchOptions): Promise<BanRecord[]> {
-  return fetchFromGateway<unknown>(opts, "/v1/bans").then((raw) =>
-    asRecordArray(raw).map((r) => r as unknown as BanRecord),
-  );
+export const BANS_PAGE_SIZE = 50;
+
+export function listBans(
+  opts: FetchOptions,
+  limit = BANS_PAGE_SIZE,
+  offset = 0,
+): Promise<BanRecord[]> {
+  return fetchFromGateway<unknown>(
+    opts,
+    `/v1/bans?limit=${limit}&offset=${offset}`,
+  ).then((raw) => asRecordArray(raw).map((r) => r as unknown as BanRecord));
 }
 
 export function getBan(opts: FetchOptions, id: string): Promise<BanRecord> {
