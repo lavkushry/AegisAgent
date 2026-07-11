@@ -43,13 +43,13 @@ Strongest current capabilities:
 - **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, both CI-wired)
 - **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph) plus cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls product pages — Phase 9.2/9.3 complete
 - **Deploy** — gateway + sensor + egress + cage + llm-gateway Helm; single-writer SQLite default
-- **Postgres** — feature + migrations exist; not the default HA production path
+- **Postgres** — feature + migrations exist; read/write pool split with replica failover, DB-backed replay store, cross-replica correlation windows, and a live `postgres-integration` CI job now exercise it against a real Postgres instance (not just compile-checked) — but not the default HA production path; real cross-instance failover/load validation still pending
 
 ### Roadmap / not done
 
 - sensor collectors proven against a real live host, not just synthetic `/proc` trees (P0)
 - transparent / netns forced egress (no raw-socket bypass) (P0 residual after proxy-env force)
-- Postgres multi-replica GA (#1194) (P1)
+- Postgres multi-replica GA (#1194) (P1) — remaining: real cross-instance failover/replication-lag validation, load validation, default Helm bundling
 - OIDC/SAML for console/admin (P1)
 
 ---
@@ -80,7 +80,7 @@ Strongest current capabilities:
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
 | Signed control commands | Partial | Issue + sensor poll + host PID enforce + auto PID discovery (`AEGIS_RUN_ID` process collector); not yet proven on a real live host. |
 | Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
-| Postgres production mode | Roadmap / partial | Code path exists; SQLite single-writer is still the default deploy. |
+| Postgres production mode | Roadmap / partial | Code path now CI-validated against a live Postgres instance (was compile-check only); SQLite single-writer is still the default deploy. |
 | Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |
 
 ---
