@@ -40,7 +40,7 @@
 | UI: receipts/integrity | Implemented | `ui-next` Integrity page + `provable-timeline` / `receipt-integrity` panels | — | #1825–#1826 | bun test + Playwright | beta | — |
 | UI: panel framework + system catalog | Implemented | `ui-next/src/panels/*`, 10 system boards, charts + decision-graph | — | #1815–#1830 | bun test + E2E mock suite | beta | — |
 | UI: incidents/SOC | Implemented | overview/fleet/incidents system boards + `decision-graph` | richer incident drill-down | #1828 | bun test + Playwright | beta | incident detail |
-| UI: agent-cage console | Implemented | `ui-next/…/runs` (list + pause/resume/kill/quarantine), `/runs/:id` (timeline + runtime events), `/bans`, `/quarantine`, `/egress`, `/graph`, `/policies` | Prompt Timeline / Model Calls pages (backend has no query API yet, ingest-only) | Phased PR plan §11 (PR 9.2/9.3) | bun test | beta | prompt/model query API |
+| UI: agent-cage console | Implemented | `ui-next/…/runs` (list + pause/resume/kill/quarantine), `/runs/:id` (decision timeline, runtime events, prompt timeline, model calls), `/bans`, `/quarantine`, `/egress`, `/graph`, `/policies` | — | Phased PR plan §11 (PR 9.2/9.3) | bun test + Playwright (`mocked-phase9-control-pages.spec.ts`) | beta | — |
 | Agent runs registry (cage control-plane API) | Partial | `lib/storage/src/db/agent_runs.rs`, migration `0026`; `routes/runtime.rs` (`/v1/agent-cage/runs` + controls) | claim/heartbeat/lease APIs + executor not on main (WIP branch) | #1681 | route + storage | beta | cage execution PR |
 | Runtime events ingest + timeline | Partial | `POST /v1/ingest/runtime-events`, `list/query` ASE APIs | rich producers (process/fs/net) on sensor | #1681 | storage + route | beta | sensor collectors |
 | Control commands (signed kill/pause/quarantine) | Partial | store + protocol + gateway issue routes; sensor poll/verify + **host ProcessEnforcer** (SIGTERM/STOP/CONT for registered PIDs); cage-runner Docker kill path | auto PID discovery/collectors; grace_period from command payload | Phased PR plan §5 | storage + sensor unit (real child kill) | beta | collectors |
@@ -50,9 +50,9 @@
 | Agent cage runner | Partial | binary + DockerRuntime + Dockerfile + compose `cage` + Helm; claim lifecycle smoke; host-Docker review + hardened create; `scripts/cage-docker-e2e.sh` + CI job (quick finish + signed kill against real Docker) | sensor↔runner IPC; forced egress netns; product “untrusted→incident” narrative e2e | Phased PR plan §6 | unit (lib) + claim lifecycle + cage-docker-e2e + helm lint | beta (local/k8s) | forced egress + sensor enforce |
 | Egress proxy | Partial | `bins/aegis-egress-proxy` binary + Dockerfile + Helm + compose; `POST /v1/egress/check` | forced cage netns integration; always-on path | Phased PR plan §7 | unit + proxy tests | beta | cage net integration |
 | Tool broker | Partial | `routes/broker.rs`, `lib/tool-broker-core`, `lib/tool-broker-connectors` | standalone broker binary; mandatory path for privileged tools | Phased PR plan §8 | unit + route | beta | binary + force-path |
-| Prompt capture | Implemented | `POST /v1/ingest/prompt-events` (`routes/prompt_capture.rs`), Python SDK emit | Go/TS emit; UI timeline | #1775/#1776 | unit + SDK | beta | UI + SDK parity |
-| Model call capture | Implemented | `POST /v1/ingest/model-calls`; `bins/aegis-llm-gateway` (Phase 7.3) | Dockerfile/Helm/compose for LLM gateway; broader provider adapters | #1775/#1776/#1794 | unit + gateway tests | beta | packaging + adapters |
-| Runtime timeline (UI) | Implemented | APIs: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline`; `provable-timeline` panel (receipts); `ui-next/…/runs/:id` run-detail page renders both | prompt/model timeline pages (backend ingest-only, no query API) | Phase 9.2 | route + bun test | beta | prompt/model query API |
+| Prompt capture | Implemented | `POST /v1/ingest/prompt-events`, `GET .../prompt-events` (`routes/prompt_capture.rs`), Python SDK emit, `ui-next` Prompt Timeline section | Go/TS emit | #1775/#1776 | unit + SDK + bun test | beta | SDK parity |
+| Model call capture | Implemented | `POST /v1/ingest/model-calls`, `GET .../model-calls`; `bins/aegis-llm-gateway` (Phase 7.3); `ui-next` Model Calls section | Dockerfile/Helm/compose for LLM gateway; broader provider adapters | #1775/#1776/#1794 | unit + gateway tests + bun test | beta | packaging + adapters |
+| Runtime timeline (UI) | Implemented | APIs: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline`, `GET /v1/runtime/runs/:id/{prompt-events,model-calls}`; `provable-timeline` panel (receipts); `ui-next/…/runs/:id` run-detail page renders all four | — | Phase 9.2 | route + storage + bun test | beta | — |
 | Deployment (Compose/Helm) | Partial | gateway + sensor + egress-proxy + cage-runner + llm-gateway charts/images; compose full (+ `cage` profile) | broker + UI Helm; multi-replica | #1206, #1297/#1790 | helm lint + e2e | beta (single-writer) | Postgres + multi-replica |
 | Postgres production mode | Partial | `features = postgres`, `migrations_postgres/*` (29 files) | full parity ops path, multi-replica validation, default Helm | #1194 | migration + feature tests | design→beta | Postgres GA |
 | CI / testing / supply chain | Implemented | `.github/workflows/*` (fmt/clippy/tests/coverage/deny; release cosign/SLSA/SBOM) | — | #1172, #1174, #1792 | — | prod | — |
@@ -63,12 +63,12 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave A — P0 unknown-agent control (blocks full control-plane claim)
 
-1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~host Docker security review + sandbox create hardening~~ **Done** (`docs/AegisAgent_Cage_Docker_Security.md`); **remaining:** full Docker e2e  
+1. ~~Cage-runner binary + packaging + Helm~~ **Done**; ~~claim-path smoke~~ **Done**; ~~host Docker security review + sandbox create hardening~~ **Done** (`docs/AegisAgent_Cage_Docker_Security.md`); ~~full Docker e2e~~ **Done** — `scripts/cage-docker-e2e.sh`, CI job `cage-docker-e2e`  
 
 2. Gateway claim/heartbeat/lease APIs — present (`/v1/agent-cage/runs/:id/{claim,heartbeat,status}`)  
 3. ~~Sensor host enforce kill/pause/resume/quarantine~~ **Done** (`process_enforcer` + command_receiver); **remaining:** process collectors that `register_run`  
 
-4. E2E: untrusted agent → cage → egress deny → control action → receipt/incident (Docker)  
+4. ~~E2E: untrusted agent → cage → egress deny → control action → receipt/incident (Docker)~~ **Done** — `scripts/cage-wave-a-e2e.sh` (#1840), now CI-wired as job `cage-wave-a-e2e`: `root_trust_level=untrusted_external` cage run, egress routed through `aegis-egress-proxy --gateway-url` (the real fail-closed `POST /v1/egress/check` path, not the proxy's standalone decider) so a durable deny event + `ActionReceiptRecord` is asserted via `GET /v1/egress/events`, then a signed kill control command. The gateway-mode proxy → deny → receipt mechanism was verified directly (curl through the proxy, inspected the resulting receipt); the full script itself needs a Docker daemon to run and is exercised in CI, not in this sandbox.  
 
 ### Wave B — P1 production ops (blocks multi-tenant HA claim)
 
@@ -79,7 +79,7 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave C — P2 product surface / honesty
 
-9. ~~UI Phase 9.2–9.3 (cage runs, ban/quarantine centers, runtime timelines)~~ **Done** — `ui-next` `/runs`, `/runs/:id`, `/bans`, `/quarantine`, `/egress`, `/graph`, `/policies`; remaining: prompt/model timeline pages once backend gets a query API  
+9. ~~UI Phase 9.2–9.3 (cage runs, ban/quarantine centers, runtime timelines)~~ **Done** — `ui-next` `/runs`, `/runs/:id` (decision timeline, runtime events, prompt timeline, model calls), `/bans`, `/quarantine`, `/egress`, `/graph`, `/policies`  
 10. ~~TypeScript receipt chain verifier parity~~ **Done** (`sdk-typescript/src/receipts.ts` + shared corpus; CI `ts-canon` runs canon + receipts)  
 11. Keep this matrix + `current-vs-roadmap.md` in lockstep with landing PRs  
 12. Branch merge-or-close pass (~80 remote branches)  

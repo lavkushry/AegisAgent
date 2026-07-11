@@ -1,6 +1,6 @@
 # Flow: MCP Gateway
 
-## Simple version
+## Overview
 
 MCP servers are plug-in tool menus for agents. Aegis fingerprints each server's menu when it's registered. Unknown menus don't get served, and a changed menu raises an alarm before anyone orders from it.
 
@@ -31,6 +31,18 @@ MCP is a supply chain. A "rug-pulled" server that quietly adds a parameter or a 
 ## What can go wrong
 
 Never re-discovering means drift is never checked — schedule it. Low-severity metadata drift is still social-engineering surface for approvers.
+
+## Example
+
+```bash
+cargo test -p gateway mcp
+```
+
+Then use the registered demo MCP path to confirm that an unknown server/tool denies and a changed manifest produces drift evidence.
+
+## Security
+
+Normalize identifiers before lookup, deny unknown server/tool, authenticate discovery, bound remote responses/timeouts, verify optional manifest signatures, and never auto-approve drift. “Lite” governance does not intercept traffic that bypasses the gateway-integrated path.
 
 ## Current status
 

@@ -2,6 +2,43 @@
 
 Shared vocabulary for AegisAgent. Terms link to the doc that owns them.
 
+## Overview
+
+Use this page when a product, security, API, or operations term is unfamiliar. The short definition supports first-time readers; the technical definition preserves exact implementation meaning.
+
+> **Status:** Terms reflect the current architecture. Capability status remains authoritative in [Implementation Status](Implementation_Status.md).
+
+## Why This Exists
+
+Security controls fail when teams use the same word for different things—for example, treating an approval status as an executable permission or treating an advisory score as an authorization decision. Shared vocabulary keeps product, code, runbooks, and customer claims aligned.
+
+```mermaid
+mindmap
+  root((AegisAgent))
+    Identity
+      Tenant
+      Agent
+      Token
+    Integrity
+      Canonical action
+      Action hash
+      Approval
+      Receipt
+    Provenance
+      Trust level
+      Trust chain
+    Operations
+      Alert
+      Incident
+      Containment
+```
+
+The map groups terms by the job they perform: identify the actor, preserve exact action identity, track the source of influence, and operate the resulting evidence.
+
+## Usage Example
+
+“The **decision** required an **approval** bound to the **action hash**. The SDK atomically **consumed** it, and the resulting **receipt** linked to the tenant's previous receipt hash.”
+
 ## Key terms, two ways
 
 | Term | Simple | Technical |
@@ -21,8 +58,8 @@ Shared vocabulary for AegisAgent. Terms link to the doc that owns them.
 | **`action_hash`** | SHA-256 of the canonicalized action — the identity that approvals and receipts bind to. |
 | **`aegis-jcs-1`** | The canonical JSON scheme (Unicode-sorted keys, compact separators, raw UTF-8, non-finite floats rejected). Byte-identical across gateway and all SDKs. [ADR-0003](adr/0003-aegis-jcs-1-canonicalization.md) |
 | **Agent (known)** | A cooperative agent integrated via SDK; registered, tokened, policy-governed. |
-| **Agent (anonymous/unknown)** | An untrusted workload; target of the [Agent Cage](AegisAgent_Agent_Cage.md) (📐). |
-| **Agent Cage / cage runner** | Designed disposable sandbox system for unknown agents — no host FS, no raw credentials, no direct internet. 📐 |
+| **Agent (anonymous/unknown)** | An untrusted workload; target of the partial [Agent Cage](AegisAgent_Agent_Cage.md) runtime path. |
+| **Agent Cage / cage runner** | Partial disposable sandbox system for unknown agents; complete sensor/egress/broker force paths remain unfinished. 🟡 |
 | **Agent run** | A registered execution of an agent (`agent_runs`, `POST /v1/agent-cage/runs`). |
 | **Approval** | A human decision bound to an `action_hash`; TTL-limited, single-use. [Approval Integrity](components/Approval_Engine.md) |
 | **Approve-then-swap** | Attack where the action changes after approval; defeated by hash binding. |
@@ -36,7 +73,7 @@ Shared vocabulary for AegisAgent. Terms link to the doc that owns them.
 | **Control command** | Signed, tenant/target-bound, expiring, replay-protected instruction to a node sensor (kill/pause/quarantine…). 🟡 store / 📐 protocol. [Control Command Protocol](AegisAgent_Control_Command_Protocol.md) |
 | **Decision** | The gateway's answer to an authorize call: `allow` / `deny` / `require_approval`, with reason and context. |
 | **Deny-storm** | Burst of denials for one agent — a canonical detection. [runbook](runbooks/deny-storm.md) |
-| **Egress proxy** | Designed network choke point for caged workloads. 📐 [doc](components/Egress_Proxy.md) |
+| **Egress proxy** | Partial network choke point for caged workloads; transparent forced integration remains unfinished. 🟡 [doc](components/Egress_Proxy.md) |
 | **Evidence graph** | Linked structure connecting content → decisions → approvals → receipts → alerts → incidents. [evidence-graph.md](evidence-graph.md) |
 | **Evidence pack** | Exportable compliance bundle (`GET /v1/compliance/evidence-pack`). |
 | **Fail closed** | On any uncertainty (unknown entity, mismatch, expiry, unreachable dependency), refuse. [fail-closed-behavior.md](fail-closed-behavior.md) |
@@ -46,7 +83,7 @@ Shared vocabulary for AegisAgent. Terms link to the doc that owns them.
 | **Inline plane / async plane** | The two-plane principle: synchronous decisions (<75 ms target) vs. out-of-band SOC. |
 | **Manifest drift** | Change in an MCP server's pinned tool manifest; severity-classified alert. [MCP Gateway](components/MCP_Gateway.md) |
 | **MCP** | Model Context Protocol — pluggable tool servers for agents. |
-| **Node sensor** | Designed host-local telemetry + enforcement agent. 📐 [doc](components/Node_Sensor.md) |
+| **Node sensor** | Partial host-local telemetry and enforcement agent; real collectors remain incomplete. 🟡 [doc](components/Node_Sensor.md) |
 | **Playbook** | Automated SOC response recipe (freeze/revoke/quarantine on conditions). |
 | **Receipt (action receipt)** | Hash-chained, optionally Ed25519-signed record of a decision. [spec](action-receipt-spec.md) |
 | **`prev_receipt_hash`** | The chain link: each receipt commits to its predecessor. |
@@ -55,7 +92,7 @@ Shared vocabulary for AegisAgent. Terms link to the doc that owns them.
 | **Run / `run_id`** | Correlation spine tying prompts, decisions, receipts, and events to one agent execution. |
 | **SOC** | Security Operations Center — here, the agent-native async pipeline + console. [SOC Model](components/SOC_Engine.md) |
 | **Tenant** | Isolation boundary; every query binds `tenant_id`. |
-| **Tool broker** | Designed credential-isolation service — agents never hold raw secrets. 📐 [doc](components/Tool_Broker.md) |
+| **Tool broker** | Partial credential-isolation path; standalone packaging and mandatory privileged-tool routing remain incomplete. 🟡 [doc](components/Tool_Broker.md) |
 | **Trust chain propagation** | Downstream hops inherit the most restrictive upstream trust label (`trust_chain::propagate`). |
 | **Two-plane principle** | Decisions inline, monitoring async — SOC latency never delays agents, SOC failure never changes decisions. |
 

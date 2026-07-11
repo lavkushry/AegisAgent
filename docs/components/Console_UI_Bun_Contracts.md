@@ -4,6 +4,26 @@
 **Stack:** Bun + Vite + React 19 + TanStack Query + Zustand + react-router (`/dashboard/`)  
 **Phases:** 0–F shipped; post-phase catalog polish through Explore template (#1819)
 
+## Overview
+
+This page defines the binding build, serving, tenant, token, route, panel, and theme contracts for the production console artifact. It is a reference for frontend, gateway, Docker, CI, and E2E changes.
+
+## Why This Exists
+
+The console spans multiple owners. Without explicit contracts, a frontend build can succeed while the gateway serves the wrong directory, state-changing requests omit CSRF, tenantless queries run, or a panel silently changes the meaning of security evidence.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    SRC[ui-next source] --> BUILD[Bun test + typecheck + Vite build]
+    BUILD --> DIST[ui-next/dist]
+    DIST --> GW[Gateway /dashboard]
+    GW --> BROWSER[React SPA]
+    BROWSER -->|Bearer + tenant + CSRF| API[Gateway /v1]
+    API --> FRAME[Datasource frames] --> PANEL[Allowlisted panels]
+```
+
 ## 1. Deploy / serve contract
 
 | Item | Value |
@@ -154,3 +174,15 @@ Not templated (by design): `settings`, `dashboards` (chrome), `analytics`/`runti
 - Density: `data-density` = `compact` (default) | `cozy`.
 - **Anti-template:** no stock Material / Ant / full shadcn skin. One brand accent (indigo); severity, decision, and trust ramps are reserved (never used for chrome decoration).
 - Persistence keys: `aegis_theme`, `aegis_density` in `localStorage`.
+
+## Security
+
+Production bearer tokens must not persist in browser storage. Empty tenant blocks requests. State-changing requests use the injected CSRF value. Panel/datasource types are allowlisted, attacker-controlled text is escaped/redacted, and visual thresholds cannot change deterministic decision meaning.
+
+## Operations
+
+CI must run Bun tests, typecheck/build, gateway asset serving tests, and relevant Playwright workflows. A rollout verifies the selected bundle, `/dashboard/` deep links, runtime configuration, authentication, tenant scope, CSRF, and one evidence mutation/verification flow. Roll back the UI artifact with a compatible gateway API.
+
+## References
+
+[Console UI Guide](Console_UI.md) · [Frontend Onboarding](../onboarding/For_Frontend_Engineer.md) · [Console Design System](../AegisAgent_SOC_Console_Design_System.md) · [API Reference](../api-reference.md) · [Implementation Status](../Implementation_Status.md)

@@ -2,6 +2,12 @@
 
 **Goal:** investigate an agent incident end-to-end in ~10 minutes.
 
+> **Status:** Gateway evidence, deterministic detection/correlation, incidents, queries, evidence export, and the beta console are implemented. Runtime sensor evidence and force-path containment remain Partial.
+
+## Overview
+
+Your job is to establish what happened, whether evidence is intact, which tenant/agent/actions are affected, whether containment actually reached the deployed control points, and what must be recovered before closure.
+
 ## 1. Your surfaces
 
 - **Console:** `http(s)://<gateway>/dashboard` — overview, fleet, integrity, approvals dashboards; live event stream.
@@ -54,3 +60,19 @@ Frozen/quarantined/revoked agents cannot authenticate — containment is enforce
 ## 7. Read next
 
 [../components/SOC_Engine.md](../components/SOC_Engine.md) · [../AegisAgent_Agent_SOC_Design.md](../AegisAgent_Agent_SOC_Design.md) · [../flows/Ban_Quarantine_Flow.md](../flows/Ban_Quarantine_Flow.md) · [../runbooks/index.md](../runbooks/index.md)
+
+## 8. Security and Failure Handling
+
+- Treat prompt/tool content as attacker-controlled evidence; never execute embedded instructions.
+- Use tenant-scoped queries and verify target identity before containment.
+- Preserve original receipts, exports, timestamps, and custody; never repair hashes.
+- A successful freeze at the gateway does not prove host/network containment unless the runtime force path is deployed.
+- Narration is advisory. Base decisions on deterministic events, stored records, and independently verified receipts.
+
+## 9. Operations and Troubleshooting
+
+If the console is stale or unavailable, use the API/CLI and record the telemetry gap. If receipt verification fails, stop evidence mutation and follow the receipt runbook. If containment fails, revoke upstream credentials and isolate the workload using platform controls. Close only after impact, evidence integrity, containment, recovery, and follow-up ownership are recorded.
+
+## 10. References
+
+[Runbooks](../runbooks/index.md) · [Threat Model](../AegisAgent_Threat_Model.md) · [Receipt Chain Verification](../runbooks/receipt-chain-verification.md) · [Implementation Status](../Implementation_Status.md)

@@ -2,6 +2,14 @@
 
 **Endpoint:** `POST /v1/admin/backup` (#945) · **Restore:** manual procedure (no restore API exists — see below)
 
+> **Status:** Implemented for the SQLite deployment path. PostgreSQL backup/restore requires database-native tooling and a separately tested procedure.
+
+## Overview
+
+Use this runbook before schema-risking changes, during disaster-recovery exercises, or after suspected corruption/deletion. A successful restore is not merely “the process starts”: readiness, expected tenant data, migrations, and receipt-chain integrity must all pass.
+
+Prerequisites are an authenticated admin credential, access to the gateway host/volume, enough backup capacity, a recorded database path, and a maintenance window for restore.
+
 ## Symptoms
 
 - Scheduled maintenance before a risky migration or upgrade.
@@ -47,3 +55,24 @@ Notes:
 - Spot-check that expected data is present: e.g. `GET /v1/agents`, `GET /v1/decisions?limit=5` return data consistent with the backup's point in time (not the bad state you restored away from).
 - `aegis-verify-receipts` or `POST /v1/receipts/verify-chain` against the restored database confirms the receipt hash chain is intact (see [`receipt-chain-verification.md`](receipt-chain-verification.md)) — a restore from a clean backup should never break chain continuity, since `VACUUM INTO` copies the database byte-for-byte at the row level.
 - Once confident, remove the `*.bad-*` file you set aside in step 2 (or archive it for postmortem if the corruption cause is still unclear).
+
+## Security and Failure Handling
+
+- Backups contain tenant data and security evidence. Encrypt them at rest, restrict access, record custody, and apply retention/deletion policy.
+- Never accept a user-controlled path; the API deliberately requires a bare filename under `AEGIS_BACKUP_DIR`.
+- Do not start an older binary against a database whose schema is newer than that binary supports.
+- If receipt verification fails, preserve both restored and displaced databases and treat the result as an evidence-integrity incident.
+- Test restore on an isolated copy before relying on a backup for production recovery.
+
+## Rollback and Recovery
+
+If the restored database fails readiness or verification, stop the gateway and restore the displaced `*.bad-*` database only when doing so is safer and its integrity is understood. Otherwise select an earlier verified backup. Keep traffic disabled until one candidate passes startup, readiness, tenant spot checks, and receipt verification.
+
+Record actual recovery point and recovery time. The product must not claim an RPO/RTO that has not been exercised on deployment-class storage.
+
+## References
+
+- [Receipt Chain Verification](receipt-chain-verification.md)
+- [Deployment Guide](../deployment-guide.md)
+- [Production Hardening](../production-hardening.md)
+- [Fail-Closed Behavior](../fail-closed-behavior.md)

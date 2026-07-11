@@ -5,6 +5,31 @@ its default, when to change it, and what to watch after changing it. For
 the underlying measurements and methodology these defaults were chosen
 against, see [`performance-baseline.md`](performance-baseline.md).
 
+> **Status:** Current tuning reference for the gateway. Historical benchmark values are baselines, not production capacity guarantees.
+
+## Overview
+
+Tune only after measurement. The safe loop is: establish a representative baseline, identify the saturated resource, change one bounded setting, repeat the same workload, verify security and evidence invariants, and keep or roll back the change.
+
+## Why This Exists
+
+Authorization latency is part of agent safety, but unsafe tuning can create larger failures: unbounded queues consume memory, oversized pools worsen SQLite contention, aggressive batching delays evidence, and disabled replay/rate controls improve a benchmark by weakening security.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    LOAD[Agent request load] --> LIMIT[Rate / quota / concurrency]
+    LIMIT --> CACHE[Bounded metadata caches]
+    CACHE --> POLICY[Cedar + canonical hash]
+    POLICY --> POOL[DB connection pool]
+    POOL --> STORE[(Decision / audit / receipt writes)]
+    STORE --> RESPONSE[Authorization response]
+    POLICY -. bounded async .-> SOC[SOC event pipeline]
+```
+
+Measure each stage before tuning. For SQLite-heavy protected traffic, the serialized writer is usually more important than CPU or the number of gateway processes.
+
 All settings below are read once at startup (env vars), logged at `info`
 level on boot, and require a restart to change.
 
@@ -135,3 +160,41 @@ traffic, raise the interval before touching anything else here.
 Change one knob at a time and re-run the relevant benchmark — these settings
 interact (e.g. a bigger DB pool doesn't help if the rate limiter caps load
 well below the pool's capacity first).
+
+## 8. Security and Evidence Guardrails
+
+Performance changes are unacceptable if they weaken authorization or evidence:
+
+- Do not disable replay protection, authentication, tenant checks, or protected receipt durability for a production benchmark.
+- Do not cache allow/deny decisions. Cache only bounded registration/configuration metadata.
+- Keep queues and caches bounded; capacity `0` may disable a protection and must be reviewed setting by setting.
+- Measure low-risk reads and protected writes separately.
+- Preserve the asynchronous SOC design, but alert on event drops rather than hiding them.
+- Verify receipt chains after storage, batching, concurrency, or backend changes.
+
+## 9. Monitoring and Rollback
+
+Capture before/after p50, p95, p99, throughput, errors, CPU, memory, database pool use/wait, storage latency, WAL growth, event drops, and receipt verification. Use the same data set, policy, request mix, concurrency, duration, and host class.
+
+Roll back when latency/error objectives regress, resource saturation moves to a more dangerous boundary, evidence is delayed beyond its requirement, or any security invariant fails. Restore the previous environment values, restart/roll the gateway, repeat the benchmark, and confirm readiness and receipt integrity.
+
+## 10. Troubleshooting
+
+| Symptom | Likely cause | First action |
+|---|---|---|
+| Good p50, extreme p99 | Queueing or writer contention | Inspect pool wait, concurrency, and storage latency |
+| More DB connections, lower throughput | SQLite writer contention | Return to prior pool size; test reads/writes separately |
+| `429` during capacity test | Rate/quota guard is the measured limit | Decide whether testing guard behavior or backend capacity |
+| `503` under load | Concurrency load shedding | Confirm configured ceiling and downstream drain rate |
+| Rising memory | Oversized caches/queues or unbounded client concurrency | Reduce bounded capacities and profile allocations |
+| SOC event drops | Consumer/channel pressure | Inspect detector/exporter; do not move detection inline |
+| Receipt verification failure | Unsafe storage/concurrency change or corruption | Stop test writes and run the receipt verification runbook |
+
+## 11. References
+
+- [Performance Baseline](performance-baseline.md)
+- [Gateway](components/Gateway.md)
+- [Deployment Guide](deployment-guide.md)
+- [Production Hardening](production-hardening.md)
+- [Receipt Chain Verification](runbooks/receipt-chain-verification.md)
+- [Implementation Status](Implementation_Status.md)

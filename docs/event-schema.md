@@ -2,6 +2,7 @@
 
 > **Source of truth:** `lib/soc/src/events.rs` — `AseEvent` struct.
 > **Issue:** [#1388](https://github.com/lavkushry/AegisAgent/issues/1388)
+> **Status:** Schema version `1`; gateway/SOC source is authoritative when this reference and code disagree.
 
 An **Agent Security Event** (`AseEvent`) is the normalized unit that every
 SOC-plane consumer (detection, correlation, response, indexing, WebSocket feed)
@@ -28,7 +29,16 @@ so the inline `/v1/authorize` decision is never delayed by downstream processing
   "reason":          "<human-readable explanation>",
   "run_id":          "<string | null>",
   "trace_id":        "<string | null>",
-  "matched_policies": ["<policy_id>", ...]
+  "matched_policies": ["<policy_id>", ...],
+  "redacted_fields": [],
+  "schema_version": 1,
+  "evidence": {
+    "decision_id": "<uuid | null>",
+    "action_hash": "<sha256 | null>",
+    "receipt_id": "<uuid | null>",
+    "receipt_hash": "<sha256 | null>",
+    "source_trust": "<trust level | null>"
+  }
 }
 ```
 
@@ -50,6 +60,11 @@ so the inline `/v1/authorize` decision is never delayed by downstream processing
 | `run_id` | string or null | no | Caller-supplied agent run identifier, propagated from `AuthorizeRequest.trace.run_id`. Null when absent. |
 | `trace_id` | string or null | no | Caller-supplied distributed trace identifier, propagated from `AuthorizeRequest.trace.trace_id`. Null when absent. |
 | `matched_policies` | array of strings | **yes** | Cedar policy IDs that matched this request (e.g. `["policy1"]`). Empty array for ingested events. |
+| `redacted_fields` | array of strings | **yes** | Parameter paths removed when the decision is `redact`; empty otherwise. |
+| `schema_version` | integer | **yes** | Event contract version; defaults to `1` when deserializing pre-field events. |
+| `evidence` | object or null | no | Decision/approval/action/receipt identifiers and trust linkage; hashes/IDs only, never secrets. |
+| `prompt_injection` | object or null | no | Pattern counts and advisory scan score for relevant agent-input events; no raw input. |
+| `rag_poisoning` | object or null | no | Trust and hit-count metadata for relevant RAG/memory events; no raw document content. |
 
 ---
 
@@ -245,7 +260,7 @@ The stateful correlator (`lib/soc/src/correlate.rs`) groups events into
 
 ## Versioning
 
-The `AseEvent` schema is **v0** (implicit). When a breaking field change is
+The `AseEvent` schema is **v1** (`schema_version`, defaulting to `1` when older serialized events omit it). When a breaking field change is
 needed:
 
 1. Bump the schema version in a new field, e.g. `"schema_version": "v1"`.
@@ -291,3 +306,7 @@ AseEvent {
 
 Emit via `state.events.emit(event)` — the call is non-blocking and never
 propagates an error to the caller.
+
+## References
+
+[SOC Engine](components/SOC_Engine.md) · [SOC Incident Flow](flows/SOC_Incident_Flow.md) · [Evidence Graph](evidence-graph.md) · [Action Receipt Specification](action-receipt-spec.md) · [Implementation Status](Implementation_Status.md)

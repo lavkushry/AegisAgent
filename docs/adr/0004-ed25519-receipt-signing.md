@@ -36,11 +36,10 @@ weakens the chain's own tamper-evidence.
   inform the integrity primitives") — Sigstore/cosign use Ed25519 (or
   ECDSA P-256) as their default signing scheme, so this is a well-trodden
   choice for transparency-log-style evidence rather than a novel one.
-- Key management is currently a single hex secret in an environment
-  variable — adequate for self-hosted MVP, but `action-receipt-spec.md`
-  itself flags the real next step as "Enterprise: KMS-backed signing" once
-  a tenant needs hardware-backed or rotated keys, which Ed25519's
-  raw-secret-in-env model doesn't provide on its own.
+- Local key management supports a hex secret and key identifier. KMS-backed
+  signing paths also exist, but provider-specific provisioning, rotation, and
+  operational validation remain deployment responsibilities; signing is beta
+  rather than a universal default.
 - Verification (`GET /v1/receipts/:id/verify`) only checks the signature
   against the stored `receipt_hash` — it does not (yet) anchor to an
   external transparency log, so "verifiable" today means "verifiable given
@@ -64,7 +63,22 @@ weakens the chain's own tamper-evidence.
 
 ## Revisit when
 
-A tenant's compliance requirement needs KMS-backed or HSM-backed keys rather
-than an environment-variable secret, or transparency-log anchoring
-(mentioned as a future enterprise tier in `action-receipt-spec.md`) is
-actually built.
+A tenant requires an unsupported HSM/provider, external transparency-log
+anchoring, multi-party key custody, or cryptographic agility beyond Ed25519.
+
+## Security consequences
+
+Private keys never enter receipts or logs. Verification records the signer identity used at creation so historical receipts survive rotation. Signature success does not replace receipt hash-chain verification, and a gateway-claimed public key is not the same as an independently anchored identity.
+
+## Verification
+
+```bash
+cargo test -p gateway sign
+python3 -m aegisagent.verify_receipts receipts.json
+```
+
+Test unsigned, locally signed, rotated-key, invalid-signature, and configured KMS paths separately.
+
+## References
+
+[Receipt Engine](../components/Receipt_Engine.md) · [Receipt Specification](../action-receipt-spec.md) · [Secret Rotation](../runbooks/secret-rotation.md)

@@ -34,11 +34,11 @@ specifics (WAL, busy-timeout, tenant-id indexing).
   via a Tokio channel, but this is a real ceiling, not a workaround that
   scales indefinitely.
 - Because all queries go through SQLx with parameterized binds (never string
-  interpolation) and the schema is designed tenant-scoped from the start,
-  the eventual Postgres retarget is a connection-string and dialect change,
-  not a rewrite — but it has not yet been built or load-tested as of this
-  writing (`docs/AegisAgent_Gap_Reassessment_2026-06.md` lists "PostgreSQL
-  backend" under "Next").
+  interpolation) and the schema is tenant-scoped, the PostgreSQL feature and
+  migrations now exist without changing handler ownership. The production
+  multi-replica operations path remains Partial: failover, migration, replay,
+  receipt-ordering, and load validation must pass before it is a generally
+  supported HA claim.
 - Compile-time query checking (`sqlx::query!`) ties CI to either a live
   SQLite DB or a committed `sqlx-data.json` offline cache that must be kept
   in sync with schema migrations.
@@ -59,4 +59,21 @@ specifics (WAL, busy-timeout, tenant-id indexing).
 A self-hosted deployment's write volume (audit events, decisions, SOC
 events) starts hitting SQLite's single-writer ceiling in practice, or a
 customer's multi-node / HA requirement forces the Postgres backend to be
-built out rather than remain a documented future tier.
+built out and validated as a supported product tier.
+
+## Security consequences
+
+Every tenant-owned query binds `tenant_id` through `StorageBackend`; SQL is parameterized; handlers never receive a raw pool. SQLite encryption requires the SQLCipher build and fails startup when misconfigured. Backups and database files contain security evidence and require protected custody.
+
+## Verification
+
+```bash
+cargo test -p aegis-storage
+cargo check -p aegis-storage --features postgres
+```
+
+Compilation is not HA acceptance. Multi-replica status remains governed by [Implementation Status](../Implementation_Status.md).
+
+## References
+
+[Storage](../components/Storage.md) · [Database Schema](../database-schema.md) · [Backup and Restore](../runbooks/backup-and-restore.md) · [Implementation Status](../Implementation_Status.md)

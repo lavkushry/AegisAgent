@@ -2,6 +2,12 @@
 
 *Sixty seconds. No jargon.*
 
+## Overview
+
+Remember three ideas: Aegis checks actions rather than trusting generated text; a human approval is bound to one exact action; and every protected decision leaves independently verifiable evidence.
+
+> **Status:** These known-agent integrity capabilities are implemented. Cage, sensor, forced egress, broker enforcement, and multi-replica HA remain Partial.
+
 ## The problem
 
 Companies are handing AI agents real power: credentials, APIs, code, money, customer data.
@@ -42,3 +48,11 @@ flowchart LR
 - The mechanism, step by step: [How_It_Works.md](How_It_Works.md)
 - I'm a developer — integrate now: [onboarding/For_SDK_Developer.md](onboarding/For_SDK_Developer.md)
 - The full story with code references: [Last_Mile_System_Walkthrough.md](Last_Mile_System_Walkthrough.md)
+
+## Try It
+
+```bash
+make demo
+```
+
+The expected outcome is a blocked malicious action, a rejected action swap/replay, and a verified receipt chain—not merely a running dashboard.

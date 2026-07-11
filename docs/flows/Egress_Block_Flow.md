@@ -1,8 +1,8 @@
 # Flow: Egress Block
 
-> **Status: Planned (Phase 5). No implementation files yet.** This page describes the target flow; the normative design is [../components/Egress_Proxy.md](../components/Egress_Proxy.md).
+> **Status: Partial.** The egress binary, decision route, tests, and packaging exist; forced transparent cage networking remains incomplete. Normative component guide: [Egress Proxy](../components/Egress_Proxy.md).
 
-## Simple version
+## Overview
 
 A caged agent has exactly one road to the internet: the egress proxy. Allowed destinations pass. Everything else is blocked — and every block becomes evidence.
 
@@ -10,7 +10,7 @@ A caged agent has exactly one road to the internet: the egress proxy. Allowed de
 
 ```mermaid
 flowchart LR
-    SB[caged agent] -->|only route| EP[egress proxy*]
+    SB[caged agent] -->|target forced route 🟡| EP[egress proxy]
     EP --> MODE{mode}
     MODE -->|observe| LOG[log + forward]
     MODE -->|enforce| CHK{allowlisted?}
@@ -20,7 +20,7 @@ flowchart LR
     BLK & LOG & ALL --> EVT[runtime event → SOC]
 ```
 
-## Step by step (target)
+## Step by step
 
 1. The cage runner wires sandbox networking so the proxy is the only route (DNS included, to stop tunneling).
 2. Tenant egress policy (domains/CIDRs/ports per run or agent) comes from the gateway.
@@ -36,6 +36,19 @@ Exfiltration is the endgame of most agent attacks. You can't reliably filter *co
 ## Honest scope
 
 The proxy controls traffic forced through it. A workload outside the cage with its own network path is out of scope — which is why unknown agents only run caged, and why non-proxy traffic seen by the sensor is itself a detection signal.
+
+## Example
+
+```bash
+cargo test -p aegis-egress
+cargo test -p aegis-egress-proxy
+```
+
+These tests prove policy/proxy behavior, not transparent network force. The full acceptance test must demonstrate that a caged workload cannot reach a destination around the proxy.
+
+## Security
+
+Enforce/lockdown deny when policy is unavailable, normalize and validate destinations, control DNS, block metadata/loopback bypasses as policy requires, redact credentials/bodies, and alert on any direct-network observation.
 
 ## Related docs
 

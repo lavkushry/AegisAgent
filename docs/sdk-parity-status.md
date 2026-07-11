@@ -1,5 +1,7 @@
 # SDK parity status
 
+> **Status:** Python and TypeScript integrity/receipt paths are production-ready. Go is beta because prompt/model emission parity remains incomplete; all three pass canonicalization and receipt verification corpora.
+
 AegisAgent ships three first-class SDKs. All canonicalize the action with the
 **`aegis-jcs-1`** scheme byte-identically (locked by `tests/canonical_action_vectors.json`
 + `tests/receipt_chain_vectors.json` and a 4-language CI gate), and all enforce the
@@ -19,6 +21,7 @@ or unreachable gateway for a mutating/high-risk action.
 | Approve/reject a pending approval | ✅ | ✅ (#1183) | ✅ (#1182) |
 | SOC query methods (alerts/incidents/summary) | ✅ | ✅ (#1183) | ✅ (#1182) |
 | Context-based cancellation on every client call | n/a (Python uses per-call `timeout`) | ✅ (#1183, `context.Context` first param) | n/a (JS uses `AbortSignal` internally) |
+| Prompt/model capture emission | ✅ prompt emit | 🟡 incomplete | 🟡 incomplete |
 
 **Reference oracle:** Python is the reference implementation; Go and TS are verified against
 the same shared corpus. Any divergence fails CI (`Go SDK canon byte-parity`, `TS SDK canon
@@ -32,3 +35,17 @@ The Go SDK parity goal — `canon` + `aegis.Client` + fail-closed `aegis.Protect
 chain verifier, all under `sdk-go/` with `go test ./...` green and the `Go SDK canon byte-parity`
 CI gate — is likewise complete; this document records that the `track/go-sdk` task stubs are
 satisfied by the shipped code.
+
+## Verification
+
+```bash
+python3 -m unittest discover -s sdk-python/tests
+(cd sdk-go && go test ./...)
+(cd sdk-typescript && npm test && npx tsc --noEmit)
+```
+
+Parity requires shared corpus success, not only language-local tests. Compare canonical UTF-8 bytes and receipt verification results across all implementations.
+
+## References
+
+[SDK Guide](components/SDK.md) · [SDK Onboarding](onboarding/For_SDK_Developer.md) · [Canonicalization ADR](adr/0003-aegis-jcs-1-canonicalization.md) · [Implementation Status](Implementation_Status.md)

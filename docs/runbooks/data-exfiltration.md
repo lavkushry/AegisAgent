@@ -2,6 +2,12 @@
 
 **Incident kind:** `data_exfil_pattern` · **Severity:** `high` · **Detection rule:** `correlate::rule_data_exfil`
 
+> **Status:** Implemented heuristic correlation for gateway evidence. It is not content-aware DLP and does not prove delivery to an external destination.
+
+## Overview
+
+Use this runbook when one agent performs a source-like read followed by a sink-like external write within the correlation window. Contain first, preserve evidence, determine what data and destination were involved, rotate potentially exposed credentials, and verify both Aegis state and the external destination.
+
 ## Symptoms
 
 - A SOC alert/incident with `kind: "data_exfil_pattern"` appears in `GET /v1/incidents`.
@@ -59,3 +65,23 @@ This pattern is higher-confidence-malicious than a deny storm — default to con
 - `GET /v1/incidents/<incident_id>` shows `status: "closed"`.
 - If a destination cleanup was needed, confirm directly against that external system (outside AegisAgent's scope) — note this in the incident close reason for the audit trail.
 - No repeat `data_exfil_pattern` incident for the same agent in the following `EXFIL_WINDOW_SECS` (120s) window.
+
+## Security and Failure Handling
+
+- Treat attacker-controlled prompt/tool content as inert evidence; do not follow instructions embedded in it.
+- Do not copy sensitive source data into incident chat or tickets. Record identifiers, hashes, and protected evidence locations.
+- Freezing the agent does not recall data already delivered. Confirm destination cleanup independently.
+- A missing correlation is not proof of safety; the detector uses action-name heuristics and deployed evidence only.
+- If containment fails, revoke credentials at the upstream tool/provider and restrict network access using external controls.
+
+## Rollback and Recovery
+
+Do not unfreeze solely because the incident was closed. Restore the agent only after the trigger source, policy gap, credentials, destination impact, and agent configuration are understood. Re-enable with a fresh token and a low-risk verification action; monitor for at least one correlation window.
+
+## References
+
+- [Threat Model](../AegisAgent_Threat_Model.md)
+- [Evidence Graph](../evidence-graph.md)
+- [Agent Token Rotation](agent-token-rotation.md)
+- [Receipt Chain Verification](receipt-chain-verification.md)
+- [Fail-Closed Behavior](../fail-closed-behavior.md)

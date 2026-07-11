@@ -77,3 +77,20 @@ No planned revisit — this is a foundational invariant of the product, not a
 tradeoff expected to flip with scale or a new deployment tier. A change here
 would need to be a deliberate, reviewed decision, not an incidental side
 effect of unrelated work.
+
+## Security consequences
+
+Availability loss can stop protected actions, which makes gateway/storage reliability a security dependency. SOC detection remains asynchronous and may degrade without changing a decision, but protected evidence, identity, policy, approval, or exact-action uncertainty never becomes permission.
+
+## Verification
+
+```bash
+make demo
+cargo test --workspace -- --test-threads=1
+```
+
+Release tests include gateway loss, invalid identity, unknown tool, expired/mismatched/replayed approval, policy failure, protected receipt failure, and cross-tenant requests.
+
+## References
+
+[Fail-Closed Behavior](../fail-closed-behavior.md) · [Threat Model](../AegisAgent_Threat_Model.md) · [Known Agent Flow](../flows/Known_Agent_Flow.md)

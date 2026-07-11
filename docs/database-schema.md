@@ -1,6 +1,8 @@
 # Database schema (ERD)
 
-The gateway uses a single SQLite database (`lib/storage/src/db/mod.rs`, `run_migrations`).
+> **Status:** SQLite schema is production-ready for the single-writer path. PostgreSQL migrations/backend exist but multi-replica operations remain Partial.
+
+The gateway uses the trait-backed relational storage layer in `lib/storage/`; SQLite is the default local/single-writer database and PostgreSQL is an optional validation path.
 Every tenant-owned table carries a `tenant_id` column, and every tenant-scoped
 query filters/binds on it (multi-tenant isolation — see `CLAUDE.md`). New
 columns are added via additive `ensure_*_column` migrations (checked with
@@ -271,3 +273,16 @@ erDiagram
   re-running `run_migrations` against an already-migrated database is a no-op
   (locked in by `db::tests::migrations_are_idempotent_on_existing_database`, #0108).
 - **Qdrant Vector Database:** When enabled, Agent Security Events (`AseEvent`) are asynchronously vectorized and indexed in Qdrant. See the [Qdrant guide](qdrant-integration.md) for details on semantic indexing and configurations.
+
+## Verification
+
+```bash
+cargo test -p aegis-storage
+cargo check -p aegis-storage --features postgres
+```
+
+After backup/restore or schema-affecting rollout, verify readiness, tenant spot checks, migration state, and the receipt chain. Compilation of the PostgreSQL feature is not proof of production HA.
+
+## References
+
+[Storage Component](components/Storage.md) · [SQLite ADR](adr/0002-sqlite-first-storage.md) · [Backup and Restore](runbooks/backup-and-restore.md) · [Receipt Chain Verification](runbooks/receipt-chain-verification.md) · [Implementation Status](Implementation_Status.md)

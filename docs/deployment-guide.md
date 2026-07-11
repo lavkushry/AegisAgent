@@ -4,6 +4,33 @@ Production deployment reference for the AegisAgent gateway: Docker Compose, Kube
 
 This page assumes you've already read [`docs/getting-started.md`](getting-started.md) or [`docs/quickstart.md`](quickstart.md) for the zero-setup demo. It's about running the gateway as a real, long-lived service.
 
+> **Status:** The known-agent gateway is production-hardened for a single-writer topology. Runtime data-plane packaging and multi-replica PostgreSQL operations remain Partial; check [Implementation Status](Implementation_Status.md).
+
+## Overview
+
+This guide takes an operator from a tested artifact to a running, observable, recoverable gateway. It covers the shipped deployment paths, their trust boundaries, configuration, capacity constraints, verification, rollback, backup, and disaster recovery.
+
+## Why This Exists
+
+An authorization service is part of the action safety boundary. A deployment that exposes an unauthenticated listener, loses receipt evidence, runs multiple SQLite writers, or routes traffic before readiness can undermine otherwise-correct policy and SDK behavior. Deployment requirements therefore include security and evidence integrity, not only process availability.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    AGENTS[Agent workloads] -->|HTTPS REST :8080 / gRPC :6334| EDGE[TLS ingress or controlled network]
+    ADMINS[Operators / approvers] --> EDGE
+    EDGE --> GW[AegisAgent gateway]
+    GW --> DB[(Durable relational storage)]
+    GW --> POL[Mounted Cedar policy]
+    KMS[Secret manager / KMS] --> GW
+    GW --> PROM[Prometheus]
+    GW -. OTLP / export .-> OBS[Collector / SIEM]
+    BACKUP[Encrypted backup target] <-->|backup / restore| DB
+```
+
+The listener is the outer trust boundary; authenticated tenant handling and policy form the decision boundary; the database and signer protect the evidence boundary. Keep loopback defaults for local development and add TLS/authentication before any public bind.
+
 ## 1. Docker Compose
 
 The repo ships two compose files:
@@ -241,3 +268,30 @@ Don't size for "N agents" or "M events/sec" in the abstract — size for the one
 **Practical reading**: on hardware comparable to the benchmark (Intel Xeon Gold 6230R, 15 GiB RAM), a single gateway instance sustains **~130–150 `/v1/authorize` req/s** with excellent latency. Past that, requests queue behind SQLite's write lock faster than the two synchronous writes per request (`decisions` + `audit_events`) can drain, and latency falls off a cliff rather than degrading gracefully — plan capacity with headroom below that ceiling, not up to it.
 
 This is a property of the storage backend, not of CPU/memory/replica count — adding more gateway replicas in front of the *same* SQLite file does not raise this ceiling (they'd all serialize on the same WAL writer lock), which is why the Helm chart defaults to `replicaCount: 1`. If your expected load is within the ~100 req/s range, a single instance sized at the chart's default `resources` (100m/128Mi requests, 500m/512Mi limits) is sufficient headroom. If you need materially more throughput, the PostgreSQL backend (#1194) is the tracked path to MVCC-based concurrent writers and is the right point to revisit both `replicaCount` and the HPA — not before.
+
+## 7. Security and Trust Boundaries
+
+- Require TLS and authenticated tenant identity before binding beyond loopback.
+- Restrict `/metrics`, admin, debug, backup, policy, and containment surfaces with the documented guards.
+- Store JWT, webhook, database-encryption, KMS, and signing secrets outside manifests and shell history.
+- Set admission-webhook failure behavior deliberately. A fail-open webhook may be acceptable only when it is advisory and deterministic Aegis policy still protects the action; use fail-closed behavior when the webhook is a required control.
+- Keep NetworkPolicy default-deny and allow only agent workloads, ingress, storage, telemetry, and required integrations.
+- Treat the SQLite file, backups, receipt signing material, and Cedar policy as security assets.
+- Do not claim unknown-agent containment unless cage, sensor, egress, broker, ban, and quarantine force paths are deployed and verified.
+
+## 8. Operations, Rollback, and Disaster Recovery
+
+Before rollout, record the current image digest, policy version/hash, schema version, configuration, and receipt-chain head. Use startup/readiness probes and shift traffic only after a functional authorization and receipt verification.
+
+For a canary, use an independent database or dry-run/mirrored requests; do not let two incompatible versions write one SQLite file. Roll back the image and compatible policy together. Database rollback means restoring a tested backup with the gateway stopped, then running readiness, tenant spot checks, and receipt verification before reopening traffic.
+
+Exercise the [Backup and Restore](runbooks/backup-and-restore.md), [Receipt Chain Verification](runbooks/receipt-chain-verification.md), and [Secret Rotation](runbooks/secret-rotation.md) runbooks. Publish only RPO/RTO values demonstrated on deployment-class infrastructure.
+
+## 9. References
+
+- [Production Hardening](production-hardening.md)
+- [Performance Baseline](performance-baseline.md)
+- [Performance Tuning](performance-tuning-guide.md)
+- [Operational Design](AegisAgent_Operational_Design.md)
+- [Implementation Status](Implementation_Status.md)
+- [Runbooks](runbooks/index.md)

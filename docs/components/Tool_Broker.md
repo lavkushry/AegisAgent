@@ -1,10 +1,10 @@
 # Tool Broker (`aegis-tool-broker`)
 
-**Status: 📐 Planned (Phase 6)** — no broker service exists in this repository yet. This page records the target design; implementation tracking: [Implementation_Status.md](../Implementation_Status.md).
+**Status: 🟡 Partial** — broker core/connectors and `POST /v1/broker/execute` exist. A standalone broker binary and mandatory privileged-tool force path remain incomplete; implementation tracking: [Implementation Status](../Implementation_Status.md).
 
-## 1. One-sentence summary
+## Overview
 
-The tool broker is the planned credential-isolation choke point: caged agents never hold raw secrets — they ask the broker to perform tool/API calls, and the broker injects credentials server-side only after the gateway authorizes the exact action.
+The tool broker is the credential-isolation choke point: agents request a registered operation, the broker authorizes the exact action, injects provider credentials server-side, executes through a typed connector, and redacts evidence.
 
 ## 2. Why it exists
 
@@ -14,7 +14,20 @@ If an agent process holds an API key, a successful prompt injection owns that ke
 
 A hotel concierge with the master keycard: guests (agents) can request "open the gym," the concierge checks the guest is allowed, opens the door, and logs it. Guests never touch the keycard, so a pickpocketed guest loses nothing.
 
-## 4. Target design
+## 4. Architecture
+
+```mermaid
+flowchart LR
+    AGENT[Agent without provider secret] --> BROKER[Broker execute]
+    BROKER --> AUTH[Gateway authorize exact action]
+    AUTH -->|deny / approval invalid| STOP[Refuse]
+    AUTH -->|allow| CONN[Typed connector]
+    SECRET[Secret store / KMS] --> CONN
+    CONN --> API[Provider API]
+    BROKER -. redacted evidence .-> SOC[SOC / receipt]
+```
+
+## 5. Current and target behavior
 
 - Sandboxed agents get a broker endpoint + per-run scoped broker token — never provider credentials.
 - Request shape mirrors the authorize contract: tool, action, parameters → canonicalized → `action_hash`.
@@ -23,10 +36,27 @@ A hotel concierge with the master keycard: guests (agents) can request "open the
 - Every brokered call emits a runtime/SOC event and rides the receipt chain — same evidence model as SDK calls.
 - Relationship to existing pieces: per-agent tool permissions ✅ (migration 0013), action registry ✅, approval engine ✅ — the broker is a new *enforcement front-end* over the already-implemented decision core.
 
-## 5. Honest scope
+## 6. Honest scope
 
 The broker protects credentials for calls that go **through the broker**. A known agent that is handed a raw key by its operator is protected only by SDK-level controls; the broker's guarantee is specifically for caged/anonymous workloads where Aegis provisions the environment.
 
-## 6. Related docs
+## Example
+
+```bash
+cargo test -p aegis-tool-broker-core
+cargo test -p aegis-tool-broker-connectors
+```
+
+Route tests cover the gateway execution surface. End-to-end acceptance still requires a workload that cannot access the provider except through the broker.
+
+## Security
+
+Connectors must be typed and allowlisted, never arbitrary shell or arbitrary URL execution. Secrets stay out of agent memory, request/response logs, receipts, and error text. Authorization, approval consume, tenant binding, destination validation, timeouts, and response-size limits apply before returning data.
+
+## Operations
+
+Monitor connector latency/errors, secret-provider health, authorization outcomes, redaction failures, and bypass attempts. On broker or secret-store failure, privileged calls fail closed. Rotate provider credentials independently and verify old credentials are rejected.
+
+## References
 
 [AegisAgent_Agent_Cage.md](../AegisAgent_Agent_Cage.md) · [AegisAgent_Runtime_Data_Plane.md](../AegisAgent_Runtime_Data_Plane.md) · [components/Approval_Engine.md](Approval_Engine.md) · [components/MCP_Gateway.md](MCP_Gateway.md) · roadmap: [AegisAgent_Phased_PR_Plan.md](../AegisAgent_Phased_PR_Plan.md) §Phase 6 · [runbooks/secret-rotation.md](../runbooks/secret-rotation.md)

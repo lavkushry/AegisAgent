@@ -72,6 +72,8 @@ exclude_docs: |
   AegisAgent_Market_Gap_Analysis.md
   AegisAgent_Product_Research.md
   AegisAgent_GTM_Document.md
+  Product_Requirements_Traceability.md
+  Documentation_Quality_Report.md
 
 nav:
   - Home: index.md

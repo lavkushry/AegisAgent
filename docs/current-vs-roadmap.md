@@ -40,19 +40,17 @@ Strongest current capabilities:
 - **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs); not full process/fs/net collectors
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
-- **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e still open
-- **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph) plus cage runs / ban / quarantine / egress / evidence-graph / policy product pages; missing prompt/model timeline pages (backend has no query API yet)
+- **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, both CI-wired)
+- **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph) plus cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls product pages — Phase 9.2/9.3 complete
 - **Deploy** — gateway + sensor + egress + cage + llm-gateway Helm; single-writer SQLite default
 - **Postgres** — feature + migrations exist; not the default HA production path
 
 ### Roadmap / not done
 
-- cage full Docker e2e (untrusted → cage → control) (P0; security review + packaging done)
 - sensor real telemetry + host enforce (P0)
 - transparent / netns forced egress (no raw-socket bypass) (P0 residual after proxy-env force)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
-- prompt/model timeline console pages, blocked on a backend query API for prompt-events/model-calls (P2)
 
 ---
 
@@ -75,9 +73,9 @@ Strongest current capabilities:
 | SOC query / incidents | Available today | Async detect/correlate + query API + schema-driven UI. |
 | TypeScript SDK | Available today | Canon + protect + client + receipt chain verifier (shared corpus). |
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
-| Full web console | Available today | Bun SPA panel suite + cage runs / ban / quarantine / egress / evidence-graph / policy pages shipped; prompt/model timeline pages pending a backend query API. |
+| Full web console | Available today | Bun SPA panel suite + cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls pages shipped (Phase 9.2/9.3 complete). |
 | Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
-| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; e2e still open. |
+| Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, CI-wired). |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
 | Signed control commands | Partial | Issue + sensor poll + host PID enforce; auto discovery incomplete. |

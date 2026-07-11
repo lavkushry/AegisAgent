@@ -1,8 +1,19 @@
 # Why AegisAgent?
 
-## Simple version
+## Overview
 
 You wouldn't give a new employee production credentials with no review, no log, and no way to fire them. AI agents get exactly that every day. AegisAgent gives you the review, the log, and the off switch.
+
+```mermaid
+flowchart LR
+    U[Untrusted source] --> A[Agent proposes action]
+    A --> C[Aegis checks source + exact action]
+    C --> P[Policy / approval]
+    P --> E[Execute or fail closed]
+    C --> R[Verifiable receipt]
+```
+
+The diagram shows the difference from prompt-only defenses: source and exact action identity reach the control before execution, and proof is produced alongside the decision.
 
 ## The three problems
 
@@ -45,3 +56,11 @@ Everything above except runtime containment of unknown agents is Implemented —
 ## Related docs
 
 [What_Is_AegisAgent.md](What_Is_AegisAgent.md) · [The_One_Minute_Tour.md](The_One_Minute_Tour.md) · [AegisAgent_Threat_Model.md](AegisAgent_Threat_Model.md) · [Product_Overview.md](Product_Overview.md)
+
+## See the Difference
+
+```bash
+make demo
+```
+
+The demo proves both “trust the source” and “make the approval trustworthy” with negative cases.

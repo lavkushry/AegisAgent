@@ -1,18 +1,50 @@
 # Fail-closed behavior guide
 
-> **Design philosophy:** mutating or high-risk actions fail **closed** — the
-> action is denied — whenever AegisAgent cannot positively confirm it is
-> safe to proceed (unreachable component, expired/mismatched approval, full
-> audit pipeline, unknown principal/tool, untrusted provenance). Only
-> non-mutating, **low**-risk reads are ever allowed to degrade gracefully,
-> and even then only where explicitly noted below. The SOC pipeline (alerts,
-> incidents, notifications) is asynchronous by construction and its failure
-> **never** flips an authorize decision from deny to allow.
->
-> See [`AegisAgent_Threat_Model.md`](AegisAgent_Threat_Model.md) for the
-> threat catalogue this table defends against, and
-> [`AegisAgent_Agent_Workflow.md`](AegisAgent_Agent_Workflow.md) for the
-> end-to-end request lifecycle.
+> **Status:** Current guarantee catalogue for the implemented known-agent integrity path. Runtime cage/sensor/egress guarantees remain limited by [Implementation Status](Implementation_Status.md).
+
+## Overview
+
+**Fail closed** means refusing an action when AegisAgent cannot positively establish that the action is permitted and can be recorded with the required evidence. A timeout, unknown identity, invalid approval, policy failure, or protected receipt failure must not become permission.
+
+Mutating or high-risk actions fail closed. Only explicitly documented low-risk, non-mutating behavior may degrade gracefully. The asynchronous SOC may lose detection availability, but its failure never changes a deny into an allow.
+
+## Why This Exists
+
+Agent actions can change production systems. Treating “the control did not answer” as “permission granted” converts an availability incident into a security incident. The fail-closed contract lets SDK authors, operators, approvers, and auditors predict the result of dependency failure before it happens.
+
+## Architecture
+
+Follow the solid path for authorization and the dotted path for asynchronous detection. Failure before protected execution reaches an allow result stops the tool call.
+
+```mermaid
+flowchart LR
+    SDK[Agent SDK] --> GW[Gateway guards]
+    GW --> POLICY[Deterministic policy]
+    POLICY --> APPROVAL[Exact-action approval]
+    APPROVAL --> RECEIPT[Durable protected receipt]
+    RECEIPT --> EXEC{Execute?}
+    EXEC -->|allow and valid| TOOL[Tool]
+    EXEC -->|deny / unknown / failure| STOP[Do not execute]
+    GW -. non-blocking event .-> SOC[SOC]
+    SOC -. degradation is observable .-> ALERT[Metrics / alert]
+```
+
+The SOC path is deliberately asynchronous. Protected receipt persistence is not: a protected action cannot report success without its durable evidence identity.
+
+## Security
+
+The contract defends approval manipulation, replay, confused-deputy behavior, unknown principals/tools, cross-tenant ambiguity, unrecorded protected mutation, and unsafe startup configuration. It does not prove control over an agent that bypasses every deployed Aegis control point.
+
+## Quick Verification
+
+From the repository root, exercise the negative integrity cases and then verify service state:
+
+```bash
+make demo
+curl -fsS http://127.0.0.1:8080/readyz
+```
+
+The demo must show that a swapped hash and a replay do not execute. `readyz` must return success only when storage and tracked background tasks are healthy.
 
 ## Quick reference table
 
@@ -97,3 +129,18 @@ audit/event pipeline, approval store, MCP registry) becomes unavailable,
 recovers. Only low-risk, non-mutating reads may continue. No failure mode in
 this table results in a mutating action executing without a verified
 approval and a durable receipt.
+
+## Monitoring and Operations
+
+Alert on readiness failure, protected receipt write failure, receipt-chain integrity failure, sustained SOC event drops, hash-mismatch spikes, replay conflicts, and authentication lockouts. During dependency failure, stop routing traffic, preserve evidence, restore the dependency, verify the receipt chain, and reopen traffic gradually. Never modify an SDK to fail open as an outage workaround.
+
+Use [Deny Storm](runbooks/deny-storm.md), [Receipt Chain Verification](runbooks/receipt-chain-verification.md), [Backup and Restore](runbooks/backup-and-restore.md), and [Secret Rotation](runbooks/secret-rotation.md) for operational response.
+
+## References
+
+- [Threat Model](AegisAgent_Threat_Model.md)
+- [Agent Workflow](AegisAgent_Agent_Workflow.md)
+- [Approval Engine](components/Approval_Engine.md)
+- [Receipt Engine](components/Receipt_Engine.md)
+- [Production Hardening](production-hardening.md)
+- [Implementation Status](Implementation_Status.md)

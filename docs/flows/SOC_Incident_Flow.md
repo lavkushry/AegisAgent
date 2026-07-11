@@ -1,6 +1,6 @@
 # Flow: SOC Incident
 
-## Simple version
+## Overview
 
 One denial is noise. A pattern of denials is an attack. The SOC turns event streams into alerts, alerts into incidents with a narrative, and incidents into action — freeze, quarantine, revoke.
 
@@ -36,7 +36,20 @@ SOC failure never changes an inline decision (isolation by design). Dead webhook
 
 ## Current status
 
-Implemented (runtime-event *sources* are Partial — sensors are planned).
+Implemented for gateway evidence. Runtime event sources and enforcement coverage remain Partial.
+
+## Example
+
+```bash
+curl -fsS http://127.0.0.1:8080/v1/incidents \
+  -H "Authorization: Bearer tenant_123"
+```
+
+Use demo credentials only in the local seeded environment. Select an incident, inspect its graph, verify linked receipts, contain if required, and record a disposition before closure.
+
+## Security
+
+Detections and narration cannot authorize actions. Treat captured content as inert evidence, bind every query/response to tenant identity, preserve receipt hashes, and distinguish gateway freeze from complete host/network containment. SOC degradation is observable but never flips an inline deny to allow.
 
 ## Related code / docs
 

@@ -1,6 +1,6 @@
 # Policy Engine
 
-## Simple version
+## Overview
 
 The policy engine answers one question: *should this action run?* Its answers are **allow**, **deny**, or **ask a human** — and the same inputs always produce the same answer.
 
@@ -43,6 +43,24 @@ Implemented.
 ## What can go wrong
 
 Rules without trust-level conditions silently widen exposure — always state the trust levels a permit applies to. A policy that fails to parse never loads (fail closed), so a "policy change did nothing" usually means the reload rejected it — check `POST /v1/policies/reload`.
+
+## Example
+
+```bash
+cargo test -p aegis-policy
+curl -fsS -X POST http://127.0.0.1:8080/v1/policies/reload \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Run the package tests before reload. A production reload must preserve the last-known-good policy if validation fails and should be preceded by dry-run comparison.
+
+## Security
+
+Policy is authorization code. Require review, validation, tenant/admin authorization, signed bundles where used, audit history, and rollback. Trust labels come from channel provenance and can only tighten. Risk/composite scores remain advisory and must never turn a forbid into permit.
+
+## Operations
+
+Monitor reload success/failure, policy hash/version, decision distribution, deny/approval spikes, evaluation latency, and audit-chain health. Canary with dry-run traffic, retain the prior bundle, and roll back when decision deltas are unexplained.
 
 ## Related docs
 

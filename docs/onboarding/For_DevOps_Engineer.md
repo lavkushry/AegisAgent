@@ -2,6 +2,12 @@
 
 **Goal:** run AegisAgent locally, in Docker, and on Kubernetes — with the fail-closed production posture intact.
 
+> **Status:** Known-agent single-writer deployment is production-hardened. Multi-replica PostgreSQL and complete cage/sensor/egress/broker force paths remain Partial.
+
+## Overview
+
+Your job is to make the authorization boundary available without weakening it. You own safe listener exposure, identity and secrets, durable evidence storage, probes, metrics, backup/restore, rollout, rollback, and capacity limits.
+
 ## 1. Read first
 
 [../deployment-guide.md](../deployment-guide.md) → [../production-hardening.md](../production-hardening.md) (config reference + checklist) → [../AegisAgent_Operational_Design.md](../AegisAgent_Operational_Design.md) (SLOs, ops model).
@@ -42,3 +48,29 @@ DB: `AEGIS_DB_STATEMENT_CACHE_CAPACITY`, `AEGIS_DB_MMAP_SIZE`, `AEGIS_DB_JOURNAL
 ## 7. When things break
 
 [../AegisAgent_Debugging_Guide.md](../AegisAgent_Debugging_Guide.md) · [../runbooks/index.md](../runbooks/index.md) — deny-storm, exfiltration, token rotation, backup/restore, receipt-chain verification, secret rotation.
+
+## 8. First Verified Task
+
+```bash
+make doctor
+make demo
+curl -fsS http://127.0.0.1:8080/readyz
+```
+
+Confirm the demo blocks the swapped action and replay, verifies the receipt chain, and leaves readiness healthy. Then stop the local stack with `docker compose down`.
+
+## 9. Security and Failure Handling
+
+- Never expose the gateway publicly with demo mode or without enforced authentication and TLS.
+- Keep SQLite at one writer; do not infer HA from a successful multi-pod rollout.
+- Treat policy, database, backups, JWT secrets, and receipt-signing material as security assets.
+- Do not work around an outage by making protected SDK calls fail open.
+- After restore or rollback, verify the receipt chain before restoring traffic.
+
+## 10. Operations and Troubleshooting
+
+Start with `/startupz`, `/readyz`, and `/livez`, then inspect database pool wait, background-task status, event drops, receipt integrity, and recent configuration/image/policy changes. Use the [Deployment Guide](../deployment-guide.md) for rollout/rollback and the [runbook index](../runbooks/index.md) for incident procedures.
+
+## 11. References
+
+[Deployment Guide](../deployment-guide.md) · [Production Hardening](../production-hardening.md) · [Performance Tuning](../performance-tuning-guide.md) · [Implementation Status](../Implementation_Status.md)

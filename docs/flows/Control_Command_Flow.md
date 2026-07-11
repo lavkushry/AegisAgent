@@ -1,6 +1,6 @@
 # Flow: Control Command (Kill / Pause / Quarantine)
 
-**Status: 🟡 storage implemented, protocol designed.** The `control_commands` store exists (migration 0028, `lib/storage/src/db/control_commands.rs`); command signing, dispatch routes, sensor verification, and ACK handling are 📐 target design from [../AegisAgent_Control_Command_Protocol.md](../AegisAgent_Control_Command_Protocol.md). Today's *implemented* containment path (freeze/quarantine/revoke on agent status) is in [../flows/Ban_Quarantine_Flow.md](../flows/Ban_Quarantine_Flow.md).
+**Status: 🟡 Partial.** Storage, canonical signing, gateway issue/poll/ACK routes, sensor verification, and host process enforcement exist. Complete collector-driven registration, command semantics, and force-path operations remain unfinished. Gateway-status containment is in [Ban/Quarantine Flow](Ban_Quarantine_Flow.md).
 
 ```mermaid
 sequenceDiagram
@@ -8,13 +8,13 @@ sequenceDiagram
     participant A as SOC analyst / respond playbook
     participant GW as Gateway
     participant ST as control_commands store ✅
-    participant NS as Node sensor 📐
-    participant SB as Sandbox 📐
+    participant NS as Node sensor 🟡
+    participant SB as Sandbox 🟡
     A->>GW: click "kill run" (console) / playbook fires
     GW->>GW: build command {id, tenant, target run/agent,<br/>type=kill, nonce, issued_at, expires_at}
-    GW->>GW: canonicalize (aegis-command-jcs-1) → Ed25519 sign 📐
+    GW->>GW: canonicalize (aegis-command-jcs-1) → sign 🟡
     GW->>ST: persist command (idempotency anchor) ✅
-    NS->>GW: poll /v1/control/commands 📐
+    NS->>GW: poll commands 🟡
     GW-->>NS: signed command
     NS->>NS: verify: signature (pinned key), tenant binding,<br/>target binding, expiry, unseen nonce
     alt any check fails
@@ -40,15 +40,27 @@ sequenceDiagram
 
 Key management (rotation, `kid`, grace windows, emergency re-registration) is specified in [../AegisAgent_Control_Command_Protocol.md](../AegisAgent_Control_Command_Protocol.md) §3.
 
-## Command types (designed set)
+## Command types
 
 `start_run` · `pause` · `resume` · `kill` · `snapshot` · `quarantine_workspace` · `ban_agent` · `update_sensor_config`. Each execution emits runtime events and rides the receipt chain, so *the act of containment is itself evidence*.
 
-## What to build next (per the phased plan)
+## Remaining work
 
-1. Signing + canonical command serializer (`aegis-command-jcs-1`) in the gateway.
-2. `POST /v1/control/commands` (issue) + sensor poll/ack routes.
-3. Sensor-side verifier + typed handlers (Phase 3 skeleton).
+1. Complete collector-driven run/PID discovery and runner/sensor integration.
+2. Apply payload `grace_period` and finish every typed command semantic.
+3. Exercise replay, expiry, wrong-tenant, sensor loss, and kill/quarantine end to end.
+
+## Example
+
+```bash
+cargo test -p aegis-node-sensor process_enforcer
+```
+
+The focused tests exercise typed host process controls. Use cage Docker E2E for a broader signed-kill path; neither proves complete fleet enforcement.
+
+## Security
+
+Invalid, unsigned, expired, replayed, wrong-tenant, or wrong-target commands execute nothing. Sensors accept typed operations only, keep the gateway verification key pinned/rotatable, and produce ACK/NACK evidence. If the sensor is silent, the orchestrator must isolate the workload rather than assume containment succeeded.
 
 ## Related docs
 

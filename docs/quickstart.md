@@ -2,6 +2,30 @@
 
 Go from `git clone` to watching AegisAgent **block a malicious GitHub merge** in under 10 minutes.
 
+> **Status:** Current known-agent proof path. It demonstrates gateway/SDK integrity and SOC evidence, not complete unknown-agent runtime containment.
+
+## Overview
+
+This quickstart proves negative security behavior: untrusted provenance cannot drive the merge, a swapped approved action does not execute, replay is rejected, and the receipt chain verifies.
+
+## Why This Exists
+
+A security quickstart must prove that unsafe behavior is stopped. Starting containers or rendering a dashboard alone does not validate approval integrity, provenance gating, or evidence verification.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    ISSUE[Malicious public issue] --> AGENT[Demo coding agent]
+    AGENT --> SDK[Fail-closed SDK]
+    SDK --> GW[Gateway + Cedar]
+    GW --> DECISION[Deny / exact approval]
+    DECISION --> RECEIPT[Hash-chained receipt]
+    GW -. async .-> SOC[SOC event]
+```
+
+The demonstration stays on the implemented known-agent path. It does not require the partial cage or sensor.
+
 ## Prerequisites
 
 - **Docker** + **Docker Compose**
@@ -56,9 +80,9 @@ Replay Blocked
 
 ## 4. See the current state (the "dashboard")
 
-The Aegis SOC Console UI is still in development (see
-[SOC Console UI](AegisAgent_SOC_UI_Design.md)). Until it ships, the same data is available live over
-the API and WebSocket feed — this is what the dashboard will visualize:
+The Aegis SOC Console UI is available as a beta product surface (see
+[SOC Console UI](AegisAgent_SOC_UI_Design.md)). The same data remains available over the API and
+WebSocket feed, which is useful for verification and automation:
 
 ```bash
 # Tenant-scoped SOC summary (decisions, alerts, incidents)
@@ -145,3 +169,13 @@ curl -s "http://127.0.0.1:8080/v1/decisions?agent_id=<agent-id>" \
   `curl http://127.0.0.1:8080/health` succeeds first.
 
 Tested on macOS (Apple Silicon) and Linux (Ubuntu 22.04).
+
+## Security and Cleanup
+
+The seeded bearer token and demo data are not production credentials. Keep the gateway on loopback, do not reuse demo secrets, and remove the local stack when finished:
+
+```bash
+docker compose down
+```
+
+Add `-v` only if you intentionally want to delete local persisted volumes and evidence.

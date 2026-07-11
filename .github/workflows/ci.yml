@@ -414,6 +414,33 @@ jobs:
           RUST_LOG: info
         run: bash scripts/cage-docker-e2e.sh
 
+  # ── Wave A item 4: untrusted agent → cage → egress deny → control → receipt ──
+  # Narrative e2e (#1840): isolation, then an untrusted_external cage run whose
+  # egress goes through aegis-egress-proxy in --gateway-url mode (the real
+  # POST /v1/egress/check fail-closed path, not the proxy's standalone
+  # decider) so a durable deny event + receipt is asserted via
+  # GET /v1/egress/events, then a signed kill control command.
+  cage-wave-a-e2e:
+    name: Cage Wave A E2E (untrusted → egress deny → receipt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: cage-wave-a-e2e
+      - name: Pull sandbox image
+        run: docker pull alpine:3
+      - name: Cage Wave A narrative e2e (managed stack)
+        env:
+          AEGIS_CAGE_E2E_MANAGE: "1"
+          AEGIS_CAGE_E2E_TIMEOUT_SECS: "180"
+          RUST_LOG: info
+        run: bash scripts/cage-wave-a-e2e.sh
+
   # ── #1326: Dashboard end-to-end test (Playwright) ─────────────────────────────
   dashboard-e2e:
     name: Dashboard E2E (Playwright)
