@@ -31,6 +31,17 @@ PUBLIC_KEY_HEX="${AEGIS_CAGE_GATEWAY_PUBLIC_KEY_HEX:-79b5562e8fe654f94078b112e8a
 WORKSPACE_ROOT="${AEGIS_CAGE_WORKSPACE_ROOT:-${TMPDIR:-/tmp}/aegis-cage-wave-a-workspaces}"
 EGRESS_LISTEN="${AEGIS_EGRESS_LISTEN:-127.0.0.1:18888}"
 EGRESS_PROXY_URL="${AEGIS_EGRESS_PROXY_URL:-http://${EGRESS_LISTEN}}"
+# aegis-cage-runner attaches the egress-deny sandbox to a dedicated
+# --internal Docker bridge and rewrites a loopback egress_proxy_url to
+# `host.docker.internal` (docker_cli.rs::rewrite_loopback_proxy_for_container)
+# so the sandbox can reach it. That only works if the proxy process itself
+# is actually listening on an interface the bridge can reach — a listener
+# bound to 127.0.0.1 only accepts connections arriving via loopback and
+# silently refuses everything else, so the container's request never lands
+# and no deny event/receipt is ever produced. EGRESS_PROXY_URL / EGRESS_LISTEN
+# stay loopback (host-side checks + the container-side rewrite both key off
+# 127.0.0.1); EGRESS_BIND is the actual `--listen` address and must be wider.
+EGRESS_BIND="${AEGIS_EGRESS_BIND:-0.0.0.0:${EGRESS_LISTEN##*:}}"
 POLL_SECS="${AEGIS_CAGE_E2E_POLL_SECS:-2}"
 TIMEOUT_SECS="${AEGIS_CAGE_E2E_TIMEOUT_SECS:-180}"
 MANAGE="${AEGIS_CAGE_E2E_MANAGE:-0}"
@@ -135,14 +146,25 @@ start_managed_stack() {
   GATEWAY_PID=$!
   wait_gateway
 
-  printf '==> Start egress-proxy in gateway mode (deny-by-default) on %s\n' "$EGRESS_LISTEN"
+  printf '==> Start egress-proxy in gateway mode (deny-by-default) on %s (bridge-reachable at %s)\n' "$EGRESS_BIND" "$EGRESS_LISTEN"
   # --gateway-url routes every check through the real fail-closed
   # POST /v1/egress/check (bans/quarantine layered, durable runtime
   # event + receipt written by the gateway) instead of the proxy's own
   # standalone local decider — this is the code path production traffic
   # actually uses, so the e2e proves the real thing, not a stand-in.
+  #
+  # Bind EGRESS_BIND (0.0.0.0 by default), not EGRESS_LISTEN (127.0.0.1):
+  # the sandbox reaches this proxy via the dedicated --internal Docker
+  # bridge cage-runner creates for forced egress, using
+  # host.docker.internal:host-gateway — a listener scoped to 127.0.0.1
+  # only accepts loopback-origin connections and silently refuses
+  # anything arriving over that bridge, so the container's request would
+  # never land and no deny event/receipt would ever be produced. This is
+  # test/CI-only infrastructure (ephemeral runner or local dev box), not a
+  # production deployment of the proxy — production's own default (in
+  # main.rs) stays loopback-only.
   RUST_LOG="${RUST_LOG:-info,aegis_egress_proxy=info}" \
-    "$egress_bin" --listen "$EGRESS_LISTEN" \
+    "$egress_bin" --listen "$EGRESS_BIND" \
     --gateway-url "$AEGIS_URL" --api-token "$TOKEN" &
   EGRESS_PID=$!
   sleep 1
