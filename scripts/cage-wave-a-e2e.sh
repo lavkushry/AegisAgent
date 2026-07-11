@@ -126,11 +126,22 @@ start_managed_stack() {
   local db_path="${TMPDIR:-/tmp}/aegis-cage-wave-a-db/aegis-e2e.db"
   rm -f "$db_path" "${db_path}-wal" "${db_path}-shm"
 
-  printf '==> Start gateway\n'
+  printf '==> Start gateway (bound wide so the egress-proxy sidecar container can reach it)\n'
+  # AEGIS_BIND_ADDR=0.0.0.0: the egress-proxy now runs as a container and
+  # reaches this gateway via host.docker.internal on its own (non-internal)
+  # bridge — on native Linux Docker that arrives as bridge-origin traffic,
+  # which a loopback-only listener (the gateway's own default, and the same
+  # class of bug already fixed once for the proxy itself) silently refuses.
+  # The gateway's own startup guard (assert_bind_security in main.rs)
+  # refuses a non-loopback bind unless AEGIS_DEMO_MODE=true — this is
+  # test/CI-only infrastructure (ephemeral runner or local dev box), not a
+  # production deployment.
   AEGIS_COMMAND_SIGNING_KEY="$SIGNING_SECRET_HEX" \
     DATABASE_URL="sqlite://${db_path}" \
     CEDAR_POLICY_PATH="${ROOT}/policies.cedar" \
     RUST_LOG="${RUST_LOG:-info,gateway=info}" \
+    AEGIS_BIND_ADDR="0.0.0.0:8080" \
+    AEGIS_DEMO_MODE="true" \
     "$gateway_bin" &
   GATEWAY_PID=$!
   wait_gateway

@@ -37,7 +37,7 @@ Strongest current capabilities:
 
 ### Partial (built, not end-to-end production)
 
-- **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs); not full process/fs/net collectors
+- **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs), real process/net/fs/secret collectors (`AEGIS_RUN_ID` auto-discovery -> enforcer registration); not yet proven against a real live host (tests use synthetic `/proc` trees)
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
 - **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, both CI-wired)
@@ -47,7 +47,7 @@ Strongest current capabilities:
 
 ### Roadmap / not done
 
-- sensor real telemetry + host enforce (P0)
+- sensor collectors proven against a real live host, not just synthetic `/proc` trees (P0)
 - transparent / netns forced egress (no raw-socket bypass) (P0 residual after proxy-env force)
 - Postgres multi-replica GA (#1194) (P1)
 - OIDC/SAML for console/admin (P1)
@@ -74,11 +74,11 @@ Strongest current capabilities:
 | TypeScript SDK | Available today | Canon + protect + client + receipt chain verifier (shared corpus). |
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Available today | Bun SPA panel suite + cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls pages shipped (Phase 9.2/9.3 complete). |
-| Node sensor | Partial | Skeleton binary + packaging; collectors/enforce incomplete. |
+| Node sensor | Partial | Binary + packaging; real process/net/fs/secret collectors + host enforce, unit-tested; not yet proven on a real live host. |
 | Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, CI-wired). |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | In-gateway execute path; no standalone broker service. |
-| Signed control commands | Partial | Issue + sensor poll + host PID enforce; auto discovery incomplete. |
+| Signed control commands | Partial | Issue + sensor poll + host PID enforce + auto PID discovery (`AEGIS_RUN_ID` process collector); not yet proven on a real live host. |
 | Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
 | Postgres production mode | Roadmap / partial | Code path exists; SQLite single-writer is still the default deploy. |
 | Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |
