@@ -1451,6 +1451,49 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    // OIDC console login
+    async fn link_oidc_identity(
+        &self,
+        tenant_id: &str,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<(), AegisError> {
+        db::oidc::link_oidc_identity(
+            &self.pool,
+            &uuid::Uuid::new_v4().to_string(),
+            tenant_id,
+            issuer,
+            subject,
+            Utc::now(),
+        )
+        .await
+        .map_err(|e| match e {
+            db::oidc::LinkOidcIdentityError::AlreadyLinkedToAnotherTenant => AegisError::Conflict(
+                "this identity is already linked to a different tenant".to_string(),
+            ),
+            db::oidc::LinkOidcIdentityError::Db(e) => AegisError::Database(e),
+        })
+    }
+
+    async fn get_oidc_identity(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<OidcIdentityRecord>, AegisError> {
+        db::oidc::get_oidc_identity(&self.pool, issuer, subject)
+            .await
+            .map_err(AegisError::Database)
+    }
+
+    async fn list_oidc_identities_for_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<OidcIdentityRecord>, AegisError> {
+        db::oidc::list_oidc_identities_for_tenant(&self.pool, tenant_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     // Quarantine (Phase 2.5)
     async fn insert_quarantine(&self, record: &QuarantineRecord) -> Result<(), AegisError> {
         db::insert_quarantine(&self.pool, record)
