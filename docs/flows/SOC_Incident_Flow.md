@@ -41,8 +41,9 @@ Implemented for gateway evidence. Runtime event sources and enforcement coverage
 ## Example
 
 ```bash
+TENANT_ID="tenant_123"
 curl -fsS http://127.0.0.1:8080/v1/incidents \
-  -H "Authorization: Bearer tenant_123"
+  -H "Authorization: Bearer ${TENANT_ID}"
 ```
 
 Use demo credentials only in the local seeded environment. Select an incident, inspect its graph, verify linked receipts, contain if required, and record a disposition before closure.
