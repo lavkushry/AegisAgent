@@ -2,6 +2,25 @@
 
 AegisAgent employs prefix-based API versioning to ensure backward compatibility for SDKs and clients while supporting ongoing feature development.
 
+> **Status:** `/v1` and `/v2` route mounts plus media-type negotiation are implemented. `/v1` currently emits deprecation/sunset headers; removal must not occur without SDK, customer, and evidence-compatible migration.
+
+## Why This Exists
+
+Authorization clients sit immediately before tool execution. An uncoordinated breaking change can turn safe denial into integration failure or tempt callers to bypass the control. Versioning provides an explicit compatibility window and observable migration signal.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    CLIENT[Client] --> PREFIX{Path or Accept version}
+    PREFIX -->|v1| OLD[/v1 + deprecation headers]
+    PREFIX -->|v2| NEW[/v2]
+    PREFIX -->|unversioned API + media type| NEG[Negotiation middleware]
+    OLD --> ROUTES[Shared api_routes where compatible]
+    NEW --> ROUTES
+    NEG --> ROUTES
+```
+
 ---
 
 ## 1. Overview
@@ -72,3 +91,24 @@ When a request is sent to an unversioned route (e.g. `/authorize`, `/agents`), t
 * **Unspecified / Other Accept Headers**: Defaults to `/v1/...` for backward compatibility.
 
 Diagnostic and static endpoints (e.g., `/health`, `/livez`, `/readyz`, `/startupz`, `/metrics`, `/debug/runtime`, and `/dashboard/*`) are exempt from content negotiation and are always served directly from the root context.
+
+## 6. Security and Failure Behavior
+
+- Unknown media types default according to the documented compatibility rule; clients should prefer explicit versioning.
+- A version change must preserve fail-closed decision handling, tenant identity, canonical action bytes, approval hashes, receipt verification, and error semantics.
+- Clients treat unknown decision values or malformed version responses as deny.
+- Never remove a version while supported SDKs or retained evidence require its schema.
+
+## 7. Verification and Operations
+
+```bash
+curl -i http://127.0.0.1:8080/v1/version
+curl -i http://127.0.0.1:8080/v2/version
+curl -i -H 'Accept: application/vnd.aegis.v2+json' http://127.0.0.1:8080/version
+```
+
+Verify deprecation/sunset headers only on v1, no version headers on exempt probes, identical behavior for shared routes, and explicit contract tests for any divergent handler. Track version traffic before sunset and publish SDK migration guidance.
+
+## 8. References
+
+[API Reference](api-reference.md) · [Runtime Authorization API](runtime-authorization-api.md) · [Architecture Patterns](architecture.md) · [SDK Parity](sdk-parity-status.md)

@@ -281,35 +281,36 @@ rows=json.load(sys.stdin)
 print(rows[0]["id"] if rows else "")'
 }
 
-# verify_egress_receipt <watermark_id> <run_id>
+# verify_egress_receipt <watermark_id>
 # Asserts the gateway's real POST /v1/egress/check path (not the proxy's
 # standalone local decider) recorded at least one deny/blocked durable event
-# for this run since the watermark — i.e. a receipt-bearing evidence trail
-# exists, not just a container exit code.
+# since the watermark — i.e. a receipt-bearing evidence trail exists, not
+# just a container exit code. Not scoped by run_id: the egress-proxy process
+# is shared for the whole script and isn't told a --run-id (it's started
+# before any run exists), so a fresh watermark is this test's isolation
+# instead — this phase is the only one that ever talks to the proxy.
 verify_egress_receipt() {
   local watermark="$1"
-  local run_id="$2"
   local i body
   for i in $(seq 1 15); do
     body=$(curl -fsS "$AEGIS_URL/v1/egress/events?limit=50" "${auth[@]}")
     if printf '%s' "$body" | python3 -c "
 import sys, json
 watermark = '''${watermark}'''
-run_id = '''${run_id}'''
 rows = json.load(sys.stdin)
 for row in rows:
     if watermark and row.get('id') == watermark:
         break
-    if row.get('run_id') == run_id and row.get('decision') in ('deny', 'blocked'):
+    if row.get('decision') in ('deny', 'blocked'):
         sys.exit(0)
 sys.exit(1)
 "; then
-      printf '    durable deny event confirmed for run %s (real gateway /v1/egress/check path)\n' "$run_id"
+      printf '    durable deny event confirmed (real gateway /v1/egress/check path wrote receipt + runtime event)\n'
       return 0
     fi
     sleep 1
   done
-  printf 'no durable deny event found for run %s in GET /v1/egress/events\n' "$run_id" >&2
+  printf 'no durable deny event found in GET /v1/egress/events since watermark\n' >&2
   printf '%s\n' "$body" >&2
   return 1
 }
@@ -356,7 +357,7 @@ PY
   # completed within timeout without OPEN_INTERNET_LEAK hang.
   printf '    container path ok (completed without open-internet success hang)\n'
 
-  verify_egress_receipt "$watermark" "$run_id"
+  verify_egress_receipt "$watermark"
   printf '    phase 2 ok (untrusted agent → cage → egress deny → durable receipt)\n'
 }
 

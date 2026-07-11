@@ -12,16 +12,16 @@ This inventory makes the all-documentation improvement program measurable. Each 
 |---|---:|---:|---:|
 | authoring | 2 | 90% | 0 |
 | component | 15 | 96% | 0 |
-| decision | 7 | 64% | 6 |
+| decision | 7 | 95% | 0 |
 | flow | 11 | 95% | 0 |
-| guide | 52 | 62% | 42 |
+| guide | 52 | 64% | 41 |
 | landing | 10 | 93% | 0 |
 | onboarding | 6 | 100% | 0 |
 | product | 1 | 100% | 0 |
-| reference | 11 | 69% | 5 |
+| reference | 11 | 85% | 0 |
 | runbook | 7 | 100% | 0 |
 
-**Total:** 122 active Markdown pages · **Migration backlog:** 53 pages below 75%.
+**Total:** 122 active Markdown pages · **Migration backlog:** 41 pages below 75%.
 
 ## Scoring signals
 
@@ -36,9 +36,6 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | Page | Profile | Score | Missing signals |
 |---|---|---:|---|
 | [AegisAgent_SOC_Console_Design_System.md](AegisAgent_SOC_Console_Design_System.md) | guide | D · 33% | Why/reason, Diagram, Runnable/example, Security/failure, Operations, References/links |
-| [api-versioning.md](api-versioning.md) | guide | D · 33% | Why/reason, Status/scope, Diagram, Security/failure, Operations, References/links |
-| [database-schema.md](database-schema.md) | reference | D · 40% | Status/scope, Runnable/example, References/links |
-| [sdk-parity-status.md](sdk-parity-status.md) | reference | D · 40% | Status/scope, Runnable/example, References/links |
 | [AegisAgent_Integration_Connectivity.md](AegisAgent_Integration_Connectivity.md) | guide | D · 44% | Why/reason, Status/scope, Diagram, Security/failure, Operations |
 | [AegisAgent_Market_Gap_Analysis.md](AegisAgent_Market_Gap_Analysis.md) | guide | D · 44% | Why/reason, Status/scope, Diagram, Operations, References/links |
 | [AegisAgent_Phased_PR_Plan.md](AegisAgent_Phased_PR_Plan.md) | guide | D · 44% | Why/reason, Diagram, Security/failure, Operations, References/links |
@@ -50,8 +47,6 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [Local_Development.md](Local_Development.md) | guide | D · 44% | Why/reason, Status/scope, Diagram, Security/failure, Operations |
 | [mission.md](mission.md) | guide | D · 44% | Why/reason, Status/scope, Diagram, Security/failure, Operations |
 | [performance-baseline.md](performance-baseline.md) | guide | D · 44% | Why/reason, Diagram, Security/failure, Operations, References/links |
-| [adr/0004-ed25519-receipt-signing.md](adr/0004-ed25519-receipt-signing.md) | decision | D · 50% | Status/scope, Security/failure, References/links |
-| [adr/index.md](adr/index.md) | decision | D · 50% | Why/reason, Status/scope, Security/failure |
 | [AegisAgent_Agent_SOC_Design.md](AegisAgent_Agent_SOC_Design.md) | guide | D · 56% | Why/reason, Diagram, Operations, References/links |
 | [AegisAgent_Agent_Workflow.md](AegisAgent_Agent_Workflow.md) | guide | D · 56% | Why/reason, Status/scope, Diagram, Operations |
 | [AegisAgent_Agent_Workforce_Governance.md](AegisAgent_Agent_Workforce_Governance.md) | guide | D · 56% | Why/reason, Status/scope, Diagram, Security/failure |
@@ -65,13 +60,6 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [github-integration.md](github-integration.md) | guide | D · 56% | Why/reason, Status/scope, Diagram, Security/failure |
 | [qdrant-integration.md](qdrant-integration.md) | guide | D · 56% | Diagram, Security/failure, Operations, References/links |
 | [runtime-authorization-api.md](runtime-authorization-api.md) | guide | D · 56% | Why/reason, Status/scope, Diagram, Operations |
-| [api-reference.md](api-reference.md) | reference | C · 60% | Status/scope, Runnable/example |
-| [event-schema.md](event-schema.md) | reference | C · 60% | Status/scope, References/links |
-| [feature_history.md](feature_history.md) | reference | C · 60% | Runnable/example, References/links |
-| [adr/0002-sqlite-first-storage.md](adr/0002-sqlite-first-storage.md) | decision | C · 67% | Status/scope, Security/failure |
-| [adr/0003-aegis-jcs-1-canonicalization.md](adr/0003-aegis-jcs-1-canonicalization.md) | decision | C · 67% | Security/failure, References/links |
-| [adr/0005-fail-closed-defaults.md](adr/0005-fail-closed-defaults.md) | decision | C · 67% | Security/failure, References/links |
-| [adr/template.md](adr/template.md) | decision | C · 67% | Security/failure, References/links |
 | [AegisAgent_Control_Command_Protocol.md](AegisAgent_Control_Command_Protocol.md) | guide | C · 67% | Why/reason, Operations, References/links |
 | [AegisAgent_Gap_Reassessment_2026-06.md](AegisAgent_Gap_Reassessment_2026-06.md) | guide | C · 67% | Diagram, Runnable/example, Operations |
 | [AegisAgent_GTM_Document.md](AegisAgent_GTM_Document.md) | guide | C · 67% | Diagram, Operations, References/links |
@@ -94,13 +82,13 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | Page | Profile | Lines | Grade | Score |
 |---|---|---:|:---:|---:|
 | [action-receipt-spec.md](action-receipt-spec.md) | reference | 135 | B | 80% |
-| [adr/0001-cedar-policy-engine.md](adr/0001-cedar-policy-engine.md) | decision | 68 | B | 83% |
-| [adr/0002-sqlite-first-storage.md](adr/0002-sqlite-first-storage.md) | decision | 63 | C | 67% |
-| [adr/0003-aegis-jcs-1-canonicalization.md](adr/0003-aegis-jcs-1-canonicalization.md) | decision | 71 | C | 67% |
-| [adr/0004-ed25519-receipt-signing.md](adr/0004-ed25519-receipt-signing.md) | decision | 71 | D | 50% |
-| [adr/0005-fail-closed-defaults.md](adr/0005-fail-closed-defaults.md) | decision | 80 | C | 67% |
-| [adr/index.md](adr/index.md) | decision | 24 | D | 50% |
-| [adr/template.md](adr/template.md) | decision | 34 | C | 67% |
+| [adr/0001-cedar-policy-engine.md](adr/0001-cedar-policy-engine.md) | decision | 85 | A | 100% |
+| [adr/0002-sqlite-first-storage.md](adr/0002-sqlite-first-storage.md) | decision | 80 | A | 100% |
+| [adr/0003-aegis-jcs-1-canonicalization.md](adr/0003-aegis-jcs-1-canonicalization.md) | decision | 90 | A | 100% |
+| [adr/0004-ed25519-receipt-signing.md](adr/0004-ed25519-receipt-signing.md) | decision | 85 | B | 83% |
+| [adr/0005-fail-closed-defaults.md](adr/0005-fail-closed-defaults.md) | decision | 97 | A | 100% |
+| [adr/index.md](adr/index.md) | decision | 44 | B | 83% |
+| [adr/template.md](adr/template.md) | decision | 46 | A | 100% |
 | [AegisAgent_Agent_Cage.md](AegisAgent_Agent_Cage.md) | guide | 581 | B | 78% |
 | [AegisAgent_Agent_SOC_Design.md](AegisAgent_Agent_SOC_Design.md) | guide | 757 | D | 56% |
 | [AegisAgent_Agent_Workflow.md](AegisAgent_Agent_Workflow.md) | guide | 214 | D | 56% |
@@ -127,8 +115,8 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [AegisAgent_Vision.md](AegisAgent_Vision.md) | guide | 197 | D | 56% |
 | [AegisAgent_World_Class_HLD.md](AegisAgent_World_Class_HLD.md) | guide | 777 | C | 67% |
 | [AegisAgent_World_Class_LLD.md](AegisAgent_World_Class_LLD.md) | guide | 973 | D | 56% |
-| [api-reference.md](api-reference.md) | reference | 11 | C | 60% |
-| [api-versioning.md](api-versioning.md) | guide | 75 | D | 33% |
+| [api-reference.md](api-reference.md) | reference | 26 | B | 80% |
+| [api-versioning.md](api-versioning.md) | guide | 115 | A | 100% |
 | [approve-then-swap-demo.md](approve-then-swap-demo.md) | guide | 227 | D | 44% |
 | [Architecture_Overview.md](Architecture_Overview.md) | guide | 137 | C | 67% |
 | [architecture.md](architecture.md) | guide | 262 | D | 44% |
@@ -150,17 +138,17 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [concepts.md](concepts.md) | guide | 415 | B | 78% |
 | [contributing/documentation-standard.md](contributing/documentation-standard.md) | authoring | 222 | B | 80% |
 | [current-vs-roadmap.md](current-vs-roadmap.md) | reference | 145 | A | 100% |
-| [database-schema.md](database-schema.md) | reference | 274 | D | 40% |
+| [database-schema.md](database-schema.md) | reference | 289 | A | 100% |
 | [demo-github-attack.md](demo-github-attack.md) | guide | 220 | B | 78% |
 | [deployment-guide.md](deployment-guide.md) | guide | 298 | A | 100% |
 | [Documentation_Audit.md](Documentation_Audit.md) | reference | 91 | B | 80% |
 | [Documentation_Index.md](Documentation_Index.md) | reference | 69 | B | 80% |
 | [Documentation_Redesign_Plan.md](Documentation_Redesign_Plan.md) | guide | 114 | C | 67% |
-| [event-schema.md](event-schema.md) | reference | 294 | C | 60% |
+| [event-schema.md](event-schema.md) | reference | 313 | B | 80% |
 | [evidence-graph.md](evidence-graph.md) | guide | 169 | D | 44% |
 | [fail-closed-behavior.md](fail-closed-behavior.md) | guide | 147 | A | 100% |
 | [faq.md](faq.md) | landing | 341 | B | 86% |
-| [feature_history.md](feature_history.md) | reference | 118 | C | 60% |
+| [feature_history.md](feature_history.md) | reference | 133 | A | 100% |
 | [flows/Approval_Flow.md](flows/Approval_Flow.md) | flow | 59 | A | 100% |
 | [flows/Ban_Quarantine_Flow.md](flows/Ban_Quarantine_Flow.md) | flow | 82 | A | 100% |
 | [flows/Control_Command_Flow.md](flows/Control_Command_Flow.md) | flow | 68 | A | 100% |
@@ -207,7 +195,7 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [runbooks/receipt-chain-verification.md](runbooks/receipt-chain-verification.md) | runbook | 88 | A | 100% |
 | [runbooks/secret-rotation.md](runbooks/secret-rotation.md) | runbook | 88 | A | 100% |
 | [runtime-authorization-api.md](runtime-authorization-api.md) | guide | 331 | D | 56% |
-| [sdk-parity-status.md](sdk-parity-status.md) | reference | 35 | D | 40% |
+| [sdk-parity-status.md](sdk-parity-status.md) | reference | 52 | B | 80% |
 | [security-model.md](security-model.md) | guide | 214 | C | 67% |
 | [slack-integration.md](slack-integration.md) | guide | 192 | C | 67% |
 | [START_HERE.md](START_HERE.md) | landing | 69 | B | 86% |

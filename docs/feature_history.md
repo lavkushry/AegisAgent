@@ -2,6 +2,17 @@
 
 This document contains the historical status, feature releases, and ticket verification details for the Rust gateway and SDKs of AegisAgent. It is preserved here for developer reference and on-demand agent lookup, keeping the global `CLAUDE.md` context clean.
 
+> **Status:** Historical record, not the current capability ledger. Use [Implementation Status](Implementation_Status.md) for present-tense claims; test counts and file paths below reflect the recorded point in time.
+
+## How to verify a historical claim
+
+```bash
+git log --oneline --all -- <path>
+git show <commit>:<path>
+```
+
+Use the cited issue/PR and repository history. Do not infer current production readiness from a historical “done” entry.
+
 ---
 
 ## Console UI — Bun rewrite (July 2026)
@@ -112,6 +123,10 @@ Contracts: [`docs/components/Console_UI_Bun_Contracts.md`](components/Console_UI
 - **Per-tenant risk-weights TTL cache** (#1513): `db::get_risk_weights` was previously re-read from SQLite inside `write_decision_and_audit` on every single `/v1/authorize` call, even though these operator-configured weights (`PUT /v1/tenants/risk-weights`) change only rarely. `RiskWeightsCache` (`routes/mod.rs`) is a plain per-tenant TTL cache (not an LRU like the existing `SkillActionCache`) — `get`/`insert` take an explicit `now: Instant`, mirroring `ReplayNonceCache::check_and_insert`'s pattern, so TTL expiry is testable without real sleeps. Default TTL 60s, configurable via `AEGIS_RISK_WEIGHTS_CACHE_TTL_SECS`; `put_tenant_risk_weights` invalidates the relevant tenant's entry on a successful upsert so an operator override takes effect immediately instead of waiting out the TTL.
 - **Parallelized independent DB reads in `authorize_action`** (#1510): two pairs of independent reads now run concurrently via `tokio::join!` instead of serially. `db::agent_tool_permission_status` + the idempotency lookup (`db::get_decision_by_request_id`, gated on `!dry_run` + `request_id` present) — the in-memory nonce/replay check between them in the original code has no DB dependency, so each result is still checked in the original priority order (permission denial, then replay, then idempotent replay) immediately after the join; tradeoff: a permission-denied call carrying a `request_id` now does one "wasted" idempotency read it previously skipped. `db::get_skill_action` (on a skill-action-cache miss) + `db::get_mcp_server_by_key` (for an `mcp:`-prefixed tool) — `mcp_server_key` only depends on the already-normalized tool identifier, not the skill-action lookup's result. Deliberately untouched: `db::touch_agent_last_seen` (a write, #1511's territory) and `db::get_risk_weights` (already removed from this hot path entirely by #1513's TTL cache). 2 new tests proving exact behavior is preserved when both joined futures are exercised together.
 - **Debounced agent heartbeat write** (#1511): `db::touch_agent_last_seen` was the one remaining synchronous DB write on the `authorize_action` hot path (#1510 left it untouched deliberately). `HeartbeatDebouncer` (`routes/mod.rs`) is an in-memory `Mutex<HashSet<(tenant_id, agent_id)>>` that `authorize_action` touches instead of writing immediately; a new periodic job (`jobs::run_heartbeat_flush_job`, default every 30s via `AEGIS_HEARTBEAT_FLUSH_INTERVAL_SECS`) drains the set and batches the real writes. Deliberately **not** `is_leader`-gated like the other periodic maintenance jobs, since heartbeats are per-instance-observed activity, not global state needing single-leader coordination — every gateway instance must flush its own observed heartbeats. Graceful shutdown flushes any remaining buffered heartbeats before the pool is dropped. Registered in `AppState.background_task_handles` for #1152 liveness monitoring. 3 new tests.
+
+## References
+
+[Implementation Status](Implementation_Status.md) · [Current vs Roadmap](current-vs-roadmap.md) · [Repository Knowledge Map](Repo_Knowledge_Map.md) · [Documentation Audit](Documentation_Audit.md)
 - **OpenAPI Spec Auto-Generation** (#1401): auto-generates the OpenAPI 3.0 specification from route metadata, serving the dynamic schema at `GET /v1/openapi.json` and integrating Swagger UI at `GET /v1/docs` (fetching from `GET /v1/docs/openapi.json` to avoid route overlap).
 - **Native TLS Support via Rustls** (#1209): optional TLS support when `AEGIS_TLS_CERT` and `AEGIS_TLS_KEY` environment variables are set. Implements same-port TCP multiplexing: peeks incoming streams to route TLS traffic (Client Hello `0x16`) to Rustls, and redirects plain HTTP to HTTPS using an HTTP `308 Permanent Redirect` response. Enforces a minimum of TLS 1.2 and supports HTTP/1.1 and HTTP/2.
 - Hashed agent tokens (SHA-256), tenant validation (404 for non-existent), graceful shutdown with SOC channel drain, `CatchPanic` layer, `schema_meta` version tracking.
