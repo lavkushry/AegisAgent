@@ -43,6 +43,16 @@ pub struct RawRunnerConfig {
     pub claim_poll_interval_secs: Option<u64>,
     pub control_poll_interval_secs: Option<u64>,
     pub heartbeat_interval_secs: Option<u64>,
+    /// Docker container name of a running `aegis-egress-proxy` instance,
+    /// when forced egress (`network.egress_proxy_url`) is used. A sandbox's
+    /// dedicated `--internal` bridge has no route to the host at all (not
+    /// just no internet), so the proxy must be joined to that bridge as a
+    /// peer container (`docker network connect`) rather than reached via
+    /// `host.docker.internal` — that path doesn't exist for `--internal`
+    /// networks. Unset means forced-egress sandboxes get no proxy
+    /// connectivity at all (fail closed: isolated, not reachable, not "open
+    /// unless we can prove denial").
+    pub egress_proxy_container: Option<String>,
 }
 
 /// CLI-supplied overrides, applied on top of the config file before
@@ -100,6 +110,7 @@ pub struct RunnerConfig {
     pub claim_poll_interval_secs: u64,
     pub control_poll_interval_secs: u64,
     pub heartbeat_interval_secs: u64,
+    pub egress_proxy_container: Option<String>,
 }
 
 impl RunnerConfig {
@@ -183,6 +194,7 @@ impl RunnerConfig {
             claim_poll_interval_secs,
             control_poll_interval_secs,
             heartbeat_interval_secs,
+            egress_proxy_container: raw.egress_proxy_container,
         })
     }
 }

@@ -11,6 +11,11 @@
 #      production traffic uses, not just the proxy's local standalone
 #      decider. wget to the public Internet must fail → finished, and a
 #      durable deny event/receipt must land in GET /v1/egress/events.
+#      The proxy runs as a Docker container that aegis-cage-runner joins to
+#      each forced-egress sandbox's dedicated --internal bridge — that
+#      bridge has no route to the host at all, so a host-run proxy process
+#      (reached via host.docker.internal) is never actually reachable; only
+#      another container on the same bridge is.
 #   3) Control: sleep → POST kill → killed (signed control command)
 #
 # Managed mode builds gateway, cage-runner, and egress-proxy locally.
@@ -29,19 +34,21 @@ RUNNER_ID="${AEGIS_CAGE_RUNNER_ID:-cage-wave-a-e2e-runner}"
 SIGNING_SECRET_HEX="${AEGIS_COMMAND_SIGNING_KEY:-0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20}"
 PUBLIC_KEY_HEX="${AEGIS_CAGE_GATEWAY_PUBLIC_KEY_HEX:-79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664}"
 WORKSPACE_ROOT="${AEGIS_CAGE_WORKSPACE_ROOT:-${TMPDIR:-/tmp}/aegis-cage-wave-a-workspaces}"
-EGRESS_LISTEN="${AEGIS_EGRESS_LISTEN:-127.0.0.1:18888}"
-EGRESS_PROXY_URL="${AEGIS_EGRESS_PROXY_URL:-http://${EGRESS_LISTEN}}"
-# aegis-cage-runner attaches the egress-deny sandbox to a dedicated
-# --internal Docker bridge and rewrites a loopback egress_proxy_url to
-# `host.docker.internal` (docker_cli.rs::rewrite_loopback_proxy_for_container)
-# so the sandbox can reach it. That only works if the proxy process itself
-# is actually listening on an interface the bridge can reach — a listener
-# bound to 127.0.0.1 only accepts connections arriving via loopback and
-# silently refuses everything else, so the container's request never lands
-# and no deny event/receipt is ever produced. EGRESS_PROXY_URL / EGRESS_LISTEN
-# stay loopback (host-side checks + the container-side rewrite both key off
-# 127.0.0.1); EGRESS_BIND is the actual `--listen` address and must be wider.
-EGRESS_BIND="${AEGIS_EGRESS_BIND:-0.0.0.0:${EGRESS_LISTEN##*:}}"
+# The proxy runs as a container (not a bare host process): a sandbox's
+# --internal bridge (created per forced-egress run) has no route to the
+# host at all — host.docker.internal doesn't resolve to anything reachable
+# there — so the only thing it can ever reach is another container joined
+# to that same bridge. aegis-cage-runner does that join itself
+# (docker_cli.rs::plan_egress_network / connect_container_to_network) once
+# `egress_proxy_container` names this container in its config.
+EGRESS_PROXY_CONTAINER="${AEGIS_EGRESS_PROXY_CONTAINER:-aegis-wave-a-e2e-egress-proxy}"
+EGRESS_PROXY_NET="${AEGIS_EGRESS_PROXY_NET:-aegis-wave-a-e2e-egress-proxy-net}"
+EGRESS_PROXY_PORT="${AEGIS_EGRESS_PROXY_PORT:-18888}"
+# Informational only — cage-runner rewrites the host part to
+# EGRESS_PROXY_CONTAINER before injecting HTTP_PROXY into the sandbox, but
+# SandboxSpec validation requires a well-formed http(s) URL and the port
+# must match what the proxy container actually listens on.
+EGRESS_PROXY_URL="http://127.0.0.1:${EGRESS_PROXY_PORT}"
 POLL_SECS="${AEGIS_CAGE_E2E_POLL_SECS:-2}"
 TIMEOUT_SECS="${AEGIS_CAGE_E2E_TIMEOUT_SECS:-180}"
 MANAGE="${AEGIS_CAGE_E2E_MANAGE:-0}"
@@ -50,15 +57,16 @@ auth=(-H "Authorization: Bearer ${TOKEN}" -H "X-Aegis-Tenant-ID: ${TENANT_ID}" -
 
 GATEWAY_PID=""
 RUNNER_PID=""
-EGRESS_PID=""
 cleanup() {
-  for pid_var in RUNNER_PID EGRESS_PID GATEWAY_PID; do
+  for pid_var in RUNNER_PID GATEWAY_PID; do
     pid="${!pid_var:-}"
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
     fi
   done
+  docker rm -f "$EGRESS_PROXY_CONTAINER" >/dev/null 2>&1 || true
+  docker network rm "$EGRESS_PROXY_NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -72,6 +80,10 @@ require_docker() {
     docker pull alpine:3
   fi
   # wget is in alpine:3 busybox.
+  if ! docker image inspect ubuntu:24.04 >/dev/null 2>&1; then
+    printf '==> Pulling ubuntu:24.04 (egress-proxy sidecar container base)\n'
+    docker pull ubuntu:24.04
+  fi
 }
 
 wait_gateway() {
@@ -83,29 +95,6 @@ wait_gateway() {
     sleep 1
   done
   printf 'Gateway not healthy at %s\n' "$AEGIS_URL" >&2
-  return 1
-}
-
-wait_tcp() {
-  local hostport="$1"
-  local host="${hostport%:*}"
-  local port="${hostport##*:}"
-  local i
-  for i in $(seq 1 30); do
-    if (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1; then
-      return 0
-    fi
-    # bash /dev/tcp may be unavailable; fall back to curl
-    if curl -fsS -o /dev/null --connect-timeout 1 "http://${hostport}/" 2>/dev/null; then
-      return 0
-    fi
-    # proxy may not speak plain HTTP on GET / — treat connection refused vs other
-    if ! curl -sS -o /dev/null --connect-timeout 1 "http://${hostport}/" 2>&1 | grep -qi 'connection refused'; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  printf 'nothing listening on %s\n' "$hostport" >&2
   return 1
 }
 
@@ -146,33 +135,51 @@ start_managed_stack() {
   GATEWAY_PID=$!
   wait_gateway
 
-  printf '==> Start egress-proxy in gateway mode (deny-by-default) on %s (bridge-reachable at %s)\n' "$EGRESS_BIND" "$EGRESS_LISTEN"
+  printf '==> Start egress-proxy container %s in gateway mode (deny-by-default)\n' "$EGRESS_PROXY_CONTAINER"
   # --gateway-url routes every check through the real fail-closed
   # POST /v1/egress/check (bans/quarantine layered, durable runtime
   # event + receipt written by the gateway) instead of the proxy's own
   # standalone local decider — this is the code path production traffic
   # actually uses, so the e2e proves the real thing, not a stand-in.
   #
-  # Bind EGRESS_BIND (0.0.0.0 by default), not EGRESS_LISTEN (127.0.0.1):
-  # the sandbox reaches this proxy via the dedicated --internal Docker
-  # bridge cage-runner creates for forced egress, using
-  # host.docker.internal:host-gateway — a listener scoped to 127.0.0.1
-  # only accepts loopback-origin connections and silently refuses
-  # anything arriving over that bridge, so the container's request would
-  # never land and no deny event/receipt would ever be produced. This is
-  # test/CI-only infrastructure (ephemeral runner or local dev box), not a
-  # production deployment of the proxy — production's own default (in
-  # main.rs) stays loopback-only.
-  RUST_LOG="${RUST_LOG:-info,aegis_egress_proxy=info}" \
-    "$egress_bin" --listen "$EGRESS_BIND" \
-    --gateway-url "$AEGIS_URL" --api-token "$TOKEN" &
-  EGRESS_PID=$!
-  sleep 1
-  if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
-    printf 'egress-proxy exited immediately\n' >&2
-    exit 1
-  fi
-  wait_tcp "$EGRESS_LISTEN" || true
+  # Runs as a container, not a bare host process: a forced-egress sandbox's
+  # --internal bridge has no route to the host at all (verified —
+  # host.docker.internal doesn't resolve to anything reachable there), so
+  # a host-run proxy is never actually reachable regardless of what
+  # interface it binds. The only thing that bridge can reach is another
+  # container joined to it — aegis-cage-runner does that join itself once
+  # `egress_proxy_container` in its own config names this container.
+  #
+  # The proxy's *own* home network is a plain (non-internal) bridge, so it
+  # can reach the gateway (a host process here) via host.docker.internal.
+  # ubuntu:24.04 matches ubuntu-latest GH Actions runners' own glibc, since
+  # the mounted binary is a `cargo build` debug binary, not the Dockerfile's
+  # musl/distroless release build.
+  docker rm -f "$EGRESS_PROXY_CONTAINER" >/dev/null 2>&1 || true
+  docker network rm "$EGRESS_PROXY_NET" >/dev/null 2>&1 || true
+  docker network create --driver bridge "$EGRESS_PROXY_NET" >/dev/null
+  docker run -d --name "$EGRESS_PROXY_CONTAINER" \
+    --network "$EGRESS_PROXY_NET" \
+    --add-host host.docker.internal:host-gateway \
+    -v "${egress_bin}:/aegis-egress-proxy:ro" \
+    -e "RUST_LOG=${RUST_LOG:-info,aegis_egress_proxy=info}" \
+    ubuntu:24.04 \
+    /aegis-egress-proxy --listen "0.0.0.0:${EGRESS_PROXY_PORT}" \
+    --gateway-url "http://host.docker.internal:8080" --api-token "$TOKEN" \
+    >/dev/null
+
+  local i
+  for i in $(seq 1 30); do
+    if docker logs "$EGRESS_PROXY_CONTAINER" 2>&1 | grep -q "aegis-egress-proxy listening"; then
+      break
+    fi
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$EGRESS_PROXY_CONTAINER" 2>/dev/null)" != "true" ]]; then
+      printf 'egress-proxy container exited immediately\n' >&2
+      docker logs "$EGRESS_PROXY_CONTAINER" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
 
   local runner_toml
   runner_toml="$(mktemp "${TMPDIR:-/tmp}/aegis-cage-wave-a-XXXXXX.toml")"
@@ -183,6 +190,7 @@ api_token = "${TOKEN}"
 runner_id = "${RUNNER_ID}"
 gateway_public_key_hex = "${PUBLIC_KEY_HEX}"
 workspace_root = "${WORKSPACE_ROOT}"
+egress_proxy_container = "${EGRESS_PROXY_CONTAINER}"
 claim_poll_interval_secs = 1
 control_poll_interval_secs = 1
 heartbeat_interval_secs = 2
