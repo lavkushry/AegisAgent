@@ -38,9 +38,9 @@
 | SDK Go | Implemented | `sdk-go/{canon,aegis}/` | prompt/model emit parity | [sdk-parity-status.md](sdk-parity-status.md) | unit + parity vectors | beta | capture parity |
 | UI: approvals | Implemented | `ui-next/…/approvals` + `approval-card` panel | — | #1824 | bun test + Playwright | beta | — |
 | UI: receipts/integrity | Implemented | `ui-next` Integrity page + `provable-timeline` / `receipt-integrity` panels | — | #1825–#1826 | bun test + Playwright | beta | — |
-| UI: panel framework + system catalog | Implemented | `ui-next/src/panels/*`, 10 system boards, charts + decision-graph | cage/ban/quarantine product pages | #1815–#1830 | bun test + E2E mock suite | beta | Phase 9 cage UI |
+| UI: panel framework + system catalog | Implemented | `ui-next/src/panels/*`, 10 system boards, charts + decision-graph | — | #1815–#1830 | bun test + E2E mock suite | beta | — |
 | UI: incidents/SOC | Implemented | overview/fleet/incidents system boards + `decision-graph` | richer incident drill-down | #1828 | bun test + Playwright | beta | incident detail |
-| UI: agent-cage console | Planned | — | cage runs page, control actions UX (Phase 9.2–9.3) | Phased PR plan §11 | — | design | after cage binary lands |
+| UI: agent-cage console | Implemented | `ui-next/…/runs` (list + pause/resume/kill/quarantine), `/runs/:id` (timeline + runtime events), `/bans`, `/quarantine`, `/egress`, `/graph`, `/policies` | Prompt Timeline / Model Calls pages (backend has no query API yet, ingest-only) | Phased PR plan §11 (PR 9.2/9.3) | bun test | beta | prompt/model query API |
 | Agent runs registry (cage control-plane API) | Partial | `lib/storage/src/db/agent_runs.rs`, migration `0026`; `routes/runtime.rs` (`/v1/agent-cage/runs` + controls) | claim/heartbeat/lease APIs + executor not on main (WIP branch) | #1681 | route + storage | beta | cage execution PR |
 | Runtime events ingest + timeline | Partial | `POST /v1/ingest/runtime-events`, `list/query` ASE APIs | rich producers (process/fs/net) on sensor | #1681 | storage + route | beta | sensor collectors |
 | Control commands (signed kill/pause/quarantine) | Partial | store + protocol + gateway issue routes; sensor poll/verify + **host ProcessEnforcer** (SIGTERM/STOP/CONT for registered PIDs); cage-runner Docker kill path | auto PID discovery/collectors; grace_period from command payload | Phased PR plan §5 | storage + sensor unit (real child kill) | beta | collectors |
@@ -52,7 +52,7 @@
 | Tool broker | Partial | `routes/broker.rs`, `lib/tool-broker-core`, `lib/tool-broker-connectors` | standalone broker binary; mandatory path for privileged tools | Phased PR plan §8 | unit + route | beta | binary + force-path |
 | Prompt capture | Implemented | `POST /v1/ingest/prompt-events` (`routes/prompt_capture.rs`), Python SDK emit | Go/TS emit; UI timeline | #1775/#1776 | unit + SDK | beta | UI + SDK parity |
 | Model call capture | Implemented | `POST /v1/ingest/model-calls`; `bins/aegis-llm-gateway` (Phase 7.3) | Dockerfile/Helm/compose for LLM gateway; broader provider adapters | #1775/#1776/#1794 | unit + gateway tests | beta | packaging + adapters |
-| Runtime timeline (UI) | Partial | APIs: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline`; `provable-timeline` panel (receipts) | full console pages (prompt/model/egress/cage) | Phase 9.2 | route + bun test | beta | Phase 9 UI |
+| Runtime timeline (UI) | Implemented | APIs: `GET /v1/runtime/runs/:id/events`, `GET /v1/runs/:id/timeline`; `provable-timeline` panel (receipts); `ui-next/…/runs/:id` run-detail page renders both | prompt/model timeline pages (backend ingest-only, no query API) | Phase 9.2 | route + bun test | beta | prompt/model query API |
 | Deployment (Compose/Helm) | Partial | gateway + sensor + egress-proxy + cage-runner + llm-gateway charts/images; compose full (+ `cage` profile) | broker + UI Helm; multi-replica | #1206, #1297/#1790 | helm lint + e2e | beta (single-writer) | Postgres + multi-replica |
 | Postgres production mode | Partial | `features = postgres`, `migrations_postgres/*` (29 files) | full parity ops path, multi-replica validation, default Helm | #1194 | migration + feature tests | design→beta | Postgres GA |
 | CI / testing / supply chain | Implemented | `.github/workflows/*` (fmt/clippy/tests/coverage/deny; release cosign/SLSA/SBOM) | — | #1172, #1174, #1792 | — | prod | — |
@@ -79,7 +79,7 @@ Living checklist (detail also in [`.claude/PRPs/tasks/task.md`](../.claude/PRPs/
 
 ### Wave C — P2 product surface / honesty
 
-9. UI Phase 9.2–9.3 (cage runs, ban/quarantine centers, runtime timelines)  
+9. ~~UI Phase 9.2–9.3 (cage runs, ban/quarantine centers, runtime timelines)~~ **Done** — `ui-next` `/runs`, `/runs/:id`, `/bans`, `/quarantine`, `/egress`, `/graph`, `/policies`; remaining: prompt/model timeline pages once backend gets a query API  
 10. ~~TypeScript receipt chain verifier parity~~ **Done** (`sdk-typescript/src/receipts.ts` + shared corpus; CI `ts-canon` runs canon + receipts)  
 11. Keep this matrix + `current-vs-roadmap.md` in lockstep with landing PRs  
 12. Branch merge-or-close pass (~80 remote branches)  

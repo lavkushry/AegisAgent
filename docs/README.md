@@ -26,6 +26,8 @@ This folder is the **single source for AegisAgent product documentation**. It re
 | [AegisAgent_Diagram_Index.md](AegisAgent_Diagram_Index.md) + [diagrams/](diagrams/) | Every diagram as Mermaid source |
 | [explorer/index.html](explorer/index.html) | Interactive 3D system map (2D fallback, driven by [architecture-map.json](architecture-map.json)) |
 | [Glossary.md](Glossary.md) | Shared vocabulary |
+| [contributing/documentation-standard.md](contributing/documentation-standard.md) | Required teaching, evidence, diagram, code, security, and operations standard for docs authors |
+| [templates/component-page.md](templates/component-page.md) | Copyable structure for production-grade component pages |
 
 Docs hygiene: `node scripts/validate-docs.mjs` checks required docs, internal links, diagram inventory, and `architecture-map.json` references. `architecture-map.json` is the machine-readable source of truth for the explorer and layered diagrams — update it when components change.
 

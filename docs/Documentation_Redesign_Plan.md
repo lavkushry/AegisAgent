@@ -92,6 +92,8 @@ The repo already ships **MkDocs Material** deployed to GitHub Pages by `.github/
 
 `node scripts/validate-docs.mjs` (also `make docs-validate`) checks: required docs exist · internal links resolve · architecture-map.json valid (nodes, edges, flows, related docs/files) · diagram inventory matches the index · Implementation_Status.md contains every required capability with valid status words · explorer wiring. `mkdocs build` must pass warning-free.
 
+The repository-wide writing contract is [contributing/documentation-standard.md](contributing/documentation-standard.md). New or substantially rewritten component pages start from [templates/component-page.md](templates/component-page.md). [components/Gateway.md](components/Gateway.md) is the canonical worked example; validation checks its required section order so the template and real documentation cannot silently drift apart.
+
 ## Related docs
 
 [Documentation_Audit.md](Documentation_Audit.md) · [Documentation_Index.md](Documentation_Index.md) · [START_HERE.md](START_HERE.md)

@@ -169,6 +169,8 @@ use utoipa::OpenApi;
         get_receipt_chain_head_api,
         verify_receipt_range_api,
         list_run_events_api,
+        list_prompt_events_api,
+        list_model_calls_api,
         list_sensors_api,
         register_sensor_api,
         get_sensor_api,
@@ -2161,6 +2163,26 @@ fn verify_receipt_range_api() {}
     )
 )]
 fn list_run_events_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/runtime/runs/{id}/prompt-events",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List run prompt-lineage events")
+    )
+)]
+fn list_prompt_events_api() {}
+
+#[utoipa::path(
+    get,
+    path = "/v1/runtime/runs/{id}/model-calls",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List run model-call events")
+    )
+)]
+fn list_model_calls_api() {}
 
 #[utoipa::path(
     get,

@@ -4,6 +4,7 @@
 //! caller-redacted preview only — never a raw prompt, request, or response
 //! body.
 
+use super::SOC_MAX_LIMIT;
 use crate::db::DbPool;
 use aegis_api::models::*;
 
@@ -55,6 +56,31 @@ pub async fn get_prompt_event_by_event_id(
         "SELECT {PROMPT_EVENT_COLS} FROM prompt_events WHERE tenant_id = ? AND event_id = ?"
     );
     crate::fetch_optional_as!(PromptEventRecord, pool, sql.as_str(), tenant_id, event_id)
+}
+
+/// Tenant-scoped, run-scoped listing for the console's Prompt Timeline page.
+/// Oldest first (chronological read), capped at `SOC_MAX_LIMIT`.
+pub async fn list_prompt_events_for_run(
+    pool: &DbPool,
+    tenant_id: &str,
+    run_id: &str,
+    limit: i64,
+) -> Result<Vec<PromptEventRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let sql = format!(
+        "SELECT {PROMPT_EVENT_COLS} FROM prompt_events
+         WHERE tenant_id = ? AND run_id = ?
+         ORDER BY created_at ASC, rowid ASC
+         LIMIT ?"
+    );
+    crate::fetch_all_as!(
+        PromptEventRecord,
+        pool,
+        sql.as_str(),
+        tenant_id,
+        run_id,
+        limit
+    )
 }
 
 const MODEL_CALL_EVENT_COLS: &str = "id, tenant_id, event_id, run_id, trace_id, provider, model, \
@@ -111,6 +137,31 @@ pub async fn get_model_call_event_by_event_id(
         sql.as_str(),
         tenant_id,
         event_id
+    )
+}
+
+/// Tenant-scoped, run-scoped listing for the console's Model Calls page.
+/// Oldest first (chronological read), capped at `SOC_MAX_LIMIT`.
+pub async fn list_model_call_events_for_run(
+    pool: &DbPool,
+    tenant_id: &str,
+    run_id: &str,
+    limit: i64,
+) -> Result<Vec<ModelCallEventRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, SOC_MAX_LIMIT);
+    let sql = format!(
+        "SELECT {MODEL_CALL_EVENT_COLS} FROM model_call_events
+         WHERE tenant_id = ? AND run_id = ?
+         ORDER BY received_at ASC, rowid ASC
+         LIMIT ?"
+    );
+    crate::fetch_all_as!(
+        ModelCallEventRecord,
+        pool,
+        sql.as_str(),
+        tenant_id,
+        run_id,
+        limit
     )
 }
 
@@ -242,5 +293,45 @@ mod tests {
             .unwrap()
             .expect("row persisted");
         assert_eq!(fetched.model, "gpt-5");
+    }
+
+    #[tokio::test]
+    async fn list_prompt_events_for_run_is_tenant_and_run_scoped() {
+        let pool = setup_pool("prompt_event_list_run").await;
+        insert_prompt_event(&pool, &prompt_ev("t_a", "r1", "e1"))
+            .await
+            .unwrap();
+        let mut other_run = prompt_ev("t_a", "r2", "e2");
+        other_run.run_id = Some("run-2".to_string());
+        insert_prompt_event(&pool, &other_run).await.unwrap();
+        insert_prompt_event(&pool, &prompt_ev("t_b", "r3", "e3"))
+            .await
+            .unwrap();
+
+        let rows = list_prompt_events_for_run(&pool, "t_a", "run-1", 50)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_id, "e1");
+    }
+
+    #[tokio::test]
+    async fn list_model_call_events_for_run_is_tenant_and_run_scoped() {
+        let pool = setup_pool("model_call_list_run").await;
+        insert_model_call_event(&pool, &model_call_ev("t_a", "r1", "e1"))
+            .await
+            .unwrap();
+        let mut other_run = model_call_ev("t_a", "r2", "e2");
+        other_run.run_id = Some("run-2".to_string());
+        insert_model_call_event(&pool, &other_run).await.unwrap();
+        insert_model_call_event(&pool, &model_call_ev("t_b", "r3", "e3"))
+            .await
+            .unwrap();
+
+        let rows = list_model_call_events_for_run(&pool, "t_a", "run-1", 50)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_id, "e1");
     }
 }

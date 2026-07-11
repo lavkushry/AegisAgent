@@ -178,3 +178,6 @@ nav:
       - Evidence graph: evidence-graph.md
       - Database schema (ERD): database-schema.md
       - SDK parity status: sdk-parity-status.md
+  - Contributing:
+      - Documentation standard: contributing/documentation-standard.md
+      - Component page template: templates/component-page.md
