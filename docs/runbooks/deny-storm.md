@@ -2,6 +2,12 @@
 
 **Incident kind:** `deny_storm` · **Severity:** `high` · **Detection rule:** `correlate::rule_deny_storm`
 
+> **Status:** Implemented deterministic correlation. Automatic freeze depends on the tenant's configured SOC autonomy level.
+
+## Overview
+
+Use this runbook when one agent repeatedly receives deny decisions in a short window. The usual cause is a retry loop or stale integration, but varied actions/resources may indicate active probing. Preserve the evidence, stop the loop, distinguish defect from compromise, and restore only after the caller is corrected.
+
 ## Symptoms
 
 - A SOC alert/incident with `kind: "deny_storm"` appears in `GET /v1/incidents` or the live `GET /v1/ws/events` feed.
@@ -74,3 +80,23 @@ If the level is `L3`/`L4`, the agent is **already frozen** — skip to Investiga
 - `GET /v1/incidents/<incident_id>` shows `status: "closed"`.
 - No new `deny_storm` incident for the same agent within the next `DENY_STORM_WINDOW_SECS` (60s) window after remediation.
 - If you rotated the token, confirm the old token is rejected: a `/v1/authorize` call with the old token now returns `401`.
+
+## Security and Failure Handling
+
+- Do not change policy to allow the denied action merely to stop alert noise.
+- Use a separate operator credential for containment when the agent token may be compromised.
+- Tenant autonomy state is currently read from configuration/storage; direct SQLite inspection is a local single-node diagnostic, not the preferred enterprise control path.
+- A deny storm can exhaust quotas and obscure other activity. Preserve the incident evidence before clearing or restarting clients.
+- If freeze/revoke fails, disable the workload and revoke its upstream credentials outside AegisAgent.
+
+## Rollback and Recovery
+
+For a confirmed configuration defect, deploy the corrected client while the agent remains frozen, perform one controlled authorization check, then unfreeze. For suspected compromise, revocation is not rolled back; register or re-establish identity only after investigation and credential rotation.
+
+## References
+
+- [Agent Token Rotation](agent-token-rotation.md)
+- [Evidence Graph](../evidence-graph.md)
+- [Data Exfiltration](data-exfiltration.md)
+- [Fail-Closed Behavior](../fail-closed-behavior.md)
+- [SOC Engine](../components/SOC_Engine.md)

@@ -40,6 +40,8 @@ AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright test tests/dashboard-sh
 | `dashboard-data.spec.ts` | Live gateway | Agents, MCP, Explore, Integrity, Approvals, Overview panels, agent detail, Detections/Rules/Alerting, dashboard editor validate |
 | `dashboard-evidence-graph.spec.ts` | Live gateway | Fleet inventory + bookmarkable agent detail |
 | `mocked-soc-workflows.spec.ts` | Mocked `/v1/*` | Overview stats, tenant isolation, approve + secret redaction, integrity verify, explore, freeze, MCP quarantine, detections, dashboard validate |
+| `mocked-panel-suite.spec.ts` | Mocked `/v1/*` | Overview timeseries/heatmap/risk-map panels, dashboard template previews (decision-graph, chain controls, risk scoreboard) |
+| `mocked-phase9-control-pages.spec.ts` | Mocked `/v1/*` | Agent Cage Runs list + pause, run detail (timeline/events/prompt/model calls), Ban Center, Quarantine Center, Egress Events, Evidence Graph, Policy Center edit + rollback |
 | `soc-security.spec.ts` | Live gateway | Freeze confirm dialog, operator id field |
 
 Mock fixtures live in `e2e/fixtures/`. They use fake credentials only (`fake-bearer-e2e-only`).

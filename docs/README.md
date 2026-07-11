@@ -28,8 +28,10 @@ This folder is the **single source for AegisAgent product documentation**. It re
 | [Glossary.md](Glossary.md) | Shared vocabulary |
 | [contributing/documentation-standard.md](contributing/documentation-standard.md) | Required teaching, evidence, diagram, code, security, and operations standard for docs authors |
 | [templates/component-page.md](templates/component-page.md) | Copyable structure for production-grade component pages |
+| [Product_Requirements_Traceability.md](Product_Requirements_Traceability.md) | PRD requirement → owning docs → implementation → verification → status |
+| [Documentation_Quality_Report.md](Documentation_Quality_Report.md) | Generated structural coverage inventory for every active Markdown page |
 
-Docs hygiene: `node scripts/validate-docs.mjs` checks required docs, internal links, diagram inventory, and `architecture-map.json` references. `architecture-map.json` is the machine-readable source of truth for the explorer and layered diagrams — update it when components change.
+Docs hygiene: `node scripts/validate-docs.mjs` checks required docs, internal links, diagram inventory, `architecture-map.json`, PRD traceability, and the generated quality-report freshness. `node scripts/audit-doc-quality.mjs --write` refreshes the all-pages inventory. `architecture-map.json` is the machine-readable source of truth for the explorer and layered diagrams — update it when components change.
 
 ---
 

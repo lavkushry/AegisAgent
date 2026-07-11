@@ -1,6 +1,6 @@
 # How It Works
 
-## Simple version
+## Overview
 
 An agent wants to act → Aegis checks the action → policy decides → a human approves if needed → the action runs only if it exactly matches what was approved → a receipt proves it → the SOC investigates patterns.
 
@@ -64,3 +64,11 @@ This whole loop is **Implemented** for SDK-integrated agents. Runtime containmen
 ## Related docs
 
 [The_One_Minute_Tour.md](The_One_Minute_Tour.md) · [flows/Approval_Flow.md](flows/Approval_Flow.md) · [flows/Receipt_Flow.md](flows/Receipt_Flow.md) · [flows/SOC_Incident_Flow.md](flows/SOC_Incident_Flow.md) · [Architecture_Overview.md](Architecture_Overview.md)
+
+## Try the Flow
+
+```bash
+make demo
+```
+
+Inspect the resulting audit events and receipt verification rather than relying only on terminal success text.

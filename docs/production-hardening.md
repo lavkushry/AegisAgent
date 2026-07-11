@@ -5,6 +5,31 @@ June 2026 hardening pass. Pairs with [`deployment-guide.md`](deployment-guide.md
 (how to deploy) and [`performance-tuning-guide.md`](performance-tuning-guide.md)
 (throughput knobs). Everything here is read once at startup unless noted.
 
+> **Status:** Production-hardened for the known-agent, single-writer gateway path. PostgreSQL/multi-replica operations, complete runtime enforcement, and native human OIDC/SAML remain Partial or Planned; see [Implementation Status](Implementation_Status.md).
+
+## Overview
+
+Hardening protects four boundaries: network entry, authenticated tenant identity, deterministic authorization, and durable evidence. Use this checklist before exposing the gateway beyond loopback and after every material deployment, identity, policy, storage, or signing change.
+
+## Why This Exists
+
+A correct Cedar policy cannot compensate for an unauthenticated public listener, replay state that is not shared correctly, missing receipt durability, leaked secrets, or an unsupported database topology. Hardening converts secure code paths into a secure operating system.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    CLIENT[Agent / operator] --> TLS[TLS or trusted edge]
+    TLS --> AUTH[JWT / bearer / optional mTLS]
+    AUTH --> TENANT[Tenant binding + admin guards]
+    TENANT --> POLICY[Deterministic policy]
+    POLICY --> EVIDENCE[Decision + durable protected receipt]
+    EVIDENCE --> DB[(Supported storage topology)]
+    EVIDENCE -. metrics / OTLP .-> OBS[Restricted observability]
+```
+
+Hardening must preserve every boundary. Public traffic must not reach policy anonymously; protected decisions must not bypass durable evidence; diagnostics must not expose tenant identifiers or secrets.
+
 ## 1. Authentication mode (safe by default)
 
 | Env var | Default | Effect |
@@ -120,12 +145,12 @@ Phase 10.1 lands. The production Helm profile
 (`helm/aegis-gateway/values-production.yaml`) enables `jwtRequired: true`
 and multi-replica Postgres assumptions.
 
-## 10. PostgreSQL multi-replica (production path)
+## 10. PostgreSQL multi-replica (validation path)
 
 | Mode | `DATABASE_URL` | `replicaCount` | Notes |
 |---|---|---|---|
 | Dev / single-writer | `sqlite:///data/aegis.db` | `1` only | Default chart; PVC RWO |
-| Production HA | `postgres://…` or `postgresql://…` | `≥2` allowed | Use `values-production.yaml`; disable SQLite PVC; `AEGIS_REPLAY_STORE=db` |
+| Production HA candidate | `postgres://…` or `postgresql://…` | `≥2` only in a validated environment | Use `values-production.yaml`; disable SQLite PVC; `AEGIS_REPLAY_STORE=db`; do not claim supported HA until the release ledger marks Postgres GA |
 
 Compile the gateway with the workspace `postgres` feature when using Postgres.
 Migrations live under `lib/storage/migrations_postgres/`. SQLite remains the
@@ -140,3 +165,31 @@ local/dev path.
 | egress-proxy | yes | `helm/aegis-egress-proxy` | yes |
 | llm-gateway | yes (`bins/aegis-llm-gateway/Dockerfile`) | `helm/aegis-llm-gateway` | yes |
 | cage-runner | yes (`bins/aegis-cage-runner/Dockerfile`) | `helm/aegis-cage-runner` | yes (`--profile cage`; mounts host `docker.sock` — see `docs/AegisAgent_Cage_Docker_Security.md`) |
+
+## 12. Security Verification
+
+After hardening, verify negative cases as well as health:
+
+```bash
+curl -i http://127.0.0.1:8080/readyz
+curl -i http://127.0.0.1:8080/metrics
+```
+
+The first request should match deployment readiness. The second must be rejected without the required admin authorization in a hardened configuration. Also test invalid JWT, wrong tenant, replayed nonce, expired approval, swapped action hash, oversized body, and protected receipt persistence failure in a non-production environment.
+
+Never treat a successful liveness probe as proof that authentication, tenant isolation, policy, approvals, receipts, or background evidence writers are correct.
+
+## 13. Operations and Recovery
+
+Record configuration without secret values, policy hash, image digest, schema version, and receipt-chain head at every release. Alert on readiness, hash mismatch, replay, protected receipt failure, receipt integrity, SOC event drops, database saturation, and secret/exporter health.
+
+If a hardening change blocks legitimate traffic, prefer rolling back the specific configuration/image under controlled maintenance over disabling authentication or fail-closed behavior. After rollback, verify identity, authorization, protected receipt creation, and chain integrity.
+
+## 14. References
+
+- [Deployment Guide](deployment-guide.md)
+- [Fail-Closed Behavior](fail-closed-behavior.md)
+- [Threat Model](AegisAgent_Threat_Model.md)
+- [Secret Rotation](runbooks/secret-rotation.md)
+- [Backup and Restore](runbooks/backup-and-restore.md)
+- [Implementation Status](Implementation_Status.md)

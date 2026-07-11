@@ -1,6 +1,6 @@
 # Flow: Approval
 
-## Simple version
+## Overview
 
 A risky action pauses. A human sees the *exact* action and approves it. The approval is a fingerprint-locked, single-use ticket — if the action changes even slightly, the ticket doesn't fit.
 
@@ -35,6 +35,18 @@ This kills approve-then-swap, replay, and render-vs-bytes attacks. Demo the defe
 ## What can go wrong
 
 Expired/consumed/unknown approval → refuse (fail closed). Brute-forcing approval IDs → 429 (per-IP limiter + per-ID attempt tracker, #1307). Executing on `approved` status without consuming → you built a bypass; use the SDKs.
+
+## Example
+
+```bash
+python3 examples/approve_then_swap_demo.py
+```
+
+The expected result is that the originally approved action can be consumed once, while changed parameters and replay do not execute.
+
+## Security
+
+Approvers review the stored effective action and hash, not a caller-controlled summary. Approval endpoints require authenticated tenant/role context, expiry, rate limiting, and audit. SDKs must consume atomically and compare the current hash before the wrapped tool call.
 
 ## Current status
 

@@ -172,6 +172,21 @@ Prefer a precise link to a canonical runbook over copying a procedure into multi
 
 Copy [`component-page.md`](../templates/component-page.md) for a new component guide. Delete template comments, replace all placeholders, and run the validation commands below.
 
+Documentation is audited by page profile rather than a single indiscriminate checklist:
+
+| Profile | Primary purpose |
+|---|---|
+| Product | Outcomes, scope, requirements, acceptance, release gates |
+| Component | Architecture, implementation, security, operation |
+| Flow | One end-to-end interaction and its failure paths |
+| Runbook | Detection, containment, recovery, verification, rollback |
+| Onboarding | A role-specific path to first successful task |
+| Decision | Context, options, decision, consequences |
+| Reference | Precise generated, tabular, schema, or status information |
+| Guide | Progressive teaching for a concept, integration, or operation |
+
+The generated [Documentation Quality Report](../Documentation_Quality_Report.md) records structural coverage and the prioritized migration backlog. It does not replace factual review.
+
 ## 10. Review checklist
 
 - [ ] A beginner can explain the component after Overview and Solution.
@@ -191,10 +206,11 @@ Run from the repository root:
 
 ```bash
 node scripts/validate-docs.mjs
+node scripts/audit-doc-quality.mjs --check
 mkdocs build --strict
 ```
 
-`validate-docs.mjs` checks the repository-specific inventory, internal links, diagram registry, architecture map, and implementation ledger. `mkdocs build --strict` treats publishing warnings as failures.
+`validate-docs.mjs` checks the repository-specific inventory, internal links, diagram registry, architecture map, implementation ledger, PRD traceability, and quality-report freshness. `audit-doc-quality.mjs --check` can also be run directly. `mkdocs build --strict` treats publishing warnings as failures.
 
 ## References
 
@@ -203,4 +219,3 @@ mkdocs build --strict
 - [Documentation audit](../Documentation_Audit.md)
 - [Implementation status](../Implementation_Status.md)
 - [Diagram index](../AegisAgent_Diagram_Index.md)
-

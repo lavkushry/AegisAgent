@@ -3,6 +3,16 @@
 This page is the quickest path to understanding AegisAgent: what it is, its components, the
 architecture, and the use cases it targets.
 
+## Overview
+
+Start with the proof demo, then choose an SDK and deployment path. Do not begin by exposing the gateway publicly or deploying partial runtime components as if they were complete enforcement.
+
+> **Status:** The known-agent quickstart is implemented. Unknown-agent cage/sensor/egress/broker force paths and multi-replica HA remain Partial.
+
+## Why This Exists
+
+The safest learning path proves enforcement before adding deployment complexity. You should understand what is blocked, why it is blocked, and how the evidence verifies before connecting production credentials.
+
 ## What AegisAgent is
 
 AegisAgent is the **integrity layer for AI agent actions**, delivered as an **integrity-anchored
@@ -23,24 +33,28 @@ run — and guarantees what competitors only decide:
 |---|---|
 | **Gateway** (Rust + Axum) | The runtime: authorizes every action with Cedar, manages approvals, writes receipts, emits SOC events. Binds `127.0.0.1:8080` in dev. |
 | **Policy engine** (Cedar) | Deterministic `allow` / `deny` / `require_approval` decisions; provenance + approval gates live here (`policies.cedar`). |
-| **SDKs** | In-agent interception. **Python** (complete reference), **Go** and **TypeScript** (canonicalizer verified; client + decorator in progress). |
+| **SDKs** | In-agent interception. Python and TypeScript integrity paths are production-ready; Go is beta with documented capture-parity gaps. |
 | **Approval integrity engine** | Freeze → hash → bind → single-use consume → fail-closed. |
 | **Trust-provenance gate** | The 6 deterministic source-trust levels. |
 | **Verifiable receipts** | Hash-chained, tamper-evident evidence + reference verifier + CLI (`aegis-verify-receipts`). |
 | **MCP Gateway Lite** | Register / discover / pin MCP tools; manifest-drift detection. |
-| **Agent SOC** *(designed)* | Async detection, correlation, response, console — consumes the event stream. |
+| **Agent SOC** | Implemented async detection/correlation/incidents and a beta console; runtime force-path response remains Partial. |
 
 ## Architecture at a glance
 
 AegisAgent runs two planes:
 
-```text
-INLINE PLANE (synchronous, <75 ms — the action path)
-  Agent SDK ──► Gateway ──► Cedar ──► allow | deny | require_approval
-       │ freezes action_hash · binds approval · emits receipt
-       ▼ emit Agent Security Event (fire-and-forget)
-ASYNC SOC PLANE (out-of-band)
-  Event bus ──► detect ──► correlate ──► alert ──► { respond · index · notify · RCA }
+```mermaid
+flowchart TB
+    subgraph INLINE[Inline integrity plane]
+        SDK[Agent SDK] --> GW[Gateway] --> CEDAR[Cedar]
+        CEDAR --> DECISION[allow / deny / require approval]
+        DECISION --> RECEIPT[Hash-bound approval + receipt]
+    end
+    subgraph ASYNC[Asynchronous SOC plane]
+        EVENT[Security event] --> DETECT[Detect] --> CORR[Correlate] --> RESP[Alert / respond / investigate]
+    end
+    GW -. non-blocking .-> EVENT
 ```
 
 The inline plane decides and enforces in real time; the SOC plane monitors and responds out-of-band

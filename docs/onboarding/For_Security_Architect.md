@@ -2,6 +2,12 @@
 
 **Goal:** understand the trust boundaries and security guarantees in ~15 minutes, and know exactly where each claim is enforced in code.
 
+> **Status:** Known-agent integrity controls are largely production-ready. Unknown-agent cage, sensor collection, forced egress, broker force path, ban/quarantine propagation, and multi-replica HA remain Partial.
+
+## Overview
+
+Audit AegisAgent as a chain of deployed enforcement points, not as a feature list. For every claim, identify the principal, tenant binding, canonical bytes, decision authority, durable evidence, failure behavior, bypass path, and test that proves the negative case.
+
 ## 1. Read first
 
 1. [../Architecture_Overview.md](../Architecture_Overview.md) §2 (choke points), §5 (trust boundaries), §6 (fail-closed paths)
@@ -24,7 +30,7 @@
 - **B5 tenant isolation:** every query binds `tenant_id` — audit `lib/storage/src/db/*`; isolation tests exist; CWE-284 runbook in `.claude/rules/security_scan.md`.
 - **Evidence:** hash-chained receipts + hash-chained policy audit log; optional Ed25519; parity vectors in `tests/`.
 - **Supply chain:** cosign keyless signing, SLSA L3 provenance, SBOMs (`release-publish.yml`); cargo-deny license gate; Semgrep/secret/container scans.
-- **Runtime plane (📐):** signed control commands (Ed25519, tenant/target/expiry/nonce) — design only today; see [../flows/Control_Command_Flow.md](../flows/Control_Command_Flow.md).
+- **Runtime plane (Partial):** signed control commands, process enforcement, cage/egress/sensor/broker skeletons exist; real collectors and complete force paths remain. See [../flows/Control_Command_Flow.md](../flows/Control_Command_Flow.md).
 
 ## 4. Fail-closed spot checks
 
@@ -32,11 +38,33 @@
 
 ## 5. Residual risks to keep on your register
 
-- SDK-side enforcement assumes the agent process isn't fully hostile (that's the cage's job — 📐).
-- No egress control for known agents today (proxy is Phase 5).
+- SDK-side enforcement assumes the agent process is cooperating; the partial cage/runtime plane addresses hostile workloads only in supported deployments.
+- The egress proxy exists, but forced transparent cage integration is incomplete; known-agent traffic can bypass it unless the deployment makes it mandatory.
 - SQLite single-writer: availability (not integrity) consideration until Postgres GA (#1194).
-- Prompt/model interior lineage lands in Phase 7 — today lineage starts at ingestion and the tool boundary.
+- Prompt/model ingest and the LLM gateway exist, but broader provider adapters and prompt/model query UI remain incomplete; verify lineage coverage for the deployed path.
 
 ## 6. Where to poke
 
 `grep -rn "unwrap()" src/src/ lib/` (should be tests only) · `grep -ri "0.0.0.0"` (deploy configs only) · run `cargo deny check licenses` · read the ADRs ([../adr/index.md](../adr/index.md)) for why Cedar/SQLite/JCS/Ed25519 were chosen.
+
+## 7. Verification Example
+
+```bash
+python3 examples/approve_then_swap_demo.py
+cargo tree --workspace
+node scripts/validate-docs.mjs
+```
+
+The first proves the headline negative case, the second exposes dependency direction/cycles, and the third checks documentation/status/traceability integrity.
+
+## 8. Security and Failure Handling
+
+Assume the agent, external content, tool output, and network are untrusted. Treat SDK enforcement as cooperative, receipt signing keys and policy bundles as high-value assets, and the database as evidence infrastructure. Require explicit residual-risk documentation for every partial force path.
+
+## 9. Operations and Troubleshooting
+
+For every production topology, trace identity and evidence across listener, gateway, storage, SDK, SOC, and runtime components. Exercise gateway loss, storage loss, policy parse failure, expired/mismatched approvals, replay, cross-tenant access, receipt corruption, sensor silence, and command replay. Findings update the threat model, status ledger, runbooks, and architecture map together.
+
+## 10. References
+
+[Security Model](../security-model.md) · [Threat Model](../AegisAgent_Threat_Model.md) · [Fail-Closed Behavior](../fail-closed-behavior.md) · [Implementation Status](../Implementation_Status.md)

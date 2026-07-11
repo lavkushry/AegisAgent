@@ -5,9 +5,62 @@
 export type MockRole = "viewer" | "analyst" | "approver" | "admin";
 export type ReceiptVerifyMode = "verified" | "failed" | "unknown";
 
+export interface MockBanRecord {
+  id: string;
+  target_type: string;
+  target_value: string;
+  scope: string;
+  reason: string | null;
+  actor: string;
+  status: string;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revoked_by: string | null;
+}
+
+export interface MockQuarantineRecord {
+  id: string;
+  target_type: string;
+  target_value: string;
+  reason: string | null;
+  actor: string;
+  status: string;
+  incident_id: string | null;
+  created_at: string;
+  released_at: string | null;
+  released_by: string | null;
+}
+
+export interface MockPolicyRecord {
+  id: string;
+  policy_key: string;
+  name: string;
+  language: string;
+  body: string;
+  version: number;
+  status: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface MockPolicyAuditLogEntry {
+  id: string;
+  policy_id: string;
+  policy_key: string;
+  action: string;
+  actor: string | null;
+  created_at: string;
+}
+
 export interface MockRuntimeState {
   agentStatus: string;
   mcpStatus: string;
+  runStatus: string;
+  bans: MockBanRecord[];
+  quarantines: MockQuarantineRecord[];
+  policies: MockPolicyRecord[];
+  policyAuditLog: MockPolicyAuditLogEntry[];
 }
 
 export interface MockScenario {
@@ -18,8 +71,57 @@ export interface MockScenario {
   failingPaths?: string[];
 }
 
+const NOW = "2026-06-28T12:00:00.000Z";
+
 export function createMockRuntimeState(): MockRuntimeState {
-  return { agentStatus: "active", mcpStatus: "active" };
+  return {
+    agentStatus: "active",
+    mcpStatus: "active",
+    runStatus: "running",
+    bans: [
+      {
+        id: BAN_ID,
+        target_type: "agent",
+        target_value: AGENT_KEY,
+        scope: "tenant",
+        reason: "E2E fixture ban",
+        actor: "e2e_operator",
+        status: "active",
+        created_at: NOW,
+        expires_at: null,
+        revoked_at: null,
+        revoked_by: null,
+      },
+    ],
+    quarantines: [
+      {
+        id: QUARANTINE_ID,
+        target_type: "agent",
+        target_value: AGENT_KEY,
+        reason: "E2E fixture quarantine",
+        actor: "e2e_operator",
+        status: "active",
+        incident_id: null,
+        created_at: NOW,
+        released_at: null,
+        released_by: null,
+      },
+    ],
+    policies: [
+      {
+        id: POLICY_ID,
+        policy_key: "e2e-fixture-policy",
+        name: "E2E Fixture Policy",
+        language: "cedar",
+        body: 'permit(principal, action, resource) when { context.trust_level == "trusted_internal_signed" };',
+        version: 1,
+        status: "active",
+        created_by: "e2e_operator",
+        created_at: NOW,
+      },
+    ],
+    policyAuditLog: [],
+  };
 }
 
 export const MOCK_TENANT_A = "tenant_e2e_a";
@@ -35,8 +137,11 @@ export const RECEIPT_ID_BROKEN = "receipt-e2e-broken";
 export const INCIDENT_ID = "incident-e2e-001";
 export const MCP_SERVER_KEY = "mcp-e2e-server";
 export const RULE_KEY = "high-risk-merge";
-
-const NOW = "2026-06-28T12:00:00.000Z";
+export const RUN_ID = "run-e2e-001";
+export const RUN_KEY = "run-key-e2e-001";
+export const BAN_ID = "ban-e2e-001";
+export const QUARANTINE_ID = "quarantine-e2e-001";
+export const POLICY_ID = "policy-e2e-001";
 
 function tenantAgents(tenantId: string, runtime?: MockRuntimeState) {
   if (tenantId === MOCK_TENANT_B) {
@@ -278,6 +383,125 @@ function incidentGraph() {
       },
     ],
   };
+}
+
+/** Run/agent-scoped graph reuses the same shape as the incident graph. */
+function runOrAgentGraph() {
+  return incidentGraph();
+}
+
+function tenantAgentRun(tenantId: string, runtime?: MockRuntimeState) {
+  if (tenantId !== MOCK_TENANT_A) return [];
+  return [
+    {
+      id: RUN_ID,
+      agent_id: AGENT_ID,
+      run_key: RUN_KEY,
+      source_component: "sdk",
+      mode: "enforce",
+      status: runtime?.runStatus ?? "running",
+      started_at: NOW,
+      finished_at: null,
+      root_trace_id: "trace-e2e-001",
+      root_trust_level: "trusted_internal_signed",
+      policy_bundle_id: null,
+      claimed_by: null,
+    },
+  ];
+}
+
+function tenantRunTimeline(tenantId: string) {
+  if (tenantId !== MOCK_TENANT_A) return [];
+  return [
+    {
+      id: "audit-e2e-001",
+      event_type: "authorize_decision",
+      agent_id: AGENT_ID,
+      run_id: RUN_ID,
+      skill: "github",
+      action: "read_issue",
+      resource: "octocat/demo-repo#1",
+      decision_id: "decision-e2e-001",
+      created_at: NOW,
+    },
+  ];
+}
+
+function tenantRunEvents(tenantId: string) {
+  if (tenantId !== MOCK_TENANT_A) return [];
+  return [
+    {
+      id: "runtime-event-e2e-001",
+      event_id: "runtime-event-e2e-001",
+      event_type: "sandbox_started",
+      severity: "info",
+      agent_id: AGENT_ID,
+      run_id: RUN_ID,
+      source_component: "cage-runner",
+      decision: null,
+      reason: null,
+      observed_at: NOW,
+    },
+  ];
+}
+
+function tenantPromptEvents(tenantId: string) {
+  if (tenantId !== MOCK_TENANT_A) return [];
+  return [
+    {
+      id: "prompt-event-e2e-001",
+      event_id: "prompt-event-e2e-001",
+      run_id: RUN_ID,
+      trace_id: "trace-e2e-001",
+      prompt_hash: "a".repeat(64),
+      redacted_prompt_preview: "Summarize the attached [REDACTED] file",
+      role: "user",
+      source_trust: "trusted_internal_signed",
+      model_provider: "openai",
+      retention_policy: "30d",
+      redaction_status: "redacted",
+      created_at: NOW,
+    },
+  ];
+}
+
+function tenantModelCalls(tenantId: string) {
+  if (tenantId !== MOCK_TENANT_A) return [];
+  return [
+    {
+      id: "model-call-e2e-001",
+      event_id: "model-call-e2e-001",
+      run_id: RUN_ID,
+      trace_id: "trace-e2e-001",
+      provider: "openai",
+      model: "gpt-5",
+      request_hash: "b".repeat(64),
+      response_hash: "c".repeat(64),
+      started_at: NOW,
+      finished_at: NOW,
+      token_counts_json: '{"prompt":10,"completion":20}',
+      status: "success",
+      redaction_status: "redacted",
+      received_at: NOW,
+    },
+  ];
+}
+
+function tenantEgressEvents(tenantId: string) {
+  if (tenantId !== MOCK_TENANT_A) return [];
+  return [
+    {
+      id: "egress-event-e2e-001",
+      event_id: "egress-event-e2e-001",
+      event_type: "egress_check",
+      severity: "info",
+      agent_id: AGENT_ID,
+      run_id: RUN_ID,
+      decision: "allow",
+      reason: "matched tenant allow rule",
+      observed_at: NOW,
+    },
+  ];
 }
 
 function tenantMcpServers(tenantId: string, runtime?: MockRuntimeState) {
@@ -575,6 +799,212 @@ export function resolveMockResponse(
     };
   }
   if (path === `/v1/graph/incident/${INCIDENT_ID}`) return { status: 200, body: incidentGraph() };
+  if (path === `/v1/graph/run/${RUN_ID}`) return { status: 200, body: runOrAgentGraph() };
+  if (path.startsWith(`/v1/graph/agent/${AGENT_ID}`)) return { status: 200, body: runOrAgentGraph() };
+
+  // Agent Cage Runs (Phase 9.2)
+  if (path === "/v1/agent-cage/runs" || path.startsWith("/v1/agent-cage/runs?")) {
+    return { status: 200, body: tenantAgentRun(tenantId, runtime) };
+  }
+  if (path === `/v1/agent-cage/runs/${RUN_ID}`) {
+    const run = tenantAgentRun(tenantId, runtime)[0];
+    return run ? { status: 200, body: run } : { status: 404, body: { error: "not found" } };
+  }
+  if (
+    method === "POST" &&
+    /^\/v1\/agent-cage\/runs\/[^/]+\/(pause|resume|kill|quarantine)$/.test(path)
+  ) {
+    const action = path.split("/").pop();
+    runtime.runStatus =
+      action === "pause" ? "paused" : action === "resume" ? "running" : action === "kill" ? "killed" : "quarantined";
+    return {
+      status: 200,
+      body: { command_id: `command-e2e-${action}`, status: "issued", action },
+    };
+  }
+  if (path === `/v1/runs/${RUN_ID}/timeline`) return { status: 200, body: tenantRunTimeline(tenantId) };
+  if (path.startsWith(`/v1/runtime/runs/${RUN_ID}/events`)) return { status: 200, body: tenantRunEvents(tenantId) };
+  if (path.startsWith(`/v1/runtime/runs/${RUN_ID}/prompt-events`)) return { status: 200, body: tenantPromptEvents(tenantId) };
+  if (path.startsWith(`/v1/runtime/runs/${RUN_ID}/model-calls`)) return { status: 200, body: tenantModelCalls(tenantId) };
+
+  // Ban Center (Phase 9.3)
+  if (path === "/v1/bans" || path.startsWith("/v1/bans?")) {
+    if (method === "POST") {
+      const req = (body ?? {}) as Partial<MockBanRecord>;
+      const created: MockBanRecord = {
+        id: `ban-e2e-created-${runtime.bans.length + 1}`,
+        target_type: req.target_type ?? "agent",
+        target_value: req.target_value ?? "unknown",
+        scope: req.scope ?? "tenant",
+        reason: req.reason ?? null,
+        actor: req.actor ?? "e2e_operator",
+        status: "active",
+        created_at: NOW,
+        expires_at: null,
+        revoked_at: null,
+        revoked_by: null,
+      };
+      runtime.bans.push(created);
+      return { status: 201, body: created };
+    }
+    return { status: 200, body: tenantId === MOCK_TENANT_A ? runtime.bans : [] };
+  }
+  const revokeBanMatch = path.match(/^\/v1\/bans\/([^/]+)\/revoke$/);
+  if (method === "POST" && revokeBanMatch) {
+    const id = decodeURIComponent(revokeBanMatch[1]);
+    const ban = runtime.bans.find((b) => b.id === id);
+    if (!ban) return { status: 404, body: { error: "not found" } };
+    ban.status = "revoked";
+    ban.revoked_at = NOW;
+    ban.revoked_by = (body as { revoked_by?: string } | undefined)?.revoked_by ?? "e2e_operator";
+    return { status: 200, body: ban };
+  }
+
+  // Quarantine Center (Phase 9.3)
+  if (path === "/v1/quarantine" || path.startsWith("/v1/quarantine?")) {
+    if (method === "POST") {
+      const req = (body ?? {}) as Partial<MockQuarantineRecord>;
+      const created: MockQuarantineRecord = {
+        id: `quarantine-e2e-created-${runtime.quarantines.length + 1}`,
+        target_type: req.target_type ?? "agent",
+        target_value: req.target_value ?? "unknown",
+        reason: req.reason ?? null,
+        actor: req.actor ?? "e2e_operator",
+        status: "active",
+        incident_id: req.incident_id ?? null,
+        created_at: NOW,
+        released_at: null,
+        released_by: null,
+      };
+      runtime.quarantines.push(created);
+      return { status: 201, body: created };
+    }
+    return { status: 200, body: tenantId === MOCK_TENANT_A ? runtime.quarantines : [] };
+  }
+  const releaseQuarantineMatch = path.match(/^\/v1\/quarantine\/([^/]+)\/release$/);
+  if (method === "POST" && releaseQuarantineMatch) {
+    const id = decodeURIComponent(releaseQuarantineMatch[1]);
+    const q = runtime.quarantines.find((row) => row.id === id);
+    if (!q) return { status: 404, body: { error: "not found" } };
+    q.status = "released";
+    q.released_at = NOW;
+    q.released_by = (body as { released_by?: string } | undefined)?.released_by ?? "e2e_operator";
+    return { status: 200, body: q };
+  }
+
+  // Egress Events (Phase 9.2)
+  if (path.startsWith("/v1/egress/events")) {
+    return { status: 200, body: tenantId === MOCK_TENANT_A ? tenantEgressEvents(tenantId) : [] };
+  }
+  if (method === "POST" && path === "/v1/egress/block") {
+    const req = (body ?? {}) as { destination?: string; actor?: string; reason?: string };
+    const created: MockBanRecord = {
+      id: `ban-e2e-egress-${runtime.bans.length + 1}`,
+      target_type: "destination",
+      target_value: req.destination ?? "unknown",
+      scope: "tenant",
+      reason: req.reason ?? null,
+      actor: req.actor ?? "e2e_operator",
+      status: "active",
+      created_at: NOW,
+      expires_at: null,
+      revoked_at: null,
+      revoked_by: null,
+    };
+    runtime.bans.push(created);
+    return { status: 201, body: created };
+  }
+  if (method === "POST" && path === "/v1/egress/unblock") {
+    const req = (body ?? {}) as { ban_id?: string; revoked_by?: string };
+    const ban = runtime.bans.find((b) => b.id === req.ban_id);
+    if (!ban) return { status: 404, body: { error: "not found" } };
+    ban.status = "revoked";
+    ban.revoked_at = NOW;
+    ban.revoked_by = req.revoked_by ?? "e2e_operator";
+    return { status: 200, body: ban };
+  }
+
+  // Policy Center (Phase 9.3)
+  if (path === "/v1/policies" || path.startsWith("/v1/policies?")) {
+    if (method === "POST") {
+      const req = (body ?? {}) as { policy_key?: string; name?: string; body?: string };
+      const created: MockPolicyRecord = {
+        id: `policy-e2e-created-${runtime.policies.length + 1}`,
+        policy_key: req.policy_key ?? "unknown",
+        name: req.name ?? "Untitled policy",
+        language: "cedar",
+        body: req.body ?? "",
+        version: 1,
+        status: "active",
+        created_by: "e2e_operator",
+        created_at: NOW,
+      };
+      runtime.policies.push(created);
+      runtime.policyAuditLog.push({
+        id: `policy-audit-e2e-${runtime.policyAuditLog.length + 1}`,
+        policy_id: created.id,
+        policy_key: created.policy_key,
+        action: "created",
+        actor: "e2e_operator",
+        created_at: NOW,
+      });
+      return { status: 201, body: created };
+    }
+    return { status: 200, body: tenantId === MOCK_TENANT_A ? runtime.policies : [] };
+  }
+  if (path === "/v1/policies/audit-log") {
+    return { status: 200, body: tenantId === MOCK_TENANT_A ? runtime.policyAuditLog : [] };
+  }
+  const rollbackPolicyMatch = path.match(/^\/v1\/policies\/([^/]+)\/rollback$/);
+  if (method === "POST" && rollbackPolicyMatch) {
+    const id = decodeURIComponent(rollbackPolicyMatch[1]);
+    const policy = runtime.policies.find((p) => p.id === id);
+    if (!policy) return { status: 404, body: { error: "not found" } };
+    policy.version = Math.max(1, policy.version - 1);
+    runtime.policyAuditLog.push({
+      id: `policy-audit-e2e-${runtime.policyAuditLog.length + 1}`,
+      policy_id: policy.id,
+      policy_key: policy.policy_key,
+      action: "rolled_back",
+      actor: "e2e_operator",
+      created_at: NOW,
+    });
+    return { status: 200, body: policy };
+  }
+  const policyByIdMatch = path.match(/^\/v1\/policies\/([^/]+)$/);
+  if (policyByIdMatch) {
+    const id = decodeURIComponent(policyByIdMatch[1]);
+    const policy = runtime.policies.find((p) => p.id === id);
+    if (!policy) return { status: 404, body: { error: "not found" } };
+    if (method === "PUT") {
+      const req = (body ?? {}) as { name?: string; body?: string; status?: string };
+      if (req.name !== undefined) policy.name = req.name;
+      if (req.body !== undefined) policy.body = req.body;
+      if (req.status !== undefined) policy.status = req.status;
+      policy.version += 1;
+      runtime.policyAuditLog.push({
+        id: `policy-audit-e2e-${runtime.policyAuditLog.length + 1}`,
+        policy_id: policy.id,
+        policy_key: policy.policy_key,
+        action: "updated",
+        actor: "e2e_operator",
+        created_at: NOW,
+      });
+      return { status: 200, body: policy };
+    }
+    if (method === "DELETE") {
+      runtime.policies = runtime.policies.filter((p) => p.id !== id);
+      runtime.policyAuditLog.push({
+        id: `policy-audit-e2e-${runtime.policyAuditLog.length + 1}`,
+        policy_id: id,
+        policy_key: policy.policy_key,
+        action: "deleted",
+        actor: "e2e_operator",
+        created_at: NOW,
+      });
+      return { status: 200, body: { deleted: true } };
+    }
+  }
 
   if (path === "/v1/mcp/servers") return { status: 200, body: tenantMcpServers(tenantId, runtime) };
   if (path === `/v1/mcp/servers/${encodeURIComponent(MCP_SERVER_KEY)}/tools`) {

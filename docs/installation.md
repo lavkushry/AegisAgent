@@ -3,6 +3,28 @@
 AegisAgent is self-hostable and runs as a single Rust gateway plus a language SDK. This page gets you
 from zero to a verified protected action.
 
+> **Status:** Native, Docker Compose, and single-replica Helm paths are available. Multi-replica production HA and complete runtime-control force paths remain Partial.
+
+## Overview
+
+Choose the smallest installation that proves your objective: the in-process integrity demo for concepts, the native gateway for development, Docker Compose for the full local proof, or Helm for a controlled single-replica deployment.
+
+## Why This Exists
+
+Installation is part of the security model. A process that starts without authentication, durable evidence, correct policy, or a supported storage topology is not a successful production installation.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    SDK[Language SDK] -->|REST :8080 or gRPC :6334| GW[Gateway]
+    GW --> POLICY[Cedar policy]
+    GW --> DB[(SQLite local / validated DB mode)]
+    GW -. events .-> SOC[Async SOC]
+```
+
+The local path defaults to loopback. Production exposure adds TLS, enforced authentication, durable storage, metrics, backups, and tested rollback.
+
 ## Requirements
 
 - **Rust** (stable) for the gateway
@@ -83,6 +105,18 @@ aegis-verify-receipts <receipts.json>
 For development and testing the gateway binds the loopback interface (`127.0.0.1`). For production,
 front it with TLS and expose it on a controlled endpoint your agents can reach (see
 [Integration & connectivity](AegisAgent_Integration_Connectivity.md) §4 for network and auth).
+
+## Security and Verification
+
+- Keep `127.0.0.1` for local development.
+- Require TLS and production authentication before public binding.
+- Treat seeded `tenant_123` credentials as demo-only.
+- Verify `/startupz`, `/readyz`, one protected action, and receipt integrity.
+- Do not scale the default SQLite/PVC topology beyond one writer.
+
+## Troubleshooting
+
+Run `make doctor`, check port `8080`/`6334` availability, inspect `docker compose logs gateway`, verify `src/policies.cedar` exists for native startup, and confirm storage permissions. Use [Debugging Guide](AegisAgent_Debugging_Guide.md) for deeper failures.
 
 ## Next steps
 

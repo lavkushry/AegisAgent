@@ -12,6 +12,16 @@ Open, self-hostable, framework-neutral.
 !!! quote ""
     *Make the approval trustworthy. Trust the source, not the text. Run the SOC on the proof.*
 
+## Overview
+
+AegisAgent checks an agent's proposed action before execution, binds required approval to the exact canonical action, produces verifiable evidence, and operates a deterministic SOC on that evidence.
+
+> **Status:** Known-agent integrity and gateway-evidence SOC capabilities largely ship today. Unknown-agent runtime force paths and multi-replica enterprise operations remain Partial. See [Implementation Status](Implementation_Status.md).
+
+## Why This Exists
+
+AI agents act with real credentials on real systems. Permission without source provenance, exact-action approval, and independently verifiable evidence creates false assurance. AegisAgent provides those controls at deployable action choke points.
+
 <div class="grid cards" markdown>
 
 -   :material-rocket-launch:{ .lg .middle } **Getting started**
@@ -86,11 +96,12 @@ It is built on three things a generic gateway or SIEM can't copy:
 
 ## How it fits together
 
-```text
-Agent (anywhere)  ──SDK / proxy / agentless──►  AegisAgent Gateway (Cedar rules · approvals · receipts)
-                                                          │ emit (async)
-                                                          ▼
-                                                Agent SOC  →  detect · correlate · contain · prove
+```mermaid
+flowchart LR
+    AGENT[Agent] -->|SDK / controlled integration| GW[Gateway]
+    GW --> POLICY[Cedar + exact approval]
+    POLICY --> RECEIPT[Verifiable receipt]
+    GW -. async evidence .-> SOC[Detect · correlate · investigate · respond]
 ```
 
 Start with **[Integration & connectivity](AegisAgent_Integration_Connectivity.md)** to connect your first

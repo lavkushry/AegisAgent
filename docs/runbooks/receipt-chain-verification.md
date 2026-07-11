@@ -2,6 +2,12 @@
 
 **Endpoints:** `GET /v1/receipts/:id/verify` · `POST /v1/receipts/verify-chain` · **CLI:** `aegis-verify-receipts` (or `python3 -m aegisagent.verify_receipts`)
 
+> **Status:** Implemented for single, range, chain, and head verification, with shared verification corpora across supported languages.
+
+## Overview
+
+Use this runbook during routine evidence checks, after restore, or whenever receipt integrity alerts. Verification must preserve the original evidence, distinguish content tampering from missing/reordered rows and signature configuration, and never “repair” a broken hash before forensic capture.
+
 ## Symptoms
 
 - A `receipt-chain-broken` SOC alert (P1 per [`AegisAgent_Threat_Model.md`](../AegisAgent_Threat_Model.md) T-C1).
@@ -59,3 +65,23 @@ Every action receipt is hash-chained: each receipt's hash is computed over its o
 - Re-run the chain-level check across the full receipt range for the affected tenant; it should now return `verified: true`.
 - File/update the incident record citing the specific `receipt_id` where the break was found and the root cause determined above.
 - If this was a genuine tamper event (not a benign restore gap), treat it with the same urgency as the `data_exfiltration.md` runbook — rotate any credentials that may have allowed direct database write access, and review who/what has that access going forward.
+
+## Security and Failure Handling
+
+- Verify exported receipts with an independent verifier when the producing gateway or database is suspect.
+- Preserve exact bytes, command output, timestamps, chain head, and custody information.
+- An empty range can verify trivially; confirm expected receipt count and boundaries.
+- Hash verification and signature verification answer different questions. Record both.
+- Never recalculate and overwrite stored hashes to make verification pass.
+
+## Rollback and Recovery
+
+Receipt evidence is append-oriented and must not be rolled back casually. If restoration creates an accepted point-in-time gap, document the lost interval and anchor the restored chain head before resuming. If the root cause is unknown or malicious, keep affected evidence read-only and escalate before traffic resumes.
+
+## References
+
+- [Action Receipt Specification](../action-receipt-spec.md)
+- [Receipt Engine](../components/Receipt_Engine.md)
+- [Backup and Restore](backup-and-restore.md)
+- [Threat Model](../AegisAgent_Threat_Model.md)
+- [Fail-Closed Behavior](../fail-closed-behavior.md)

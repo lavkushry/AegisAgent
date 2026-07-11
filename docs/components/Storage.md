@@ -1,6 +1,6 @@
 # Storage
 
-## Simple version
+## Overview
 
 One trait, one database, thirty migrations. Everything the gateway knows — tenants, agents, approvals, decisions, receipts, incidents — lives behind a single storage interface, and every query is locked to its tenant.
 
@@ -46,6 +46,23 @@ Implemented (SQLite: production for single-writer; Postgres mode: Partial — se
 ## What can go wrong
 
 Sharing one SQLite file across processes → `SQLITE_BUSY` storms. Restoring an old snapshot forks the receipt chain — verify after restore ([../runbooks/backup-and-restore.md](../runbooks/backup-and-restore.md)). Adding a tenant-owned table without a `tenant_id` index → full scans on the hot path.
+
+## Example
+
+```bash
+cargo test -p aegis-storage
+cargo check -p aegis-storage --features postgres
+```
+
+The first exercises the default backend and trait behavior. The second verifies the optional PostgreSQL compilation path; it does not by itself establish multi-replica production readiness.
+
+## Security
+
+All access goes through `StorageBackend`; tenant-owned operations bind authenticated `tenant_id`; SQL is parameterized; secrets are hashed/encrypted as designed; backups are protected; and schema mismatch fails startup. No handler or policy crate may receive a raw `SqlitePool`.
+
+## Operations
+
+Monitor pool wait/use, write latency, WAL/disk growth, busy errors, migration state, backup freshness, receipt integrity, and background-job health. Keep one SQLite writer, test restore regularly, and validate tenant/replay/receipt invariants before any backend or replica change.
 
 ## Related docs
 

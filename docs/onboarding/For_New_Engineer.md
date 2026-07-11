@@ -2,6 +2,12 @@
 
 **Goal:** understand the project in ~30 minutes, land your first change in your first week.
 
+> **Status:** Current workspace onboarding. Read `docs/architecture.md` before any code change; it is mandatory.
+
+## Overview
+
+Your first objective is not memorizing every subsystem. It is learning the dependency direction, the known-agent integrity path, the current-vs-roadmap boundary, and the verification commands that prevent a local change from weakening security elsewhere.
+
 ## 1. Read first (in order)
 
 1. [../Product_Overview.md](../Product_Overview.md) — what & why (10 min)
@@ -64,3 +70,18 @@ TDD is the house style (RED → GREEN → refactor); see `CLAUDE.md` and `CONTRI
 ## 8. Contribution path
 
 Small PRs; conventional commits (release-please derives versions); CI must be green (fmt, clippy, tests, coverage ≥70, SDK parity, scans). Debugging help: [../AegisAgent_Debugging_Guide.md](../AegisAgent_Debugging_Guide.md).
+
+## 9. Security and Failure Handling
+
+- Never weaken hash checks, expiry, tenant binding, default deny, or fail-closed SDK behavior to make a test pass.
+- Treat protobuf as the API source of truth and implement REST/gRPC together.
+- Preserve unrelated work in a dirty tree and never put secrets in fixtures or logs.
+- If a requirement conflicts with architecture or implementation status, stop and resolve the source-of-truth conflict before coding.
+
+## 10. Operations and Troubleshooting
+
+Use `rg` to trace a request from proto/model to REST/gRPC adapter, service crate, storage trait, and test. For build failures, isolate the affected package, then rerun workspace checks. For behavioral failures, reproduce the negative security case and inspect structured logs without exposing secrets.
+
+## 11. References
+
+[Architecture Patterns](../architecture.md) · [Repository Map](../Repo_Knowledge_Map.md) · [Documentation Standard](../contributing/documentation-standard.md) · [Contribution Guide](../../CONTRIBUTING.md)

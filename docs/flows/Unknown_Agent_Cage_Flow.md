@@ -1,15 +1,15 @@
 # Flow: Anonymous Agent in the Cage
 
-**Status: 🟡 control-plane APIs + storage implemented; sandbox execution 📐 designed (Phases 3–6).** Steps marked ✅ work at HEAD today; steps marked 📐 are target design from [../AegisAgent_Agent_Cage.md](../AegisAgent_Agent_Cage.md) and [../AegisAgent_Runtime_Data_Plane.md](../AegisAgent_Runtime_Data_Plane.md).
+**Status: 🟡 Partial.** Control-plane APIs/storage, sensor and cage binaries, process enforcement, minimal collectors, egress/broker components, packaging, and selected Docker E2E exist. Forced egress, mandatory broker, complete sensor/runner integration, and the full untrusted-to-incident narrative remain unfinished.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as Submitter
     participant GW as Gateway
-    participant NS as Node sensor 📐
-    participant CR as Cage runner 📐
-    participant SB as Sandboxed agent 📐
+    participant NS as Node sensor 🟡
+    participant CR as Cage runner 🟡
+    participant SB as Sandboxed agent 🟡
     participant SOC
     U->>GW: POST /v1/agent-cage/runs ✅
     GW->>GW: preflight: policy, ban check, quota, sandbox spec
@@ -26,28 +26,45 @@ sequenceDiagram
     NS-->>GW: ACK → receipt + timeline ✅ storage
 ```
 
-## What works today (✅ at committed HEAD)
+## What works today
 
 | Step | API / code |
 |---|---|
 | Register a controlled run | `POST /v1/agent-cage/runs`, `GET /v1/agent-cage/runs[/:id]` — `src/src/routes/runtime.rs` (#1681), store `lib/storage/src/db/agent_runs.rs` (migration 0026). *Route file under reorganization on an active branch — verify before deep-linking.* |
 | Ingest runtime events (idempotent) | `POST /v1/ingest/runtime-events` — store `db/runtime_events.rs` (0027) |
 | Read a run's runtime timeline | `GET /v1/runtime/runs/:id/events` |
-| Persist control commands | `lib/storage/src/db/control_commands.rs` (0028) — **storage only**; no signing/dispatch yet |
+| Signed control path | command store/routes, sensor verification, ACK, and host process enforcement; full semantics/integration remain |
+| Cage execution | `bins/aegis-cage-runner`, Docker runtime, packaging, claim lifecycle and selected Docker E2E |
+| Runtime collection | sensor spool/shipper plus minimal process/filesystem/network/secret collectors |
 | Bans / quarantine records | `db/agent_bans.rs` (0029, #1678), `db/quarantine.rs` (0030, #1679) |
 | SOC detection over ingested events | `lib/soc/src/*` |
 
-## What the design adds (📐)
+## Remaining force-path work
 
-1. **Node sensor (Phase 3):** registration, durable local queue, command polling + verification, typed enforcement handlers — [../components/Node_Sensor.md](../components/Node_Sensor.md).
-2. **Cage runner (Phase 4):** Docker-first disposable sandbox — isolated workspace, no Docker socket, no host filesystem, seccomp/least-privilege; gVisor/Firecracker/Kata later — [../AegisAgent_Agent_Cage.md](../AegisAgent_Agent_Cage.md).
-3. **Egress proxy (Phase 5):** observe/enforce/lockdown network modes — [../components/Egress_Proxy.md](../components/Egress_Proxy.md).
-4. **Tool broker (Phase 6):** credential isolation — [../components/Tool_Broker.md](../components/Tool_Broker.md).
-5. **Signed control commands end-to-end:** `aegis-command-jcs-1` canonical signing, nonce/expiry/tenant/target binding, ACK/NACK — [../AegisAgent_Control_Command_Protocol.md](../AegisAgent_Control_Command_Protocol.md), [Control_Command_Flow.md](Control_Command_Flow.md).
+1. Force every cage network path through the egress proxy, including controlled DNS.
+2. Force privileged provider calls through the broker without placing raw credentials in the workload.
+3. Complete runner/sensor IPC, identity rotation, collector coverage, and command semantics.
+4. Enforce bans/quarantine consistently at every supported choke point.
+5. Pass the untrusted workload → denied egress → incident → signed containment → verified evidence E2E.
 
 ## The security argument
 
 The cage doesn't try to out-argue a hostile agent — it removes the ambient environment. Filesystem, network, secrets, tools, and MCP all *only* work through Aegis choke points, so "bypassing Aegis" means "having nothing to act with." Dangerous behavior that is attempted anyway becomes runtime events → detections → kill/quarantine/ban, each step receipted.
+
+That argument is the target guarantee. Until the remaining force paths pass, deployments must state which paths are enforced and which are only observed.
+
+## Example
+
+```bash
+docker compose --profile cage up --build -d
+bash scripts/cage-docker-e2e.sh
+```
+
+The current E2E proves selected claim/finish and signed-kill behavior. It does not yet prove transparent forced egress or broker-only credentials.
+
+## Security
+
+Run untrusted workloads only on approved cage hosts, harden Docker/runner privileges, keep secrets out of the sandbox, reject invalid controls, preserve workspaces/evidence, and stop scheduling when sensor/runner/egress enforcement is unavailable. Sandbox escape and Docker socket compromise remain critical residual risks.
 
 ## Related docs
 

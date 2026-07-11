@@ -2,6 +2,12 @@
 
 **Goal:** protected tool calls in ~10 minutes; understand the fail-closed contract so you never accidentally weaken it.
 
+> **Status:** Python and TypeScript integrity paths are production-ready; Go is beta with documented capture-parity gaps. Check [SDK Parity Status](../sdk-parity-status.md).
+
+## Overview
+
+The SDK is the cooperating enforcement point immediately before a tool call. Your responsibility is to preserve canonical action identity, deterministic decision handling, exact-action approval consume, secret redaction, and safe failure behavior across network errors and version changes.
+
 ## 1. Ten-minute integration (Python)
 
 ```bash
@@ -56,3 +62,19 @@ cd sdk-typescript && npm ci && npx tsc --noEmit && npm test
 ## 6. Read next
 
 [../components/SDK.md](../components/SDK.md) (full guide) · [../flows/Known_Agent_Flow.md](../flows/Known_Agent_Flow.md) · [../fail-closed-behavior.md](../fail-closed-behavior.md) · [../runtime-authorization-api.md](../runtime-authorization-api.md)
+
+## 7. Security and Failure Handling
+
+- Treat unknown decision values, malformed responses, non-success status, and protected gateway failure as deny.
+- Never log tokens, callback secrets, unredacted parameters, or canonical bytes containing secrets.
+- Use bounded approval polling with deadline and backoff; always consume before execution.
+- Preserve `root_trust_level` across agent hops and never loosen a source label.
+- Version canonicalization and receipt verification changes through shared corpora before release.
+
+## 8. Operations and Troubleshooting
+
+When parity fails, compare exact UTF-8 bytes—not parsed JSON objects—against the shared vectors. When an approved call does not execute, inspect expiry, bound hash, consume status, tenant/agent identity, and clock skew. Do not add bypass flags; fix the integration or re-authorize the current action.
+
+## 9. References
+
+[SDK Component](../components/SDK.md) · [Canonicalization ADR](../adr/0003-aegis-jcs-1-canonicalization.md) · [Receipt Specification](../action-receipt-spec.md) · [Implementation Status](../Implementation_Status.md)

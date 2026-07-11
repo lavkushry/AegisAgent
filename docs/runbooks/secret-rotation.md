@@ -2,7 +2,13 @@
 
 **Config:** `AEGIS_JWT_SECRET` · `AEGIS_RECEIPT_SIGNING_KEY` (#1211)
 
+> **Status:** JWT overlap rotation and local Ed25519 receipt-key rotation are implemented. KMS-specific rotation follows the configured provider's procedure and must preserve signer identity evidence.
+
+## Overview
+
 Unlike the [agent token rotation](agent-token-rotation.md) runbook (a per-agent, API-driven, often incident-triggered rotation), these two are process-wide environment secrets rotated on a routine schedule or after a suspected exposure of the deployment environment itself (e.g. a leaked `.env`, a compromised CI secret store).
+
+Prepare a protected new secret, inventory every replica and token issuer, schedule a rollout, and establish a rollback window that does not reintroduce compromised material.
 
 ## Symptoms / when to rotate
 
@@ -59,3 +65,23 @@ curl -s "http://127.0.0.1:8080/v1/receipts/<old_receipt_id>/verify"
 curl -s "http://127.0.0.1:8080/v1/receipts/<new_receipt_id>/verify"
 # -> {"verified": true, "signature_verified": true, "signer_key_id": "rotation-2026-06", ...}
 ```
+
+## Security and Failure Handling
+
+- Never place real JWT or Ed25519 secrets in commands retained by shell history, committed values, CI output, tickets, or screenshots.
+- Generate keys with an approved cryptographic source and store them in a secret manager or KMS.
+- JWT overlap is for controlled rotation, not indefinite acceptance of old secrets.
+- Receipt signer rotation must not delete the public-key identity stored with old receipts.
+- If exposure is confirmed, prioritize containment over zero downtime and revoke affected issuer/deployment access.
+
+## Rollback and Recovery
+
+If a routine JWT rollout fails before the old secret is removed, restore the previous overlap list while fixing issuers. After confirmed compromise, do not restore the exposed secret; instead complete rollout or temporarily stop authenticated traffic. If receipt signing fails, keep authorization behavior within its documented signing mode, preserve unsigned/signed status honestly, correct provisioning, and verify both pre- and post-rotation receipts.
+
+## References
+
+- [Agent Token Rotation](agent-token-rotation.md)
+- [Production Hardening](../production-hardening.md)
+- [Receipt Engine](../components/Receipt_Engine.md)
+- [Receipt Chain Verification](receipt-chain-verification.md)
+- [Fail-Closed Behavior](../fail-closed-behavior.md)

@@ -94,6 +94,20 @@ The repo already ships **MkDocs Material** deployed to GitHub Pages by `.github/
 
 The repository-wide writing contract is [contributing/documentation-standard.md](contributing/documentation-standard.md). New or substantially rewritten component pages start from [templates/component-page.md](templates/component-page.md). [components/Gateway.md](components/Gateway.md) is the canonical worked example; validation checks its required section order so the template and real documentation cannot silently drift apart.
 
+## 9. PRD and all-docs convergence (July 2026)
+
+The current [Product Requirements Document](AegisAgent_PRD.md) replaces the stale June MVP plan with stable requirement IDs, Now/Next/Later scope, negative security acceptance criteria, and release gates. [Product Requirements Traceability](Product_Requirements_Traceability.md) maps those IDs to owning docs, source, verification, and the authoritative implementation ledger.
+
+The generated [Documentation Quality Report](Documentation_Quality_Report.md) inventories every active Markdown page using profile-specific signals. Migration order is:
+
+1. Security guarantees, fail-closed behavior, deployment, and incident runbooks.
+2. Product entry points and persona onboarding.
+3. Implemented component and flow guides.
+4. Partial runtime-control guides, with force-path gaps stated first.
+5. Reference, ADR, and internal strategy cleanup.
+
+The report is a structural prioritization tool, not an accuracy certificate. Every migrated page still requires code/status verification.
+
 ## Related docs
 
 [Documentation_Audit.md](Documentation_Audit.md) · [Documentation_Index.md](Documentation_Index.md) · [START_HERE.md](START_HERE.md)

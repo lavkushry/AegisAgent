@@ -1,8 +1,8 @@
 # Flow: Tool Broker
 
-> **Status: Planned (Phase 6). No implementation files yet.** This page describes the target flow so the choke point has a stable home; the normative design is [../components/Tool_Broker.md](../components/Tool_Broker.md).
+> **Status: Partial.** Broker core/connectors and the gateway execution route exist; standalone packaging and mandatory privileged-tool routing remain incomplete. Normative guide: [Tool Broker](../components/Tool_Broker.md).
 
-## Simple version
+## Overview
 
 Caged agents never hold real credentials. When they need a tool, they ask the broker. The broker checks with Aegis, injects the credential on its own side, makes the call, and returns the result. A compromised agent has nothing to steal.
 
@@ -10,7 +10,7 @@ Caged agents never hold real credentials. When they need a tool, they ask the br
 
 ```mermaid
 flowchart LR
-    SB[caged agent<br/>no secrets] -->|tool request| TB[tool broker*]
+    SB[caged agent<br/>no provider secrets] -->|tool request| TB[tool broker 🟡]
     TB --> GW[/v1/authorize - same policy + approvals/]
     GW -->|deny| REF[refuse]
     GW -->|allow| INJ[credential injected broker-side]
@@ -18,7 +18,7 @@ flowchart LR
     INJ --> EV[event + receipt - secrets redacted]
 ```
 
-## Step by step (target)
+## Step by step
 
 1. Sandbox provisioning gives the agent a broker endpoint + per-run scoped token — never provider keys.
 2. The broker canonicalizes the request and calls the (already-implemented) authorize path.
@@ -32,7 +32,20 @@ If the agent process holds an API key, one successful prompt injection owns that
 
 ## What exists today
 
-The decision core it will call: policy, approvals, per-agent tool permissions (migration 0013), receipts — all Implemented. The broker service itself: Planned.
+Policy, approvals, permissions, receipts, broker core/connectors, and `POST /v1/broker/execute` exist. A standalone service and a deployment that prevents direct privileged-provider access remain incomplete.
+
+## Example
+
+```bash
+cargo test -p aegis-tool-broker-core
+cargo test -p aegis-tool-broker-connectors
+```
+
+Acceptance additionally requires proving the workload cannot obtain the provider secret or bypass the broker.
+
+## Security
+
+Use typed allowlisted connectors, exact-action authorization and approval consume, scoped broker identity, destination validation, bounded timeouts/results, and redaction. Broker/secret-store failure denies privileged calls; arbitrary shell/URL connectors are forbidden.
 
 ## Related docs
 

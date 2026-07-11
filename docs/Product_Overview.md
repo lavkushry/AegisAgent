@@ -2,6 +2,12 @@
 
 **One sentence:** AegisAgent is the security control plane that decides what autonomous AI agents may do, proves what they did, and contains them when they misbehave.
 
+## Overview
+
+The product combines a synchronous action-integrity plane with an asynchronous security-operations plane. Its defensibility comes from exact-action approval, deterministic source provenance, and verifiable receipts—not generic gateway or dashboard breadth.
+
+> **Status:** Known-agent integrity and gateway-evidence SOC capabilities largely ship today. Runtime force paths and enterprise multi-replica operations remain Partial; see [Implementation Status](Implementation_Status.md).
+
 ## Why it exists
 
 AI agents now hold credentials, call APIs, merge code, move money, and talk to customers. Three things go wrong at scale:
@@ -14,11 +20,11 @@ Generic "AI firewalls" answer these with probabilistic text classifiers. AegisAg
 
 ## What AegisAgent is (and is not)
 
-AegisAgent **is**: Control Plane + Runtime Sensor + Agent Cage + Egress Proxy + Tool Broker + MCP Gateway + Receipt SOC for autonomous AI agents. It is open-source, self-hostable, and framework-neutral (LangGraph, OpenAI Agents, Autogen, custom, MCP).
+AegisAgent **is**: an integrity control plane and evidence-backed Agent SOC, with runtime sensor, cage, egress proxy, and tool-broker components under active force-path completion. It is open-source, self-hostable, and framework-neutral (LangGraph, OpenAI Agents, Autogen, custom, MCP).
 
 AegisAgent **is not**: an agent, an LLM, a prompt scanner, or a model provider. It never generates actions; it authorizes, records, and contains them.
 
-> **Honest scope note:** the control plane, SDK enforcement, MCP defense, approvals, receipts, and the SOC are implemented today. The runtime data plane for *unknown* agents (node sensor, cage runner, egress proxy, tool broker) is a designed and partially-stored roadmap — see [Implementation_Status.md](Implementation_Status.md). Do not sell what column "Planned" contains.
+> **Honest scope note:** the control plane, SDK enforcement, MCP defense, approvals, receipts, and gateway-evidence SOC are implemented today. The runtime data plane for *unknown* agents has working partial binaries and APIs, but real collectors and complete cage-egress-broker enforcement remain incomplete—see [Implementation_Status](Implementation_Status.md).
 
 ## The two defensible differentiators
 
@@ -45,7 +51,7 @@ The eleven choke points (prompt/model, tool, API, MCP, egress, filesystem, proce
 
 | Persona | What they get |
 |---|---|
-| Platform / AI engineers | `@protect_tool` decorator (Python/Go/TS) — 10 minutes to fail-closed protection |
+| Platform / AI engineers | Supported Python/Go/TypeScript protection clients—minutes to fail-closed protection |
 | Security architects | Deterministic policy (Cedar), 6-level trust provenance, threat model with named boundaries |
 | SOC analysts | Agent-native SIEM: alerts, incidents, timelines, narratives, freeze/quarantine/revoke |
 | Compliance / CTOs | Evidence packs and receipts that prove control effectiveness |

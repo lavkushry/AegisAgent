@@ -2,6 +2,14 @@
 
 **Endpoints:** `POST /v1/agents/:id/rotate-token` · `POST /v1/agents/:id/report-leaked-token` (#1295)
 
+> **Status:** Implemented for registered agents. Rotation invalidates the old token immediately; there is no overlap window.
+
+## Overview
+
+Use this runbook when an agent bearer token is exposed or suspected of compromise. The objective is to stop unauthorized use, preserve evidence, issue one replacement credential, deploy it safely, and verify that the old token can no longer authorize requests.
+
+Before starting, identify the tenant and agent, prepare access to the agent's secret store/deployment, and use an authenticated operator credential that is not the suspected token wherever possible.
+
 ## Symptoms
 
 - A token appeared somewhere it shouldn't have (a log line, a public repo commit, a Slack message, a CI artifact, a support ticket screenshot).
@@ -49,3 +57,23 @@ The **old token is rejected immediately** on rotation — there is no grace peri
 - `GET /v1/audit/events?agent_id=<agent_id>` shows an `agent_token_rotated` event with your `reason`.
 - The legitimate agent process, reconfigured with the new token, successfully calls `/v1/authorize` again.
 - If you used `report-leaked-token` and auto-rotate was disabled, confirm you followed up with an explicit `rotate-token` call — the leak report alone does not protect you.
+
+## Security and Failure Handling
+
+- Treat the plaintext replacement as show-once secret material. Do not paste it into chat, tickets, shell history, or logs.
+- Prefer a protected file/secret-manager input over inline shell values when updating the workload.
+- Preserve audit events and the original leak location before removing exposed material.
+- If rotation returns an error, freeze or revoke the agent while investigating; do not continue using a known-compromised token.
+- Scope every query and action to the affected tenant and verify the agent ID before rotation.
+
+## Rollback and Recovery
+
+Token rotation is intentionally not reversible: restoring the compromised token would recreate the incident. If the legitimate agent cannot start with the new token, keep it frozen, correct its secret/configuration, and verify authentication before unfreezing. A lost replacement token requires another rotation.
+
+## References
+
+- [Fail-Closed Behavior](../fail-closed-behavior.md)
+- [Deny Storm](deny-storm.md)
+- [Data Exfiltration](data-exfiltration.md)
+- [Secret Rotation](secret-rotation.md)
+- [Agent Workflow](../AegisAgent_Agent_Workflow.md)

@@ -1,6 +1,6 @@
 # What Is AegisAgent?
 
-## Simple version
+## Overview
 
 **AegisAgent lets you run AI agents without losing control.**
 
@@ -56,3 +56,11 @@ If you don't route an agent's actions through Aegis (no SDK, no cage), Aegis can
 ## Related docs
 
 [The_One_Minute_Tour.md](The_One_Minute_Tour.md) · [Why_AegisAgent.md](Why_AegisAgent.md) · [How_It_Works.md](How_It_Works.md) · [START_HERE.md](START_HERE.md)
+
+## Try It
+
+```bash
+make demo
+```
+
+This executes the smallest end-to-end proof of the product's integrity claims. Use [Quickstart](quickstart.md) for prerequisites and expected evidence.

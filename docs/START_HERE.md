@@ -2,9 +2,13 @@
 
 **AegisAgent lets you run AI agents without losing control.**
 
+## Overview
+
 Before an AI agent does something risky, Aegis checks it, controls it, records it, and proves what happened. Aegis is not an agent — it is the control layer *for* agents.
 
 **Who it's for:** teams putting AI agents near real credentials, real APIs, and real data — and the security people who have to answer for it.
+
+> **Status:** The known-agent integrity path is largely production-ready. Unknown-agent runtime enforcement and multi-replica enterprise operations remain Partial. Check [Implementation Status](Implementation_Status.md) before evaluating a specific claim.
 
 ---
 
@@ -53,3 +57,12 @@ Aegis controls what passes through Aegis control points (SDK, gateway, policy, a
 ## Naming note
 
 Some common titles map to canonical files to avoid duplicates: API reference → [api-reference.md](api-reference.md) (generated) · deployment → [deployment-guide.md](deployment-guide.md) + [production-hardening.md](production-hardening.md) · runbook → [runbooks/index.md](runbooks/index.md) · contributor guide → [CONTRIBUTING.md](https://github.com/lavkushry/AegisAgent/blob/main/CONTRIBUTING.md) · FAQ → [faq.md](faq.md) · glossary → [Glossary.md](Glossary.md).
+
+## Try the Proof
+
+```bash
+make doctor
+make demo
+```
+
+The proof must block an untrusted merge, reject an approval hash swap and replay, and verify the receipt chain. Continue with [Quickstart](quickstart.md) for expected output and troubleshooting.
