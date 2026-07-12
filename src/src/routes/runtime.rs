@@ -292,6 +292,37 @@ pub struct CreateAgentRunRequest {
 /// pre-existing SDK-integrated-run case), none of that applies: no signing
 /// key requirement, no command issued, plain insert — unchanged from
 /// before this feature existed.
+/// Ban / quarantine enforcement shared by run registration and claim
+/// (Phase 2.4/2.5): an active ban or quarantine record on the agent blocks
+/// the sandbox before it starts. Returns the 403 to send, `None` when
+/// clear; a storage error is a 500 (fail-closed — unreadable enforcement
+/// state blocks).
+async fn agent_ban_denial(
+    state: &AppState,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<Option<StatusError>, StatusError> {
+    let (banned, quarantined) = tokio::join!(
+        state
+            .storage
+            .is_banned(tenant_id, "agent", agent_id, Utc::now()),
+        state.storage.is_quarantined(tenant_id, "agent", agent_id),
+    );
+    match (banned, quarantined) {
+        (Err(e), _) | (_, Err(e)) => {
+            error!("Failed to check agent ban/quarantine state: {:?}", e);
+            Err(StatusError::internal("Database error"))
+        }
+        (Ok(true), _) => Ok(Some(StatusError::forbidden(
+            "agent is banned; runs are denied (fail-closed)",
+        ))),
+        (_, Ok(true)) => Ok(Some(StatusError::forbidden(
+            "agent is quarantined; runs are denied (fail-closed)",
+        ))),
+        (Ok(false), Ok(false)) => Ok(None),
+    }
+}
+
 pub async fn create_agent_run(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -299,6 +330,18 @@ pub async fn create_agent_run(
 ) -> impl IntoResponse {
     let now = Utc::now();
     let run_id = Uuid::new_v4().to_string();
+
+    // "Before sandbox start" enforcement (migration 0029's contract): a run
+    // for a banned/quarantined agent is never registered. Anonymous runs
+    // (no agent_id) can't be checked here — the claim path re-checks, and
+    // egress/authorize enforcement still applies to whatever runs.
+    if let Some(agent_id) = req.agent_id.as_deref() {
+        match agent_ban_denial(&state, &tenant_id, agent_id).await {
+            Ok(Some(denial)) => return denial.into_response(),
+            Ok(None) => {}
+            Err(e) => return e.into_response(),
+        }
+    }
 
     let mut image_ref = None;
     let mut image_digest = None;
@@ -427,6 +470,42 @@ pub async fn claim_run(
     Path(run_id): Path<String>,
     Json(req): Json<RunnerIdRequest>,
 ) -> impl IntoResponse {
+    // Claiming is the moment execution actually starts, so re-check bans/
+    // quarantine here: a ban or quarantine created AFTER the run was
+    // registered must still block it (403), and a quarantined run must not
+    // be claimable at all. Checked before the atomic claim so a denial
+    // never transitions the run.
+    let run = match state.storage.get_agent_run(&tenant_id, &run_id).await {
+        Ok(Some(run)) => run,
+        Ok(None) => return StatusError::not_found("agent run not found").into_response(),
+        Err(e) => {
+            error!("Failed to fetch agent run for claim: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    };
+    if let Some(agent_id) = run.agent_id.as_deref() {
+        match agent_ban_denial(&state, &tenant_id, agent_id).await {
+            Ok(Some(denial)) => return denial.into_response(),
+            Ok(None) => {}
+            Err(e) => return e.into_response(),
+        }
+    }
+    match state
+        .storage
+        .is_quarantined(&tenant_id, "run", &run_id)
+        .await
+    {
+        Ok(true) => {
+            return StatusError::forbidden("run is quarantined; claim denied (fail-closed)")
+                .into_response()
+        }
+        Ok(false) => {}
+        Err(e) => {
+            error!("Failed to check run quarantine state for claim: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+    }
+
     match state
         .storage
         .claim_agent_run(&tenant_id, &run_id, &req.runner_id, Utc::now())
@@ -711,7 +790,7 @@ pub struct RunControlRequest {
 /// closed if no `AEGIS_COMMAND_SIGNING_KEY` is configured — the gateway
 /// never issues a command it knows a sensor can't verify. 404s if the run
 /// doesn't exist for this tenant.
-async fn issue_run_control_command(
+pub(super) async fn issue_run_control_command(
     state: &AppState,
     tenant_id: &str,
     run_id: &str,
@@ -1739,5 +1818,180 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── Ban / quarantine enforcement at cage start (Phase 2.4/2.5) ──────────
+
+    async fn ban_agent(state: &Arc<AppState>, tenant_id: &str, agent_id: &str) {
+        state
+            .storage
+            .insert_ban(&AgentBanRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                target_type: "agent".to_string(),
+                target_value: agent_id.to_string(),
+                scope: "tenant".to_string(),
+                reason: Some("test ban".to_string()),
+                actor: "test-operator".to_string(),
+                status: "active".to_string(),
+                created_at: Utc::now(),
+                expires_at: None,
+                revoked_at: None,
+                revoked_by: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn quarantine_target(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+    ) {
+        state
+            .storage
+            .insert_quarantine(&QuarantineRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                target_type: target_type.to_string(),
+                target_value: target_value.to_string(),
+                reason: Some("under investigation".to_string()),
+                actor: "test-operator".to_string(),
+                status: "active".to_string(),
+                incident_id: None,
+                created_at: Utc::now(),
+                released_at: None,
+                released_by: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    /// Registering a run for a banned agent is a fail-closed 403 — the
+    /// `agent_bans` store promises enforcement "before sandbox start".
+    #[tokio::test]
+    async fn create_agent_run_denies_banned_agent() {
+        let (state, tenant_id, _agent_token) = setup_state("cage_create_banned_agent").await;
+        ban_agent(&state, &tenant_id, "agent-banned-1").await;
+
+        let response = create_agent_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(CreateAgentRunRequest {
+                run_key: "run-banned-agent".to_string(),
+                agent_id: Some("agent-banned-1".to_string()),
+                source_component: "sdk".to_string(),
+                mode: None,
+                root_trace_id: None,
+                root_trust_level: None,
+                cage_spec: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Registering a run for an agent under an active quarantine record is
+    /// likewise a 403.
+    #[tokio::test]
+    async fn create_agent_run_denies_quarantined_agent() {
+        let (state, tenant_id, _agent_token) = setup_state("cage_create_quarantined_agent").await;
+        quarantine_target(&state, &tenant_id, "agent", "agent-q-1").await;
+
+        let response = create_agent_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(CreateAgentRunRequest {
+                run_key: "run-quarantined-agent".to_string(),
+                agent_id: Some("agent-q-1".to_string()),
+                source_component: "sdk".to_string(),
+                mode: None,
+                root_trace_id: None,
+                root_trust_level: None,
+                cage_spec: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// A ban created AFTER the run was registered still blocks the claim —
+    /// claiming is the moment execution actually starts, so it re-checks.
+    #[tokio::test]
+    async fn claim_run_denies_agent_banned_after_registration() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_claim_banned_agent",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+
+        let response = create_agent_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(CreateAgentRunRequest {
+                run_key: "run-claim-ban".to_string(),
+                agent_id: Some("agent-late-ban".to_string()),
+                source_component: "cage-runner".to_string(),
+                mode: None,
+                root_trace_id: None,
+                root_trust_level: None,
+                cage_spec: Some(sample_cage_spec()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let run: AgentRunRecord = serde_json::from_slice(&body).unwrap();
+
+        ban_agent(&state, &tenant_id, "agent-late-ban").await;
+
+        let response = claim_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunnerIdRequest {
+                runner_id: "runner-1".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // The run must NOT have been claimed on the way to the denial.
+        let after = state
+            .storage
+            .get_agent_run(&tenant_id, &run.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.status, "started", "a denied claim must not claim");
+    }
+
+    /// A run under an active quarantine record cannot be claimed.
+    #[tokio::test]
+    async fn claim_run_denies_quarantined_run() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_claim_quarantined_run",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+        let run = create_cage_run(&state, &tenant_id, "run-claim-quarantine").await;
+        quarantine_target(&state, &tenant_id, "run", &run.id).await;
+
+        let response = claim_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunnerIdRequest {
+                runner_id: "runner-1".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }

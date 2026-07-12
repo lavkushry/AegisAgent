@@ -1785,7 +1785,8 @@ fn resume_agent_cage_run_api() {}
     path = "/v1/agent-cage/runs/{id}/claim",
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Atomically claim an agent cage run")
+        (status = 200, description = "Atomically claim an agent cage run"),
+        (status = 403, description = "Run's agent is banned/quarantined, or the run is quarantined (fail-closed)")
     )
 )]
 fn claim_agent_cage_run_api() {}
@@ -1886,7 +1887,7 @@ fn set_broker_tool_status_api() {}
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Broker action executed"),
-        (status = 403, description = "Tool not active, or approval required/mismatched"),
+        (status = 403, description = "Tool banned/quarantined (fail-closed), not active, or approval required/mismatched"),
         (status = 404, description = "Broker tool not found"),
         (status = 409, description = "Approval bound to a different action_hash"),
         (status = 501, description = "No connector registered for connector_type"),

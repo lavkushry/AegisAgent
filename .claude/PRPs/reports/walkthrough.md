@@ -118,3 +118,43 @@ docker compose config
 5. Add OpenTelemetry traceparent propagation from SDK to gateway.
 6. Add audit redaction and payload capture controls.
 7. Record/link a 90-second demo video.
+
+---
+
+## Session 2026-07-12 — ban/quarantine enforcement at all choke points
+
+Branch: `feat/ban-enforcement-choke-points` (off `origin/main` @ #1858).
+
+**What changed**
+
+- `lib/storage`: new `StorageBackend::list_active_agent_runs_for_agent`
+  (`db/agent_runs.rs`) — non-terminal runs (`started/claimed/running/paused/
+  stalled`) for one agent, tenant-scoped, bounded.
+- `src/src/routes/authorize.rs`: after agent resolution + action-hash
+  computation, an active agent ban, tool ban, or agent `quarantine_records`
+  row is a deterministic fail-closed deny with a durable decision + audit
+  event (`matched_policies`: `agent_banned` / `tool_banned` /
+  `agent_quarantine_record`). Storage errors block (500).
+- `src/src/routes/broker.rs`: tool ban/quarantine → 403 before approval
+  consumption (a ban denial never burns a valid approval) and before the
+  broker-configured gate.
+- `src/src/routes/runtime.rs`: `create_agent_run` and `claim_run` deny
+  banned/quarantined agents (claim re-checks, so late bans still block);
+  quarantined runs are unclaimable.
+- `src/src/routes/control.rs`: `POST /v1/bans` with `target_type=agent`
+  propagates to live workloads — signed `kill_run` control commands for
+  every active run (best-effort, logged; no signing key ⇒ ban lands, no
+  unsigned command ever issued).
+
+**Tests** (all TDD, RED verified before GREEN): 1 storage + 4 authorize +
+3 broker + 4 runtime + 3 control route tests. Full workspace suite, fmt,
+clippy `-D warnings` green.
+
+**Docs**: `docs/Implementation_Status.md` ban/quarantine rows updated;
+`.claude/PRPs/tasks/task.md` Wave C item checked; blueprint at
+`.claude/PRPs/plans/ban-enforcement-choke-points.md`.
+
+**Honest residuals**: `fingerprint`/`image_digest`/`prompt_hash` ban target
+types are stored but consulted nowhere; quarantine workspace evidence-freeze
+still needs cage integration; sensor enforcement of the propagated kill
+remains the existing signed-command path (no new sensor code).

@@ -1160,6 +1160,16 @@ impl StorageBackend for SqlDbStorage {
             .map_err(AegisError::Database)
     }
 
+    async fn list_active_agent_runs_for_agent(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+    ) -> Result<Vec<AgentRunRecord>, AegisError> {
+        db::list_active_agent_runs_for_agent(&self.pool, tenant_id, agent_id)
+            .await
+            .map_err(AegisError::Database)
+    }
+
     async fn insert_agent_run_with_start_command(
         &self,
         run: &AgentRunRecord,

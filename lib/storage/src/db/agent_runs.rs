@@ -440,6 +440,39 @@ pub async fn list_agent_runs(
     crate::fetch_all_as!(AgentRunRecord, pool, &sql, tenant_id, limit, offset)
 }
 
+/// Non-terminal statuses: a run in one of these states is still (or may
+/// still be) executing, so an agent-level ban must reach it (via signed
+/// kill commands) rather than only blocking future runs. `stalled` is
+/// included — a stalled run's workload may well still be alive; only the
+/// heartbeat is gone.
+const ACTIVE_RUN_STATUSES: &str = "'started', 'claimed', 'running', 'paused', 'stalled'";
+
+/// List an agent's non-terminal runs (ban-propagation lookup): every run for
+/// `agent_id` still in an active status. Tenant-scoped and parameterized;
+/// bounded by `SOC_MAX_LIMIT` — an agent with more live runs than that gets
+/// the oldest-first prefix and the caller logs the truncation.
+pub async fn list_active_agent_runs_for_agent(
+    pool: &DbPool,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<Vec<AgentRunRecord>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {AGENT_RUN_COLUMNS} FROM agent_runs
+         WHERE tenant_id = ? AND agent_id = ?
+           AND status IN ({ACTIVE_RUN_STATUSES})
+         ORDER BY started_at ASC
+         LIMIT ?"
+    );
+    crate::fetch_all_as!(
+        AgentRunRecord,
+        pool,
+        &sql,
+        tenant_id,
+        agent_id,
+        SOC_MAX_LIMIT
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +590,67 @@ mod tests {
         let rows = list_agent_runs(&pool, "t_a", 50, 0).await.unwrap();
         assert_eq!(rows.len(), 2, "only tenant A's runs");
         assert!(rows.iter().all(|r| r.tenant_id == "t_a"));
+    }
+
+    #[tokio::test]
+    async fn list_active_runs_for_agent_filters_terminal_tenant_and_agent() {
+        let pool = setup_pool("agent_runs_active_for_agent").await;
+
+        let with_agent = |id: &str, key: &str, agent: &str, status: &str| AgentRunRecord {
+            agent_id: Some(agent.to_string()),
+            status: status.to_string(),
+            ..run("t_a", id, key)
+        };
+
+        // Active statuses for agent-1 — all must be returned.
+        for (i, status) in ["started", "claimed", "running", "paused", "stalled"]
+            .iter()
+            .enumerate()
+        {
+            insert_agent_run(
+                &pool,
+                &with_agent(&format!("run-a{i}"), &format!("ka{i}"), "agent-1", status),
+            )
+            .await
+            .unwrap();
+        }
+        // Terminal statuses for agent-1 — must be excluded.
+        for (i, status) in ["finished", "killed", "quarantined"].iter().enumerate() {
+            insert_agent_run(
+                &pool,
+                &with_agent(&format!("run-t{i}"), &format!("kt{i}"), "agent-1", status),
+            )
+            .await
+            .unwrap();
+        }
+        // Another agent and another tenant — must be excluded.
+        insert_agent_run(&pool, &with_agent("run-x", "kx", "agent-2", "running"))
+            .await
+            .unwrap();
+        insert_agent_run(
+            &pool,
+            &AgentRunRecord {
+                tenant_id: "t_b".to_string(),
+                ..with_agent("run-y", "ky", "agent-1", "running")
+            },
+        )
+        .await
+        .unwrap();
+        // A run with no agent_id at all — must be excluded.
+        insert_agent_run(&pool, &run("t_a", "run-z", "kz"))
+            .await
+            .unwrap();
+
+        let rows = list_active_agent_runs_for_agent(&pool, "t_a", "agent-1")
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 5, "exactly the five non-terminal agent-1 runs");
+        assert!(rows
+            .iter()
+            .all(|r| r.tenant_id == "t_a" && r.agent_id.as_deref() == Some("agent-1")));
+        assert!(rows
+            .iter()
+            .all(|r| !matches!(r.status.as_str(), "finished" | "killed" | "quarantined")));
     }
 
     #[tokio::test]

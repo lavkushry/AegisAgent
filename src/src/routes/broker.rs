@@ -252,6 +252,35 @@ pub async fn execute_broker_action(
         }
     };
 
+    // Ban / quarantine enforcement (Phase 2.4/2.5): an active ban or
+    // quarantine on the tool is a fail-closed 403, checked BEFORE approval
+    // consumption (a ban denial must not burn a still-valid approval) and
+    // before the "is a broker configured?" gate (enforcement never depends
+    // on the executor being reachable). A storage error also blocks (500).
+    let ban_now = Utc::now();
+    let (tool_banned, tool_quarantined) = tokio::join!(
+        state
+            .storage
+            .is_banned(&tenant_id, "tool", &tool.tool_name, ban_now),
+        state
+            .storage
+            .is_quarantined(&tenant_id, "tool", &tool.tool_name),
+    );
+    match (tool_banned, tool_quarantined) {
+        (Err(e), _) | (_, Err(e)) => {
+            error!("Failed to check broker tool ban/quarantine state: {:?}", e);
+            return StatusError::internal("Database error").into_response();
+        }
+        (Ok(true), _) => {
+            return StatusError::forbidden("broker tool is banned (fail-closed)").into_response()
+        }
+        (_, Ok(true)) => {
+            return StatusError::forbidden("broker tool is quarantined (fail-closed)")
+                .into_response()
+        }
+        (Ok(false), Ok(false)) => {}
+    }
+
     // The tool identity always comes from the registration lookup above,
     // never from the request body — otherwise a caller could claim any
     // `tool_name` string while pointing `action`/`parameters` at whatever
@@ -1072,6 +1101,114 @@ mod tests {
             "known Phase-1 limitation: the approval is already consumed by \
              the time the broker call happens, so a broker-unreachable \
              failure burns it without executing the action"
+        );
+    }
+
+    // ── Ban / quarantine enforcement at execute (Phase 2.4/2.5) ─────────────
+
+    async fn ban_tool(state: &Arc<AppState>, tenant_id: &str, tool_name: &str) {
+        state
+            .storage
+            .insert_ban(&AgentBanRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.to_string(),
+                target_type: "tool".to_string(),
+                target_value: tool_name.to_string(),
+                scope: "tenant".to_string(),
+                reason: Some("test ban".to_string()),
+                actor: "test-operator".to_string(),
+                status: "active".to_string(),
+                created_at: Utc::now(),
+                expires_at: None,
+                revoked_at: None,
+                revoked_by: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    /// A banned broker tool is a 403 even before "is a broker configured?"
+    /// — enforcement must not depend on the executor being reachable, and a
+    /// plain `setup_state` (no broker) proves that ordering.
+    #[tokio::test]
+    async fn execute_denies_banned_tool_fail_closed() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_banned").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-banned").await;
+        ban_tool(&state, &tenant_id, "gh-banned").await;
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(read_action("gh-banned")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// A quarantined broker tool (active `quarantine_records` row) is
+    /// likewise a 403.
+    #[tokio::test]
+    async fn execute_denies_quarantined_tool_fail_closed() {
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_quarantined").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-quarantined").await;
+        state
+            .storage
+            .insert_quarantine(&QuarantineRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                target_type: "tool".to_string(),
+                target_value: "gh-quarantined".to_string(),
+                reason: Some("under investigation".to_string()),
+                actor: "test-operator".to_string(),
+                status: "active".to_string(),
+                incident_id: None,
+                created_at: Utc::now(),
+                released_at: None,
+                released_by: None,
+            })
+            .await
+            .unwrap();
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(read_action("gh-quarantined")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// The ban denial happens BEFORE approval consumption, so the (still
+    /// valid) approval survives for after the ban is reviewed/revoked —
+    /// unlike the broker-unreachable case above.
+    #[tokio::test]
+    async fn execute_ban_denial_does_not_consume_the_approval() {
+        let (state, tenant_id, _agent_token) =
+            setup_state("broker_execute_ban_preserves_approval").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-write").await;
+
+        let req = write_action("gh-write");
+        let hash = request_action_hash("gh-write", &req);
+        let approval_id = insert_approval_bound_to(&state, &tenant_id, &hash).await;
+        ban_tool(&state, &tenant_id, "gh-write").await;
+
+        let mut req = req;
+        req.approval_id = Some(approval_id.clone());
+        let response =
+            execute_broker_action(State(state.clone()), TenantId(tenant_id.clone()), Json(req))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        assert!(
+            state
+                .storage
+                .approval_is_still_consumable(&tenant_id, &approval_id)
+                .await
+                .unwrap(),
+            "a ban denial must not burn the approval"
         );
     }
 }

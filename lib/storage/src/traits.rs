@@ -688,6 +688,14 @@ pub trait StorageBackend: Send + Sync + 'static {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<AgentRunRecord>, AegisError>;
+    /// Ban-propagation lookup: the agent's runs still in a non-terminal
+    /// status (`started`/`claimed`/`running`/`paused`/`stalled`), oldest
+    /// first, bounded.
+    async fn list_active_agent_runs_for_agent(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+    ) -> Result<Vec<AgentRunRecord>, AegisError>;
 
     // aegis-cage-runner execution loop: atomic claim + heartbeat + ownership-
     // scoped status transitions + lease-expiry sweep.
