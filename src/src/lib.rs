@@ -65,3 +65,4 @@ pub mod routes;
 pub mod sign;
 pub mod slack_approver_gate;
 pub mod splunk_export;
+pub mod tool_broker_client;

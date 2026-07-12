@@ -1,0 +1,78 @@
+# Default values for aegis-tool-broker.
+
+# -- Number of broker replicas. Stateless (the connector registry is built
+# fresh from env vars at startup, no local state) — safe to scale out.
+replicaCount: 1
+
+image:
+  repository: aegisagent-tool-broker
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag; defaults to .Chart.AppVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Matches the distroless:nonroot image's built-in uid/gid.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8899
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+config:
+  logLevel: "info"
+  # -- GitHub connector real mode (e.g. https://api.github.com). Leave
+  # empty to keep the GitHub connector in mock mode (no network, the safe
+  # default for CI/local dev).
+  githubApiBase: ""
+  # -- Enables the filesystem/shell connectors, scoped to this path inside
+  # the container. Leave empty (the default) to keep both connectors absent
+  # from the registry entirely (execute against them then fails closed with
+  # "unknown connector type", not a wide-open default). If you do set this,
+  # you are responsible for also mounting a volume at that path yourself —
+  # this chart does not wire one implicitly.
+  brokerWorkspace: ""
+
+secret:
+  # -- Set true to have this chart create the Secret from apiToken below.
+  # Leave false and set existingSecret to reference one you manage yourself
+  # (recommended for production — avoids the token in `helm get
+  # values`/release history). This is the AEGIS_TOOL_BROKER_API_TOKEN
+  # shared secret the gateway must present on every call — a separate
+  # secret from the gateway's own AEGIS_API_TOKEN.
+  create: false
+  existingSecret: ""
+  apiToken: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

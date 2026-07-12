@@ -38,6 +38,7 @@ use gateway::qdrant;
 use gateway::receipt_batch;
 use gateway::routes;
 use gateway::splunk_export;
+use gateway::tool_broker_client;
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
@@ -2225,6 +2226,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Tool broker Phase 1 extraction (roadmap: "Tool broker | Partial |
+    // In-gateway execute path; no standalone broker service"). Inert unless
+    // both AEGIS_TOOL_BROKER_URL and AEGIS_TOOL_BROKER_API_TOKEN are set —
+    // this gateway build no longer links aegis-tool-broker-connectors at
+    // all, so there is no in-process fallback: POST /v1/broker/execute
+    // fails closed with 501 until the standalone binary is configured.
+    let tool_broker = match tool_broker_client::ToolBrokerClient::from_env() {
+        Some(client) => {
+            info!(
+                "AEGIS_TOOL_BROKER_URL/AEGIS_TOOL_BROKER_API_TOKEN configured: tool broker \
+                 execution is enabled."
+            );
+            Some(Arc::new(client))
+        }
+        None => {
+            info!(
+                "AEGIS_TOOL_BROKER_URL/AEGIS_TOOL_BROKER_API_TOKEN not fully set. \
+                 POST /v1/broker/execute will 501."
+            );
+            None
+        }
+    };
+
     // Shared state (metrics are zero-initialised atomics; no heap beyond the struct)
     let state = Arc::new(AppState {
         storage: sql_storage,
@@ -2260,7 +2284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         qdrant_exporter,
         admission_webhook,
         background_task_handles: std::sync::Mutex::new(background_task_handles),
-        broker_executor: routes::broker::default_broker_executor(),
+        tool_broker,
         oidc,
     });
 
@@ -3044,7 +3068,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -3347,7 +3371,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -3694,7 +3718,7 @@ mod tests {
                 "doomed_task",
                 doomed_abort_handle,
             )]),
-            broker_executor: routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 

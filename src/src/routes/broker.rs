@@ -8,6 +8,7 @@
 
 #![allow(unused_imports)]
 use crate::error::StatusError;
+use crate::tool_broker_client::ToolBrokerError;
 use axum::{
     extract::{Path, RawQuery, State},
     http::StatusCode,
@@ -21,11 +22,7 @@ use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
-use aegis_tool_broker_connectors::{
-    BrokerExecutor, BrokerToolBinding, ConnectorRegistry, ConsumedApproval, ExecuteError,
-    FilesystemConnector, GithubConnector, GithubMode, HttpConnector, ShellConnector,
-};
-use aegis_tool_broker_core::{action_hash, BrokerAction, CredentialRef, EnvCredentialResolver};
+use aegis_tool_broker_core::{action_hash, BrokerAction};
 
 use crate::models::*;
 
@@ -193,49 +190,6 @@ pub async fn set_broker_tool_status(
     }
 }
 
-/// Builds the [`BrokerExecutor`] used by [`execute_broker_action`]. GitHub
-/// runs in mock mode unless `AEGIS_GITHUB_API_BASE` is set (real mode);
-/// `HttpConnector` is always registered (HTTPS-only). The filesystem and
-/// shell connectors are opt-in via `AEGIS_BROKER_WORKSPACE` — with no
-/// configured workspace there is nothing safe to scope them to, so they're
-/// simply absent from the registry (an execute against `filesystem`/`shell`
-/// then fails closed with `UnknownConnectorType`, not a wide-open default).
-pub fn default_broker_executor() -> Arc<BrokerExecutor> {
-    let github_mode = match std::env::var("AEGIS_GITHUB_API_BASE") {
-        Ok(base_url) if !base_url.trim().is_empty() => GithubMode::Real {
-            base_url: base_url.trim_end_matches('/').to_string(),
-        },
-        _ => GithubMode::Mock,
-    };
-    let mut registry = ConnectorRegistry::default()
-        .register(Arc::new(GithubConnector::new(github_mode)))
-        .register(Arc::new(HttpConnector::new()));
-
-    if let Ok(workspace) = std::env::var("AEGIS_BROKER_WORKSPACE") {
-        if !workspace.trim().is_empty() {
-            match FilesystemConnector::new(&workspace) {
-                Ok(fs) => registry = registry.register(Arc::new(fs)),
-                Err(e) => error!(
-                    "AEGIS_BROKER_WORKSPACE {:?} unusable for filesystem connector: {}",
-                    workspace, e
-                ),
-            }
-            match ShellConnector::new(&workspace) {
-                Ok(shell) => registry = registry.register(Arc::new(shell)),
-                Err(e) => error!(
-                    "AEGIS_BROKER_WORKSPACE {:?} unusable for shell connector: {}",
-                    workspace, e
-                ),
-            }
-        }
-    }
-
-    Arc::new(BrokerExecutor::new(
-        registry,
-        Arc::new(EnvCredentialResolver),
-    ))
-}
-
 /// Body for `POST /v1/broker/execute`.
 #[derive(Debug, Deserialize)]
 pub struct ExecuteBrokerActionBody {
@@ -254,6 +208,16 @@ pub struct ExecuteBrokerActionRequest {
     pub action: ExecuteBrokerActionBody,
     #[serde(default)]
     pub approval_id: Option<String>,
+}
+
+/// Proof that an approval was consumed (`storage::consume_approval`, atomic
+/// and hash-checked). Local to this route now that the gateway no longer
+/// links `aegis-tool-broker-connectors` (its own `ConsumedApproval` moved
+/// into `bins/aegis-tool-broker` along with the rest of the
+/// connector-execution engine).
+struct ConsumedApproval {
+    approval_id: String,
+    action_hash: String,
 }
 
 /// POST /v1/broker/execute — the Phase 6.4 execute route: consumes the
@@ -361,24 +325,32 @@ pub async fn execute_broker_action(
         None
     };
 
-    let binding = BrokerToolBinding {
-        tool_name: tool.tool_name.clone(),
-        connector_type: tool.connector_type.clone(),
-        credential_ref: if tool.credential_ref.is_empty() {
-            None
-        } else {
-            Some(CredentialRef::new(tool.credential_ref.clone()))
-        },
-        status: tool.status.clone(),
+    let Some(tool_broker) = state.tool_broker.as_ref() else {
+        return StatusError::not_implemented(
+            "the tool broker is not configured on this gateway \
+             (AEGIS_TOOL_BROKER_URL/AEGIS_TOOL_BROKER_API_TOKEN unset) — \
+             POST /v1/broker/execute has no in-process fallback",
+        )
+        .into_response();
     };
+    let credential_ref = (!tool.credential_ref.is_empty()).then_some(tool.credential_ref.as_str());
+    let consumed_approval = consumed
+        .as_ref()
+        .map(|c| (c.approval_id.as_str(), c.action_hash.as_str()));
 
-    let output = match state
-        .broker_executor
-        .execute(&binding, &action, consumed.as_ref())
+    let output = match tool_broker
+        .execute(
+            &tool.tool_name,
+            &tool.connector_type,
+            credential_ref,
+            &tool.status,
+            &action,
+            consumed_approval,
+        )
         .await
     {
         Ok(output) => output,
-        Err(e) => return broker_execute_error_response(e),
+        Err(e) => return tool_broker_error_response(e),
     };
 
     // Protected-decision receipt: mirroring `decision_requires_durable_receipt`'s
@@ -443,15 +415,11 @@ pub async fn execute_broker_action(
         .into_response()
 }
 
-fn broker_execute_error_response(e: ExecuteError) -> axum::response::Response {
+fn tool_broker_error_response(e: ToolBrokerError) -> axum::response::Response {
     match e {
-        ExecuteError::ToolNotActive { .. } => StatusError::forbidden(e.to_string()),
-        ExecuteError::UnknownConnectorType { .. } => StatusError::not_implemented(e.to_string()),
-        ExecuteError::ApprovalRequired | ExecuteError::ApprovalActionMismatch { .. } => {
-            StatusError::forbidden(e.to_string())
-        }
-        ExecuteError::Credential(_) => StatusError::service_unavailable(e.to_string()),
-        ExecuteError::Connector(_) => StatusError::service_unavailable(e.to_string()),
+        ToolBrokerError::Forbidden(msg) => StatusError::forbidden(msg),
+        ToolBrokerError::NotImplemented(msg) => StatusError::not_implemented(msg),
+        ToolBrokerError::ServiceUnavailable(msg) => StatusError::service_unavailable(msg),
     }
     .into_response()
 }
@@ -459,8 +427,120 @@ fn broker_execute_error_response(e: ExecuteError) -> axum::response::Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routes::test_helpers::setup_state;
+    use crate::routes::test_helpers::{setup_state, setup_state_with_tool_broker};
     use axum::body::to_bytes;
+
+    const MOCK_BROKER_TOKEN: &str = "test-broker-token";
+
+    /// Spins up a real local `aegis-tool-broker`-shaped HTTP server: the
+    /// real, unmodified `BrokerExecutor`/`ConnectorRegistry`/`GithubConnector`
+    /// (this test module is the one deliberate, dev-dependency-only
+    /// exception to "the gateway doesn't link `aegis-tool-broker-connectors`
+    /// in production" -- see `src/Cargo.toml`) served behind a handler
+    /// shaped like the real binary's `POST /v1/execute`. Same
+    /// `TcpListener::bind("127.0.0.1:0")` + `axum::serve` + `tokio::spawn`
+    /// pattern already used in `jobs.rs`'s Splunk HEC mock and
+    /// `oidc.rs`'s mock IdP.
+    async fn spawn_mock_tool_broker() -> String {
+        use aegis_tool_broker_connectors::{
+            BrokerExecutor, BrokerToolBinding, ConnectorRegistry,
+            ConsumedApproval as EngineApproval, GithubConnector,
+        };
+        use aegis_tool_broker_core::{CredentialRef, EnvCredentialResolver};
+        use axum::extract::Json as JsonExtract;
+        use axum::http::{header, StatusCode as AxumStatusCode};
+        use axum::routing::post;
+
+        #[derive(serde::Deserialize)]
+        struct MockExecuteRequest {
+            tool_name: String,
+            connector_type: String,
+            credential_ref: Option<String>,
+            tool_status: String,
+            action: BrokerAction,
+            consumed_approval: Option<MockConsumedApproval>,
+        }
+        #[derive(serde::Deserialize)]
+        struct MockConsumedApproval {
+            approval_id: String,
+            action_hash: String,
+        }
+
+        let registry = ConnectorRegistry::default().register(Arc::new(GithubConnector::mock()));
+        let executor = Arc::new(BrokerExecutor::new(
+            registry,
+            Arc::new(EnvCredentialResolver),
+        ));
+
+        async fn require_token(
+            headers: axum::http::HeaderMap,
+            request: axum::extract::Request,
+            next: axum::middleware::Next,
+        ) -> axum::response::Response {
+            let ok = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|h| h.to_str().ok())
+                == Some(&format!("Bearer {MOCK_BROKER_TOKEN}"));
+            if ok {
+                next.run(request).await
+            } else {
+                AxumStatusCode::UNAUTHORIZED.into_response()
+            }
+        }
+
+        let app = axum::Router::new()
+            .route(
+                "/v1/execute",
+                post(
+                    move |JsonExtract(req): JsonExtract<MockExecuteRequest>| {
+                        let executor = executor.clone();
+                        async move {
+                            let binding = BrokerToolBinding {
+                                tool_name: req.tool_name,
+                                connector_type: req.connector_type,
+                                credential_ref: req.credential_ref.map(CredentialRef::new),
+                                status: req.tool_status,
+                            };
+                            let consumed = req.consumed_approval.map(|c| EngineApproval {
+                                approval_id: c.approval_id,
+                                action_hash: c.action_hash,
+                            });
+                            match executor.execute(&binding, &req.action, consumed.as_ref()).await
+                            {
+                                Ok(output) => Json(json!({ "output": output })).into_response(),
+                                Err(e) => {
+                                    let status = match &e {
+                                        aegis_tool_broker_connectors::ExecuteError::ToolNotActive {
+                                            ..
+                                        } => AxumStatusCode::FORBIDDEN,
+                                        aegis_tool_broker_connectors::ExecuteError::UnknownConnectorType {
+                                            ..
+                                        } => AxumStatusCode::NOT_IMPLEMENTED,
+                                        aegis_tool_broker_connectors::ExecuteError::ApprovalRequired
+                                        | aegis_tool_broker_connectors::ExecuteError::ApprovalActionMismatch {
+                                            ..
+                                        } => AxumStatusCode::FORBIDDEN,
+                                        aegis_tool_broker_connectors::ExecuteError::Credential(_)
+                                        | aegis_tool_broker_connectors::ExecuteError::Connector(_) => {
+                                            AxumStatusCode::SERVICE_UNAVAILABLE
+                                        }
+                                    };
+                                    (status, Json(json!({ "error": e.to_string() }))).into_response()
+                                }
+                            }
+                        }
+                    },
+                ),
+            )
+            .layer(axum::middleware::from_fn(require_token));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
 
     fn sample_register_request(tool_name: &str) -> RegisterBrokerToolRequest {
         RegisterBrokerToolRequest {
@@ -765,7 +845,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_known_active_tool_allows_a_read_and_appends_a_receipt() {
-        let (state, tenant_id, _agent_token) = setup_state("broker_execute_read").await;
+        let broker_url = spawn_mock_tool_broker().await;
+        let (state, tenant_id, _agent_token) =
+            setup_state_with_tool_broker("broker_execute_read", &broker_url, MOCK_BROKER_TOKEN)
+                .await;
         insert_active_github_tool(&state, &tenant_id, "gh-read").await;
         let receipts_before = state.storage.count_receipts(&tenant_id).await.unwrap();
 
@@ -827,7 +910,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_hash_bound_approval_executes_and_appends_a_receipt() {
-        let (state, tenant_id, _agent_token) = setup_state("broker_execute_valid_approval").await;
+        let broker_url = spawn_mock_tool_broker().await;
+        let (state, tenant_id, _agent_token) = setup_state_with_tool_broker(
+            "broker_execute_valid_approval",
+            &broker_url,
+            MOCK_BROKER_TOKEN,
+        )
+        .await;
         insert_active_github_tool(&state, &tenant_id, "gh-write").await;
 
         let req = write_action("gh-write");
@@ -859,7 +948,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_disabled_tool_fails_closed() {
-        let (state, tenant_id, _agent_token) = setup_state("broker_execute_disabled").await;
+        let broker_url = spawn_mock_tool_broker().await;
+        let (state, tenant_id, _agent_token) =
+            setup_state_with_tool_broker("broker_execute_disabled", &broker_url, MOCK_BROKER_TOKEN)
+                .await;
         insert_active_github_tool(&state, &tenant_id, "gh-read").await;
         let tool = state
             .storage
@@ -899,8 +991,13 @@ mod tests {
 
     #[tokio::test]
     async fn an_unregistered_connector_type_is_not_implemented() {
-        let (state, tenant_id, _agent_token) =
-            setup_state("broker_execute_unknown_connector").await;
+        let broker_url = spawn_mock_tool_broker().await;
+        let (state, tenant_id, _agent_token) = setup_state_with_tool_broker(
+            "broker_execute_unknown_connector",
+            &broker_url,
+            MOCK_BROKER_TOKEN,
+        )
+        .await;
         state
             .storage
             .insert_broker_tool(&tenant_id, "smtp-tool", "smtp", "", "[]", Utc::now())
@@ -915,5 +1012,66 @@ mod tests {
         .await
         .into_response();
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn execute_returns_501_when_tool_broker_is_unconfigured() {
+        // Plain setup_state -> tool_broker: None. No in-process fallback
+        // exists any more (Phase 1 extraction) -- this must 501, not
+        // silently execute in-process.
+        let (state, tenant_id, _agent_token) = setup_state("broker_execute_no_broker").await;
+        insert_active_github_tool(&state, &tenant_id, "gh-read").await;
+
+        let response = execute_broker_action(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(read_action("gh-read")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    /// Known Phase-1 limitation, documented rather than silently left
+    /// implicit (see `docs/components/Tool_Broker.md`'s "Honest scope"):
+    /// the gateway consumes the approval BEFORE calling out to the broker,
+    /// so an unreachable broker burns the approval without executing the
+    /// action. A future phase could fix this (e.g. only consuming after a
+    /// successful broker call, or a two-phase consume/rollback); this test
+    /// exists so that fix has a regression test to work against.
+    #[tokio::test]
+    async fn execute_fails_closed_when_the_broker_is_unreachable() {
+        // Port 1 never accepts connections (same convention this
+        // codebase's other satellite-client tests use for "unreachable").
+        let (state, tenant_id, _agent_token) = setup_state_with_tool_broker(
+            "broker_execute_unreachable",
+            "http://127.0.0.1:1",
+            MOCK_BROKER_TOKEN,
+        )
+        .await;
+        insert_active_github_tool(&state, &tenant_id, "gh-write").await;
+
+        let req = write_action("gh-write");
+        let hash = request_action_hash("gh-write", &req);
+        let approval_id = insert_approval_bound_to(&state, &tenant_id, &hash).await;
+
+        let mut req = req;
+        req.approval_id = Some(approval_id.clone());
+        let response =
+            execute_broker_action(State(state.clone()), TenantId(tenant_id.clone()), Json(req))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        assert!(
+            !state
+                .storage
+                .approval_is_still_consumable(&tenant_id, &approval_id)
+                .await
+                .unwrap(),
+            "known Phase-1 limitation: the approval is already consumed by \
+             the time the broker call happens, so a broker-unreachable \
+             failure burns it without executing the action"
+        );
     }
 }

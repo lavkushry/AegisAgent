@@ -39,10 +39,10 @@ Strongest current capabilities:
 
 - **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs), real process/net/fs/secret collectors (`AEGIS_RUN_ID` auto-discovery -> enforcer registration); not yet proven against a real live host (tests use synthetic `/proc` trees)
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
-- **Tool broker** — gateway routes + connector libs; not a standalone mandatory binary
+- **Tool broker** — standalone `aegis-tool-broker` binary exists and is the only execution path when configured (gateway no longer links the connector-execution crate in production); no mandatory-force-path enforcement yet, no scoped per-run agent tokens
 - **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, both CI-wired)
 - **Console UI** — Bun SPA (`ui-next/`) with full panel suite (approvals, integrity, charts, evidence graph) plus cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls product pages — Phase 9.2/9.3 complete
-- **Deploy** — gateway + sensor + egress + cage + llm-gateway Helm; single-writer SQLite default
+- **Deploy** — gateway + sensor + egress + cage + llm-gateway + tool-broker Helm; single-writer SQLite default
 - **Postgres** — feature + migrations exist; read/write pool split with replica failover, DB-backed replay store, cross-replica correlation windows, and a live `postgres-integration` CI job now exercise it against a real Postgres instance (not just compile-checked) — but not the default HA production path; real cross-instance failover/load validation still pending
 - **OIDC console login** — self-service login/link flow (`src/src/oidc.rs`, `routes/oidc.rs`), gated on `AEGIS_OIDC_*` + `AEGIS_JWT_SECRET`, fails closed for unrecognized identities (no auto-provisioning); single-IdP-per-gateway, no SAML, no per-SSO-user attribution/revocation
 
@@ -78,7 +78,7 @@ Strongest current capabilities:
 | Node sensor | Partial | Binary + packaging; real process/net/fs/secret collectors + host enforce, unit-tested; not yet proven on a real live host. |
 | Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, CI-wired). |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
-| Tool broker | Partial | In-gateway execute path; no standalone broker service. |
+| Tool broker | Partial | Standalone `aegis-tool-broker` binary + HTTP contract; gateway owns approval/receipts, broker owns credential resolution + connector execution; no mandatory force path, no scoped tokens. |
 | Signed control commands | Partial | Issue + sensor poll + host PID enforce + auto PID discovery (`AEGIS_RUN_ID` process collector); not yet proven on a real live host. |
 | Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
 | Postgres production mode | Roadmap / partial | Code path now CI-validated against a live Postgres instance (was compile-check only); SQLite single-writer is still the default deploy. |
@@ -135,7 +135,7 @@ Control Plane (gateway) — largely shipped
   + Runtime Sensor — skeleton shipped
   + Agent Cage — lib shipped, executor WIP
   + Egress Proxy — binary shipped, force-path WIP
-  + Tool Broker — gateway path shipped
+  + Tool Broker — standalone binary shipped (Phase 1); force path + scoped tokens remain
   + LLM choke point — adapter shipped
   + Integrity-anchored SOC + evidence export — largely shipped
 ```

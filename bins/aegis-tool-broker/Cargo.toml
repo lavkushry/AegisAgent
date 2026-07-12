@@ -1,0 +1,29 @@
+[package]
+name = "aegis-tool-broker"
+version = "0.1.0"
+edition = "2021"
+description = "AegisAgent standalone tool-broker execution engine (Phase 1 extraction): resolves credentials and runs connectors in its own process, so the gateway never links this crate's connectors or holds a real provider credential."
+
+[[bin]]
+name = "aegis-tool-broker"
+path = "src/main.rs"
+
+[dependencies]
+aegis-tool-broker-core = { path = "../../lib/tool-broker-core" }
+aegis-tool-broker-connectors = { path = "../../lib/tool-broker-connectors" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = { workspace = true }
+axum = { workspace = true }
+clap = { version = "4.6", features = ["derive", "env"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+sha2 = { workspace = true }
+hex = "=0.4.3"
+
+[dev-dependencies]
+tempfile = "3.10"
+tower = { version = "0.4", features = ["util"] }
+async-trait = "0.1.89"

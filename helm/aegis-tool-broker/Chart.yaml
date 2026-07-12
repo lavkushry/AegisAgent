@@ -1,0 +1,15 @@
+apiVersion: v2
+name: aegis-tool-broker
+description: AegisAgent standalone tool-broker execution engine (Phase 1 extraction) — resolves credentials and runs connectors in its own process, so the gateway never links this crate's connectors or holds a real provider credential.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/lavkushry/AegisAgent
+sources:
+  - https://github.com/lavkushry/AegisAgent
+keywords:
+  - ai-agent-security
+  - tool-broker
+  - credential-isolation
+maintainers:
+  - name: AegisAgent

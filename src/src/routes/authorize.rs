@@ -2244,7 +2244,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2310,7 +2310,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -7717,7 +7717,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -7931,7 +7931,7 @@ mod tests {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
