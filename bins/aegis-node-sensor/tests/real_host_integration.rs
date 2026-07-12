@@ -28,6 +28,7 @@ use aegis_node_sensor::gateway_client::RuntimeEventPayload;
 use aegis_node_sensor::net_collector::NetCollector;
 use aegis_node_sensor::process_collector::{scan_host_aegis_processes, ProcessCollector};
 use aegis_node_sensor::process_enforcer::{process_alive, ProcessEnforcer};
+use aegis_node_sensor::secret_collector::SecretCollector;
 use aegis_node_sensor::spool::{Lane, SpoolQueue};
 
 fn unique_run_id(tag: &str) -> String {
@@ -186,4 +187,40 @@ fn fs_collector_reports_a_real_open_file_descriptor() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn secret_collector_reports_only_the_env_name_never_the_value_for_a_real_child() {
+    let run_id = unique_run_id("secret");
+    let secret_value = "definitely-not-a-real-secret-value-12345";
+    let mut child = Command::new("sleep")
+        .arg("20")
+        .env("AEGIS_RUN_ID", &run_id)
+        .env("GITHUB_TOKEN", secret_value)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn real sleep child with a secret-like env var");
+    let pid = child.id() as i32;
+
+    let collector = SecretCollector::new();
+    let spool_dir = tempfile::tempdir().unwrap();
+    let spool = SpoolQueue::open(spool_dir.path(), 1_000_000).unwrap();
+    collector.poll(&spool);
+
+    let rec = spool
+        .read_next(Lane::Normal)
+        .unwrap()
+        .expect("secret_signal event spooled for the real child's real /proc/<pid>/environ");
+    let payload: RuntimeEventPayload = serde_json::from_slice(&rec.payload).unwrap();
+    assert_eq!(payload.event_type, "secret_signal");
+    assert_eq!(payload.run_id.as_deref(), Some(run_id.as_str()));
+    let reason = payload.reason.as_deref().unwrap();
+    assert!(reason.contains(&format!("pid={pid}")));
+    assert!(reason.contains("GITHUB_TOKEN"));
+    // The whole point of the collector: the value never leaves the host.
+    assert!(!reason.contains(secret_value));
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
