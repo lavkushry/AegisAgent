@@ -1,173 +1,165 @@
 <div align="center">
-  <img src="docs/assets/logo.png" alt="AegisAgent Logo" width="220" />
+  <img src="docs/assets/logo.png" alt="AegisAgent" width="200" />
   <h1>AegisAgent</h1>
-  <p><strong>The Zero-Trust Security & Integrity Layer for Autonomous AI Agents</strong></p>
+  <p><strong>Bare-metal integrity, guardrails, SIEM, and SOC for autonomous AI agents.</strong></p>
 </div>
-
----
 
 [![CI](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/ci.yml)
 [![SAST](https://github.com/lavkushry/AegisAgent/actions/workflows/sast.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/sast.yml)
-[![Container Scan](https://github.com/lavkushry/AegisAgent/actions/workflows/container-scan.yml/badge.svg)](https://github.com/lavkushry/AegisAgent/actions/workflows/container-scan.yml)
-[![Release](https://img.shields.io/github/v/release/lavkushry/AegisAgent?include_prereleases&label=release)](https://github.com/lavkushry/AegisAgent/releases)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker)](https://github.com/lavkushry/AegisAgent/pkgs/container/aegisagent)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-orange.svg)](Cargo.toml)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](sdk-python/pyproject.toml)
-[![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://lavkushry.github.io/AegisAgent/)
 
-AegisAgent is an open-source, self-hostable **security integrity layer and API firewall** designed for **autonomous AI agents** and **Model Context Protocol (MCP)** tool execution. It acts as a zero-trust guardrail between your AI agent runtime (LangGraph, OpenAI Agents, Autogen, Custom) and external systems, preventing unauthorized actions caused by prompt injections, tool-use hijacking, and data exfiltration.
+AegisAgent is not another prompt wrapper or generic API proxy. It is the enforcement and evidence layer between autonomous agents and consequential tools: cloud APIs, code repositories, MCP servers, databases, filesystems, networks, and credentials.
 
-## 🛡️ Why AegisAgent? The Integrity Moat
+The current system already binds approval to the exact canonical action, gates on deterministic source provenance with Cedar, fails closed in Python/TypeScript/Go SDKs, and emits hash-chained receipts. The target data plane replaces JSON-heavy, row-oriented telemetry processing with pinned Rust reactors, bounded SPSC rings, Hybrid Columnar Merge Trees, compiled guardrails, kernel containment, and an Arrow/WASM/WebGL console.
 
-Traditional AI firewalls analyze prompts using probabilistic LLM-based text classifiers, which are prone to prompt-injection bypasses. AegisAgent introduces deterministic, cryptographic security mechanisms to secure agent actions:
+> **Performance status:** `<1 ms p99` deterministic authorization compute, `>=1,000,000 events/s/node` telemetry ingestion, `<100 ms p99` first deterministic detection, and 60 FPS analytical rendering are qualification targets—not current benchmark results. The checked-in SQLite baseline sustains roughly 130–150 authorizations/s and records 17.58 ms HTTP p99 at 10 requests/s. See [the measured baseline](docs/performance-baseline.md) and [benchmark contract](ARCHITECTURE.md#20-acceptance-benchmark-contract).
 
-| Security Vector | Generic Gateway / Scanners | **AegisAgent Security Moat** |
-| :--- | :--- | :--- |
-| **Human-in-the-Loop (HITL)** | Simple approval prompts (Vulnerable to TOCTOU / parameters modification) | **Approval Integrity**: Human approvals are bound to a SHA-256 hash of the frozen action parameters. SDK fails closed on parameter tampering. |
-| **Prompt Injection Defense** | Probabilistic text scoring (Evadable, high latency) | **Deterministic Trust-Provenance**: Authorization gates on the *source trust level* of triggering content (6 tiers). Malicious inputs are blocked regardless of text shape. |
-| **Compliance Evidence** | Text-based audit logs (Tamperable, unstructured) | **Verifiable Action Receipts**: Decision flows are stored in a per-tenant, tamper-evident hash chain, creating cryptographic proof for SOC 2. |
-| **Agent Autonomy** | All-or-nothing execution | **Active SOC Containment**: Automated response loop detects repeated denials (deny-storms) and quarantines, freezes, or revokes agent keys in real-time. |
+## The integrity moat
 
----
+| Threat | Weak control | AegisAgent invariant |
+|---|---|---|
+| Approve-then-swap / TOCTOU | approval binds to display text | `SHA-256(aegis-jcs-1(exact action))`; mismatch or edit fails closed |
+| Confused deputy | classifier trusts persuasive text | Cedar gates deterministic source provenance; trust can only tighten |
+| Approval replay | reusable approval token | atomic, expiring, single-use consume bound to `action_hash` |
+| Audit tampering | mutable text logs | per-tenant receipt chain with optional Ed25519/KMS signature |
+| Runaway agent | alert after damage | signed containment commands and target eBPF enforcement |
+| SOC data overload | JSON rows through a general search cluster | bounded binary ingestion and time-partitioned HCMT/Arrow storage |
 
-## 🏗️ Architecture
+Security scores never create an allow. LLMs may explain a closed incident; they do not decide, approve, contain, or execute.
 
-AegisAgent implements the **Two-Plane Principle** to isolate synchronous decision-making from asynchronous security monitoring, ensuring sub-75ms response latency:
+## Architecture
 
 ```mermaid
-graph TD
-    subgraph Inline Plane [Inline Decision Plane - Synchronous < 75ms]
-        A[Agent Runtime] -->|1. Wrap Tool| B[Aegis SDK]
-        B -->|2. Compute action_hash| B
-        B -->|3. Authorize| C[Aegis Gateway]
-        C -->|4. Evaluate ABAC| D[Cedar Policy Engine]
-        D -->|5. Permit / Deny / Approval| C
-        C -->|6. Decision + Receipt| B
-        B -->|7. Enforce Fail-Closed| B
-    end
-
-    subgraph Async Plane [Async SOC Monitoring Plane - Out-of-Band]
-        C -.->|8. Emit Security Event| E[Event Bus]
-        E --> F[Detection Engine]
-        F --> G[Correlation Engine]
-        G -->|9. Alerts & Timeline| H[SOC Console]
-        G -->|10. Active Containment| I[Response Engine]
-        I -->|11. Freeze / Revoke / Quarantine| C
-    end
+flowchart LR
+    Agent[Agent SDK / MCP / Cage] --> Gateway[gRPC + REST compatibility]
+    Gateway --> Reactor[Pinned CoreReactor]
+    Reactor --> Cedar[Cedar + immutable tenant snapshot]
+    Cedar -->|protected action| Control[(Transactional ControlStore + receipt)]
+    Cedar -->|telemetry descriptor| Ring[SPSC event fabric]
+    Ring --> HCMT[(Arrow HCMT)]
+    Ring --> Guard[Aho DFA + HNSW/PQ + INT8 ONNX]
+    Guard --> Contain[Signed containment / eBPF]
+    HCMT --> Query[Vectorized query reactors]
+    Query --> UI[Arrow stream → WASM → WebGL2]
 ```
 
-Every decision flows through the **Inline Plane** to enforce permissions, while the **Async SOC Plane** processes security telemetry out-of-band to detect exfiltration, deny-storms, and anomalies without delaying agent execution.
+The architecture separates two correctness domains:
 
----
+- **Control state:** agents, policies, approvals, replay claims, bans, commands, receipt heads, and protected decisions remain transactional.
+- **Event state:** runtime telemetry, SOC projections, time-series data, guardrail candidates, and analytical indexes move to HCMT.
 
-## 📥 Installation
+This split is deliberate. A columnar merge tree is excellent for append and scan; it is not a license to weaken atomic approval consumption or receipt durability.
 
-### Docker Compose (recommended)
+Read the canonical [HLD](ARCHITECTURE.md), [LLD](docs/LLD.md), and [repository-backed migration matrix](MIGRATION_MATRIX.md).
+
+## Performance design
+
+The target node eliminates avoidable coordination in the telemetry path:
+
+- one pinned thread owns each hot reactor; no work-stealing migration;
+- one producer and one consumer own each cache-padded ring;
+- FlatBuffers are verified and viewed in place inside the reactor arena;
+- memtables append into structure-of-arrays buffers and seal into Arrow-compatible segments;
+- Gorilla timestamp blocks, zone maps, Bloom filters, and Roaring bitmaps prune before decode;
+- Aho-Corasick scans text in `O(n + z)` regardless of pattern count after compilation;
+- React owns controls, WASM owns Arrow transforms, and WebGL2 instancing owns points.
+
+On a 32-core 3.2 GHz qualification profile at 70% CPU utilization, one million events/s permits 71,680 cycles/event. At 256 bytes/event, payload bandwidth is about 2.05 Gbit/s before framing/TLS. These budgets are feasible hypotheses; the project accepts them only after 30-minute compaction-active, loss-checked benchmarks with raw HDR histograms.
+
+Authorization compute and protected commit are measured separately. A warm deterministic decision targets `<1 ms p99`; a mutating allow still waits for the configured durable control/receipt commit even when storage takes longer.
+
+## Repository status
+
+| Capability | Current | Target migration |
+|---|---|---|
+| Authorization | Axum/Tokio + Cedar + SQLx | typed service on pinned decision reactors |
+| APIs | REST JSON plus partial tonic/protobuf | protobuf-first parity; binary fast path; REST compatibility off benchmark path |
+| Control storage | SQLite/PostgreSQL via `StorageBackend` | split transactional `ControlStore`/`ReceiptLog` |
+| Telemetry storage | row tables and JSON/TEXT fields | WAL + Arrow-compatible HCMT SSTables |
+| Event bus | Tokio bounded MPSC | NUMA-local cache-padded SPSC ring matrix |
+| Detection | structured scalar rules; optional Qdrant | Aho DFA plus owned HNSW/PQ and isolated INT8 ONNX |
+| Host sensor | procfs polling, spool, signed commands | CO-RE eBPF telemetry/containment with truthful fallback |
+| Console | React JSON polling and SVG | Arrow IPC worker, Rust WASM, WebGL2 instancing |
+
+No target row in this table is a shipped claim until its roadmap gate passes.
+
+## Quick start
+
+### Docker Compose
+
 ```bash
 git clone https://github.com/lavkushry/AegisAgent.git
 cd AegisAgent
 docker compose up --build -d
 ```
 
-<!-- After the first release, pre-built images will be available:
-docker pull ghcr.io/lavkushry/aegisagent:latest
-docker run -p 8080:8080 -p 6334:6334 ghcr.io/lavkushry/aegisagent:latest
--->
+The development gateway binds to loopback by default and serves REST on `8080` and gRPC on `6334`.
 
-### From Source
+### Build from source
+
 ```bash
-git clone https://github.com/lavkushry/AegisAgent.git
-cd AegisAgent
-cargo build --release
+cargo build --workspace --release
+cargo test --workspace -- --test-threads=1
 ```
 
-### Python SDK
+Rust `1.88` or newer and `protoc` are required by the current workspace.
+
+### Run the integrity demo
+
 ```bash
-pip install aegisagent
-```
-
----
-
-## ⚡ 5-Step Quickstart
-
-Experience AegisAgent's security gate preventing a simulated prompt-injection attack in under 5 minutes.
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/lavkushry/AegisAgent.git
-cd AegisAgent
-```
-
-### 2. Run the Killer Demo
-```bash
+make doctor
 make demo
 ```
 
-`make demo` first runs `make doctor`, which checks Docker, Docker Compose,
-Python, `curl`, the compose file, and whether the local REST/gRPC demo ports are
-usable.
+The demo proves that an untrusted mutating action is denied, a swapped post-approval payload fails its `action_hash`, replay is rejected, and the receipt range verifies.
 
-The demo then starts the local gateway, seeds a coding agent and GitHub tool, blocks
-a prompt-injected merge attempt from untrusted external input, proves
-approve-then-swap fails closed on `action_hash` mismatch, blocks approval
-replay, and prints the receipt chain head plus server-side receipt verification.
-
-Expected proof points:
-
-* `AegisAgent blocked the malicious merge attempt`
-* `Gateway rejected the swapped claimed_action_hash`
-* `Replay Blocked`
-* `"verified": true` from `/v1/receipts/verify-range`
-
----
-
-## 📦 SDK Support
-
-AegisAgent provides unified, multi-language SDK support. Every SDK implements `aegis-jcs-1` JSON canonicalization and performs fail-closed verification:
-
-* **Python (Reference SDK)**: [sdk-python/](sdk-python/) — Supports async clients, `@protect_tool` decorators, CLI utilities, and evidence packaging.
-* **TypeScript / Node.js**: [sdk-typescript/](sdk-typescript/) — Fully typed, zero-dependency canonicalization wrapper.
-* **Go**: [sdk-go/](sdk-go/) — Idiomatic Go client with context-based cancellation and management routing.
-
----
-
-## ⚙️ Development & Testing
-
-AegisAgent is built in Rust for raw speed and security, featuring rigorous unit, integration, and cross-language compatibility tests:
+### Python SDK
 
 ```bash
-# Setup development environment (formatting, linters, pre-commit hooks)
-make setup
-
-# Check local demo prerequisites without starting services
-make doctor
-
-# Run the complete test suite (Rust, Python, TS, Go)
-make check
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e "sdk-python[dev]"
+python examples/integrity_demo.py
 ```
 
----
+SDK implementations:
 
-## 📖 Strategy & Architecture Docs
+- [Python](sdk-python/) — async client, decorators, evidence and verification tools;
+- [TypeScript](sdk-typescript/) — typed fail-closed wrapper and canonical corpus;
+- [Go](sdk-go/) — context-aware client, approval consume, receipt verification.
 
-Detailed strategies, reassessments, and technical specifications:
-* [Market Gap Reassessment](docs/AegisAgent_Gap_Reassessment_2026-06.md) — Rationale behind the security integrity positioning.
-* [Technical Architecture Design](docs/AegisAgent_Technical_Design.md) — Cryptographic details, database models, and API contracts.
-* [Agent SOC Design Specification](docs/AegisAgent_Agent_SOC_Design.md) — Asynchronous detection rules and containment playbooks.
-* [Verifiable Receipt Specification](docs/action-receipt-spec.md) — Hash-chain specifications for SOC 2 audits.
-* [Feature Parity & PR History](docs/feature_history.md) — Detailed changelogs and ticket history.
+Every SDK reproduces `aegis-jcs-1` bytes and refuses execution on hash mismatch, expiry, replay, unknown decision, or required-gateway failure.
 
----
+## Development gates
 
-## 🤝 Contributing & Security
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace -- --test-threads=1
+python -m unittest discover -s sdk-python/tests
+(cd sdk-typescript && npm test)
+(cd sdk-go && go test ./...)
+node scripts/validate-docs.mjs
+```
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) to understand development conventions.
+Core data-plane changes additionally require ADR review, corpus/differential tests, Loom/Miri/sanitizer coverage for unsafe concurrency, and reproducible p99/allocation/copy/cache-miss evidence. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-If you discover a security vulnerability, please do **not** open a public issue. Follow our [SECURITY.md](SECURITY.md) guidelines to privately disclose the issue to our security team.
+## Documentation
 
----
+- [High-Level Architecture](ARCHITECTURE.md)
+- [Low-Level Design](docs/LLD.md)
+- [Migration Matrix](MIGRATION_MATRIX.md)
+- [36-Week Roadmap](ROADMAP.md)
+- [Action Receipt Specification](docs/action-receipt-spec.md)
+- [Security Model](docs/security-model.md)
+- [Measured Performance Baseline](docs/performance-baseline.md)
+- [Implementation Status](docs/Implementation_Status.md)
 
-## 📄 License
+## Security
 
-AegisAgent is open-source and licensed under the [MIT License](LICENSE).
+Do not file public issues for vulnerabilities. Follow [SECURITY.md](SECURITY.md) for private disclosure. Never include credentials, raw secrets, unrestricted prompts, production data, or private keys in an issue, benchmark artifact, trace, receipt, or test fixture.
+
+## License
+
+AegisAgent is licensed under the [MIT License](LICENSE).

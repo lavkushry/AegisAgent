@@ -55,6 +55,7 @@ const REQUIRED_DOCS = [
   "flows/Control_Command_Flow.md",
   // Level 3: architecture
   "Architecture_Overview.md", "Last_Mile_System_Walkthrough.md",
+  "LLD.md",
   "AegisAgent_Runtime_Data_Plane.md", "security-model.md",
   "AegisAgent_Threat_Model.md", "fail-closed-behavior.md",
   "database-schema.md", "event-schema.md", "action-receipt-spec.md",

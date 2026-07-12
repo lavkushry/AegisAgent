@@ -1,261 +1,242 @@
-# AegisAgent Architecture Patterns (Qdrant-Inspired)
+# AegisAgent Mandatory Architecture Law
 
-> **MANDATORY:** Every AI agent working on this codebase MUST follow these patterns.
-> These rules are inspired by [Qdrant](https://github.com/qdrant/qdrant) and are non-negotiable.
+> **MANDATORY:** Every human or automated contributor MUST read this file before writing code. The canonical target HLD is [../ARCHITECTURE.md](../ARCHITECTURE.md), the byte/algorithm contract is [LLD.md](LLD.md), and current-to-target cutover rules are in [../MIGRATION_MATRIX.md](../MIGRATION_MATRIX.md).
 
-> **DUAL PROTOCOL:** AegisAgent serves both **REST (Axum)** and **gRPC (tonic + protobuf)** on
-> separate ports, exactly like Qdrant serves actix-web REST and tonic gRPC. All new endpoints
-> MUST be implemented on both interfaces. Protobuf is the source of truth for types.
+**Status:** repository law during the v1 → v2 architecture migration
 
----
+**Last reviewed:** 2026-07-12
 
-## 1. Workspace Structure — Layered Crate Architecture
+## Why these laws exist
 
-AegisAgent uses a **Cargo workspace with independent library crates** under `lib/`.
-The binary entrypoint lives in `src/` and is deliberately thin.
+AegisAgent is changing execution, storage, wire, detection, kernel and browser architectures while protecting approval and receipt semantics already used by SDKs. Without one migration law, a local optimization can introduce an upward dependency, a hidden JSON copy, an eventually consistent approval, or a target presented as shipped. These rules keep the current system deployable while every target component earns authority through shadow, recovery, security and benchmark gates.
 
-```
-AegisAgent/
-├── Cargo.toml                    # workspace root
-├── config/config.yaml            # YAML configuration (Qdrant pattern)
-├── src/                          # binary crate (THIN — route wiring + startup only)
-│   └── src/
-│       ├── main.rs               # CLI (clap), config load, Axum router, dual-server startup, graceful shutdown
-│       ├── grpc.rs               # gRPC service implementations (Tonic server)
-│       ├── routes/               # REST handlers (parse → service → respond)
-│       ├── admission.rs          # Admission webhook clients
-│       ├── jobs.rs               # Periodic background cron jobs
-│       ├── gh_checks.rs          # GitHub Checks API client
-│       └── gh_comment.rs         # GitHub App PR commenter logic
-│   └── Cargo.toml                # gateway binary manifest
-├── lib/
-│   ├── common/ (aegis-common)    # shared types, errors, crypto — NO domain logic
-│   ├── api/ (aegis-api)          # protobuf definitions + generated code + OpenAPI models
-│   │   ├── proto/                # .proto files (SOURCE OF TRUTH for all types)
-│   │   │   ├── aegis.proto       # core service: Authorize, Approve, Agents
-│   │   │   ├── soc.proto         # SOC service: Alerts, Incidents, Rules
-│   │   │   └── admin.proto       # admin service: Tenants, MCP, Config
-│   │   └── src/
-│   │       ├── grpc/             # tonic-generated Rust code (build.rs + prost)
-│   │       ├── models.rs         # REST request/response types (derive from proto where possible)
-│   │       └── records.rs        # DB record types
-│   ├── storage/ (aegis-storage)  # DB trait + SQLite/PostgreSQL implementations
-│   ├── policy/ (aegis-policy)    # Cedar engine, trust chain, risk scoring
-│   └── soc/ (aegis-soc)         # detection, correlation, response engine
-├── sdk-python/
-├── sdk-go/
-├── sdk-typescript/
-└── e2e/
+```mermaid
+flowchart TD
+    I[Integrity laws] --> C[Transactional control plane]
+    I --> D[Thread-per-core data plane]
+    C --> P[Protected commit and receipts]
+    D --> H[Bounded SPSC + HCMT]
+    H --> S[Deterministic / semantic SOC]
+    S --> E[Signed containment]
+    H --> U[Arrow / WASM / WebGL UI]
+    P --> R[Migration and rollback gates]
+    E --> R
+    U --> R
 ```
 
-### Rules:
-- **`src/` is THIN.** It contains ONLY route wiring, CLI parsing, config loading, and server startup. Zero business logic.
-- **All business logic lives in `lib/` crates.** REST handlers AND gRPC service impls call the same service methods from `lib/storage` and `lib/policy`.
-- **Each `lib/` crate is independently compilable and testable** (`cargo test -p aegis-common`, etc.).
-- **Dual-protocol startup:** `main.rs` spawns two servers — Axum REST (default port 8080) and tonic gRPC (default port 6334) — on separate Tokio tasks. Both share the same `AppState`.
+## 1. Status vocabulary
 
----
+- **Current:** present and tested in this checkout.
+- **Shadow:** receives real/replayed data but is not authoritative.
+- **Target:** approved design direction, not a shipped claim.
+- **Qualified:** passed the published correctness, recovery, security and performance profile.
 
-## 2. Dependency Flow — Downward Only (NEVER upward)
+Documentation MUST NOT describe a target as current or qualified. Current shipped state remains tracked in `docs/Implementation_Status.md`; measured performance remains in `docs/performance-baseline.md`.
 
-```
-aegis-common          ← depends on nothing internal
-    ↑
-aegis-api             ← depends on common only
-    ↑
-aegis-storage         ← depends on api + common
-aegis-policy          ← depends on api + common (NEVER storage)
-    ↑
-aegis-soc             ← depends on storage + api + common
-    ↑
-src/ (binary)         ← depends on ALL lib/ crates
-```
+## 2. Integrity laws
 
-### Rules:
-- `storage` and `policy` MUST NEVER depend on each other.
-- `soc` may depend on `storage` (it needs DB access for detection rules), but never on the binary.
-- `common` MUST have zero project-internal dependencies.
-- Circular dependencies are a **hard build failure**. `cargo tree --workspace` must show a clean DAG.
+1. The exact post-admission action is canonicalized with `aegis-jcs-1` and bound to approval by SHA-256.
+2. Hash mismatch, expiry, replay, unknown state, missing required authority, or failed protected commit blocks execution.
+3. Trust provenance can only tighten; unknown is least trusted.
+4. Cedar decides allow/deny. Aho matches, risk scores, vector search, ONNX, and LLM output cannot create an allow or increase trust.
+5. Protected actions commit required control state and receipt evidence before execution is acknowledged.
+6. Tenant context is authenticated and enforced in routing, every storage/index lookup, snapshots, encryption context and receipt chains.
+7. Every queue, body, field, allocation, decompression, query, retry and time window is bounded.
+8. Raw secrets and credentials never enter agent payloads, telemetry, model input, logs, traces, receipts or browser Arrow schemas.
 
----
+## 3. Control plane and data plane are different stores
 
-## 3. Trait-Based Storage Backend (Pluggable Pattern)
+### Transactional control state
 
-Storage access is abstracted behind the `StorageBackend` trait in `lib/storage/src/traits.rs`.
-HTTP handlers receive `Arc<dyn StorageBackend>`, never a raw `SqlitePool`.
+The following remain behind `StorageBackend` during transition and `ControlStore`/`ReceiptLog` in v2:
 
-```rust
-#[async_trait::async_trait]
-pub trait StorageBackend: Send + Sync + 'static {
-    async fn get_agent_by_token(&self, tenant_id: &str, token: &str)
-        -> Result<Option<AgentRecord>, AegisError>;
-    async fn insert_decision(&self, record: &DecisionRecord)
-        -> Result<(), AegisError>;
-    // ... all DB operations are trait methods
-}
-```
+- tenants, agents, identities, tool grants and policy generations;
+- approvals, edits, expiry, atomic consume, replay nonces and idempotency;
+- bans, quarantine, signed commands and acknowledgements;
+- protected decisions, receipt heads, signatures and checkpoints.
 
-### Rules:
-- **New DB operations** → add a method to `StorageBackend` trait + implement on `SqliteBackend`.
-- **Never use `sqlx::SqlitePool` directly** in handlers or service logic — always go through the trait.
-- **Future PostgreSQL backend** → implement the same trait on `PgBackend`.
+HCMT MUST NOT become authoritative for these until a separate accepted ADR proves the required transactional/linearizable semantics.
 
----
+### HCMT event state
 
-## 4. Type Ownership — Protobuf is the Source of Truth
+HCMT is for append-heavy telemetry and analytical projections: runtime events, prompt/model metadata, bulk audit projections, SOC timelines, facets, time series, deterministic scan candidates, vector codes and query indexes.
 
-All request/response types are defined as **Protocol Buffer messages** in `lib/api/proto/*.proto`.
-`build.rs` generates Rust code via `tonic-build` + `prost`. REST models derive from or mirror proto types.
-Both the binary (REST handlers + gRPC services) and the library crates import from `aegis-api`.
+During migration, event data moves through `sql → dual → shadow read → HCMT`. Integrity-field shadow mismatches must be exactly zero before cutover.
 
-### Rules:
-- **New API type?** → Define it as a protobuf message in `lib/api/proto/aegis.proto` first, then mirror in `models.rs` for REST JSON if needed.
-- **New DB record struct?** → Define it in `lib/api/src/records.rs` (DB records are internal, not on the wire).
-- **Never define types in handlers** that are used by lib crates — that creates upward dependencies.
-- **gRPC types are auto-generated.** Never hand-write types that `tonic-build` should produce.
-- **REST types mirror proto types** but may add `#[serde]` attributes for JSON compatibility.
+## 4. Dependency direction
 
----
-
-## 5. Dual-Protocol Handler Pattern — REST (Axum) + gRPC (tonic)
-
-Both REST handlers (`src/routes/`) and gRPC service impls (`src/grpc.rs`) call the **same service layer**.
-Neither contains business logic — they are thin protocol adapters.
-
-### REST Handler (Axum):
-```rust
-// src/routes/authorize.rs
-pub async fn authorize_action(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    let request: AuthorizeRequest = parse_or_400(&body)?;
-    let decision = state.policy_engine.authorize(&request)?;
-    let result = state.storage.insert_decision(&decision).await?;
-    Json(AuthorizeResponse::from(result))
-}
+```text
+common
+├── canon
+├── wire
+└── crypto
+    ↓
+policy     event → reactor
+    ↓         ↓
+decision   hcmt → query → soc
+    ↓                    ↓
+control-store        guardrails / containment
+    \____________________/
+             ↓
+      binaries and adapters
 ```
 
-### gRPC Service Impl (tonic):
-```rust
-// src/grpc.rs
-#[tonic::async_trait]
-impl aegis_proto::aegis_service_server::AegisService for AegisGrpcService {
-    async fn authorize(
-        &self,
-        request: tonic::Request<aegis_proto::AuthorizeRequest>,
-    ) -> Result<tonic::Response<aegis_proto::AuthorizeResponse>, tonic::Status> {
-        let req = request.into_inner();
-        // Call the SAME service layer as REST
-        let decision = self.state.policy_engine.authorize(&req.into())?;
-        let result = self.state.storage.insert_decision(&decision).await
-            .map_err(|e| tonic::Status::internal(e.to_string()))?;
-        Ok(tonic::Response::new(result.into()))
-    }
-}
+Exact allowed edges are in the [target DAG](../ARCHITECTURE.md#17-target-workspace-and-dependency-direction).
+
+Hard rules:
+
+- `aegis-policy` never depends on storage, networking, SOC or adapters.
+- `aegis-hcmt` never evaluates Cedar or mutates control state.
+- query code never mutates approvals, agents, commands or receipts.
+- service crates never depend on Axum handlers, tonic service implementations, WebSocket types or binaries.
+- binaries compose crates; library crates never import a binary.
+- all functions return `Result<T, AegisError>` or a narrower typed error convertible to it.
+- `cargo tree --workspace` must show an acyclic internal graph.
+
+### Transitional v1 edges
+
+Until extraction is complete, the current downward flow remains valid:
+
+```text
+aegis-common ← aegis-api ← aegis-storage / aegis-policy ← aegis-soc ← src binary
 ```
 
-### Rules:
-- Both protocols do THREE things: **parse → service call → respond**. Nothing else.
-- **REST and gRPC call the same `lib/` service methods.** No code duplication.
-- **No SQL queries in handlers or gRPC impls.** Call `state.storage.method()` instead.
-- **No Cedar evaluation in handlers or gRPC impls.** Call `state.policy_engine.authorize()` instead.
-- **Every new endpoint MUST be implemented on both REST and gRPC.**
-- **gRPC errors use `tonic::Status`; REST errors use `AegisError → IntoResponse`.**
+New code MUST move toward the target seams; it MUST NOT expand the existing 245-method storage trait or add new business logic to route modules when a focused service/trait can own it.
 
----
+## 5. Thin protocol adapters and dual protocol
 
-## 6. Configuration — YAML + Env Override (Qdrant Pattern)
+REST and gRPC adapters perform only:
 
-Configuration is loaded from `config/config.yaml` with env var overrides.
-
-```yaml
-storage:
-  backend: sqlite
-  sqlite:
-    path: ./aegis.db
-    busy_timeout_ms: 5000
-
-gateway:
-  host: "127.0.0.1"
-  rest_port: 8080           # Axum REST API
-  grpc_port: 6334           # tonic gRPC API (Qdrant uses 6334)
-  tls:
-    enabled: false
-    cert_path: null
-    key_path: null
-
-policy:
-  cedar_path: ./policies.cedar
+```text
+authenticate/parse → typed service call → typed error/response mapping
 ```
 
-### Rules:
-- **Config struct** lives in `src/settings.rs` (binary crate). Uses `config` crate with YAML + env layers.
-- **Never scatter env var reads** across lib crates. Config is loaded once at startup and passed down.
-- **Each lib crate accepts config via constructor parameters**, not by reading env vars internally.
-- **Both REST and gRPC ports are configurable.** Env overrides: `AEGIS_REST_PORT`, `AEGIS_GRPC_PORT`.
+- Public control types are protobuf-first in `lib/api/proto/` during transition and `lib/wire/proto/` in v2.
+- New public behavior is available through both REST and gRPC until an accepted deprecation ADR changes the contract.
+- REST models mirror protobuf and exist for compatibility, not as the internal domain model.
+- gRPC MUST NOT call a REST handler, buffer an Axum response body, or parse response JSON.
+- FlatBuffers is the internal high-rate telemetry frame, not a replacement for protobuf public control contracts.
+- Arrow IPC is the analytical result format; the browser WebSocket bridge preserves Arrow semantics but is not falsely described as standard Flight transport.
 
----
+No SQL, Cedar construction, action hashing, receipt creation, rule evaluation, webhook delivery, model inference or query planning belongs in a handler or RPC implementation.
 
-## 7. Error Types — `AegisError` in `aegis-common`
+## 6. Storage access
 
-All crates use a shared `AegisError` enum from `lib/common/src/errors.rs`:
+Current code uses `StorageBackend`; raw `SqlitePool`/`PgPool` is confined to `lib/storage/` implementations and tests. Target code uses consistency-specific traits:
 
-```rust
-#[derive(Debug, thiserror::Error)]
-pub enum AegisError {
-    #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
-    #[error("Policy evaluation failed: {0}")]
-    Policy(String),
-    #[error("Tenant not found: {0}")]
-    TenantNotFound(String),
-    #[error("Authentication failed")]
-    Unauthorized,
-    // ...
-}
+```text
+ControlStore   transactional control state
+ReceiptLog     ordered protected evidence
+EventStore     append/query telemetry
+ProjectionStore rebuildable derived state
 ```
 
-### Rules:
-- **Never use `anyhow` in library crates.** `anyhow` is for the binary only.
-- **All lib functions return `Result<T, AegisError>`**, never `Result<T, sqlx::Error>` directly.
-- **Handlers convert `AegisError` → HTTP status code** via `IntoResponse` impl.
+Every operation binds authenticated `tenant_id`. SQL is parameterized. Dynamic column/order choices use closed enums. No user string is interpolated into SQL.
 
----
+## 7. Hot-path restrictions
 
-## 8. Performance Rules (from `/v1/authorize` Latency Analysis)
+The target hot crates are `aegis-reactor`, `aegis-event`, `aegis-decision`, and `aegis-hcmt`. Their steady-state paths MUST NOT use:
 
-- **Parallelize independent DB reads** with `tokio::join!` (#1510).
-- **Debounce write-heavy heartbeats** (`touch_agent_last_seen`) to background batches (#1511).
-- **Fire-and-forget post-decision writes** that don't affect the response body (#1512).
-- **Cache rarely-changing config** (risk weights, tenant settings) with TTL (#1513).
-- **The inline path is sacred** — `POST /v1/authorize` has a <75ms budget (Law 3).
-- **Detection is asynchronous** — emit events via non-blocking channel, consume out-of-band.
+- `tokio::spawn`, work stealing or thread migration;
+- blocking `Mutex`/`RwLock`;
+- `serde_json::Value` or per-event JSON serialization;
+- SQL row inserts for normal telemetry;
+- unbounded memory/queue/retry/time behavior;
+- blocking DNS, KMS, webhook, model, filesystem or control-store work on a reactor core;
+- shared mutable domain objects across cores.
 
----
+Each hot reactor is a pinned owner thread. Cross-core transfer uses bounded SPSC descriptors or complete immutable generations. Producer/consumer cursors occupy separate 64-byte cache lines. Memory is NUMA-local by construction and measurement.
 
-## 9. Testing Patterns
+Tokio/JSON/locks may remain in bounded compatibility and administrative code outside the target performance envelope.
 
-- **Unit tests** live inside each lib crate's source files (`#[cfg(test)] mod tests { ... }`).
-- **Integration tests** live in the binary crate's `tests/` directory.
-- **E2E tests** (Playwright) live in `/e2e/` — test REST endpoints.
-- **gRPC integration tests** use `tonic::transport::Channel` to test the gRPC interface directly.
-- **Cross-language corpus tests** verify `aegis-jcs-1` byte parity across all SDKs.
-- **Proto contract tests** verify that `.proto` files and REST `models.rs` stay in sync.
-- **Verify commands** (must all pass before merge):
-  ```bash
-  cargo check --workspace
-  cargo test --workspace
-  cargo fmt --all -- --check
-  cargo clippy --workspace -- -D warnings
-  ```
+## 8. Wire, memory and unsafe rules
 
----
+- Generated FlatBuffer verification precedes field access.
+- Arrow schema fingerprint, dictionary generation, lengths, offsets and tenant range are verified.
+- “Zero-copy” claims name a boundary and include a copy/allocation ledger.
+- DMA, TLS, kernel/user, decompression, browser→WASM and CPU→GPU copies are not hidden.
+- Unsafe code is isolated, justified by `// SAFETY:`, differentially tested, fuzzed and covered by Miri/sanitizers; atomics also require Loom.
+- SIMD retains a scalar oracle and runtime capability selection.
+- Epoch pins never span I/O or uncontrolled duration.
 
-## 10. The Four Design Laws (NEVER violate)
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for mandatory review evidence.
 
-1. **Deterministic policy decides; scores never gate.** Cedar evaluates trust level. `risk_score` is advisory only.
-2. **The LLM investigates; it never decides.** Only the RCA narrator uses an LLM, sandboxed.
-3. **The inline path is sacred; detection is asynchronous.** `/v1/authorize` < 75ms. SOC is out-of-band.
-4. **Every moat primitive is preserved end-to-end.** `aegis-jcs-1` canonicalization, hash-bound approvals, hash-chained receipts.
+## 9. Guardrail authority
+
+- Aho-Corasick uses versioned identical normalization at compile and scan and runs in `O(n + z)` after compilation.
+- Automaton pattern bytes, states, resident memory and outputs are bounded.
+- HNSW/PQ reports recall against exact search; no false worst-case complexity claim is permitted.
+- ONNX sessions run on isolated inference cores with fixed inputs, queues and deadlines.
+- Models/codebooks are content-addressed and cannot be retrained by untrusted events.
+- Deterministic or semantic results may tighten, deny, quarantine or alert only through explicit policy; they never allow.
+
+## 10. eBPF law
+
+- Kernel/user ABI is versioned and layout-asserted.
+- Policy maps publish by signed atomic generation switch.
+- Commands bind tenant, node, key generation, nonce, expiry and monotonic control generation.
+- Unsupported hooks/kernels report reduced assurance; polling fallback is not equivalent containment.
+- Kernel programs enforce bounded cgroup/network/process/file facts, not arbitrary prompt parsing.
+- Ring loss and map update failure are security events.
+
+## 11. UI law
+
+- React owns controls and bounded semantic summaries.
+- WASM owns Arrow validation/transforms/LOD.
+- WebGL2 owns high-cardinality drawing; no component/DOM/SVG node per event point.
+- Streams are credit-bounded, cancelable and resumable.
+- Current browser→WASM ingestion permits one declared bounded copy; WebGL2 upload is also a declared copy.
+- Every canvas/WebGL workflow has keyboard and screen-reader-accessible semantics.
+
+## 12. Configuration
+
+Configuration is loaded once from `config/config.yaml` plus documented environment overrides, validated as a whole, and passed through constructors. Hot crates do not read environment variables.
+
+Current defaults remain loopback REST `8080` and gRPC `6334`. A qualified profile additionally validates non-overlapping core roles, online CPUs, NUMA topology, queue/memory budgets, durability class, eBPF capabilities and query limits.
+
+## 13. Tests required before cutover
+
+Run current workspace gates:
+
+```bash
+cargo check --workspace
+cargo test --workspace -- --test-threads=1
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo tree --workspace
+```
+
+Stateful/performance components additionally require:
+
+- cross-language canonical/receipt/wire differential corpora;
+- approval/replay/tenant concurrency tests;
+- WAL/segment/manifest crash and corruption injection;
+- SQL versus HCMT shadow equality;
+- Loom, Miri, fuzz and sanitizer coverage for unsafe/concurrency;
+- raw p50/p95/p99/p99.9 histograms with coordinated-omission correction;
+- allocation, copy, migration, cache/branch/NUMA and write-amplification evidence;
+- rollback exercised from a built release artifact.
+
+## Security and failure stance
+
+Unknown identity, tenant, schema, policy generation, trust value, approval state, receipt state, command generation or storage integrity fails closed. Normal telemetry may be rejected or replayed according to its declared class; protected execution may not be acknowledged without its required commit. Semantic/model failure degrades enrichment only. Reduced eBPF capability is reported as reduced assurance, not silently treated as equivalent enforcement.
+
+## Operations
+
+Operators must be able to observe queue occupancy, rejection/spool state, control-generation propagation, protected commit latency, WAL/manifest health, compaction debt, query budgets, guardrail lag, eBPF loss/capability, browser stream credit and receipt verification. Every stateful cutover includes per-tenant generation, shadow mismatch telemetry, rollback command and recovery runbook.
+
+## 14. Documentation and ADR rule
+
+Core reactor, storage ABI, wire schema, control consistency, guardrail authority, eBPF, unsafe/SIMD, browser memory, durability or performance changes require an ADR before implementation. Update the HLD, LLD, migration matrix, implementation status and operator docs in the same change when their contract changes.
+
+Historical ADRs are not rewritten to pretend a previous decision never existed; supersede them with a new ADR and explicit migration.
+
+## References
+
+- [Target High-Level Architecture](../ARCHITECTURE.md)
+- [Target Low-Level Design](LLD.md)
+- [Migration Matrix](../MIGRATION_MATRIX.md)
+- [Contribution Standard](../CONTRIBUTING.md)
+- [Implementation Status](Implementation_Status.md)
+- [Measured Performance Baseline](performance-baseline.md)
+- [ADR Index](adr/index.md)

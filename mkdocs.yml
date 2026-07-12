@@ -149,6 +149,8 @@ nav:
           - Receipt chain verification: runbooks/receipt-chain-verification.md
           - Secret rotation: runbooks/secret-rotation.md
   - Architecture:
+      - Mandatory architecture law: architecture.md
+      - Target low-level design: LLD.md
       - Technical design: AegisAgent_Technical_Design.md
       - Agent workflow: AegisAgent_Agent_Workflow.md
       - Threat model: AegisAgent_Threat_Model.md

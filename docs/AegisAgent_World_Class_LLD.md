@@ -1,972 +1,1030 @@
-# AegisAgent World-Class LLD
+# AegisAgent Performance-First Low-Level Design
 
-**Status:** target low-level design proposal  
-**Date:** 2026-06-28  
-**Scope:** architecture and implementation plan; not a full implementation PR
+**Status:** normative implementation blueprint; target items require code, tests, and benchmark proof
 
----
+**Last reviewed:** 2026-07-12
+**Companion:** [Performance-First HLD](AegisAgent_World_Class_HLD.md)
 
-## 1. Current implementation baseline
+> This LLD optimizes execution speed without weakening action hashing, approval binding, replay protection, tenant isolation, or durable receipts. “Maximum efficiency” means the minimum coordination compatible with those invariants, inside a measured capacity envelope.
 
-The active root is already a Cargo workspace (the single-`gateway/`-crate MVP has
-been migrated; the workspace migration steps in §19 are largely **done**):
+## Overview
 
-- Workspace members: `src` (binary crate `gateway`), `src/canon`, and
-  `lib/{common,api,storage,policy,soc}`. A leftover `gateway/` directory may exist
-  on disk but is **not** a workspace member.
-- `src/src/routes/` is split into focused modules — `authorize.rs`,
-  `authorize_canon.rs`, `authorize_decision.rs`, `authorize_receipts.rs`,
-  `approval.rs`, `receipts.rs`, `soc.rs`, `mcp.rs`, `tenant.rs`, `policy.rs`,
-  `webhooks.rs`, `graph.rs`, `agents.rs`, `dashboard.rs`, plus `mod.rs` (AppState,
-  extractors, caches). `src/src/main.rs` builds the router, middleware stack,
-  startup gates (JWT/public-bind/admin), and background jobs.
-- `lib/api`: strongly-typed request/response + record models (`AuthorizeRequest`,
-  `AuthorizeResponse` incl. inline `receipt`, `ApprovalRecord` with
-  `effective_call_hash`, `ActionReceiptRecord`, SOC records, `EventEvidence`, …)
-  and the gRPC proto types.
-- `lib/storage`: the `StorageBackend` trait (~150 methods) with one SQLite/Postgres
-  implementation (`SqlDbStorage`), SQLx versioned migrations
-  (`migrations/0001…0025`, `migrations_postgres/0001…0004`), tenant-scoped queries,
-  WAL/busy-timeout config, atomic receipt-chain append, audit batching, and the
-  DB-backed replay-nonce store.
-- `lib/policy`: Cedar engine with `@decision`/`@approver_group`/`@id` annotations,
-  per-tenant policy sets, fail-closed reload.
-- `lib/soc`: async events/detect/correlate/respond/notify/backtest/qdrant.
-- `sdk-python`, `sdk-typescript`, `sdk-go`: all active with shared JCS-1 corpus.
+This document translates the HLD into concrete Rust ownership, request stages, data structures, algorithms, database transactions, indexes, API contracts, queue policies, and rollout gates.
 
-This LLD specifies the **next** layer: runtime data-plane crates/binaries
-(sensor, cage, egress, broker), the runtime event/command schemas, and the
-ban/quarantine/evidence-graph models — built as *separate* binaries, never folded
-into the gateway.
+The central implementation unit is a shared `AuthorizationService`. REST on port 8080 and gRPC on port 6334 are adapters around that service. The service takes one immutable tenant snapshot, evaluates one deterministic decision, and assigns one durability class.
 
----
+### Current and target boundary
 
-## 2. Target Rust workspace/crate layout
+| Area | Current | Target in this LLD |
+|---|---|---|
+| Workspace DAG | Layered `lib/` crates plus thin binary rule | Preserve exactly |
+| REST authorize | Implemented | Thin adapter to shared service |
+| gRPC authorize | Implemented, but protected receipt parity is incomplete in proto | Proto-first receipt parity and contract tests |
+| Independent reads | `tokio::join!` used for permission/idempotency | Generalize only where dependencies are proven independent |
+| Caches | Bounded skill/MCP/hash/replay/risk caches | Immutable tenant control snapshot with generation fences |
+| Replay | In-memory option and durable DB option | Durable store required for multi-replica production |
+| Receipts | Atomic append; protected synchronous, low-risk allow asynchronous | Preserve; combine protected writes into the shortest safe transaction |
+| SOC | Bounded non-blocking event path | Priority-separated bounded evidence lanes |
+| Storage | SQLite and partial PostgreSQL implementation | PostgreSQL qualification gate before HA/multi-replica claim |
+
+The authoritative capability status remains [Implementation Status](Implementation_Status.md).
+
+## Why This Exists
+
+An HLD can say “use a cache” or “process asynchronously” without answering the dangerous questions: which values are safe to cache, how revocation invalidates them, which queue may drop, what transaction owns the receipt chain head, or how REST and gRPC remain identical. This LLD removes those ambiguities.
+
+## Problem Statement
+
+The authorize path combines CPU work, indexed reads, conditional writes, and security checks. Naively serializing all of them wastes latency. Naively parallelizing all of them wastes database capacity. Naively caching all of them makes revocation unsafe.
+
+The implementation must therefore:
+
+- keep reader synchronization O(1) and avoid global write locks;
+- execute only independent reads concurrently;
+- never cache a final decision;
+- make idempotency and replay atomic across replicas;
+- serialize receipt-chain updates at the narrowest tenant boundary;
+- bound memory, queue time, request time, and DB wait;
+- preserve one semantic API across REST and gRPC.
+
+## Solution
+
+### Selected implementation pattern
+
+Use five cooperating primitives:
+
+1. `ArcSwap`-style immutable `TenantControlSnapshot` publication.
+2. A fair, bounded admission semaphore before expensive work.
+3. Structured concurrency with one request cancellation/deadline context.
+4. `StorageBackend` transactions for idempotency, replay, approval, and protected receipt integrity.
+5. Tenant-hashed bounded writer shards for non-critical evidence.
+
+`ArcSwap` names the intended semantics; the exact crate must pass dependency and security review. A standard `RwLock<Arc<_>>` may be used initially, benchmarked, and replaced only if lock contention is measured.
+
+### Developer decision rules
 
 ```text
-AegisAgent/
-  Cargo.toml                         # workspace root
-  crates/
-    aegis-common/                    # IDs, errors, canonicalization, crypto helpers, redaction
-    aegis-api/                       # strongly typed API models + OpenAPI schemas
-    aegis-storage/                   # SQLx traits + SQLite/Postgres implementations + migrations
-    aegis-policy/                    # Cedar wrapper, policy bundles, ban/quarantine inputs
-    aegis-receipts/                  # receipt hashing, chain append, verification, checkpoints
-    aegis-events/                    # runtime event schema, ingestion batching, dedupe
-    aegis-control-protocol/          # signed command schema + verification
-    aegis-egress-policy/             # domain/CIDR rule matching
-    aegis-tool-broker-core/          # tool broker abstractions and built-in tool contracts
-    aegis-soc/                       # detections, incidents, evidence graph, evidence packs
-  bins/
-    aegis-gateway/
-    aegis-node-sensor/
-    aegis-cage-runner/
-    aegis-egress-proxy/
-    aegis-tool-broker/
-    aegis-mcp-gateway/
-  sdk-python/
-  sdk-typescript/
-  sdk-go/
-  ui/                                # aegis-console
-  docs/
-  tests/
-  helm/
-  docker/
-  .github/workflows/
+Does the value change the current allow/deny/approval result?
+├─ yes → read from the same validated snapshot generation or authoritative transaction
+└─ no  → it may be asynchronously produced after the decision
+
+Would losing the write invalidate approval, replay, or protected evidence?
+├─ yes → synchronous durable transaction; failure is fail closed
+└─ no  → bounded queue with explicit overflow telemetry
 ```
 
-Migration principle: extract stable, tested modules from the current `gateway` crate first; do not rewrite behavior and refactor simultaneously.
-
----
-
-## 3. Binary layout
-
-| Binary | Main role | Runtime profile |
-|---|---|---|
-| `aegis-gateway` | Control plane API, policy, approvals, receipts, SOC APIs | stateless-ish Axum service; Postgres prod, SQLite dev |
-| `aegis-node-sensor` | Runtime telemetry and local control enforcement | Linux service, Kubernetes DaemonSet, CI sidecar |
-| `aegis-cage-runner` | Disposable sandbox executor | Docker first; gVisor/Firecracker/Kata/Kubernetes later |
-| `aegis-egress-proxy` | Network egress decision point | transparent/HTTP CONNECT/DNS proxy modes |
-| `aegis-tool-broker` | Credential/API/tool execution broker | plugin-like connectors; no raw creds to agents |
-| `aegis-mcp-gateway` | MCP choke point | MCP client/server proxy and manifest trust enforcement |
-| `aegis-console` | SOC/approval/control UI | Next.js/React frontend or static SPA backed by gateway APIs |
-
----
-
-## 4. API route design
-
-### 4.1 Existing routes to preserve
-
-- `POST /v1/authorize`
-- `POST /v1/agents/register`
-- `POST /v1/tools`
-- `POST /v1/mcp/servers`
-- `GET|POST /v1/mcp/servers/:server_key/tools`
-- `POST /v1/mcp/servers/:server_key/tools/:tool_key/approve`
-- `POST /v1/mcp/servers/:server_key/tools/:tool_key/disable`
-- `GET /v1/approvals/:id`
-- `POST /v1/approvals/:id/approve`
-- `POST /v1/approvals/:id/reject`
-- `POST /v1/approvals/:id/edit`
-- `POST /v1/approvals/:id/consume`
-- `GET /v1/runs/:id/timeline`
-- `GET /v1/audit/events`
-- `GET /v1/receipts/:id/verify`
-
-### 4.2 Required target routes
-
-#### Authorization and ingest
-
-```http
-POST /v1/authorize
-POST /v1/ingest/runtime-events
-POST /v1/ingest/prompt-events
-POST /v1/ingest/model-calls
-```
-
-#### Control commands
-
-```http
-POST /v1/control/commands
-GET  /v1/control/commands/:id
-POST /v1/control/commands/:id/ack
-```
-
-#### Agent cage runs
-
-```http
-POST /v1/agent-cage/runs
-GET  /v1/agent-cage/runs
-GET  /v1/agent-cage/runs/:id
-POST /v1/agent-cage/runs/:id/pause
-POST /v1/agent-cage/runs/:id/resume
-POST /v1/agent-cage/runs/:id/kill
-POST /v1/agent-cage/runs/:id/quarantine
-GET  /v1/agent-cage/runs/:id/timeline
-```
-
-#### Bans and quarantine
-
-```http
-POST /v1/bans
-GET  /v1/bans
-GET  /v1/bans/:id
-POST /v1/bans/:id/revoke
-GET  /v1/quarantine
-GET  /v1/quarantine/:id
-POST /v1/quarantine/:id/release
-POST /v1/quarantine/:id/delete
-```
-
-#### Runtime and SOC
-
-```http
-GET  /v1/runtime/events
-GET  /v1/runtime/runs/:id/events
-GET  /v1/runtime/runs/:id/graph
-POST /v1/soc/query
-```
-
-#### Receipts
-
-```http
-GET  /v1/receipts/:id/verify
-POST /v1/receipts/verify-chain
-POST /v1/receipts/verify-range
-GET  /v1/receipts/chain-head
-GET  /v1/receipts/:id/proof
-```
-
-#### Tool broker
-
-```http
-POST /v1/tool-broker/execute
-GET  /v1/tool-broker/tools
-POST /v1/tool-broker/tools/:id/disable
-POST /v1/tool-broker/tools/:id/enable
-```
-
-#### Egress
-
-```http
-POST /v1/egress/check
-GET  /v1/egress/events
-POST /v1/egress/block
-POST /v1/egress/unblock
-```
-
-### 4.3 API standards
-
-- All tenant-owned APIs require authenticated tenant context.
-- `tenant_id` must be server-derived where possible, not trusted from body.
-- Every write accepts an idempotency key where replay is plausible.
-- All list APIs use cursor pagination.
-- Error bodies use a typed shape: `{ code, message, request_id, details }`.
-- All destructive operations require actor identity, reason, authorization, audit event, and receipt.
-
----
-
-## 5. Storage table design
-
-Production uses Postgres. Local/dev may use SQLite. Every tenant-owned table includes `tenant_id` unless explicitly global/admin-only.
-
-### 5.1 Core identity and runtime tables
-
-```sql
--- tenants(id, name, plan, status, created_at, updated_at)
--- agents(id, tenant_id, agent_key, agent_token_hash, name, owner_team, environment,
---        framework, model_provider, model_name, risk_tier, status, created_at, updated_at)
--- agent_runs(id, tenant_id, agent_id, run_key, source_component, mode, status,
---            started_at, finished_at, root_trace_id, root_trust_level, policy_bundle_id)
--- agent_sandboxes(id, tenant_id, run_id, sensor_node_id, sandbox_type, sandbox_runtime,
---                 image_digest, workspace_path_hash, network_mode, status, created_at, destroyed_at)
--- agent_fingerprints(id, tenant_id, agent_id, run_id, fingerprint_type, fingerprint_value,
---                    confidence, first_seen_at, last_seen_at)
--- sensor_nodes(id, tenant_id, node_key, hostname, environment, version, public_key,
---              mode, status, registered_at, last_seen_at)
--- sensor_heartbeats(id, tenant_id, sensor_node_id, observed_at, received_at,
---                   mode, queue_depth, disk_used_bytes, running_runs, config_version)
-```
-
-### 5.2 Event tables
-
-```sql
--- runtime_events(id, tenant_id, event_id, agent_id, run_id, sandbox_id, trace_id,
---                parent_event_id, observed_at, received_at, event_type, severity,
---                source_component, source_trust, decision, reason, action_hash,
---                prompt_hash, request_hash, response_hash, receipt_id, receipt_hash,
---                prev_receipt_hash, canonical_version, redaction_status, schema_version,
---                event_json, dedupe_key)
--- prompt_events(id, tenant_id, event_id, run_id, trace_id, prompt_hash,
---               redacted_prompt_preview, role, source_trust, model_provider,
---               retention_policy, redaction_status, created_at)
--- model_call_events(id, tenant_id, event_id, run_id, trace_id, provider, model,
---                   request_hash, response_hash, started_at, finished_at,
---                   token_counts_json, status, redaction_status)
--- tool_call_events(id, tenant_id, event_id, run_id, trace_id, tool_name, action,
---                  resource, action_hash, decision, approval_id, receipt_id, created_at)
--- api_call_events(id, tenant_id, event_id, run_id, trace_id, api_category,
---                 method, resource_hash, action_hash, decision, receipt_id, created_at)
--- egress_events(id, tenant_id, event_id, run_id, sandbox_id, destination_domain,
---               destination_ip, destination_port, protocol, sni, http_method,
---               url_hash, bytes_sent, bytes_received, decision, rule_id, reason,
---               receipt_id, created_at)
-```
-
-Indexes:
-
-- `(tenant_id, event_id)` unique for dedupe.
-- `(tenant_id, run_id, observed_at)` for timelines.
-- `(tenant_id, trace_id)` for causal tracing.
-- `(tenant_id, action_hash)` and `(tenant_id, prompt_hash)` for lineage.
-- Time partitions for `runtime_events` and `egress_events` in Postgres.
-
-### 5.3 Approval, policy, receipt, SOC tables
-
-```sql
--- decisions(id, tenant_id, request_id, agent_id, run_id, trace_id, skill, action,
---           resource, action_hash, source_trust, decision, risk_score,
---           reason, matched_policy_ids, policy_bundle_id, created_at)
--- approvals(id, tenant_id, decision_id, status, approver_group, approver_user_id,
---           reason, original_skill_call, original_call_hash, edited_skill_call,
---           expires_at, decided_at, consumed_at, nonce, created_at)
--- approval_revisions(id, tenant_id, approval_id, revision_no, actor, revision_type,
---                    canonical_action, action_hash, reason, created_at)
--- policy_bundles(id, tenant_id, bundle_key, version, language, body, compiled_hash,
---                status, created_by, created_at, activated_at, rolled_back_at)
--- receipts(id, tenant_id, event_id, decision_id, agent_id, run_id, tool, action,
---          resource, action_hash, prompt_hash, source_trust, decision, approver,
---          actor, prev_receipt_hash, receipt_hash, canonical_version, signature,
---          signer_key_id, timestamp, created_at)
--- receipt_checkpoints(id, tenant_id, sequence_start, sequence_end, chain_head_hash,
---                     merkle_root, signature, signer_key_id, created_at)
--- incidents(id, tenant_id, incident_key, severity, status, title, summary,
---           first_event_id, last_event_id, opened_at, closed_at, assigned_to)
--- incident_evidence_edges(id, tenant_id, incident_id, from_node_id, to_node_id,
---                         edge_type, confidence, created_at)
--- evidence_packs(id, tenant_id, incident_id, requested_by, status, range_start,
---                range_end, object_uri, manifest_hash, receipt_checkpoint_id, created_at)
-```
-
-### 5.4 Control, ban, and quarantine tables
-
-```sql
--- control_commands(id, tenant_id, command_id, target_type, target_id, action,
---                  reason, issued_by, issued_at, expires_at, nonce, payload_json,
---                  requires_ack, receipt_required, signature, status, created_at)
--- control_action_results(id, tenant_id, command_id, sensor_node_id, status,
---                        acked_at, executed_at, error_code, error_message,
---                        result_json, receipt_id)
--- agent_bans(id, tenant_id, target_type, target_value, target_hash,
---            scope, reason, actor, status, starts_at, expires_at,
---            incident_id, receipt_id, created_at, revoked_at)
--- quarantine_records(id, tenant_id, target_type, target_id, run_id, incident_id,
---                    reason, actor, status, preservation_uri, created_at,
---                    released_at, deleted_at, receipt_id)
-```
-
-### 5.5 Tool/MCP and egress tables
-
-```sql
--- tools(id, tenant_id, tool_key, name, type, owner_team, auth_type, status, created_at)
--- tool_actions(id, tenant_id, tool_id, action_key, risk, mutates_state,
---              data_access, approval_required, default_decision, created_at)
--- broker_tools(id, tenant_id, tool_name, connector_type, credential_ref,
---              status, allowed_scopes_json, created_at)
--- mcp_servers(id, tenant_id, server_key, name, transport, endpoint, trust_level,
---             manifest_hash, status, inspection_enabled, created_at, updated_at)
--- mcp_tools(id, tenant_id, server_id, tool_key, name, input_schema,
---           risk, mutates_state, approval_required, status, created_at, updated_at)
--- egress_rules(id, tenant_id, scope_type, scope_id, rule_type, pattern,
---              action, priority, reason, created_by, created_at, expires_at)
-```
-
----
-
-## 6. Runtime event schema design
-
-### 6.1 Common event envelope
-
-```json
-{
-  "event_id": "evt_...",
-  "tenant_id": "tenant_...",
-  "agent_id": "agent_...",
-  "run_id": "run_...",
-  "sandbox_id": "sandbox_...",
-  "trace_id": "trace_...",
-  "parent_event_id": "evt_parent",
-  "observed_at": "2026-06-28T12:00:00Z",
-  "received_at": "2026-06-28T12:00:01Z",
-  "event_type": "tool_call_requested",
-  "severity": "info|low|medium|high|critical",
-  "source_component": "sdk|node_sensor|cage_runner|egress_proxy|tool_broker|mcp_gateway|gateway",
-  "source_trust": "trusted_internal_signed|trusted_internal_unsigned|semi_trusted_customer|untrusted_external|malicious_suspected|unknown",
-  "decision": "allow|deny|require_approval|block|flag|none",
-  "reason": "human-readable deterministic reason",
-  "action_hash": "sha256hex-or-null",
-  "prompt_hash": "sha256hex-or-null",
-  "request_hash": "sha256hex-or-null",
-  "response_hash": "sha256hex-or-null",
-  "receipt_id": "rcpt-or-null",
-  "receipt_hash": "sha256hex-or-null",
-  "prev_receipt_hash": "sha256hex-or-null",
-  "canonical_version": "aegis-jcs-1",
-  "redaction_status": "redacted|hash_only|none|failed_closed",
-  "schema_version": 1,
-  "payload": {}
-}
-```
-
-### 6.2 Supported `event_type` values
-
-- `agent_run_started`
-- `agent_run_finished`
-- `prompt_observed`
-- `model_call_started`
-- `model_call_finished`
-- `tool_call_requested`
-- `tool_call_allowed`
-- `tool_call_denied`
-- `api_call_requested`
-- `mcp_tool_call`
-- `process_started`
-- `process_exited`
-- `shell_command`
-- `file_read`
-- `file_write`
-- `file_delete`
-- `secret_access_attempt`
-- `env_access_attempt`
-- `network_connect`
-- `dns_query`
-- `http_request`
-- `package_install`
-- `browser_action`
-- `credential_use_attempt`
-- `egress_allowed`
-- `egress_blocked`
-- `policy_decision`
-- `approval_required`
-- `approval_approved`
-- `approval_rejected`
-- `approval_consumed`
-- `receipt_emitted`
-- `control_command_received`
-- `control_action_executed`
-- `run_paused`
-- `run_killed`
-- `agent_frozen`
-- `agent_banned`
-- `workspace_quarantined`
-- `incident_created`
-
----
-
-## 7. Control command schema
-
-```json
-{
-  "command_id": "cmd_...",
-  "tenant_id": "tenant_...",
-  "target_type": "sensor|run|sandbox|agent|workspace|mcp_server|tool|destination|credential",
-  "target_id": "target identifier",
-  "action": "kill_run",
-  "reason": "policy or admin reason",
-  "issued_by": "user/system identity",
-  "issued_at": "2026-06-28T12:00:00Z",
-  "expires_at": "2026-06-28T12:05:00Z",
-  "nonce": "base64url-random-128-bit",
-  "requires_ack": true,
-  "receipt_required": true,
-  "payload": {},
-  "canonical_version": "aegis-command-jcs-1",
-  "signature": "ed25519:base64url(signature)"
-}
-```
-
-Command types:
-
-- `start_run`, `pause_run`, `resume_run`, `kill_run`
-- `snapshot_workspace`, `quarantine_workspace`, `release_workspace`
-- `ban_agent`, `unban_agent`, `ban_fingerprint`, `unban_fingerprint`
-- `freeze_agent`, `unfreeze_agent`
-- `revoke_token`, `rotate_token`
-- `block_destination`, `unblock_destination`
-- `disable_tool`, `enable_tool`
-- `quarantine_mcp_server`, `restore_mcp_server`
-- `collect_evidence`
-- `update_policy`, `update_sensor_config`
-
----
-
-## 8. Runtime event ingestion path
+## Architecture
 
 ```mermaid
-flowchart TD
-    Source[Sensor/Proxy/Broker/MCP/SDK] --> Local[Local bounded queue]
-    Local --> Spool[Durable WAL/spool]
-    Spool --> Batch[Batcher]
-    Batch --> HTTP[POST /v1/ingest/runtime-events]
-    HTTP --> Auth[Authenticate sender and tenant]
-    Auth --> Validate[Schema validate and redact]
-    Validate --> Dedupe[Dedupe by tenant_id/event_id]
-    Dedupe --> Queue[Gateway bounded ingest queue]
-    Queue --> Store[Batch insert]
-    Store --> Correlate[SOC correlation]
-    Store --> Timeline[Timeline DAG indexes]
-    Store --> Receipt[Receipt link where applicable]
-    HTTP --> Ack[ACK accepted event_ids]
+flowchart LR
+    Adapter[REST/gRPC Adapter] --> Gate[AdmissionPermit]
+    Gate --> Service[AuthorizationService]
+    Service --> Deadline[RequestDeadline]
+    Service --> Snap[TenantSnapshotStore]
+    Service --> Policy[PolicyEngine]
+    Service --> Storage[StorageBackend]
+    Service --> Durable[ProtectedCommitService]
+    Service --> Sink[EvidenceSink]
+    Durable --> Storage
+    Sink --> Shards[WriterShard array]
+    Shards --> Storage
 ```
 
-Properties:
+The adapter cannot call `PolicyEngine` or storage directly. `AuthorizationService` owns orchestration. Policy remains storage-independent. The protected commit boundary is visibly different from best-effort evidence.
 
-- Bounded MPSC queues inside gateway.
-- Backpressure before memory grows unbounded.
-- Batch inserts with idempotency.
-- Dedupe by `(tenant_id, event_id)`.
-- Ordering by `(tenant_id, run_id, sequence_no, observed_at)` where sensors provide sequence.
-- Watermarks per sensor/run for replay progress.
-- Critical events never silently dropped; non-critical events can be sampled only by explicit policy.
+## Component Breakdown
 
----
+### Crate ownership
 
-## 9. Local durable sensor queue design
+| Type/logic | Owner | Forbidden dependency |
+|---|---|---|
+| `AegisError`, hashing helpers, bounded metric labels | `aegis-common` | All project crates |
+| Protobuf messages, REST mirrors, records | `aegis-api` | Storage, policy, SOC, binary |
+| `StorageBackend`, SQL, transactions, migrations | `aegis-storage` | Policy, SOC, binary |
+| Cedar compilation/evaluation, trust validation | `aegis-policy` | Storage and binary |
+| Detection/correlation/export | `aegis-soc` | Policy and binary business logic |
+| Composition, config, Axum/tonic adapters | `src/` binary | Business logic accumulation |
 
-The node sensor maintains an append-only local spool.
+Every library function returns `Result<T, AegisError>`. Production paths do not use `unwrap()` or `expect()`.
 
-### 9.1 File layout
+### Service contract
+
+```rust
+pub struct AuthorizationContext {
+    pub tenant_id: TenantId,
+    pub peer: PeerIdentity,
+    pub protocol: Protocol,
+    pub deadline: Instant,
+    pub trace: TraceContext,
+}
+
+#[async_trait::async_trait]
+pub trait AuthorizationService: Send + Sync {
+    async fn authorize(
+        &self,
+        ctx: AuthorizationContext,
+        request: AuthorizeRequest,
+    ) -> Result<AuthorizeResponse, AegisError>;
+}
+```
+
+Line-by-line intent:
+
+- `tenant_id` is established by authenticated transport context, not trusted from an arbitrary body alone.
+- `peer` captures verified token or mTLS identity without logging the credential.
+- `protocol` enables bounded metrics, not different behavior.
+- `deadline` is created once and inherited by every child operation.
+- the trait makes both adapters call the same implementation.
+
+## Data Flow
+
+### Request-stage pipeline
+
+| Order | Stage | Input | Output | Can run concurrently? | Failure behavior |
+|---:|---|---|---|---|---|
+| 1 | Frame validation | bytes/protobuf | typed request | No | 400 / `INVALID_ARGUMENT` |
+| 2 | Admission | tenant class + permit pool | permit | No | 429 / `RESOURCE_EXHAUSTED` |
+| 3 | Identity | tenant + credential | `AgentRecord` | Limited | fail closed |
+| 4 | Static restrictions | agent + environment | validated context | No | deterministic deny |
+| 5 | Permission + idempotency | agent, tool, request_id | two read results | Yes, independent |
+| 6 | Replay claim | nonce + timestamp | unique claim | No; atomic | conflict/fail closed |
+| 7 | Final mutation hook | typed action | final typed action | No | configured fail closed/open policy; must precede hash |
+| 8 | Normalize/canonicalize | final action | canonical bytes + hash | CPU task | fail closed |
+| 9 | Snapshot load | tenant | `Arc<TenantControlSnapshot>` | O(1) | fail closed if none valid |
+| 10 | Policy evaluation | facts + snapshot | deterministic decision | CPU task | fail closed |
+| 11 | Durability classification | decision + action metadata | class | No | conservative/protected on ambiguity |
+| 12 | Commit/enqueue | record set | receipt or enqueue outcome | Class-dependent | protected fails closed |
+
+No stage may start detached work that outlives cancellation unless it transfers ownership to a bounded, monitored background service.
+
+## Request Flow
+
+```mermaid
+sequenceDiagram
+    participant A as Adapter
+    participant S as AuthorizationService
+    participant DB as StorageBackend
+    participant SS as SnapshotStore
+    participant P as PolicyEngine
+    participant E as EvidenceSink
+    A->>S: authorize(ctx, request)
+    S->>S: validate deadline and static fields
+    par permission
+        S->>DB: agent_tool_permission_status
+    and idempotency
+        S->>DB: get_decision_by_request_id
+    end
+    S->>DB: check_and_insert_replay_nonce (when configured)
+    S->>S: final mutation → normalize → JCS hash
+    S->>SS: load tenant generation
+    S->>P: evaluate immutable facts
+    alt protected
+        S->>DB: commit_protected_decision
+        DB-->>S: committed receipt
+    else ordinary
+        S->>E: try_emit
+    end
+    S-->>A: response
+```
+
+## Control Flow
+
+### Snapshot lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Absent
+    Absent --> Building: first request / warmup
+    Building --> Active: validation succeeds
+    Building --> Failed: invalid bundle or timeout
+    Active --> BuildingNext: generation invalidated
+    BuildingNext --> Active: atomic swap to N+1
+    BuildingNext --> Active: build fails; retain N and alert
+    Active --> Fenced: emergency revocation ahead of local generation
+    Fenced --> Active: required generation installed
+    Active --> Evicted: idle and not pinned
+    Evicted --> Building
+```
+
+An emergency generation fence denies affected operations until the replica installs the required generation. A normal refresh never blocks readers and never mutates an active snapshot.
+
+## Sequence Diagram
+
+### Protected commit
+
+```mermaid
+sequenceDiagram
+    participant S as AuthorizationService
+    participant TX as DB Transaction
+    participant H as Tenant Receipt Head
+    S->>TX: begin
+    TX->>TX: insert decision (idempotency unique key)
+    opt require_approval
+        TX->>TX: insert approval bound to effective action_hash
+    end
+    TX->>H: lock/read last receipt hash
+    H-->>TX: prev_receipt_hash
+    TX->>TX: canonical receipt body + SHA-256
+    TX->>TX: insert receipt
+    TX->>TX: commit
+    TX-->>S: decision + approval? + receipt
+```
+
+All rows use the same `tenant_id`. The lock is tenant-scoped and held only while the receipt body is hashed and inserted. Compiling policy, calling webhooks, rendering JSON, and SOC work are forbidden inside the transaction.
+
+## State Diagram
+
+### Approval lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Approved: authorized approver + before expiry
+    Pending --> Rejected: authorized approver
+    Pending --> Expired: clock >= expires_at
+    Approved --> Consumed: atomic hash match + single consume
+    Approved --> Expired: not consumed before expiry
+    Pending --> Pending: edit creates effective_call_hash
+    Rejected --> [*]
+    Expired --> [*]
+    Consumed --> [*]
+```
+
+Consume is a compare-and-set operation. The predicate includes tenant, approval ID, `status='approved'`, `consumed_at IS NULL`, unexpired time, and effective action hash equality.
+
+## Class Diagram
+
+```mermaid
+classDiagram
+    class TenantSnapshotStore {
+      +load(TenantId) Arc~TenantControlSnapshot~
+      +publish(TenantId, Snapshot) Result
+      +fence(TenantId, Generation)
+    }
+    class TenantControlSnapshot {
+      +Generation generation
+      +Arc~CompiledPolicy~ policy
+      +HashMap tool_actions
+      +HashMap mcp_servers
+      +RevocationEpoch revocation_epoch
+    }
+    class ProtectedCommitService {
+      +commit(ProtectedDecision) CommitResult
+    }
+    class EvidenceSink {
+      <<interface>>
+      +try_emit(EvidenceEvent) EmitResult
+    }
+    class WriterShard {
+      +Sender queue
+      +run()
+    }
+    TenantSnapshotStore o-- TenantControlSnapshot
+    ProtectedCommitService --> StorageBackend
+    EvidenceSink o-- WriterShard
+```
+
+## Deployment Architecture
+
+At one replica, an in-process snapshot store and writer-shard array minimize hops. At multiple replicas, PostgreSQL is authoritative; a notification channel accelerates invalidation, but every control generation remains queryable from PostgreSQL so missed notifications recover. Runtime telemetry may use a durable external bus only after measured need.
+
+Read replicas are forbidden for identity revocation, quarantine, nonce claims, approval consume, policy generation fences, and receipt-chain heads.
+
+## Folder Structure
+
+Target changes preserve the existing Qdrant-inspired layout:
 
 ```text
-/var/lib/aegis/sensor/
-  config.toml
-  identity.json
-  spool/
-    lane-critical/
-      00000001.segment
-      00000002.segment
-    lane-normal/
-      00000001.segment
-    lane-debug/
-      00000001.segment
-  ack/
-    watermarks.json
-  replay-cache/
-    command-nonces.bin
+lib/api/proto/aegis.proto             # add receipt contract first
+lib/api/src/models.rs                 # REST mirror generated/reconciled with proto
+lib/storage/src/traits.rs             # transaction-oriented trait additions
+lib/storage/src/sqlite/               # SQLite implementation details
+lib/storage/src/postgres/             # PostgreSQL implementation details
+lib/policy/src/                       # pure compiled policy and validation
+src/src/services/authorization.rs     # target orchestration service
+src/src/routes/authorize.rs           # thin REST adapter
+src/src/grpc.rs                       # thin gRPC adapter
+src/src/background/evidence_writer.rs # bounded consumers
+benches/authorize_benchmark.rs         # decision-class benchmark matrix
 ```
 
-### 9.2 Queue algorithm
+If the service must be reusable outside the binary, introduce a downward-compatible library crate through an ADR; do not make an existing lower crate depend upward on `src/`.
 
-1. Serialize normalized event envelope.
-2. Compute event checksum.
-3. Append to lane segment.
-4. Fsync according to lane policy:
-   - critical: fsync before ACK to local producer.
-   - normal: group fsync.
-   - debug: best effort with bounded loss allowed only by config.
-5. Shipper reads oldest unacked event by lane priority.
-6. Batch POST to gateway.
-7. Gateway returns accepted event IDs and highest contiguous watermark.
-8. Sensor marks ACKed offsets and compacts old segments.
+## Configuration
 
-### 9.3 Failure handling
+```yaml
+gateway:
+  authorize_deadline_ms: 75       # total request deadline
+  db_acquire_deadline_ms: 10      # included in total deadline
+  max_concurrent_requests: 512    # benchmark-derived admission ceiling
+  max_body_bytes: 262144          # limits parse/hash CPU and memory
 
-- Corrupt segment: stop at last valid checksum, quarantine corrupt tail, emit `sensor_spool_corruption`.
-- Disk full: enforce policy mode; critical lane reserves disk budget; non-critical drops only with event.
-- Gateway down: spool until disk budget; then observe/enforce/lockdown mode decides workload impact.
+authorization:
+  durable_replay_required: true   # mandatory for multi-replica production
+  snapshot_idle_ttl_seconds: 900  # memory reclamation, not freshness
+  emergency_revocation_fence: true
 
----
+evidence:
+  writer_shards: 16
+  critical_queue_capacity: 8192
+  telemetry_queue_capacity: 65536
+  batch_max_events: 250
+  batch_max_bytes: 1048576
+  batch_max_delay_ms: 10
+```
 
-## 10. Receipt chain algorithm
+Validation rules:
 
-### 10.1 Append
+- deadlines must be positive and `db_acquire_deadline_ms < authorize_deadline_ms`;
+- capacities must fit the declared memory budget;
+- `writer_shards` must be a power of two if bit-mask routing is used;
+- multi-replica startup fails when durable replay or qualified PostgreSQL support is absent;
+- public bind fails without the required authentication/TLS gates.
 
-Protected actions execute in one DB transaction:
+## Installation
 
-1. Validate tenant, actor, decision, and receipt-required flag.
-2. Lock per-tenant chain head row:
-   - Postgres: `SELECT ... FOR UPDATE` on `receipt_chain_heads WHERE tenant_id = $1`.
-   - SQLite local: `BEGIN IMMEDIATE` and one writer.
-3. Read `prev_receipt_hash` and sequence.
-4. Canonicalize receipt body excluding `receipt_hash`, `signature`, and volatile DB fields.
-5. Compute `receipt_hash = sha256(canonical_body)`.
-6. Optionally sign `receipt_hash` with tenant/key-specific signer.
-7. Insert receipt.
-8. Update chain head to new sequence/hash.
-9. Commit.
-10. Return receipt ID/hash to caller.
+No new endpoint is considered installed until protobuf generation tools are present and both protocol suites pass. Follow [Installation](Installation.md); PostgreSQL target mode additionally requires migrations, pooling, backups, and a completed backend qualification matrix.
 
-Protected action fails closed if steps 1-9 fail.
+## Quick Start
 
-### 10.2 Chain checkpoints
+Implementation order:
 
-Every N receipts or T minutes:
+1. Add characterization tests around current REST and gRPC decisions.
+2. Correct protobuf receipt parity without changing REST behavior.
+3. Extract a shared authorization service behind existing adapters.
+4. Add stage timings and deadlines.
+5. Introduce snapshot generation storage and invalidation.
+6. Add priority-separated evidence writers.
+7. Qualify PostgreSQL transactions and multi-replica behavior.
+8. Benchmark, canary, and raise concurrency only from evidence.
 
-1. Select receipt range by tenant and sequence.
-2. Compute Merkle root over receipt hashes.
-3. Store `receipt_checkpoints` with `sequence_start`, `sequence_end`, `chain_head_hash`, `merkle_root`.
-4. Sign checkpoint.
-5. Optionally anchor to external transparency log or immutable object store.
+Each step is independently reversible.
 
-### 10.3 Verification
+## Detailed Walkthrough
 
-- Single receipt: recompute receipt hash and optional signature.
-- Chain: stream receipts in sequence, recompute each hash, verify `prev_receipt_hash` linkage.
-- Range: verify range linkage plus checkpoint/Merkle proof if available.
-- Proof endpoint returns receipt, neighbor hashes or Merkle proof, checkpoint, and signatures.
+### Core identifiers
 
----
+Use validated newtypes internally to prevent accidental tenant/key interchange:
 
-## 11. Ban cache algorithm
+```rust
+#[derive(Clone, Eq, PartialEq, Hash)]
+pub struct TenantId(Arc<str>);
 
-### 11.1 Source of truth
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Generation(u64);
 
-`agent_bans` table is authoritative. All ban/unban actions write audit + receipt + invalidation event.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ActionHash([u8; 32]);
+```
 
-### 11.2 In-memory cache
+- `Arc<str>` makes snapshot key clones cheap while retaining UTF-8 compatibility.
+- `Generation` is monotonic per tenant and cannot be mixed with a timestamp.
+- `ActionHash` stores binary SHA-256 internally; lowercase hex is a wire/storage encoding.
 
-Per gateway/sensor/proxy/broker process:
+### Immutable snapshot
 
-- Exact maps: `(tenant_id, target_type, target_hash) -> ban decision`.
-- Domain suffix trie for `destination_domain`.
-- CIDR prefix matcher for `destination_ip`.
-- Tool/MCP maps by normalized ID.
-- TTL and version watermarks.
-- Optional bloom filter for global bans as a fast precheck.
+```rust
+pub struct TenantControlSnapshot {
+    pub generation: Generation,
+    pub policy: Arc<CompiledPolicySet>,
+    pub tool_actions: HashMap<ToolActionKey, ToolActionMeta>,
+    pub mcp_servers: HashMap<NormalizedKey, McpServerMeta>,
+    pub mcp_tools: HashMap<McpToolKey, McpToolMeta>,
+    pub revocation_epoch: u64,
+    pub built_at: Instant,
+}
+```
 
-### 11.3 Lookup order
+Data-structure choices:
 
-1. Tenant/run local ban cache.
-2. Exact hash match.
-3. Domain suffix match.
-4. CIDR prefix match.
-5. Scope escalation: run → agent → tenant → organization → global.
-6. If cache stale and gateway reachable: refresh.
-7. If cache stale and gateway unavailable: enforce according to sensor mode.
+| Structure | Operation | Complexity | Reason |
+|---|---|---:|---|
+| `HashMap<ToolActionKey, Meta>` | exact normalized lookup | expected O(1) | dominant authorization access pattern |
+| `Arc<CompiledPolicySet>` | clone for request | O(1) | immutable sharing without policy copy |
+| atomic `Arc` publication | load/swap | O(1) | readers do not wait for rebuild |
+| bounded LRU | optional canonical/metadata memoization | expected O(1) | fixed memory; never stores decisions |
+| `BTreeMap` | ordered range/report paths only | O(log n) | avoid when exact hash lookup is enough |
 
-### 11.4 Invalidation
+Build memory off-thread, validate it completely, then publish. Do not mutate a live `HashMap`. Set maximum tenants, entries per tenant, and bytes per snapshot; evict idle snapshots only when no emergency fence requires them.
 
-- Gateway publishes `ban_version` increments.
-- Sensors/proxies poll or receive config push.
-- Control command `update_sensor_config` can force immediate refresh.
+### Authorization algorithm
 
----
+```rust
+async fn authorize(ctx: AuthorizationContext, mut req: AuthorizeRequest)
+    -> Result<AuthorizeResponse, AegisError>
+{
+    let _permit = admission.acquire_before(ctx.deadline).await?;
+    validate_wire_limits(&req)?;
 
-## 12. Egress rule matching algorithm
+    let agent = identity.resolve(&ctx, &req).await?;
+    validate_environment(&agent, &req.agent.environment)?;
 
-Inputs:
+    let (permission, prior) = tokio::try_join!(
+        storage.agent_tool_permission_status(&ctx.tenant_id, &agent.id, &req.tool_call.tool),
+        idempotency.lookup_unless_dry_run(&ctx, &agent.id, &req),
+    )?;
+    enforce_permission(permission)?;
+    if let Some(decision) = prior { return replay(decision).await; }
 
-- tenant ID, run ID, sandbox ID, agent ID
-- destination domain, resolved IP, port, protocol
-- DNS metadata
-- HTTP method, host, path hash, content length
-- TLS SNI where available
-- byte counters and upload heuristics
+    replay_guard.claim_if_requested(&ctx, &agent.id, &req).await?;
+    admission_hook.apply_before_hash(&ctx, &mut req).await?;
 
-Algorithm:
+    let normalized = normalize_identifiers(&req.tool_call)?;
+    let canonical = canonicalize_aegis_jcs_1(&req.tool_call)?;
+    let action_hash = sha256(&canonical);
+    let snapshot = snapshots.load_valid(&ctx.tenant_id)?;
+    let facts = build_policy_facts(&agent, &req, &normalized, snapshot.generation)?;
+    let decision = policy.evaluate(&snapshot.policy, &facts)?;
+    let class = classify_durability(&decision, &req, &snapshot)?;
 
-1. Deny if run/agent/sandbox/destination is banned.
-2. Deny if run/workspace/destination is quarantined.
-3. Check per-run rules by priority.
-4. Check per-agent rules.
-5. Check tenant rules.
-6. Domain matching using suffix trie:
-   - exact `api.github.com`
-   - suffix `*.github.com`
-   - public suffix-aware matching to avoid `evilgithub.com` false positives.
-7. CIDR matching using prefix tree / radix trie.
-8. Apply deny-by-default if no allow rule and mode is enforce/lockdown.
-9. Emit `egress_allowed`/`egress_blocked` event.
-10. Emit receipt for blocked egress and high-risk allowed egress.
+    persist_or_enqueue(ctx, req, decision, action_hash, class).await
+}
+```
 
-Fast path target: under 5 ms for cached rules.
+Important details:
 
----
+- The permit is acquired before storage work.
+- `try_join!` cancels the sibling future when one fails. Use it only when both reads are semantically independent.
+- Idempotency is checked before policy work; dry-run bypasses persistence and idempotency state.
+- The admission hook runs before hashing because it may mutate the action.
+- Original values are canonicalized for the action hash; normalized identifiers are lookup keys.
+- One snapshot is loaded once and referenced through evaluation.
+- Unknown durability class is treated as protected.
 
-## 13. Timeline DAG model
+### Trust propagation
 
-Runtime timelines are DAGs, not flat logs.
-
-Node types:
-
-- run
-- prompt
-- model_call
-- tool_call
-- api_call
-- mcp_call
-- process
-- file_event
-- secret_access
-- network_event
-- policy_decision
-- approval
-- receipt
-- control_command
-- quarantine
-- ban
-- incident
-
-Edges:
-
-- `parent_event_id`
-- `caused_by`
-- `prompt_to_model`
-- `model_to_tool`
-- `tool_to_egress`
-- `decision_for_action`
-- `approval_for_decision`
-- `receipt_for_event`
-- `control_response_to_incident`
-- `evidence_for_incident`
-
-Indexes:
-
-- `(tenant_id, run_id)`
-- `(tenant_id, trace_id)`
-- `(tenant_id, parent_event_id)`
-- `(tenant_id, action_hash)`
-- `(tenant_id, prompt_hash)`
-- graph edge table for incident evidence subgraphs
-
----
-
-## 14. Incident evidence graph model
-
-An incident evidence graph is a subgraph extracted from the timeline DAG.
-
-Graph root:
-
-- `incident_id`
-
-Common evidence chain:
+Map trust labels to an ordered enum, from most trusted to least trusted. Propagation selects the **more restrictive** value:
 
 ```text
-prompt_observed
-→ model_call_finished
-→ tool_call_requested
-→ secret_access_attempt
-→ egress_blocked
-→ policy_decision
-→ kill_run command
-→ control_action_executed
-→ workspace_quarantined
-→ agent_banned
-→ receipts
+effective_root_trust = max_restriction(inherited_root_trust, current_source_trust)
 ```
 
-Evidence graph invariants:
+This is O(1), deterministic, and idempotent. An unknown label returns an error or the least-trusted value; it never increases trust.
 
-- Every edge includes `tenant_id`.
-- Cross-tenant edges are impossible.
-- Evidence export includes receipts and checkpoint proofs.
-- Node payloads are redacted; raw secrets and raw sensitive prompts are absent.
+### Identifier normalization
 
----
+For lookup only:
 
-## 15. Policy evaluation model
+1. reject overlong values and invalid control characters;
+2. percent-decode exactly once according to the existing contract;
+3. normalize Unicode to the chosen form;
+4. apply case rules defined by the identifier contract;
+5. use the normalized tuple as a map/database key.
 
-Policy inputs:
+Do not normalize action parameters before `aegis-jcs-1` unless the canonicalization specification explicitly requires it. Lookup normalization and approval hashing solve different problems.
 
-- tenant
-- agent state
-- run state
-- source trust
-- prompt lineage
-- tool/action/resource
-- action hash
-- risk metadata
-- runtime context
-- ban state
-- quarantine state
-- MCP trust
-- egress destination
-- approval state
+### Durability classifier
 
-Outputs:
+```rust
+enum DurabilityClass {
+    Protected,
+    Ordinary,
+    DryRun,
+}
 
-- `allow`
-- `deny`
-- `require_approval`
-- `pause_run`
-- `kill_run`
-- `freeze_agent`
-- `revoke_token`
-- `quarantine_agent`
-- `quarantine_workspace`
-- `quarantine_mcp`
-- `ban_agent`
-- `ban_fingerprint`
-- `block_egress`
+fn classify(decision: &Decision, call: &ToolCall, risk: Risk) -> DurabilityClass {
+    if decision.dry_run { return DurabilityClass::DryRun; }
+    if call.mutates_state || risk >= Risk::High || decision.kind != Allow {
+        DurabilityClass::Protected
+    } else {
+        DurabilityClass::Ordinary
+    }
+}
+```
 
-Evaluation pipeline:
+The actual risk ordering and decision enum must use existing typed API definitions. Any parse error yields `Protected`, never `Ordinary`.
 
-1. Build deterministic context.
-2. Fast deny path: ban/quarantine/unknown MCP/disabled tool/invalid tenant.
-3. Load cached versioned policy bundle.
-4. Evaluate Cedar with no LLM call.
-5. Risk enrichment can escalate but cannot override deterministic forbids.
-6. Return decision with matched policy IDs and explanation.
-7. Persist decision and receipt if required.
+### Writer sharding and batching
 
-LLM allowed uses:
+```rust
+let shard = stable_hash(tenant_id.as_bytes()) & (writer_shards - 1);
+writers[shard].try_send(event)
+```
 
-- summarize incident
-- explain policy in human language
-- generate investigation narrative
-- suggest policy changes
-- draft incident report
+- Stable hashing keeps a tenant’s evidence ordered within a process.
+- Power-of-two shard counts permit a mask instead of modulo.
+- Each event carries its tenant ID; the consumer still validates tenant binding.
+- Flush when any limit is reached: event count, byte count, or delay.
+- Never batch different SQL shapes into one malformed statement; group by event type.
+- On shutdown, stop admission, drain until the configured deadline, then report any remainder.
 
-LLM disallowed use:
+### Queue priorities
 
-- allow/deny/control enforcement decision.
+| Lane | Examples | Producer operation | Overflow |
+|---|---|---|---|
+| Protected | required receipt/approval/replay | direct transaction | fail closed |
+| Critical evidence | denies, integrity alarms, control ACKs | bounded send or durable spool | alert and preserve according to contract |
+| Telemetry | process/fs/net observations | `try_send` or sensor spool | drop only approved lowest priority; count every drop |
+| Derived | risk samples, UI projection, semantic index | `try_send` | rebuild from source when possible |
 
----
+One full telemetry queue must never prevent a protected receipt.
 
-## 16. OpenAPI contract model
+## Code Explanation
 
-`aegis-api` owns request/response structs and OpenAPI generation.
+### Deadline propagation
+
+Every storage and external operation uses the request’s remaining duration, not a fresh full timeout:
+
+```rust
+fn remaining(deadline: Instant) -> Result<Duration, AegisError> {
+    deadline.checked_duration_since(Instant::now())
+        .ok_or(AegisError::DeadlineExceeded)
+}
+```
+
+Creating new independent timeouts at each stage can make a nominal 75 ms request run for several multiples of 75 ms. The root deadline prevents that.
+
+### Admission permit sizing
+
+Use Little’s Law as a starting estimate, then benchmark:
+
+```text
+concurrency ≈ target_throughput_per_second × target_service_time_seconds
+```
+
+At 2,000 requests/s and 25 ms service time, the starting concurrency is about 50, plus measured headroom—not 2,000. DB connections are sized separately; a request does not hold a connection during CPU-only policy evaluation.
+
+### Error mapping
+
+| `AegisError` category | REST | gRPC | Retry |
+|---|---:|---|---|
+| Validation | 400 | `INVALID_ARGUMENT` | No |
+| Unauthenticated | 401 | `UNAUTHENTICATED` | After credentials change |
+| Forbidden/policy deny | 403 or typed decision | `PERMISSION_DENIED` or typed decision | No automatic retry |
+| Replay conflict | 409 | `ALREADY_EXISTS` | No |
+| Admission full | 429 | `RESOURCE_EXHAUSTED` | With jitter/idempotency |
+| Deadline | 504 | `DEADLINE_EXCEEDED` | Only with idempotency |
+| Durability unavailable | 503 | `UNAVAILABLE` | With idempotency; protected action not executed |
+
+REST and gRPC adapters map the same underlying error; they do not invent different policy outcomes.
+
+## Live Example
+
+Request:
+
+```json
+{
+  "request_id": "req-018f",
+  "agent": {"id": "agent-ci", "environment": "production"},
+  "tool_call": {
+    "tool": "github",
+    "action": "merge_pull_request",
+    "resource": "acme/payments#481",
+    "mutates_state": true,
+    "parameters": {"sha": "4f3c...", "method": "squash"}
+  },
+  "context": {"source_trust": "trusted", "contains_sensitive_data": false},
+  "nonce": "b23a...",
+  "timestamp": "2026-07-12T08:00:00Z"
+}
+```
+
+Expected protected response shape:
+
+```json
+{
+  "decision_id": "0190...",
+  "decision": "require_approval",
+  "matched_policies": ["prod-mutation-approval"],
+  "approval": {
+    "approval_id": "0190...",
+    "status": "pending",
+    "action_hash": "8f5e..."
+  },
+  "root_trust_level": "trusted",
+  "dry_run": false,
+  "receipt": {
+    "receipt_hash": "0a9d...",
+    "prev_receipt_hash": "b61c...",
+    "canon_version": "aegis-jcs-1"
+  }
+}
+```
+
+The exact receipt wire type must be introduced in protobuf first. Secrets and raw signing material are excluded.
+
+## API
+
+### Protobuf-first parity correction
+
+Current gap: the REST `AuthorizeResponse` models an optional inline receipt for protected decisions, while `lib/api/proto/aegis.proto` currently ends `AuthorizeResponse` at `dry_run` and does not expose the receipt. Before parity can be claimed:
+
+```proto
+message ReceiptInfo {
+  string receipt_id = 1;
+  string receipt_hash = 2;
+  string prev_receipt_hash = 3;
+  string canon_version = 4;
+  string signature = 5;
+  string signer_public_key = 6;
+  string signer_key_id = 7;
+}
+
+message AuthorizeResponse {
+  // Existing fields 1..11 remain unchanged.
+  ReceiptInfo receipt = 12;
+  uint64 snapshot_generation = 13;
+}
+```
 
 Rules:
 
-- Every external route has typed request/response schema.
-- Every route documents auth, tenant resolution, idempotency, failure mode, and receipt behavior.
-- Every schema includes `schema_version` where persisted or emitted by runtime components.
-- Generated OpenAPI is checked in or generated in CI and validated for backwards-compatible changes.
-- SDKs generate types from OpenAPI where practical but keep hand-written fail-closed control logic.
+- never reuse or renumber existing protobuf fields;
+- add generated-code, REST-mirror, OpenAPI, and compatibility tests in the same change;
+- absence means ordinary/dry-run/no-inline-receipt, not an empty fabricated receipt;
+- `snapshot_generation` is diagnostic and safe to expose; it must not reveal secrets.
 
----
+### Endpoint contract
 
-## 17. UI data contracts
+| Service method | REST | gRPC | Idempotency | Required durability |
+|---|---|---|---|---|
+| `authorize` | `POST /v1/authorize` | `AegisService.Authorize` | `(tenant, agent, request_id)` | decision-class dependent |
+| `approve` | approval decision route | `AegisService.Approve` | approval state CAS | synchronous |
+| `consume_approval` | approval consume route | **must have proto RPC before parity claim** | effective hash + single consume | synchronous |
+| `register_agent` | agent registration route | `AegisService.RegisterAgent` | contract-specific | synchronous |
+| `soc_query` | `POST /v1/soc/query` | `SocService.Query` | read-only | off-path |
 
-Console pages consume stable APIs:
+The table intentionally flags incomplete dual-protocol coverage. Adding an HTTP route alone violates the architecture contract.
 
-| Page | Primary APIs |
+### Request limits
+
+| Field | Target limit | Reason |
+|---|---:|---|
+| Full body | 256 KiB default | bounds memory, parse, canonicalization, and hash cost |
+| Tool/action identifier | 256 bytes each | prevents normalization abuse |
+| Resource | 2 KiB | supports URIs without unbounded index/log cost |
+| `request_id` / nonce | 128 bytes | bounded unique indexes |
+| Trace identifiers | 128 bytes | bounded correlation keys |
+| Parameters nesting | 32 levels | prevents pathological recursive processing |
+
+Limits must be identical across JSON and protobuf after decoding.
+
+## CLI
+
+Target diagnostic commands:
+
+```text
+aegis config validate
+aegis snapshot inspect --tenant <id> --redacted
+aegis receipts verify --tenant <id> --from <n> --to <n>
+aegis benchmark authorize --protocol rest --class protected --concurrency 64
+```
+
+Flags that contain tenant or file references must not print secrets. Benchmark output includes commit SHA, config hash, CPU count, memory, storage backend, dataset size, protocol, decision mix, offered/achieved RPS, p50/p95/p99/max, errors, shed count, queue depth, and DB wait.
+
+## Configuration Reference
+
+### Cache policy
+
+| Cache | Key | Value | Invalidation | Failure mode |
+|---|---|---|---|---|
+| Tenant snapshot | tenant | immutable control generation | transaction generation + notification | previous valid snapshot; fence emergencies |
+| Skill action | tenant/tool/action | static metadata | control generation | miss → authoritative read/fail closed |
+| MCP metadata | tenant/server/tool | trust and manifest metadata | manifest generation | miss → authoritative read/fail closed |
+| Canonical hash | canonical input digest/key | action hash | bounded content identity | miss → recompute |
+| Risk weights | tenant | advisory weights | TTL/admin invalidation | miss → read/default; never gates |
+| Replay nonce | tenant/agent/nonce | expiry | atomic insert + expiry cleanup | DB error → fail closed in durable mode |
+
+Final decisions, approval status, approval consumption, and protected receipt heads are not ordinary TTL-cache entries.
+
+## Database Schema
+
+Existing canonical schema remains in `lib/storage/migrations/`. The following indexes already express important hot paths:
+
+```sql
+CREATE UNIQUE INDEX idx_decisions_tenant_agent_request_id
+ON decisions (tenant_id, agent_id, request_id)
+WHERE request_id IS NOT NULL;
+
+CREATE INDEX idx_decisions_tenant_agent_created
+ON decisions (tenant_id, agent_id, created_at);
+
+CREATE INDEX idx_approvals_tenant_status_created
+ON approvals (tenant_id, status, created_at);
+
+CREATE INDEX idx_action_receipts_tenant_created
+ON action_receipts (tenant_id, created_at);
+
+CREATE UNIQUE INDEX idx_runtime_events_tenant_event
+ON runtime_events (tenant_id, event_id);
+```
+
+### Target control-generation table
+
+Add only through versioned SQLite and PostgreSQL migrations after query-plan tests:
+
+```sql
+CREATE TABLE tenant_control_generations (
+    tenant_id TEXT PRIMARY KEY,
+    generation BIGINT NOT NULL,
+    emergency_floor BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+```
+
+- `generation` increments in the same transaction as a control mutation.
+- `emergency_floor` is the minimum generation allowed to authorize for that tenant.
+- a replica below the floor fails closed for affected requests.
+- use database-native timestamp types and constraints appropriate to each backend migration.
+
+### Target receipt head optimization
+
+Scanning `ORDER BY created_at DESC LIMIT 1` can become a hot operation. After correctness tests, introduce one row per tenant:
+
+```sql
+CREATE TABLE tenant_receipt_heads (
+    tenant_id TEXT PRIMARY KEY,
+    sequence_no BIGINT NOT NULL,
+    receipt_hash TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+```
+
+Protected append transaction:
+
+1. lock or compare-and-swap the tenant head;
+2. build receipt with that `prev_receipt_hash`;
+3. insert receipt with `sequence_no + 1` (add a unique tenant/sequence index if the record gains that column);
+4. update head;
+5. commit.
+
+For PostgreSQL use row-level locking or an atomic compare-and-swap. For SQLite use its short write transaction and busy timeout. Never use a process-local mutex as the only cross-replica ordering mechanism.
+
+### Query rules
+
+- Every tenant-owned table and query includes `tenant_id`.
+- Every query is parameterized.
+- List APIs use cursor pagination on a stable composite key, normally `(created_at, id)`.
+- Avoid `OFFSET` for deep pages.
+- Select explicit columns; do not use `SELECT *` in stable storage methods.
+- Run `EXPLAIN`/`EXPLAIN ANALYZE` with production-shaped cardinality before adding an index.
+- Remove redundant indexes only after write-cost and query-plan evidence.
+
+## Security
+
+### Authentication and authorization
+
+- Resolve bearer token or verified mTLS CN within the runtime tenant.
+- Apply auth-failure lockout before expensive work.
+- Enforce agent status, quarantine, allowed environment, tool permissions, and MCP permissions.
+- Admin and control APIs require authenticated RBAC; startup rejects unsafe public binding.
+
+### Encryption and secrets
+
+- TLS for client traffic and mTLS for service/sensor paths in production.
+- Database encryption or encrypted volumes, plus encrypted backups.
+- KMS/HSM-backed receipt and command signing keys where required.
+- Store callback secret hashes or opaque credential references, never plaintext secrets.
+- Redact credentials, parameters, prompts, and tokens from traces and logs.
+
+### Atomic invariants
+
+| Invariant | Enforcement |
 |---|---|
-| Overview | `/v1/soc/summary`, `/v1/runtime/events`, `/v1/receipts/chain-head` |
-| Explore | `/v1/soc/query`, `/v1/runtime/events`, `/v1/decisions` |
-| Approvals | `/v1/approvals`, approval action routes |
-| Incidents | `/v1/incidents`, `/v1/runtime/runs/:id/graph`, `/v1/soc/query` |
-| Receipts | `/v1/receipts`, verify/proof/range APIs |
-| Agents | `/v1/agents`, `/v1/agent-cage/runs` |
-| Agent Cage Runs | `/v1/agent-cage/runs`, run controls |
-| Runtime Timeline | `/v1/runtime/runs/:id/events`, `/v1/runtime/runs/:id/graph` |
-| Prompt Timeline | `/v1/ingest/prompt-events` read APIs, prompt timeline endpoint |
-| Model Calls | model call event list/detail endpoints |
-| Tool Calls | tool call event list/detail endpoints |
-| Egress Events | `/v1/egress/events` |
-| Ban Center | `/v1/bans` |
-| Quarantine Center | `/v1/quarantine` |
-| MCP Security | MCP server/tool routes plus quarantine/restore |
-| Policy Center | policy bundle CRUD/simulation routes |
-| Evidence Graph | incident graph and evidence pack APIs |
-| Settings | tenant, sensor, keys, retention, OIDC settings |
+| Idempotent decision | unique `(tenant_id, agent_id, request_id)` plus conflict readback |
+| Replay claim | primary/unique `(tenant_id, agent_id, nonce)` with expiry |
+| Approval consume once | conditional update/CAS in transaction |
+| Exact action approved | constant-time effective action-hash comparison |
+| Receipt chain ordered | tenant-scoped DB head lock/CAS |
+| Same tenant throughout | typed tenant context + SQL predicate + tests |
 
-UI must use virtualization for large event lists and graph pagination for large evidence graphs.
+## Performance
+
+### Complexity summary
+
+| Operation | Expected complexity | Dominant cost |
+|---|---:|---|
+| Snapshot load | O(1) | atomic shared-pointer load |
+| Tool metadata lookup | expected O(1) | normalized key hash |
+| Trust propagation | O(1) | enum comparison |
+| Canonicalization | O(n log n) worst case for object-key ordering | payload bytes/keys |
+| SHA-256 | O(n) | canonical bytes |
+| Cedar evaluation | policy-dependent; benchmarked | entities/rules matched |
+| Replay claim | O(log n) DB index | primary write/unique constraint |
+| Idempotency lookup | O(log n) DB index | indexed read |
+| Receipt append | O(log n) + O(receipt bytes) | tenant head coordination + transaction |
+| Evidence enqueue | O(1) | bounded channel contention |
+
+### Memory accounting
+
+For every bounded queue:
+
+```text
+reserved_memory ≈ capacity × (maximum_event_bytes + channel/item overhead)
+```
+
+A 65,536-item queue with 4 KiB events already reserves a theoretical 256 MiB before overhead. Prefer smaller events and batching over a larger queue. Snapshot memory is tracked per tenant and globally; builders are concurrency-limited to avoid doubling the entire cache during mass refresh.
+
+### Benchmark matrix
+
+| Dimension | Values |
+|---|---|
+| Protocol | REST, gRPC |
+| Decision | allow, deny, require approval, redact/quarantine if supported |
+| Durability | ordinary, protected, dry-run |
+| Cache | warm, cold, invalidating |
+| Storage | SQLite WAL, PostgreSQL |
+| Load | steady, ramp, burst, overload |
+| Failure | DB delay, DB unavailable, queue full, policy rebuild, receipt conflict |
+| Tenant shape | one hot tenant, many small tenants, mixed |
+
+Pass criteria include p95/p99, achieved throughput, error correctness, zero protected receipt loss, bounded RSS, bounded queue age, and correct load shedding.
+
+## Scaling
+
+### Connection pool
+
+Connections are a scarce concurrency limit. A larger pool can increase lock and CPU contention. Measure:
+
+- acquisition duration;
+- active/idle connections;
+- transaction duration;
+- query duration by stable operation name;
+- DB CPU, IOPS, locks, and buffer-cache hit rate.
+
+Do not hold a connection while waiting on an admission webhook, webhook delivery, SOC, or response serialization.
+
+### Tenant fairness
+
+Use a global admission ceiling plus tenant-class token buckets. A tenant bucket contains only bounded state and expires when idle. Enterprise dedicated capacity is implemented as a separate pool/shard, not a larger unbounded tenant queue.
+
+### Horizontal scaling
+
+Requirements before adding the second gateway replica:
+
+- qualified PostgreSQL implementation for every hot-path trait method;
+- durable shared replay claims;
+- DB-backed receipt ordering;
+- snapshot generation recovery after missed notifications;
+- no process-local cache required for correctness;
+- multi-replica idempotency, quarantine, approval-consume, and receipt tests.
+
+## Monitoring
+
+Target metrics:
+
+```text
+aegis_authorize_duration_seconds{stage,decision_class,protocol}
+aegis_authorize_inflight{class}
+aegis_authorize_shed_total{reason}
+aegis_storage_operation_duration_seconds{operation,backend,outcome}
+aegis_storage_pool_wait_seconds{backend}
+aegis_snapshot_generation_lag{replica_class}
+aegis_snapshot_rebuild_seconds{outcome}
+aegis_evidence_queue_depth{lane,shard_class}
+aegis_evidence_dropped_total{lane,reason}
+aegis_receipt_append_seconds{backend,outcome}
+aegis_receipt_chain_conflict_total{backend}
+```
+
+Do not place tenant ID, agent ID, tool, action, request ID, or error message into metric labels. Those belong in access-controlled structured logs/traces.
+
+## Logging
+
+Each authorize trace contains child spans for `admission`, `identity`, `permission`, `idempotency`, `replay`, `canonicalize`, `snapshot_load`, `policy`, `protected_commit`, and `evidence_enqueue`. Record elapsed time and stable outcome codes. Do not record raw action parameters or credentials.
+
+## Alerting
+
+| Condition | Severity | Automated safety action |
+|---|---|---|
+| Protected receipt append error | Critical | fail protected request; page |
+| Snapshot below emergency floor | Critical | fence tenant on replica |
+| DB pool wait consumes >25% of deadline | High | shed earlier; investigate pool/DB |
+| Evidence queue >80% for 5 min | High | scale consumer; preserve protected lane |
+| Telemetry drops above policy threshold | Medium/High | alert and inspect producer spool |
+| RSS above 85% limit | High | stop snapshot prewarming; shed before OOM |
+
+## Troubleshooting
+
+### Tail latency runbook
+
+1. Confirm offered versus admitted RPS; do not confuse shedding with backend errors.
+2. Compare stage histograms. Locate the first stage whose p99 increased.
+3. If pool wait is high, inspect connection hold time and DB locks before adding connections.
+4. If policy CPU is high, profile the exact tenant bundle and entity count.
+5. If canonicalization is high, inspect payload size and nesting—not payload contents.
+6. If protected commit is high, inspect tenant receipt-head conflicts and transaction duration.
+7. If queue age is high but authorize is healthy, scale evidence consumers without changing the inline path.
+
+### Snapshot incident
+
+If rebuild fails, retain the previous validated generation and alert. If the tenant has an emergency generation floor above the local snapshot, fail closed for that tenant until rebuilt. Roll back the bad control mutation or publish a corrected generation; never decrement generation numbers.
+
+### Database incident
+
+SQLite `busy` errors indicate writer contention; reduce concurrent writes, keep transactions short, and drain async batches. PostgreSQL pool timeouts indicate insufficient qualified capacity or leaked/long-held connections. Protected requests fail closed in either case.
+
+## Common Mistakes
+
+- Using `RwLock<HashMap<tenant, mutable policy>>` and compiling while holding the write lock.
+- Calling the DB once per policy fact instead of building a snapshot/read model.
+- Spawning an unbounded Tokio task per audit event.
+- Using `send().await` on a bulk telemetry queue from `/v1/authorize`.
+- Treating a process-local replay cache as multi-replica protection.
+- Holding a transaction open during hashing, webhooks, or SOC work that could happen earlier/later.
+- Returning the new decision after an idempotency unique conflict instead of the original committed decision.
+- Adding indexes without measuring their write amplification.
+- Claiming REST/gRPC parity while protobuf omits a response field or RPC.
+
+## Best Practices
+
+- Write characterization tests before extracting the service.
+- Use typed enums/newtypes at internal boundaries and strings only at wire/storage edges.
+- Normalize once, canonicalize once, hash once.
+- Reuse the canonical bytes for approval, receipt, audit hash, and response metadata where permitted.
+- Keep a single root deadline and structured child tasks.
+- Publish snapshots atomically; never partially refresh.
+- Separate protected, critical, bulk, and derived work.
+- Validate query plans with realistic tenant cardinality.
+- Benchmark cold paths and failures, not only warm allows.
+- Roll out each optimization behind a config flag with a defined rollback.
+
+## Testing
+
+### Unit tests
+
+- trust propagation never loosens;
+- identifier normalization corpus and abuse cases;
+- `aegis-jcs-1` byte parity across Rust/Python/TypeScript/Go;
+- durability classifier defaults to protected;
+- snapshot builder rejects incomplete/invalid policy;
+- writer-shard routing is stable and bounded;
+- error mapping parity.
+
+### Integration tests
+
+- REST and gRPC semantic golden corpus;
+- idempotent concurrent requests return one committed decision;
+- nonce race accepts one claimant and rejects the rest;
+- approval consume race has one winner;
+- tenant receipt appends form one valid chain under concurrency;
+- emergency generation fence blocks stale replicas;
+- queue saturation never blocks protected durability;
+- every storage backend passes the same trait conformance suite.
+
+### Property and failure tests
+
+- arbitrary JSON canonicalization is deterministic;
+- no cross-tenant query returns a row under generated tenant pairs;
+- cancellation releases permits/connections;
+- crash after receipt insert but before response replays safely by idempotency;
+- missed invalidation notification recovers from persisted generation;
+- graceful shutdown drains within bound and reports residue.
+
+### Performance tests
+
+CI guards regressions in in-process policy/canonicalization microbenchmarks. Scheduled or release benchmarks run the full matrix on pinned hardware. A release is blocked by a statistically meaningful p99 regression, increased protected error rate, unbounded memory growth, or receipt/invariant failure.
+
+## Rollback
+
+| Change | Rollback |
+|---|---|
+| Shared service extraction | route adapters call the characterized prior orchestration behind flag |
+| Snapshot reads | disable target snapshot; use authoritative existing lookup path |
+| Writer shards | return to existing bounded writer without losing protected path |
+| Receipt-head table | use existing atomic append implementation after dual-write verification |
+| External event transport | revert to in-process bounded sink/local spool |
+| Higher concurrency | lower admission limit immediately; no schema rollback |
+
+Schema rollbacks are forward migrations that preserve evidence. Never delete receipt or approval history to reverse an optimization.
+
+## FAQ
+
+### Why expected O(1) instead of guaranteed O(1) for `HashMap`?
+
+Hash-table operations are expected constant time; collision behavior and hashing still matter. Inputs are bounded and the standard hardened hasher is retained unless a security review approves another choice.
+
+### Why can’t the receipt append be asynchronous?
+
+For a protected action, the receipt is part of the authorization guarantee. A response without a committed receipt could authorize execution without durable evidence.
+
+### Why use a snapshot if the database is indexed?
+
+Indexes reduce individual query cost but not network round trips, connection contention, or mixed-generation reads. A snapshot turns several stable control reads into one local immutable view.
+
+### Does snapshot generation belong in every response?
+
+It is recommended as diagnostic metadata after the protobuf-first contract change. It helps reproduce decisions and detect propagation lag without exposing policy contents.
+
+### When should an external message bus be introduced?
+
+Only when measured evidence throughput or durability requirements exceed the bounded in-process/local-spool design. It remains off the authorization path.
+
+## References
+
+- [Performance-First HLD](AegisAgent_World_Class_HLD.md)
+- [Architecture Patterns](architecture.md)
+- [Runtime Authorization API](runtime-authorization-api.md)
+- [API Reference](api-reference.md) and [API Versioning](api-versioning.md)
+- [Database Schema](database-schema.md)
+- [Action Receipt Specification](action-receipt-spec.md)
+- [Event Schema](event-schema.md)
+- [Performance Baseline](performance-baseline.md)
+- [Production Hardening](production-hardening.md)
+- [Fail-Closed Behavior](fail-closed-behavior.md)
 
 ---
 
-## 18. Test plan
-
-### 18.1 Unit tests
-
-- canonical action hashing
-- prompt hashing/redaction
-- receipt hashing
-- receipt signature verification
-- policy decisions
-- ban matching
-- egress matching
-- command signature verification
-- event deduplication
-- local spool corruption recovery
-
-### 18.2 Integration tests
-
-- known agent allow
-- known agent require approval
-- approval edit/approve/consume
-- wrong approval hash does not burn approval
-- anonymous agent run start
-- runtime event ingest
-- secret access detection
-- unknown egress block
-- kill command execution
-- ban fingerprint prevents rerun
-- quarantine workspace
-- receipt emitted for control action
-- SOC incident created
-- evidence graph links prompt/model/tool/runtime/receipt
-
-### 18.3 Concurrency tests
-
-- concurrent receipt append
-- concurrent approval consume
-- concurrent runtime event ingestion
-- concurrent command ACK
-- concurrent ban cache invalidation
-- multi-sensor event ordering
-
-### 18.4 Security tests
-
-- tenant A cannot see tenant B data
-- tenant A cannot control tenant B agent
-- invalid command signature rejected
-- expired command rejected
-- replayed command rejected
-- raw secret redaction
-- banned agent cannot authorize
-- quarantined agent cannot call tools
-- public admin route rejected
-- JWT required in production
-
-### 18.5 Failure tests
-
-- gateway down in observe mode buffers
-- gateway down in enforce mode blocks
-- gateway down in lockdown mode pauses/kills
-- DB unavailable for protected action fails closed
-- receipt write failure blocks protected action
-- sensor restart replays local queue
-- duplicate event ID is idempotent
-
-### 18.6 E2E demo test
-
-A malicious anonymous agent:
-
-1. receives a prompt
-2. calls a model
-3. tries to read `.env`
-4. tries to install a package
-5. tries to call GitHub
-6. tries to POST data to unknown domain
-
-Aegis must:
-
-1. capture prompt hash and redacted prompt
-2. capture model call metadata
-3. detect `.env` access
-4. detect package install
-5. force GitHub call through Tool Broker
-6. block unknown egress
-7. require approval for GitHub write action
-8. kill or pause the run according to policy
-9. quarantine workspace
-10. ban fingerprint if configured
-11. emit receipts for protected/control actions
-12. create SOC incident
-13. show full timeline in UI
-14. export evidence pack
-15. verify receipt chain
-
----
-
-## 19. Migration strategy from current repo
-
-### 19.1 Do not start with a rewrite
-
-The active MVP has valuable correctness tests around canonicalization, approval integrity, and receipts. Preserve those first.
-
-### 19.2 Migration sequence — status
-
-Steps 1–8 are **already complete** on `main`; the live work begins at step 9.
-
-1. ✅ Add docs and target contracts (this document set).
-2. ✅ Root Cargo workspace in place.
-3. ✅ `aegis-common` (`lib/common`) — canonicalization/errors/metrics extracted.
-4. ✅ `aegis-api` (`lib/api`) — typed models extracted.
-5. ✅ Receipt helpers + shared corpus tests live (`authorize_receipts.rs`,
-   `tests/receipt_chain_vectors.json`).
-6. ✅ `aegis-storage` (`lib/storage`) behind the `StorageBackend` trait.
-7. ✅ Postgres feature + `migrations_postgres/` alongside SQLite migrations.
-8. ✅ Gateway routes split into domain modules under `src/src/routes/`.
-9. ▶ **Next:** add runtime data-plane schemas (`runtime_events`,
-   `agent_runs`, `control_commands`, `agent_bans`, `quarantine_records`) and
-   ingest routes to `lib/api`/`lib/storage`/gateway (Phase 2).
-10. Add the `aegis-node-sensor` skeleton (Phase 3).
-11. Add `aegis-cage-runner` / `aegis-egress-proxy` / `aegis-tool-broker` /
-    standalone MCP gateway as independent binaries (Phases 4–6).
-
-Recent hardening already merged also covers items this doc once listed as gaps:
-transaction-safe receipt append, fail-closed durable receipts, verify-range +
-chain-head, JWT/public-bind/admin auth gates, and the DB-backed replay store.
-
-### 19.3 Legacy `gateway/` directory
-
-If a `gateway/` directory still exists at the repo root, it predates the
-workspace migration and is **not** a workspace member. Treat it as legacy: do not
-add new code there; the production source of truth is `src/` + `lib/`.
-
----
-
-## 20. Phased implementation plan summary
-
-Detailed PR sequencing is in `docs/AegisAgent_Phased_PR_Plan.md`.
-
-High-level phases:
-
-1. Documentation and gap analysis.
-2. Control-plane data models and migrations.
-3. Node sensor skeleton.
-4. Cage runner skeleton.
-5. Egress proxy.
-6. Tool broker.
-7. Prompt/model/tool capture.
-8. SOC/evidence graph.
-9. Console UI.
-10. Production hardening.
-
----
-
-## 21. LLD design laws
-
-1. No untrusted agent execution in `aegis-gateway`.
-2. No privileged action without an Aegis choke point.
-3. No protected success without durable receipt.
-4. No LLM-decided enforcement.
-5. No missing `tenant_id` on tenant data.
-6. No raw secrets in events, logs, prompts, receipts, or evidence packs.
-7. No unbounded queue.
-8. No unsigned or replayable runtime command.
-9. No anonymous raw credential access.
-10. No direct internet for unknown agents in enforce/lockdown mode.
+**Implementation acceptance rule:** the design is complete only when both protocols pass the same golden corpus, protected invariants pass under concurrency and crash injection, PostgreSQL passes backend qualification for multi-replica use, and the published latency/capacity envelope is reproduced on controlled hardware.
