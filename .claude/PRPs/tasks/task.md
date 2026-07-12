@@ -61,8 +61,11 @@ Blocks multi-replica and enterprise-ops claims.
       egress timelines, evidence export UX, policy center.
 - [ ] **TypeScript receipt chain verifier** parity with Python/Go.
 - [ ] **Go/TS prompt-model emit** parity with Python Phase 7.2.
-- [ ] **Ban/quarantine enforcement** at all choke points (egress, broker,
-      cage start, sensor), not only store + partial preflight.
+- [x] **Ban/quarantine enforcement** at all choke points (authorize, broker,
+      cage start/claim, egress) + agent-ban propagation to live runs as signed
+      `kill_run` commands — see `feat/ban-enforcement-choke-points`.
+      Remaining: `fingerprint`/`image_digest`/`prompt_hash` ban target types
+      are stored but not yet consulted anywhere.
 - [ ] **Standalone MCP proxy binary** (optional product line; Lite remains prod).
 - [ ] **Branch hygiene** — merge-or-close pass on ~80 remote branches (no bulk
       delete without one-by-one review).

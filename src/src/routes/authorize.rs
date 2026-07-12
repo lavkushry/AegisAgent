@@ -655,6 +655,108 @@ pub async fn authorize_action_impl(
         &payload.tool_call,
     );
 
+    // Ban / quarantine-record enforcement (Phase 2.4/2.5, migrations
+    // 0029/0030): an active ban on the calling agent or the requested tool,
+    // or an active `quarantine_records` row for the agent (a separate store
+    // from the `agents.status` column the token lookup already filters), is
+    // a deterministic fail-closed deny with the same durable decision +
+    // audit trail as a quarantined MCP server. A storage error also blocks
+    // (500) — enforcement state we cannot read is enforcement state we must
+    // assume is against us. This check can only ever produce deny; Cedar
+    // remains the sole source of allow.
+    {
+        let ban_now = Utc::now();
+        let (agent_banned, tool_banned, agent_quarantined) = tokio::join!(
+            state
+                .storage
+                .is_banned(&tenant_id, "agent", &agent_id, ban_now),
+            state
+                .storage
+                .is_banned(&tenant_id, "tool", &normalized_tool, ban_now),
+            state.storage.is_quarantined(&tenant_id, "agent", &agent_id),
+        );
+        let denial = match (agent_banned, tool_banned, agent_quarantined) {
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                error!("Failed to check ban/quarantine enforcement state: {:?}", e);
+                return StatusError::from(e).into_response();
+            }
+            (Ok(true), _, _) => Some((
+                "agent_banned",
+                format!("agent '{agent_id}' is banned; all tool calls are denied (fail-closed)."),
+            )),
+            (_, Ok(true), _) => Some((
+                "tool_banned",
+                format!(
+                    "tool '{normalized_tool}' is banned; calls to it are denied (fail-closed)."
+                ),
+            )),
+            (_, _, Ok(true)) => Some((
+                "agent_quarantine_record",
+                format!(
+                    "agent '{agent_id}' is quarantined; all tool calls are denied (fail-closed)."
+                ),
+            )),
+            (Ok(false), Ok(false), Ok(false)) => None,
+        };
+        if let Some((policy, reason)) = denial {
+            let decision_id = Uuid::new_v4();
+            let matched_policies = vec![policy.to_string()];
+            let audit_event_type = if mcp_server_key_from_tool(&normalized_tool).is_some() {
+                "mcp_tool_called"
+            } else {
+                "tool_call_intercepted"
+            };
+            let composite_risk_score = match write_decision_and_audit(
+                &state.storage,
+                &state.deferred_write_tracker,
+                &state.events,
+                &state.metrics,
+                &state.audit_batch,
+                &state.risk_weight_cache,
+                &tenant_id,
+                &agent_id,
+                &payload,
+                decision_id,
+                "deny",
+                100,
+                &reason,
+                &matched_policies,
+                audit_event_type,
+                started_at,
+                dry_run,
+                &action_hash,
+                &root_trust_level,
+            )
+            .await
+            {
+                Ok(score) => score,
+                Err(e) => {
+                    error!("Failed to write ban/quarantine denial: {:?}", e);
+                    return StatusError::from(e).into_response();
+                }
+            };
+
+            return (
+                StatusCode::OK,
+                Json(AuthorizeResponse {
+                    decision_id,
+                    decision: "deny".to_string(),
+                    risk_score: 100,
+                    risk_level: "critical".to_string(),
+                    composite_risk_score,
+                    reason,
+                    matched_policies,
+                    approval: None,
+                    redacted_fields: vec![],
+                    root_trust_level: root_trust_level.clone(),
+                    dry_run,
+                    receipt: None,
+                }),
+            )
+                .into_response();
+        }
+    }
+
     // Map risk levels based on DB registered action, falling back to policy engine defaults.
     let mut risk_score = 10;
     let mut risk_level = "low".to_string();
@@ -5622,6 +5724,160 @@ mod tests {
         .await;
 
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── Ban / quarantine-record enforcement at authorize (Phase 2.4/2.5) ────
+
+    fn active_ban(tenant_id: &str, target_type: &str, target_value: &str) -> AgentBanRecord {
+        AgentBanRecord {
+            id: Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            target_type: target_type.to_string(),
+            target_value: target_value.to_string(),
+            scope: "tenant".to_string(),
+            reason: Some("test ban".to_string()),
+            actor: "test-operator".to_string(),
+            status: "active".to_string(),
+            created_at: Utc::now(),
+            expires_at: None,
+            revoked_at: None,
+            revoked_by: None,
+        }
+    }
+
+    async fn authorize_decision_json(
+        state: Arc<AppState>,
+        tenant_id: &str,
+        agent_token: &str,
+    ) -> serde_json::Value {
+        let req = mcp_authorize_request("filesystem", "read_file");
+        let resp = authorize_action_impl(
+            state,
+            agent_headers(agent_token, tenant_id),
+            Bytes::from(serde_json::to_vec(&req).unwrap()),
+            test_conn_info(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    /// An active `agent_bans` row for the calling agent denies every
+    /// authorize call (fail-closed), even one policy would otherwise allow.
+    #[tokio::test]
+    async fn authorize_action_denies_banned_agent() {
+        let (state, tenant_id, agent_token) = setup_state("ban_agent_deny").await;
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .storage
+            .insert_ban(&active_ban(&tenant_id, "agent", &agent.id))
+            .await
+            .unwrap();
+
+        let json = authorize_decision_json(state, &tenant_id, &agent_token).await;
+        assert_eq!(json["decision"], "deny");
+        assert!(
+            json["matched_policies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "agent_banned"),
+            "expected agent_banned in matched_policies, got: {}",
+            json["matched_policies"]
+        );
+    }
+
+    /// An active ban on the requested tool denies the call for every agent.
+    #[tokio::test]
+    async fn authorize_action_denies_banned_tool() {
+        let (state, tenant_id, agent_token) = setup_state("ban_tool_deny").await;
+        state
+            .storage
+            .insert_ban(&active_ban(&tenant_id, "tool", "filesystem"))
+            .await
+            .unwrap();
+
+        let json = authorize_decision_json(state, &tenant_id, &agent_token).await;
+        assert_eq!(json["decision"], "deny");
+        assert!(json["matched_policies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "tool_banned"));
+    }
+
+    /// An active `quarantine_records` row targeting the agent denies the
+    /// call — this store is separate from the `agents.status` column the
+    /// token lookup already filters, and must be enforced on its own.
+    #[tokio::test]
+    async fn authorize_action_denies_agent_with_active_quarantine_record() {
+        let (state, tenant_id, agent_token) = setup_state("ban_quarantine_record_deny").await;
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .storage
+            .insert_quarantine(&QuarantineRecord {
+                id: Uuid::new_v4().to_string(),
+                tenant_id: tenant_id.clone(),
+                target_type: "agent".to_string(),
+                target_value: agent.id.clone(),
+                reason: Some("under investigation".to_string()),
+                actor: "test-operator".to_string(),
+                status: "active".to_string(),
+                incident_id: None,
+                created_at: Utc::now(),
+                released_at: None,
+                released_by: None,
+            })
+            .await
+            .unwrap();
+
+        let json = authorize_decision_json(state, &tenant_id, &agent_token).await;
+        assert_eq!(json["decision"], "deny");
+        assert!(json["matched_policies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "agent_quarantine_record"));
+    }
+
+    /// An expired ban no longer denies — `is_banned` only matches active,
+    /// unrevoked, unexpired rows.
+    #[tokio::test]
+    async fn authorize_action_ignores_expired_ban() {
+        let (state, tenant_id, agent_token) = setup_state("ban_expired_ignored").await;
+        let agent = state
+            .storage
+            .get_agent_by_token(&tenant_id, &agent_token)
+            .await
+            .unwrap()
+            .unwrap();
+        let expired = AgentBanRecord {
+            expires_at: Some(Utc::now() - Duration::hours(1)),
+            ..active_ban(&tenant_id, "agent", &agent.id)
+        };
+        state.storage.insert_ban(&expired).await.unwrap();
+
+        let json = authorize_decision_json(state, &tenant_id, &agent_token).await;
+        assert!(
+            !json["matched_policies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "agent_banned"),
+            "an expired ban must not deny; got: {}",
+            json["matched_policies"]
+        );
     }
 
     /// `POST /v1/agents/:id/report-leaked-token` rotates by default (tenant's
