@@ -167,7 +167,7 @@ out.push("- [Documentation Audit](Documentation_Audit.md)");
 out.push("- [Implementation Status](Implementation_Status.md)");
 out.push("");
 
-const rendered = `${out.join("\n")}\n`;
+const rendered = `${out.join("\n").replace(/\n+$/, "")}\n`;
 const mode = process.argv[2];
 if (mode === "--write") {
   writeFileSync(REPORT, rendered);

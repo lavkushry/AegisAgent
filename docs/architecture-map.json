@@ -50,7 +50,7 @@
     { "id": "alerts_out", "label": "Alerts & Incidents", "layer": 6, "type": "output", "status": "implemented", "description": "Detection hits correlated into incidents with narratives and timelines.", "related_docs": ["components/SOC_Engine.md"] },
     { "id": "evidence_pack", "label": "Evidence Packs", "layer": 6, "type": "output", "status": "implemented", "description": "Compliance export (GET /v1/compliance/evidence-pack) for SOC 2 / EU AI Act Art. 14.", "related_routes": ["/v1/compliance/evidence-pack"], "related_docs": ["components/Receipt_Engine.md"] },
     { "id": "audit_logs", "label": "Audit Logs", "layer": 6, "type": "output", "status": "implemented", "description": "Decision-linked audit events; policy transparency log is itself hash-chained.", "related_routes": ["/v1/audit/events", "/v1/policies/audit-log"], "related_docs": ["event-schema.md"] },
-    { "id": "dashboards_out", "label": "SOC Console Dashboards", "layer": 6, "type": "output", "status": "implemented", "description": "Next.js console served at /dashboard: overview, fleet, integrity, approvals.", "related_files": ["ui/src/dashboards/system/overview.ts"], "related_docs": ["components/Console_UI.md"] }
+    { "id": "dashboards_out", "label": "SOC Console Dashboards", "layer": 6, "type": "output", "status": "implemented", "description": "React/Vite console served at /dashboard: overview, fleet, integrity, approvals.", "related_files": ["ui-next/src/dashboards/system/overview.ts"], "related_docs": ["components/Console_UI.md"] }
   ],
   "edges": [
     { "from": "developer", "to": "sdk", "label": "wraps tools with @protect_tool", "flow": "known_agent" },
