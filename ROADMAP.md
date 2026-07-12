@@ -1,164 +1,464 @@
-# AegisAgent Roadmap
+# AegisAgent 36-Week Architecture Roadmap
 
-> Re-anchored **2026-06-05** on the integrity-layer wedge *and* the Agent SOC direction.
->
-> Source of truth for *why* the product is shaped this way:
-> [`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md).
-> Architecture for the SOC surface:
-> [`docs/AegisAgent_Agent_SOC_Design.md`](docs/AegisAgent_Agent_SOC_Design.md).
->
-> The generic gateway loop (intercept → policy → allow/deny → audit → approval) is commodity —
-> free toolkits and OSS already ship it. The roadmap prioritizes the **two defensible
-> differentiators** that form the moat: **(1)** approval integrity (SHA-256 hash-bound, single-use,
-> fail-closed) and **(2)** deterministic trust-provenance gating (6 levels as Cedar policy input,
-> not a text score). The Agent SOC is the detection/response/evidence plane built **on top of** those
-> primitives — it rides the moat, does not widen it.
+**Status:** execution plan for the target architecture; not a shipped-feature list
 
----
+**Start:** week 1 begins only after maintainers accept the foundation ADR set
 
-## Status update (2026-06-11)
+**Canonical design:** [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/LLD.md](docs/LLD.md)
 
-The "Q4 2026" and "2027 H1/H2" sections below were written before implementation started and are
-kept for build-order rationale, but **nearly all listed phases are now done**. Current state
-(see [`docs/AegisAgent_Agent_SOC_Design.md` §28](docs/AegisAgent_Agent_SOC_Design.md) for the
-file-by-file breakdown):
+**Current-to-target audit:** [MIGRATION_MATRIX.md](MIGRATION_MATRIX.md)
 
-- ✅ **Done:** the integrity moat (canonicalization, approval integrity, hash-chained receipts —
-  Python/Rust/Go/TS), Phase 0 (ASE event stream), Phase 1 (detection rules), Phase 2 (notify
-  sink with HMAC-SHA256 webhook signing + circuit breaker), Phase 3 (correlation/incidents),
-  Phase 4 (response engine with auto-dispatch + autonomy levels `L0`-`L4`, #1227),
-  Phase 5 (SQLite event indexer + `/v1/ws/events` live feed + `/v1/soc/summary`),
-  Phase 6 (RCA narrator). Also done: agentless ingestion via `POST /v1/ingest` (#1230),
-  per-agent behavioral baselining (#1229), Kubernetes health probes `/livez`/`readyz`/`startupz`
-  (#1225), Ed25519 receipt signing, hashed agent tokens, graceful shutdown, CatchPanic layer,
-  SQLITE_BUSY retry, and production-hardening fixes (BUG-001 through BUG-005).
-- ❌ **Remaining:** a real SOC Console UI (today: `/v1/soc/summary` + WebSocket feed, no dashboard),
-  PostgreSQL backend, Kubernetes/Helm packaging, and remaining developer-experience improvements.
+## Program rules
 
----
+1. Every week ends with a demonstrable artifact and a binary pass/fail gate.
+2. The existing authorization path remains deployable until typed-service, integrity, performance, recovery, and rollback gates pass.
+3. Approval, replay, tenant, Cedar, action-hash, receipt, and Ed25519 invariants are release blockers in every phase.
+4. HCMT initially shadows telemetry only. It does not replace transactional control state.
+5. `<1 ms p99` authorization compute and `>=1M events/s/node` ingestion remain targets until raw qualification artifacts are published.
+6. Feature flags and per-tenant generations support dual write, shadow read, cutover, and rollback.
+7. No phase borrows unbounded CPU, memory, I/O, queue capacity, or retry time from another plane.
 
-## MVP launch readiness (done / in progress)
+## Phase summary
 
-- Local gateway quickstart with Docker Compose. ✅
-- Python SDK `@protect_tool` with **fail-closed approval action-hash verification**. ✅
-- Default Cedar policy pack: read-only allow, main-merge approval, untrusted-mutation denial. ✅
-- GitHub attack demo with audit output. ✅
+| Phase | Weeks | Outcome | Exit gate |
+|---|---:|---|---|
+| Foundation | 1–6 | frozen contracts, typed service seam, reactor/ring proof, benchmark harness | old/new authorization differential equality; ring safety suite |
+| Core Engine | 7–16 | io_uring reactors, immutable snapshots, WAL, HCMT, vectorized query, dual write/read | crash-safe HCMT; zero shadow mismatches; qualified ingest target attempted honestly |
+| SOC Plane | 17–24 | compiled deterministic guardrails, owned semantic index, INT8 inference, correlation, eBPF | deterministic `<100 ms p99` detection target; containment safety/kernel matrix |
+| UI Layer | 25–30 | Arrow browser stream, WASM transforms, WebGL2 panels | 60 FPS stress profile, accessibility and reconnect correctness |
+| Integration | 31–36 | SDK/protocol migration, HA/NUMA hardening, chaos, comparative benchmark, cutover | all integrity/performance/recovery/rollback release gates |
 
----
+## Phase 1 — Foundation (Weeks 1–6)
 
-## Q3 2026 — harden the integrity primitives (the moat)
+### Week 1 — Freeze evidence and decisions
 
-These ship before anything else. The Agent SOC phases below are consumers of this foundation;
-none of them weaken it.
+Deliverables:
 
-- **Canonicalization spec v1** (`aegis-jcs-1`, target RFC 8785 JCS) shared across SDK + gateway,
-  with a CI byte-equality gate. The fail-closed guarantee is only as strong as this lock.
-- **Approval Integrity Engine hardening:** expiry fail-closed at SDK ✅ and gateway; **single-use**
-  atomic consume (replay T-A3) ✅ (SDK verified; gateway pending `cargo`); edit → re-hash →
-  re-evaluate confirmation; tamper-attempt receipts.
-- **Verifiable action-receipt format v0** (per-tenant hash chain): open spec ✅
-  ([`docs/action-receipt-spec.md`](docs/action-receipt-spec.md)) · Python reference verifier ✅
-  (`aegisagent/receipts.py`, 8/8) · CLI ✅ · gateway emission into `action_receipts` ·
-  `GET /v1/receipts/:id/verify` (written, pending `cargo`). **Next:** race-safe chain head
-  (transaction); enterprise signing.
-- **Trust-Provenance Gate:** deterministic 6-level model finalized; classifier integration that can
-  only *tighten*, never loosen a label.
-- Slack approval callback signature verification + approver role lookup.
-- The "approve-then-swap blocked" demo as the flagship — this is the positioning proof.
+- capture current repository, route/RPC, dependency, storage, task/lock, SDK, UI and performance inventories;
+- preserve canonical, receipt, approval replay, trust-lattice and tenant-isolation corpora;
+- accept ADRs for target dependency DAG, performance classes, copy ledger, benchmark hardware profile and migration switches;
+- add a machine-readable implementation-status vocabulary: `current`, `shadow`, `target`, `qualified`.
 
----
+Gate: baseline commands reproduce; docs never label targets as measurements; current CI remains green.
 
-## Q4 2026 — evidence, provenance depth, and reach
+### Week 2 — Establish wire and compatibility contracts
 
-- **SOC 2 / EU AI Act Article 14 evidence export** (receipt packs; Article 14 deadline
-  2026-08-02 creates concrete demand).
-- TypeScript SDK with byte-identical canonicalization (`aegis-jcs-1` parity test in CI).
-- MCP manifest signing + drift detection feeding provenance downgrade.
-- MCP proxy execution path (beyond authorization).
-- OpenTelemetry exporter; `approval_hash_mismatch_total` / `provenance_denials_total` metrics.
-- GitHub App integration + PR comments/checks; default anti-confused-deputy policy pack.
-- **Phase 0 (keystone) — Async Agent Security Event emitter:** after every `/v1/authorize`
-  decision, emit one immutable ASE event via a non-blocking `tokio::mpsc` channel drained by a
-  background task. This does **not** add latency to the <75 ms inline path (Law 3 below). Every
-  subsequent SOC phase is a consumer of this one stream and never touches the hot path again.
-  Unlocks the entire async detection plane.
-- **Phase 1 — Deterministic detection rules:** atomic YAML rules evaluated against ASE events
-  (single-event matches for confused-deputy, MCP drift, approval tamper). Cedar decides; scores
-  annotate display only. No LLM in this path.
-- **Phase 2 — Notify sink:** Slack / webhook consumer on deny + approval events. L1 visibility
-  without any dashboard yet.
+Deliverables:
 
----
+- define protobuf v2 control skeleton and FlatBuffer telemetry v2;
+- define Arrow logical schema, schema fingerprinting, FlatBuffer verification limits and error codes;
+- build logical-event conversion corpus across REST model, protobuf, FlatBuffer and Arrow;
+- configure protobuf `bytes` fields as `Bytes` and reserve field numbers.
 
-## 2027 H1 — Agent SOC: correlation, response, and the console
+Gate: round-trip/differential corpus equality; malformed length/depth/version fuzz seeds rejected without allocation spikes.
 
-*This section rides the moat — it does not widen it.* The detections, alerts, and responses below
-are defensible only because they carry `action_hash` and `receipt_hash` as immutable evidence.
-A generic SIEM can record; AegisAgent can **prove**. See
-[`docs/AegisAgent_Agent_SOC_Design.md §27`](docs/AegisAgent_Agent_SOC_Design.md) for the full
-build order rationale and the four design laws that keep the SOC from drifting into commodity.
+### Week 3 — Extract typed authorization service
 
-- **Phase 3 — Correlation engine + incidents:** frequency, sequence, and time-window correlation
-  rules (deny-storm, read-sensitive → egress, runaway-agent). Incident model with
-  `evidence_receipts` linking each event to its chain position — the incident timeline is provable.
-- **Phase 4 — Response control API:** `POST /v1/agents/:id/freeze|revoke` ·
-  `POST /v1/mcp/servers/:server_key/quarantine` — tenant-scoped, parameterized, fail-closed. The
-  authorize path already reads `agents.status`, so a freeze takes effect on the next action
-  automatically. Enables L3 graduated-autonomy containment (reversible, low-blast-radius actions
-  may auto-fire; destructive actions stay human-gated).
-- **Layer-on adapters:** AegisAgent adds integrity on top of existing gateways (Microsoft Agent
-  Governance Toolkit, MintMCP, Pipelock). Sold as interop, not displacement.
-- Enterprise: transparency-log / KMS-backed receipt signing; air-gapped mode.
+Deliverables:
 
----
+- introduce protocol-neutral `AuthorizeService` and domain command/outcome;
+- route REST and gRPC through the typed service behind a feature flag;
+- remove the gRPC → REST handler → JSON body round trip for the first authorization method;
+- preserve current transactional storage and receipt behavior.
 
-## 2027 H2 — SOC console, RCA narrator, and breadth
+Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus.
 
-- **Phase 5 — ClickHouse sink + SOC Console:** live decision feed, incident timeline (each row
-  carries its `receipt_hash` — timeline is *provable*, not just recorded), agent risk scoreboard,
-  receipt integrity viewer. The console is the daily-use surface; its defensibility is the receipt
-  chain beneath it.
-- Memory/RAG provenance + receipts (AgentPoison/PoisonedRAG class of threats).
-- Policy bundle versioning + dry-run / simulation mode.
-- Per-tenant rate limiting; webhook export; Helm + production hardening.
-- Drive adoption of the open action-receipt spec across the ecosystem.
-- **Phase 6 — RCA narrator (sandboxed LLM, post-incident only):** a single LLM module that
-  *summarises* an already-decided, already-closed, already-evidenced incident and writes a
-  human-readable markdown report. It has no tools, no path to enforcement, and treats all evidence
-  as inert data. This is the **only** LLM in the SOC. It never gates a decision.
-- **Phase 7 — Agentless ingestion + behavioural baselining:** ingest GitHub webhooks, OpenAI
-  traces, LangSmith, OTel/OTLP, Slack audit logs without requiring SDK installation. Enables value
-  before any customer code change. Baselining surfaces anomalous agent behaviour for the
-  correlation engine without replacing deterministic rules.
+### Week 4 — SPSC ring and slab prototype
 
----
+Deliverables:
 
-## What AegisAgent is NOT — and what the Agent SOC is NOT
+- implement cache-padded SPSC ring, 32-byte descriptor and NUMA-local slab prototype;
+- document linearization, memory ordering, shutdown, wrap, drop and epoch rules;
+- add scalar reference queue, Loom model, Miri tests and native stress benchmark;
+- instrument allocations, copied bytes, cache misses and cycles/op.
 
-AegisAgent is **not** a generic SIEM, DLP, network egress firewall, model scanner, GRC
-automation suite, or identity lifecycle manager. The Agent SOC is specifically **not** those
-things either — it is a narrow, focused surface on the integrity spine:
+Gate: zero lost/duplicated descriptors; zero steady-state allocations; safety suite green; no false sharing in layout/perf evidence.
 
-> **Monitor / detect / correlate / approve / contain / PROVE agent actions** — and nothing else.
+### Week 5 — CoreReactor prototype
 
-The four design laws that keep the Agent SOC from drifting into a commodity SIEM (from
-[`docs/AegisAgent_Agent_SOC_Design.md §2`](docs/AegisAgent_Agent_SOC_Design.md)):
+Deliverables:
 
-1. **Deterministic policy decides; scores never gate.** Cedar evaluates source trust and
-   `mutates_state`. Risk scores are advisory display metadata — never the allow/deny input.
-   A number is attacker-gameable; a deterministic provenance gate is not.
-2. **The LLM investigates; it never decides, enforces, or reads instructions.** One sandboxed
-   LLM narrates closed incidents (Phase 6). No LLM reads live, attacker-controlled evidence —
-   that would recreate the very prompt-injection threat the product defends against.
-3. **The inline path is sacred; detection is asynchronous.** `POST /v1/authorize` has a <75 ms
-   budget. The SOC is purely out-of-band; it is value-add, never a tax on the inline path.
-4. **Every moat primitive is preserved end-to-end.** `aegis-jcs-1` stays byte-identical;
-   approvals stay hash-bound and single-use; receipts stay hash-chained. The SOC *consumes and
-   surfaces* these; it never weakens them.
+- pin one OS thread per selected core;
+- own one io_uring, listener, admission budget, request arena and ring producers per reactor;
+- prove connection completion remains on its owner core;
+- isolate REST/admin jobs on reserved control cores.
 
-**AegisAgent integrates with — it does not become — enterprise SIEM, SOAR, and GRC.** Webhook
-export and OTel metrics feed existing stacks (Splunk, Datadog, PagerDuty). The integrity
-primitives and the verifiable receipt chain are what AegisAgent contributes to those integrations;
-the query, correlation, and dashboard infrastructure those tools already own is not duplicated.
-A feature that violates one of the four laws above would make AegisAgent a *better generic SIEM*
-and therefore a *worse* AegisAgent — those features are out of scope.
+Gate: scheduler migration count zero for reactor threads under load; bounded overload response; clean shutdown with no leaked in-flight ownership.
+
+### Week 6 — Qualification harness
+
+Deliverables:
+
+- create hardware manifest, core/IRQ/frequency setup, HDR histogram and coordinated-omission-correct load generator;
+- add stage timing for validation, canonicalization, snapshot lookup, Cedar, commit, ring publish and response;
+- publish current control run on the same qualified machine;
+- add loss/duplicate/receipt verification to throughput tests.
+
+Gate: one command produces raw artifacts and integrity report; mean-only results cannot pass a p99 gate.
+
+## Phase 2 — Core Engine (Weeks 7–16)
+
+### Week 7 — Immutable tenant snapshots
+
+Deliverables:
+
+- build immutable agent/tool/policy/trust snapshots off hot cores;
+- publish complete generations to every decision reactor;
+- add emergency revocation acknowledgement and fail-closed expiry;
+- differential-test current `RwLock` engine against snapshots.
+
+Gate: zero decision mismatches; one request never mixes generations; revocation propagation meets declared deadline.
+
+### Week 8 — Split persistence contracts
+
+Deliverables:
+
+- introduce `ControlStore`, `ReceiptLog`, `EventStore` and `ProjectionStore` seams;
+- map existing SQLite/PostgreSQL operations without changing semantics;
+- move normal telemetry callers behind `EventStore`;
+- record consistency/durability class at every call site.
+
+Gate: no raw pool access in services; protected action transaction tests remain green; dependency DAG is acyclic.
+
+### Week 9 — WAL and recovery
+
+Deliverables:
+
+- implement `AEGWAL02` format, CRC32C, sequence validation and bounded record parser;
+- use registered io_uring files/buffers; implement protected/critical/normal acknowledgement classes;
+- add group commit, critical reserve and disk-full behavior;
+- inject crash/short-write/corruption at every record boundary.
+
+Gate: acknowledged protected records survive every injected crash; interior corruption quarantines; torn tail truncates deterministically.
+
+### Week 10 — HCMT memtable and L0 segment
+
+Deliverables:
+
+- implement preallocated structure-of-arrays memtable and spare-buffer swap;
+- seal into aligned Arrow-compatible column buffers;
+- implement exact segment metadata, hashes, granule index and atomic manifest publication;
+- create golden segment corpus and independent inspection tool.
+
+Gate: SQL/HCMT row equality on corpus; no row materialization during append; crash-safe segment publication.
+
+### Week 11 — Timestamp and filter codecs
+
+Deliverables:
+
+- implement independently restartable Gorilla delta-of-delta blocks with raw fallback;
+- implement zone maps, dictionary generations, Roaring indexes and blocked Bloom filters;
+- fuzz codecs, overflow, corrupt lengths, dictionary mismatch and conservative pruning;
+- report compression ratio and decode/prune cost by distribution.
+
+Gate: no false-negative pruning; decoder equals raw timestamps; corrupted blocks never escape bounds.
+
+### Week 12 — Compaction and retention
+
+Deliverables:
+
+- implement L0 overlap and non-overlapping L1+ leveled compaction;
+- unify dictionaries, rebuild filters, deduplicate IDs and preserve evidence roots;
+- add I/O/CPU token budgets, tenant fairness and debt throttling;
+- implement whole-segment retention and manifest epoch retirement.
+
+Gate: 24-hour accelerated soak with compaction active; bounded debt; query equality; measured write amplification.
+
+### Week 13 — Vectorized query engine
+
+Deliverables:
+
+- implement manifest snapshot, partition/segment/granule pruning and residual vector operators;
+- support time range, equality, set, trust/decision/severity, count, count-by and count-over-time;
+- emit bounded Arrow batches with cancellation and memory/scanned-byte limits;
+- shadow current SOC queries.
+
+Gate: zero shadow mismatches for supported queries; budgets cancel safely; prune/decode statistics are correct.
+
+### Week 14 — Binary telemetry ingestion
+
+Deliverables:
+
+- implement bidirectional gRPC ingest stream with FlatBuffer frames, CRC, credit and contiguous/durable ACKs;
+- add sensor/cage dual protocol negotiation and durable replay until ACK;
+- feed verified descriptors into per-writer rings without payload cloning;
+- rate-limit/authenticate by trusted stream context, not frame tenant alone.
+
+Gate: reorder/duplicate/loss/reconnect tests; authenticated tenant mismatch rejected; bounded memory under malicious stream.
+
+### Week 15 — Dual write and shadow read
+
+Deliverables:
+
+- dual-write telemetry to row store and HCMT by per-tenant generation;
+- compare query results and evidence linkage online by hashes;
+- expose mismatch, lag, WAL, segment and compaction telemetry;
+- exercise rollback to row reads and WAL replay into the legacy SOC drain.
+
+Gate: two full replay corpora and a sustained staging interval with zero integrity-field mismatch.
+
+### Week 16 — Core qualification checkpoint
+
+Deliverables:
+
+- run 30-minute steady and burst ingest with compaction/query load active;
+- run warm authorization compute and separate protected-commit profiles;
+- publish raw histograms, cycles/event, copies, allocations, cache/branch/NUMA misses and write amplification;
+- file gaps instead of weakening durability or loss policy.
+
+Gate: target passes or is explicitly recorded as unmet with bottleneck evidence. No marketing claim changes without pass.
+
+## Phase 3 — SOC Plane (Weeks 17–24)
+
+### Week 17 — Guardrail normalization and Aho compiler
+
+Deliverables:
+
+- version Unicode/case/newline/whitespace normalization and original-offset mapping;
+- compile tenant pattern sets to bounded Aho-Corasick DFAs;
+- enforce pattern/state/resident/output caps;
+- atomically publish automaton generation with policy snapshots.
+
+Gate: Aho equals naive reference across Unicode fuzz corpus; scan is `O(n+z)` and memory cap failure is explicit.
+
+### Week 18 — Structured rule compiler
+
+Deliverables:
+
+- compile existing YAML predicates into typed field operations;
+- combine DFA matches, Arrow dictionaries and bitmap predicates;
+- eliminate per-event rule DB reads and stringly typed hot comparisons;
+- preserve stable rule IDs and evidence references.
+
+Gate: old/new detector differential equality; deterministic rules never create allow; first-stage latency histogram published.
+
+### Week 19 — Product Quantization
+
+Deliverables:
+
+- implement/version PQ codebooks, fixed codes and exact reference distance;
+- isolate training to approved content-addressed corpora;
+- add tenant/model/tokenizer/codebook compatibility checks;
+- measure quantization error, memory and scan throughput.
+
+Gate: quality threshold accepted in ADR; cross-tenant/codebook mismatch rejected; deletion/retention defined.
+
+### Week 20 — HNSW index
+
+Deliverables:
+
+- implement immutable HNSW generation plus mutable delta/rebuild path;
+- integrate PQ distance tables and exact-search verification harness;
+- implement tombstone/deletion debt and generation rollback;
+- shadow current Qdrant results without serving them.
+
+Gate: recall@k, p99, bytes/vector, build/rebuild and worst-case safeguards meet declared profile.
+
+### Week 21 — INT8 ONNX inference
+
+Deliverables:
+
+- select signed/content-addressed model/tokenizer and calibration report;
+- own one preallocated ORT session per inference core with one internal thread;
+- batch within fixed queue/deadline limits;
+- map outputs to advisory/tighten-only evidence.
+
+Gate: queue+inference p99 fits async budget; quality threshold met; failure/timeout/saturation cannot allow or loosen trust.
+
+### Week 22 — Partitioned correlation and response intents
+
+Deliverables:
+
+- partition time windows by tenant/agent owner;
+- implement bounded frequency/sequence/state-machine operators over HCMT/live rings;
+- produce idempotent signed response intents with autonomy policy;
+- retain LLM narration only after evidence/decision closure.
+
+Gate: deterministic replay yields identical incidents/intents; bounded memory per tenant; no inline decision dependency.
+
+### Week 23 — eBPF observation
+
+Deliverables:
+
+- introduce shared kernel/user ABI and CO-RE build workspace;
+- capture process lifecycle and cgroup network events through per-CPU maps/ring buffer;
+- integrate sensor durable spool and loss counters;
+- run verifier/kernel matrix and capability detection.
+
+Gate: unsupported kernels report reduced assurance; no ABI drift; ring overflow is detected and surfaced.
+
+### Week 24 — eBPF containment
+
+Deliverables:
+
+- add signed, generation-switched cgroup network and selected BPF LSM policy maps;
+- implement expiry, rollback, break glass and last-known-policy behavior;
+- test process/file/network containment in disposable VMs;
+- bind every enforcement decision to tenant/node/cgroup and signed command receipt.
+
+Gate: unauthorized/stale/replayed commands rejected; rollback works; lockout recovery exercised; `<100 ms p99` deterministic detection-to-intent target evaluated.
+
+## Phase 4 — UI Layer (Weeks 25–30)
+
+### Week 25 — Arrow query and browser stream
+
+Deliverables:
+
+- serve native Arrow Flight and Aegis Arrow Stream WebSocket envelopes;
+- implement schema/dictionary generations, CRC, credit, cancel and resume cursor;
+- enforce tenant query and output-field redaction before transmission;
+- retain JSON query fallback.
+
+Gate: reconnect/resume/restart tests; server never exceeds credit; malformed IPC/envelope rejected.
+
+### Week 26 — Rust WASM Arrow worker
+
+Deliverables:
+
+- add `ui-wasm` crate, bounded arena and one-copy browser→WASM ingest;
+- validate Arrow messages and create typed buffer views;
+- implement SIMD/scalar filter, aggregate and level-of-detail parity;
+- instrument copied bytes, allocations and worker time.
+
+Gate: scalar/WASM SIMD equality; stale views invalidated on memory growth; no per-field copy.
+
+### Week 27 — WebGL2 rendering kernel
+
+Deliverables:
+
+- implement structure-of-arrays GPU buffers, instancing, triple buffering and changed-range upload;
+- implement off-screen ID picking and context-loss recovery;
+- render time series, scatter, bars and heatmaps;
+- add deterministic screenshot and GPU-capability fallbacks.
+
+Gate: frame budget on declared GPU/viewport/cardinality; no DOM/SVG object per point.
+
+### Week 28 — SOC panels on Arrow frames
+
+Deliverables:
+
+- migrate Explore, live feed, incidents, integrity timeline and agent risk panels;
+- preserve action/receipt hash drill-down and verification state;
+- keep React state bounded to summaries/selections;
+- add server-side pixel aggregation.
+
+Gate: JSON versus Arrow panel semantics match; approval/containment actions remain typed and CSRF/auth protected.
+
+### Week 29 — Graph and live-stream scaling
+
+Deliverables:
+
+- migrate evidence graph nodes/edges to WASM layout and WebGL2 instancing;
+- coalesce obsolete visual frames while preserving resume cursor;
+- cancel stale queries on navigation/time changes;
+- stress multi-stream backpressure and browser memory plateau.
+
+Gate: bounded memory for 8-hour session; interaction remains within frame budget; no dropped durable cursor state.
+
+### Week 30 — UI qualification and accessibility
+
+Deliverables:
+
+- publish p50/p95/p99 frame, worker, upload and draw timings;
+- complete keyboard, focus, screen-reader summary, contrast and reduced-motion coverage;
+- test context loss, reconnect, offline, schema change and slow-device degradation;
+- retain legacy UI rollback flag.
+
+Gate: 60 FPS p95 target passes declared stress profile; critical workflows accessible without canvas-only semantics.
+
+## Phase 5 — Integration and Qualification (Weeks 31–36)
+
+### Week 31 — SDK binary transport
+
+Deliverables:
+
+- add gRPC/protobuf authorization to Python, TypeScript and Go;
+- add streaming FlatBuffer transport where applicable;
+- preserve exact local v1 action hashing and fail-closed consume sequence;
+- negotiate fallback without downgrade ambiguity.
+
+Gate: cross-language transport/canonical corpus; network failure/hash mismatch/expiry/replay never executes a protected tool.
+
+### Week 32 — Contract parity and adapter cleanup
+
+Deliverables:
+
+- reconcile all public REST routes with protobuf services or accepted deprecation ADRs;
+- remove remaining gRPC/REST JSON bridging;
+- generate route/RPC/schema compatibility reports;
+- move handler business logic into service crates.
+
+Gate: parity report complete; adapter-only dependency checks; protocol E2E tests use identical service outcomes.
+
+### Week 33 — HA, NUMA and shard movement
+
+Deliverables:
+
+- qualify control-store HA mode and declare linearizability/RPO/RTO;
+- implement routing generations, tenant writer movement and snapshot/manifest handoff;
+- bind Kubernetes/systemd deployment to cpusets, topology and IRQ policy;
+- test node loss and cross-NUMA avoidance.
+
+Gate: no duplicate approval/receipt/control mutation across failover; declared RPO/RTO met; reactor migrations zero.
+
+### Week 34 — Security and chaos qualification
+
+Deliverables:
+
+- run disk-full, corrupt WAL/segment, KMS outage, policy compiler failure, model failure, queue saturation, network partition and clock rollback campaigns;
+- run cross-tenant fuzzing, unsafe-code review, Miri/Loom/sanitizers and eBPF verifier matrix;
+- complete threat-model and operational runbook updates;
+- exercise rollback from built release artifacts.
+
+Gate: no unauthorized execution or acknowledged protected-evidence loss; every failure is bounded and observable.
+
+### Week 35 — Comparative performance qualification
+
+Deliverables:
+
+- run Aegis targets on published qualified hardware for 30+ minutes with compaction and queries active;
+- compare representative JVM SIEM/search pipeline using identical durability, replication, retention, event schema and loss policy;
+- publish raw configs, manifests, histograms and integrity reports;
+- document misses and saturation without benchmark-specific security weakening.
+
+Gate: claims exactly match evidence. A missed target becomes a measured backlog item, not a rewritten result.
+
+### Week 36 — Controlled cutover and release
+
+Deliverables:
+
+- complete two-release zero-mismatch shadow requirement for integrity fields;
+- cut selected canary tenants to HCMT queries, Arrow UI, local semantic index and qualified sensor mode;
+- retain transactional control store and rollback readers;
+- update implementation status, release notes, operator docs and support matrix;
+- schedule legacy telemetry/Qdrant/UI retirement only after retention and rollback gates.
+
+Gate: canary SLOs, integrity proofs, recovery, rollback and operator sign-off pass. Target architecture becomes `qualified` only for the tested deployment profile.
+
+## Cross-phase metrics
+
+The weekly scorecard tracks:
+
+- authorization compute and protected-commit p50/p95/p99/p99.9 separately;
+- admitted/durable events/s and loss/duplicate count;
+- cycles, allocations and copied bytes per event;
+- scheduler migrations, context switches, L1/LLC/branch/NUMA misses;
+- WAL sync p99, bytes/event, segment compression and write amplification;
+- compaction debt/age, granules pruned and bytes decoded;
+- Aho states/resident bytes/scan rate;
+- HNSW recall@k/p99/bytes per vector and PQ error;
+- ONNX queue/inference p99 and quality;
+- detection-to-alert/intent p99;
+- browser worker, upload, draw and total frame histograms;
+- policy/control generation propagation and receipt-chain verification;
+- shadow mismatch count, which must be exactly zero for integrity fields.
+
+## Explicit non-goals for this 36-week program
+
+- replacing the transactional control store with an unproven merge tree;
+- claiming universal end-to-end zero-copy across kernel, TLS, browser, WASM and GPU;
+- allowing a model score to bypass Cedar or increase trust;
+- implementing a general-purpose Elasticsearch/OpenSearch-compatible query language;
+- supporting arbitrary unbounded regex, script or plugin execution in query/guardrail reactors;
+- deleting the legacy path before a tested release-artifact rollback exists;
+- calling a target shipped because a microbenchmark passed.

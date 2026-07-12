@@ -19,6 +19,8 @@ This folder is the **single source for AegisAgent product documentation**. It re
 | [Product_Overview.md](Product_Overview.md) | What/why in plain language |
 | [Last_Mile_System_Walkthrough.md](Last_Mile_System_Walkthrough.md) | The entire system as one story |
 | [Architecture_Overview.md](Architecture_Overview.md) | The 11 choke points, trust boundaries, fail-closed paths |
+| [../ARCHITECTURE.md](../ARCHITECTURE.md) + [LLD.md](LLD.md) | Canonical target HLD/LLD and benchmark contract |
+| [../MIGRATION_MATRIX.md](../MIGRATION_MATRIX.md) | Repository-backed current-to-target audit and cutover gates |
 | [Implementation_Status.md](Implementation_Status.md) | **Honest ledger**: implemented vs. partial vs. planned |
 | [Repo_Knowledge_Map.md](Repo_Knowledge_Map.md) | Maintainer's map: every layer → files → flows → doc gaps |
 | [onboarding/](onboarding/For_New_Engineer.md) | Six role-specific onboarding guides |

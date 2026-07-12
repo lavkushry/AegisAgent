@@ -1,776 +1,672 @@
-# AegisAgent World-Class HLD
+# AegisAgent Performance-First High-Level Design
 
-**Status:** target architecture proposal  
-**Date:** 2026-06-28  
-**Scope:** architecture only; no runtime implementation implied  
-**Audience:** platform security, infra, backend, SDK, SOC, and product engineering
+**Status:** normative target design with current-state annotations
 
----
+**Last reviewed:** 2026-07-12
 
-## 1. Product vision
+**Owners:** Architecture, Platform Security, Gateway, Storage, SRE
+**Audience:** students, developers, security engineers, SREs, and enterprise architects
 
-AegisAgent becomes the **AI Agent Security Control Plane** for autonomous agents.
+> **Performance contract, not a slogan.** No finite system can guarantee “zero bottlenecks” under unlimited load. This design removes avoidable serialization, bounds every queue, sheds excess work before resources collapse, and defines a capacity envelope that must be proven by benchmark. Security invariants are never traded for speed.
 
-AegisAgent is **not an agent**. AegisAgent controls agents by forcing important agent actions through explicit, auditable choke points. It provides control, isolation, evidence, and runtime response for both:
+## Overview
 
-- **Known agents** integrated through SDKs, the gateway, MCP gateway, tool broker, policy engine, approval engine, and receipt engine.
-- **Unknown or anonymous agents** controlled through a node sensor, disposable cage runner, sandbox isolation, runtime telemetry, egress proxy, tool broker, credential isolation, signed control commands, and ban/quarantine systems.
+AegisAgent is the integrity layer for AI-agent actions. Before an agent invokes a tool, changes data, calls an MCP server, or uses a privileged API, AegisAgent determines whether the exact action is allowed, denied, or requires human approval. It then creates evidence that can be independently verified.
 
-The governing principle is:
+The performance-first architecture separates work into three lanes:
 
-> Aegis can only control what passes through Aegis choke points. If an agent bypasses all choke points, it is treated as hostile and must be isolated, blocked, killed, quarantined, or banned by the runtime data plane.
+1. **Decision lane:** authenticate, normalize, verify provenance, evaluate deterministic policy, and respond.
+2. **Durability lane:** atomically persist protected decisions, approvals, replay state, and hash-chained receipts.
+3. **Evidence lane:** batch non-critical audit, telemetry, detection, correlation, export, and UI projections asynchronously.
 
----
+The selected design is the **Snapshot-Isolated Fast Lane**: immutable tenant-scoped control snapshots serve read-heavy authorization without global locks; independent storage reads execute concurrently; tenant-affine bounded writers reduce write contention; and protected actions synchronously cross the durability boundary before a response is returned.
 
-## 2. Category definition
+### Design status vocabulary
 
-AegisAgent defines a higher-order category than the current repository's MVP framing of **Agent Action Integrity**:
+| Label | Meaning |
+|---|---|
+| **Current** | Present in the repository and described by the implementation ledger. |
+| **Target** | Approved architecture direction; implementation and benchmark evidence are still required. |
+| **Conditional** | Enabled only by configuration or deployment mode. |
 
-> **AI Agent Security Control Plane** — a control plane plus runtime data plane that governs prompt/model, tool, API, MCP, network, filesystem, process, secret, approval, runtime-control, and receipt/evidence boundaries for autonomous AI agents.
+The authoritative shipped-status ledger is [Implementation Status](Implementation_Status.md). This page does not promote a target capability to “shipped.”
 
-AegisAgent still preserves its current differentiators:
+## Why This Exists
 
-1. **Approval integrity:** exact action is canonicalized and hashed; approvals bind to `action_hash`; SDKs fail closed on mismatch, expiry, or replay.
-2. **Deterministic provenance gating:** policy evaluates source trust and prompt/tool lineage; LLMs may summarize but never decide enforcement.
-3. **Receipt-backed evidence:** protected actions produce tamper-evident receipts.
+An AI agent can create a pull request, delete cloud data, send money, read secrets, or call an untrusted tool in milliseconds. Traditional IAM often answers only “may this identity access this service?” It does not bind approval to the exact canonical action, preserve source provenance, or produce a tamper-evident action history.
 
-The world-class version adds the missing runtime data plane:
+A slow control point is bypassed. An unreliable control point blocks legitimate work. A fast but eventually consistent security decision may authorize against stale policy. AegisAgent therefore needs low latency **and** deterministic, fail-closed integrity.
 
-- `aegis-node-sensor`
-- `aegis-cage-runner`
-- `aegis-egress-proxy`
-- `aegis-tool-broker`
-- signed gateway-to-sensor command protocol
-- runtime event ingestion
-- ban/quarantine control plane
-- prompt/model/tool/runtime timeline
-- receipt-backed SOC evidence graph
+Real example: an agent requests approval to transfer ₹10,000 and later changes the payload to ₹100,000. A text-only approval can be misleading. AegisAgent canonicalizes the executable action, hashes it, binds approval to that hash, and rejects any mismatch.
 
----
+## Problem Statement
 
-## 3. Current repository summary
+Companies face five coupled problems:
 
-The active root is a **Cargo workspace** (the earlier single-`gateway/`-crate MVP
-has already been migrated; a stale `gateway/` directory may remain on disk but is
-**not** a workspace member and is not the source of truth):
+- **Latency:** every inline database round trip increases agent execution time.
+- **Contention:** decision, audit, receipt, and telemetry writes can fight for the same pool or SQLite writer lock.
+- **Staleness:** aggressive caching can continue to allow a quarantined agent or revoked policy.
+- **Overload:** unbounded work queues convert a traffic spike into memory growth and multi-second tail latency.
+- **Evidence integrity:** making every write asynchronous is fast but can acknowledge a protected action without durable proof.
 
-- `src/`: the gateway binary crate (package name `gateway`) — Axum + Tokio + SQLx,
-  `routes/` split into focused modules (`authorize*.rs`, `approval.rs`,
-  `receipts.rs`, `soc.rs`, `mcp.rs`, `tenant.rs`, …), middleware, jobs, mTLS,
-  admission webhook, dashboard serving. `src/canon/` holds the canonicalization crate.
-- `lib/{common,api,storage,policy,soc}`: extracted workspace crates — shared
-  canonicalization/errors/metrics, strongly-typed API models, the `StorageBackend`
-  trait + SQLite/Postgres implementations and SQLx migrations
-  (`lib/storage/migrations{,_postgres}/`), the Cedar policy engine, and the async
-  SOC plane (events/detect/correlate/respond/notify/backtest).
-- `sdk-python/`, `sdk-typescript/`, `sdk-go/`: all three SDKs are active, with
-  byte-identical `aegis-jcs-1` canonicalization and fail-closed approval consume.
-- `ui/`: the Next.js console (static-exported, served by the gateway).
-- `mcp-gateway-lite/`, `policies.cedar` (kept byte-identical across the root,
-  `src/`, `lib/policy/`, and Helm copies), `helm/`, `docs/`, and a substantial CI
-  matrix (`fmt`/`clippy`/tests/coverage/fuzz-smoke/benchmarks/SDK parity/Docker E2E/
-  SAST/secret-scan/container-scan).
+If these are not solved, operators see timeouts, retry storms, duplicated approvals, missing evidence, cross-tenant risk, and pressure to bypass the gateway.
 
-Recent hardening already merged: transaction-safe atomic receipt-chain append;
-**fail-closed durable receipts** for protected decisions; receipt
-verify-chain/verify-range/chain-head endpoints; SOC event evidence linkage;
-public-bind + admin-endpoint auth gates; structured `POST /v1/soc/query`; and a
-**DB-backed, multi-instance-safe replay-nonce store**. See
-[`production-hardening.md`](production-hardening.md).
+### Non-negotiable design laws
 
-What does **not** yet exist is the **runtime data plane** — there are no
-`aegis-node-sensor`, `aegis-cage-runner`, `aegis-egress-proxy`, or
-`aegis-tool-broker` binaries, no runtime-event ingestion, no signed
-gateway→sensor command protocol, and no first-class ban/quarantine or
-prompt/model/runtime capture. That is the subject of this architecture.
+1. Deterministic policy decides; advisory risk scores never gate.
+2. An LLM may investigate or explain; it never allows, denies, approves, or executes.
+3. The inline authorization path is sacred; detection and correlation run out of band.
+4. Canonical action hashing, approval binding, expiry, replay protection, tenant isolation, and receipt-chain integrity remain fail closed.
 
----
+## Solution
 
-## 4. System overview
+### Architectural alternatives considered
 
-AegisAgent is split into clear planes and binaries. The gateway is the central brain; it never runs untrusted agents.
+The following candidates are intentionally diverse. Scores are relative, from 1 (poor) to 5 (excellent), for AegisAgent’s security and workload shape.
+
+| Candidate | Core idea | Median speed | Tail latency | CPU/memory efficiency | Consistency | Operational cost | Verdict |
+|---|---|---:|---:|---:|---:|---:|---|
+| Lock-free snapshot gateway | Immutable per-tenant compiled policy and metadata snapshots; atomic pointer swap | 5 | 5 | 5 | 4 | 4 | **Selected foundation** |
+| Tenant-affine actors | Hash tenant to a single mailbox/writer; eliminate lock competition within a shard | 4 | 4 | 5 | 5 | 4 | **Selected for writes** |
+| Edge/WASM authorization | Push compiled policy beside every agent and reconcile centrally | 5 | 5 | 4 | 2 | 2 | Rejected as authority; optional preflight only |
+| Append-log-first CQRS | Append every request to a durable log, decide from materialized projections | 2 | 3 | 3 | 5 | 2 | Rejected for inline decisions; selected for async evidence |
+| Stateless replicas + remote cache/bus | Redis for reads, Kafka/NATS for all writes, Postgres source of truth | 3 | 3 | 2 | 4 | 2 | Useful at scale, but remote hops are not the default fast path |
+
+### Converged decision
+
+Use a hybrid of the first, second, and fourth candidates:
+
+- **Immutable snapshots** make normal control reads local and lock-light.
+- **Tenant-affine writer shards** serialize only writes that must be ordered, without a global writer lock.
+- **Append-oriented evidence processing** absorbs telemetry efficiently after the decision.
+- **PostgreSQL transactions** provide multi-replica durability; **SQLite WAL** remains the local/single-node mode.
+- **Edge policy** may provide a non-authoritative early deny, but only the gateway returns the authoritative decision.
+
+Why this wins: it performs the least network and storage coordination compatible with the security contract. It does not place Kafka, Redis, an LLM, or a graph query on the authorization path.
+
+### Explicit non-goals
+
+- Unlimited throughput or universal latency guarantees.
+- Caching final allow/deny decisions.
+- Running untrusted agents inside the gateway.
+- Using eventual consistency for quarantine, approval consumption, replay claims, or protected receipts.
+- Treating SQLite as a multi-writer, multi-replica production database.
+
+## Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Agents[Agent Workloads]
-        KA[Known Agent]
-        UA[Unknown or Anonymous Agent]
+flowchart LR
+    subgraph Clients[Agent workloads]
+        SDK[SDK / Tool Broker]
+        MCP[MCP Gateway]
+        Cage[Cage / Node Sensor]
     end
 
-    subgraph DevPlane[Developer Integration Plane]
-        SDK[SDKs and Framework Adapters]
-        LLMProxy[Prompt and Model Gateway]
-        MCPAdapter[MCP Client Adapter]
+    subgraph Gateway[Aegis Gateway]
+        Proto[REST 8080 + gRPC 6334 adapters]
+        Admit[Bounded admission + deadlines]
+        Auth[Identity / replay validation]
+        Snap[Immutable Tenant Snapshot]
+        Cedar[Deterministic Cedar Evaluation]
+        Classify[Durability Classifier]
     end
 
-    subgraph RuntimePlane[Runtime Data Plane]
-        Sensor[aegis-node-sensor]
-        Cage[aegis-cage-runner]
-        Egress[aegis-egress-proxy]
-        Broker[aegis-tool-broker]
-        MCPGW[aegis-mcp-gateway]
-        LocalQueue[Durable Local Sensor Queue]
+    subgraph Durable[Durable state]
+        Store[(StorageBackend\nPostgres or SQLite WAL)]
+        Chain[Receipt Chain]
     end
 
-    subgraph ControlPlane[Control Plane]
-        Gateway[aegis-gateway]
-        Policy[Deterministic Policy Engine]
-        Approval[Approval Engine]
-        Commands[Signed Control Commands]
-        Ban[Ban and Quarantine Control]
-        Registry[Agent, Tool, Sensor, Policy Registry]
+    subgraph Async[Bounded asynchronous plane]
+        Critical[Priority evidence queue]
+        Bulk[Telemetry queue]
+        Batch[Batch writers]
+        SOC[Detection / correlation / export]
     end
 
-    subgraph EvidencePlane[Evidence and SOC Plane]
-        Ingest[Runtime Event Ingestion]
-        Receipts[Receipt Engine]
-        Timeline[Prompt Tool Runtime Timeline]
-        Incidents[Incident and Evidence Graph]
-        Export[Evidence Pack and SIEM Export]
-    end
-
-    subgraph UIPlane[Console UI Plane]
-        Console[aegis-console]
-    end
-
-    KA --> SDK --> Gateway
-    KA --> LLMProxy --> Gateway
-    KA --> MCPAdapter --> MCPGW
-    UA --> Cage
-    Cage --> Sensor
-    Cage --> Egress
-    Cage --> Broker
-    Cage --> MCPGW
-    Sensor --> LocalQueue --> Ingest --> Gateway
-    Egress --> Gateway
-    Broker --> Gateway
-    MCPGW --> Gateway
-    Gateway --> Policy
-    Gateway --> Approval
-    Gateway --> Commands --> Sensor
-    Gateway --> Ban
-    Gateway --> Receipts
-    Gateway --> Timeline
-    Timeline --> Incidents
-    Receipts --> Export
-    Incidents --> Console
-    Timeline --> Console
-    Approval --> Console
-    Ban --> Console
+    SDK --> Proto
+    MCP --> Proto
+    Cage --> Proto
+    Proto --> Admit --> Auth
+    Auth --> Snap --> Cedar --> Classify
+    Auth <--> Store
+    Classify -->|protected: synchronous transaction| Store
+    Store --> Chain
+    Classify -->|ordinary evidence| Critical
+    Classify -->|telemetry| Bulk
+    Critical --> Batch --> Store
+    Bulk --> Batch
+    Batch --> SOC
+    Classify --> Proto
 ```
 
----
+The diagram shows the essential isolation. A request cannot enter an unbounded queue. Cedar reads an immutable snapshot. Protected actions wait for the required database transaction and receipt append; ordinary evidence is offered to bounded queues. SOC never feeds a probabilistic decision back into the current authorization.
 
-## 5. Mandatory choke points
+### Latency budget
 
-| Choke point | Known-agent enforcement | Unknown-agent enforcement | Fail-closed behavior |
+Budgets are targets within a benchmarked capacity envelope, not promises for arbitrary infrastructure.
+
+| Stage | p99 target | Bound/strategy |
+|---|---:|---|
+| Protocol parsing and validation | 3 ms | body limit, protobuf/JSON validation, no blocking I/O |
+| Authentication and replay | 12 ms | indexed lookup; bounded cache only with revocation epoch; atomic nonce claim when enabled |
+| Metadata acquisition | 12 ms | immutable snapshot first; independent misses joined concurrently |
+| Canonicalization and hash | 4 ms | `aegis-jcs-1`; bounded payload size; cache canonical hashes only for identical immutable input |
+| Cedar evaluation | 8 ms | precompiled tenant policy snapshot; deterministic evaluation |
+| Protected durability | 25 ms | one short transaction; indexed chain-head access; no SOC work |
+| Serialization/network margin | 11 ms | response encoding and local network variability |
+| **End-to-end hard objective** | **<75 ms** | measured per decision class and protocol |
+
+The current historical local baseline is documented in [Performance Baseline](performance-baseline.md). It is evidence from a specific environment, not a production SLA.
+
+## Component Breakdown
+
+| Component | Responsibility | Hot-path rule | Scale unit |
 |---|---|---|---|
-| Prompt/model call | SDK, LLM proxy, framework adapter | cage-forced LLM gateway/proxy where possible | no raw sensitive prompt storage; capture hashes/metadata |
-| Tool call | SDK and gateway authorize | tool broker owns credentials and executes | anonymous agent never receives raw credentials |
-| API call | SDK, API proxy, tool broker | tool broker / egress proxy | direct privileged API bypass is incident |
-| MCP call | MCP gateway + manifest trust | cage routes MCP only through MCP gateway | unknown MCP/tool denied or quarantined |
-| Network egress | egress proxy opt-in | egress forced through proxy by network namespace | deny unknown destination in enforce/lockdown |
-| Filesystem/workspace | SDK hooks where possible | cage isolated workspace, sensor telemetry | block host FS; quarantine workspace on incident |
-| Process execution | SDK/tool wrapper where possible | cage runner + sensor | enforce CPU/mem/proc/time limits; kill if hostile |
-| Secret access | tool broker, vault proxy | no raw secrets in cage; sensor detects access attempts | deny raw secret access; emit event |
-| Approval | approval engine + SDK hash verification | broker/gateway approval before broker execution | approval mismatch/expiry/replay blocks execution |
-| Runtime control | signed commands to sensor | sensor enforces pause/kill/quarantine/ban | unsigned/expired/replayed command rejected |
-| Receipt/evidence | receipt engine on protected action | receipt engine on protected/control action | receipt write failure blocks protected action |
+| REST/gRPC adapters | Parse, authenticate transport, call shared service, map errors | No business logic or SQL | Gateway replica |
+| Authorization service | Orchestrate canonicalization, provenance, policy, decision class | One implementation for both protocols | Gateway replica |
+| Snapshot manager | Build validated tenant control snapshots and atomically publish generations | Reads never wait for refresh | Tenant generation |
+| Policy engine | Deterministic Cedar evaluation | No storage dependency; no network | CPU core |
+| StorageBackend | Tenant-scoped persistence contract | Parameterized, indexed, deadline-aware | DB pool/shard |
+| Receipt service | Canonical hash-chain append and verification | Protected receipt is synchronous | Tenant chain |
+| Admission controller | Limit concurrent work and shed overload | Reject before DB exhaustion | Gateway replica |
+| Evidence writers | Batch decisions/audit/runtime events | Bounded queues and explicit overflow policy | Tenant shard |
+| SOC engine | Detect, correlate, respond, export | Always asynchronous from authorize | Consumer replica |
+| Runtime data plane | Sensor, cage, egress, broker, LLM gateway | Enforce near workload; spool telemetry locally | Node/workload |
 
----
+### Dependency direction
 
-## 6. Planes
+```mermaid
+flowchart BT
+    Common[aegis-common]
+    API[aegis-api]
+    Storage[aegis-storage]
+    Policy[aegis-policy]
+    SOC[aegis-soc]
+    Binary[src binary]
+    API --> Common
+    Storage --> API
+    Storage --> Common
+    Policy --> API
+    Policy --> Common
+    SOC --> Storage
+    SOC --> API
+    SOC --> Common
+    Binary --> Storage
+    Binary --> Policy
+    Binary --> SOC
+```
 
-### 6.1 Control Plane
+Arrows mean “depends on.” `aegis-policy` never depends on storage. The binary composes the crates and keeps REST and gRPC adapters thin. This prevents policy evaluation from silently acquiring database or network dependencies.
 
-**Binary:** `aegis-gateway`
+## Data Flow
 
-Responsibilities:
+1. The adapter applies request-size, authentication-attempt, and concurrency limits.
+2. Identity is resolved within the tenant boundary; quarantine and environment restrictions fail closed.
+3. Tool permission and idempotency reads execute concurrently when both are required.
+4. The final post-admission action is normalized and canonicalized with `aegis-jcs-1`.
+5. Replay state is atomically claimed when the durable replay store is enabled.
+6. The authorization service reads one immutable snapshot generation.
+7. Cedar evaluates deterministic facts and returns `allow`, `deny`, or `require_approval`.
+8. The durability classifier chooses the commit protocol:
+   - protected/mutating/approval/control action: synchronous transaction and receipt;
+   - low-risk read-only action: decision response plus bounded asynchronous evidence, according to policy.
+9. Detection, correlation, webhooks, risk samples, and UI projections consume events asynchronously.
 
-- Tenant, agent, run, sensor, sandbox, tool, MCP, policy, approval, ban, and quarantine registries.
-- Deterministic policy evaluation using Cedar or a versioned deterministic policy bundle.
-- Approval creation, edit, approve, reject, consume, expiry, and evidence.
-- Runtime event ingestion APIs.
-- Signed control command creation and delivery tracking.
-- Receipt append, verification, checkpoints, and evidence packs.
-- SOC incident correlation and evidence graph APIs.
-
-Non-responsibilities:
-
-- It must **not** execute untrusted agents.
-- It must **not** hold long-running sandbox workloads.
-- It must **not** make enforcement decisions using an LLM.
-
-### 6.2 Runtime Data Plane
-
-Binaries:
-
-- `aegis-node-sensor`: EDR/Filebeat/Wazuh-like daemon near workloads.
-- `aegis-cage-runner`: disposable sandbox executor for unknown agents.
-- `aegis-egress-proxy`: network choke point.
-- `aegis-tool-broker`: credential/API/tool execution choke point.
-- `aegis-mcp-gateway`: MCP choke point.
-
-Responsibilities:
-
-- Runtime telemetry collection.
-- Local durable queueing and shipping to gateway.
-- Local enforcement under observe/enforce/lockdown modes.
-- Signed command verification and idempotent execution.
-- Sandbox isolation and resource limiting.
-- Network, tool, MCP, filesystem, secret, and process control.
-
-### 6.3 Developer Integration Plane
-
-Components:
-
-- Python SDK (active today).
-- TypeScript and Go SDKs (target; hidden worktree has prototypes).
-- LLM gateway/proxy and framework adapters.
-- Browser automation adapter where feasible.
-
-Responsibilities:
-
-- Known-agent registration and tool wrapping.
-- Prompt/model metadata capture where a choke point exists.
-- Canonical action hashing and fail-closed approval verification.
-- Trace/run propagation.
-- Redaction before event emission.
-
-### 6.4 Evidence/SOC Plane
-
-Responsibilities:
-
-- Runtime event normalization.
-- Prompt/model/tool/runtime DAG timeline.
-- Receipt chain, checkpoints, range verification, and proof export.
-- Incident correlation and evidence graph.
-- SOC events for blocked egress, bans, quarantine, receipt failures, command execution, and suspicious lineage.
-
-### 6.5 Console UI Plane
-
-**Binary/app:** `aegis-console`
-
-Aegis Console should feel like Grafana + Kibana + CrowdStrike for AI agents.
-
-Required pages:
-
-- Overview
-- Explore
-- Approvals
-- Incidents
-- Receipts
-- Agents
-- Agent Cage Runs
-- Runtime Timeline
-- Prompt Timeline
-- Model Calls
-- Tool Calls
-- Egress Events
-- Ban Center
-- Quarantine Center
-- MCP Security
-- Policy Center
-- Evidence Graph
-- Settings
-
----
-
-## 7. Component model
-
-| Component | Purpose | Critical boundaries |
-|---|---|---|
-| `aegis-gateway` | Central control plane and evidence API | no untrusted execution; tenant isolation; policy determinism |
-| `aegis-node-sensor` | Runtime sensor and local enforcer near workloads | durable queue; signed command verification; local fail-closed modes |
-| `aegis-cage-runner` | Disposable sandbox for unknown agents | no host FS, no Docker socket, no raw creds, proxy-forced egress |
-| `aegis-egress-proxy` | Network egress decision point | deny unknown destination; DNS/HTTP/SNI metadata; exfil hooks |
-| `aegis-tool-broker` | Credential/API/tool choke point | owns credentials; canonicalize, authorize, approve, execute, receipt |
-| `aegis-mcp-gateway` | MCP server and tool gate | manifest pinning, drift quarantine, per-tool authorization |
-| `aegis-console` | SOC/approval/control UI | read-only views unless explicit admin auth; command actions are signed/audited |
-| SDKs/adapters | Known-agent integration | final approval hash check before execution; fail closed on mismatch |
-
----
-
-## 8. Known-agent flow
+## Request Flow
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Known Agent
-    participant SDK as Aegis SDK
-    participant GW as aegis-gateway
-    participant Policy as Policy Engine
-    participant Approval as Approval Engine
-    participant Tool as Tool or Broker
-    participant Receipt as Receipt Engine
+    autonumber
+    participant A as Agent SDK
+    participant G as Protocol Adapter
+    participant S as Authorization Service
+    participant C as Tenant Snapshot
+    participant P as Cedar
+    participant D as StorageBackend
+    participant Q as Evidence Queue
 
-    Agent->>SDK: call protected tool
-    SDK->>SDK: canonicalize action and compute action_hash
-    SDK->>GW: POST /v1/authorize
-    GW->>Policy: evaluate tenant, agent, source_trust, tool, risk, bans, quarantine
-    Policy-->>GW: allow/deny/require_approval
-    alt require approval
-        GW->>Approval: create approval bound to action_hash
-        GW-->>SDK: require_approval + approval_id + action_hash
-        SDK->>GW: poll approval status
-        SDK->>GW: consume approval
-        SDK->>SDK: verify consumed action_hash == local action_hash
+    A->>G: Authorize(request_id, nonce, exact action)
+    G->>G: Size limit + admission + deadline
+    G->>S: Typed request context
+    par Independent indexed reads
+        S->>D: Resolve identity / replay claim
+    and
+        S->>D: Permission / idempotency lookup
     end
-    alt allow or consumed approval
-        SDK->>Tool: execute protected function or brokered action
-        GW->>Receipt: emit receipt for decision/action
-    else deny or mismatch
-        SDK-->>Agent: fail closed
-        GW->>Receipt: emit denial or tamper receipt where applicable
+    S->>C: Load one immutable generation
+    S->>S: Normalize + canonicalize + hash
+    S->>P: Evaluate facts from same generation
+    P-->>S: allow / deny / require_approval
+    alt Protected action
+        S->>D: Atomic decision + approval? + receipt append
+        D-->>S: Committed receipt
+    else Ordinary evidence
+        S->>Q: try_send bounded event
     end
+    S-->>G: Typed response
+    G-->>A: REST JSON or gRPC protobuf
 ```
 
----
+Parallelism is used only for independent operations. The response is tied to one snapshot generation, preventing a policy refresh from mixing old metadata with new policy inside a single decision.
 
-## 9. Anonymous-agent flow
+## Control Flow
+
+Control changes—policy activation, agent quarantine, tool revocation, ban, or key rotation—follow a versioned publish protocol:
+
+1. Validate and persist the new control state.
+2. Increment the tenant control generation in the same transaction.
+3. Publish an invalidation notification after commit.
+4. Rebuild a complete immutable snapshot off-thread.
+5. Atomically swap the tenant’s snapshot pointer.
+6. Record propagation lag; fail closed for emergency revocations until every serving replica acknowledges the generation.
+
+Routine policy updates favor availability with bounded propagation. Emergency quarantine and credential revocation use a synchronous deny overlay or generation fence so stale positive cache entries cannot authorize.
+
+## Sequence Diagram
+
+The preceding request sequence is the primary latency-critical sequence. The next diagram shows overload behavior.
 
 ```mermaid
 sequenceDiagram
-    participant User as User/CI/System
-    participant GW as aegis-gateway
-    participant Sensor as aegis-node-sensor
-    participant Cage as aegis-cage-runner
-    participant Egress as aegis-egress-proxy
-    participant Broker as aegis-tool-broker
-    participant SOC as SOC/Evidence
-
-    User->>GW: request unknown-agent run
-    GW->>GW: preflight ban/quarantine/policy checks
-    GW->>Sensor: signed start_run command
-    Sensor->>Sensor: verify signature, tenant, expiry, nonce
-    Sensor->>Cage: launch sandbox with resource limits
-    Cage->>Sensor: runtime events
-    Cage->>Egress: forced network egress
-    Cage->>Broker: forced tool/API requests
-    Egress->>GW: egress check and event
-    Broker->>GW: authorize/approval/receipt flow
-    Sensor->>GW: batched runtime events from durable queue
-    GW->>SOC: timeline, incident, receipts
-    alt hostile behavior
-        GW->>Sensor: signed kill/quarantine/ban command
-        Sensor->>Cage: kill/pause/quarantine
-        Sensor->>GW: ACK + control_action_executed event
+    participant C as Client
+    participant A as Admission Gate
+    participant DB as DB Pool
+    participant M as Metrics
+    C->>A: authorize
+    alt Capacity available
+        A->>DB: bounded work with deadline
+        DB-->>A: result
+        A-->>C: decision
+    else Concurrency budget exhausted
+        A->>M: increment load_shed_total
+        A-->>C: 429/RESOURCE_EXHAUSTED + retry hint
+    else Deadline exhausted
+        A->>M: record timeout stage
+        A-->>C: fail-closed error
     end
 ```
 
----
+Early rejection is intentional. It preserves useful latency for admitted requests and prevents a saturated database from becoming a system-wide queue.
 
-## 10. Prompt/model capture flow
-
-Aegis captures prompt/model activity only where it owns a choke point:
-
-- SDK capture.
-- LLM gateway/proxy capture.
-- Framework adapters.
-- Browser automation adapter where possible.
-
-Default storage avoids raw sensitive prompts. Persist:
-
-- `prompt_hash`
-- `redacted_prompt_preview`
-- model/provider
-- role
-- `source_trust`
-- `run_id`
-- `trace_id`
-- `parent_event_id`
-- `action_hash` linkage
-- `receipt_hash` linkage
-- retention policy
-- redaction status
+## State Diagram
 
 ```mermaid
-flowchart TD
-    Prompt[Prompt Observed] --> Redact[Redact and classify]
-    Redact --> Hash[Compute prompt_hash]
-    Hash --> ModelCall[Model call started/finished]
-    ModelCall --> ToolProposal[Tool proposal or action request]
-    ToolProposal --> Authorize[Authorize and receipt]
-    Authorize --> Timeline[Prompt-to-action timeline]
+stateDiagram-v2
+    [*] --> Received
+    Received --> Rejected: invalid / overloaded
+    Received --> Authenticated
+    Authenticated --> Replay: same request_id
+    Authenticated --> Evaluating
+    Replay --> Responded
+    Evaluating --> Denied
+    Evaluating --> ApprovalPending
+    Evaluating --> CommitRequired
+    Evaluating --> AsyncEvidence: ordinary read-only
+    CommitRequired --> Responded: transaction committed
+    CommitRequired --> FailedClosed: commit/receipt failed
+    AsyncEvidence --> Responded: bounded enqueue attempted
+    Denied --> Responded
+    ApprovalPending --> Responded: approval + receipt committed
+    Rejected --> [*]
+    Responded --> [*]
+    FailedClosed --> [*]
 ```
 
----
+No protected action reaches `Responded` before its required durable state is committed.
 
-## 11. Tool broker flow
-
-Anonymous agents must never receive raw credentials.
+## Class Diagram
 
 ```mermaid
-sequenceDiagram
-    participant Agent as Agent or Cage
-    participant Broker as aegis-tool-broker
-    participant GW as aegis-gateway
-    participant Approval as Approval Engine
-    participant Tool as External Tool/API
-    participant SOC as SOC/Receipts
+classDiagram
+    class ProtocolAdapter { +authorize(request) response }
+    class AuthorizationService { +authorize(ctx, request) Result }
+    class SnapshotManager { +load(tenant) Snapshot +publish(generation) }
+    class AuthorizationSnapshot { +generation +agents +tools +compiled_policy }
+    class PolicyEngine { +evaluate(facts) Decision }
+    class StorageBackend { <<interface>> +claim_nonce() +commit_protected_decision() }
+    class ReceiptService { +append() Receipt +verify_range() }
+    class EvidenceSink { <<interface>> +try_emit(event) EmitResult }
+    ProtocolAdapter --> AuthorizationService
+    AuthorizationService --> SnapshotManager
+    SnapshotManager --> AuthorizationSnapshot
+    AuthorizationService --> PolicyEngine
+    AuthorizationService --> StorageBackend
+    AuthorizationService --> ReceiptService
+    AuthorizationService --> EvidenceSink
+```
 
-    Agent->>Broker: request action with parameters
-    Broker->>Broker: canonicalize action and compute action_hash
-    Broker->>GW: POST /v1/authorize
-    GW-->>Broker: allow/deny/require_approval
-    alt require approval
-        Broker->>Approval: wait/consume approval
+The class boundaries mirror crate ownership. Protocol types originate in protobuf; storage remains behind `StorageBackend`; policy remains a pure dependency.
+
+## Deployment Architecture
+
+```mermaid
+flowchart TB
+    LB[Layer 7 load balancer\nHTTP/2 + gRPC]
+    subgraph AZ1[Availability Zone A]
+        G1[Gateway replica]
+        S1[SOC consumer]
     end
-    alt allowed
-        Broker->>Tool: execute with broker-held credential
-        Broker->>SOC: emit tool_call_allowed/api_executed + receipt
-        Broker-->>Agent: sanitized result
-    else denied
-        Broker->>SOC: emit tool_call_denied + receipt
-        Broker-->>Agent: deny
+    subgraph AZ2[Availability Zone B]
+        G2[Gateway replica]
+        S2[SOC consumer]
     end
+    PG[(PostgreSQL primary)]
+    RR[(Read replica\nnon-authoritative queries only)]
+    BUS[(Optional event transport)]
+    OBJ[(Immutable evidence/archive)]
+    LB --> G1
+    LB --> G2
+    G1 --> PG
+    G2 --> PG
+    PG --> RR
+    G1 --> BUS
+    G2 --> BUS
+    BUS --> S1
+    BUS --> S2
+    S1 --> PG
+    S2 --> PG
+    S1 --> OBJ
 ```
 
-Initial tool categories:
+Authorization never reads security-critical state from a lagging replica. Read replicas serve dashboards, searches, and reports only. An optional transport scales evidence consumption but is not required for the single-node path.
 
-- GitHub
-- Slack
-- Gmail
-- Jira
-- HTTP
-- filesystem
-- shell
-- MCP
+### Deployment modes
 
----
+| Mode | Storage | Replicas | Intended use |
+|---|---|---:|---|
+| Local | SQLite WAL | 1 | development and demos |
+| Small production | PostgreSQL | 1–2 | controlled workload after backend qualification |
+| Enterprise | HA PostgreSQL + optional event transport | 2+ | multi-AZ, benchmarked capacity, disaster recovery |
 
-## 12. MCP gateway flow
+### Availability, backup, and disaster recovery
 
-```mermaid
-sequenceDiagram
-    participant Agent as Agent/Cage
-    participant MCPGW as aegis-mcp-gateway
-    participant GW as aegis-gateway
-    participant MCP as MCP Server
-    participant SOC as SOC/Receipts
+- Run qualified gateway replicas across failure domains; readiness removes a replica when its database, snapshot generation, or protected writer is unsafe.
+- Use PostgreSQL point-in-time recovery, encrypted backups, and regularly tested restores. Back up signing-key metadata and policy/configuration separately under the organization’s KMS process.
+- Replicate immutable evidence archives according to retention policy. A database restore is not complete until receipt chains and checkpoints verify.
+- Define and test recovery point and recovery time objectives per deployment tier. SQLite local mode uses a quiesced database/WAL backup and is not an HA topology.
+- During regional failover, fence writes until the promoted primary is authoritative for replay claims, approval consumption, control generations, and receipt heads.
 
-    Agent->>MCPGW: call MCP tool
-    MCPGW->>GW: resolve server/tool status and manifest trust
-    alt unknown or quarantined
-        GW-->>MCPGW: deny
-        MCPGW->>SOC: mcp_tool_call denied + receipt
-    else approved
-        MCPGW->>GW: authorize MCP action
-        GW-->>MCPGW: allow/deny/require_approval
-        alt allowed
-            MCPGW->>MCP: proxy tool call
-            MCPGW->>SOC: receipt and event
-        end
-    end
-```
+### Release strategies
 
-MCP manifest drift is a high-signal tool poisoning indicator. Drift should downgrade trust and can auto-quarantine the MCP server until reviewed.
+- **Rolling update:** permitted only when protobuf/database changes are backward compatible and mixed-version contract tests pass.
+- **Canary:** send a small tenant-safe traffic slice; compare decisions in shadow mode where safe, then check p99, errors, receipt integrity, and snapshot lag.
+- **Blue/green:** preferred for storage or snapshot-engine changes; warm snapshots and verify readiness before switching traffic.
+- **Rollback:** stop admission to the new pool, return traffic to the previous compatible version, and use forward schema migrations. Never delete evidence to roll back.
 
----
+### Interactive 3D architecture concept
 
-## 13. Egress control flow
+A React Three Fiber view represents gateway replicas as illuminated nodes, PostgreSQL as the durable core, and tenant snapshots as translucent layers. The camera starts above the deployment, zooms into one authorization, and follows particles through the fast lane. Green particles stop at the snapshot and Cedar nodes; protected actions turn amber while crossing the transaction boundary; asynchronous blue particles fan into evidence consumers. Hover reveals live p50/p95/p99, queue occupancy, snapshot generation, DB pool utilization, and receipt commit latency. Selecting a tenant filters every connection without exposing another tenant’s identifiers. Motion is reduced when the browser requests reduced animation.
 
-```mermaid
-sequenceDiagram
-    participant Cage as Cage/Workload
-    participant Proxy as aegis-egress-proxy
-    participant GW as aegis-gateway
-    participant SOC as SOC/Receipts
-    participant Internet as Destination
-
-    Cage->>Proxy: DNS/HTTP/TCP connect
-    Proxy->>Proxy: extract metadata: domain, CIDR, DNS, HTTP, SNI
-    Proxy->>GW: POST /v1/egress/check
-    GW->>GW: ban, quarantine, per-run, per-tenant policy
-    GW-->>Proxy: allow or block
-    alt allow
-        Proxy->>Internet: forward
-        Proxy->>SOC: egress_allowed event; receipt if high risk
-    else block
-        Proxy-->>Cage: block
-        Proxy->>SOC: egress_blocked event + receipt
-    end
-```
-
-Deny-by-default is mandatory for unknown agents in enforce/lockdown mode.
-
----
-
-## 14. Runtime control flow
-
-All control commands from gateway to sensor are signed and replay-protected.
-
-```mermaid
-sequenceDiagram
-    participant Admin as Admin/Policy Automation
-    participant GW as aegis-gateway
-    participant Sensor as aegis-node-sensor
-    participant Cage as Local Workload
-    participant Receipt as Receipt Engine
-
-    Admin->>GW: issue kill_run/quarantine/ban command
-    GW->>GW: authorize actor and create command
-    GW->>GW: sign canonical command
-    GW->>Sensor: deliver command
-    Sensor->>Sensor: verify signature, tenant, expiry, nonce
-    Sensor->>Cage: execute idempotently
-    Sensor->>GW: ACK/NACK with result
-    GW->>Receipt: receipt for command executed
-```
-
----
-
-## 15. Receipt/evidence flow
-
-Protected actions cannot succeed without durable receipt.
-
-Receipt-required events:
-
-- approval created/edited/approved/rejected/consumed
-- tool allowed/denied
-- API executed
-- egress blocked and high-risk egress allowed
-- prompt-to-tool risky chain
-- run killed
-- agent frozen/banned
-- workspace quarantined
-- MCP quarantined
-- control command executed
-- incident created/closed
-- evidence pack exported
-
-Receipts are append-only per tenant and hash-chained. Enterprise mode signs chain heads and checkpoints with KMS/HSM-backed keys.
-
----
-
-## 16. SOC investigation flow
-
-```mermaid
-flowchart TD
-    Event[Runtime event or receipt] --> Normalize[Normalize and redact]
-    Normalize --> Timeline[Run timeline DAG]
-    Timeline --> Detect[Detection and correlation rules]
-    Detect --> Incident[Incident created]
-    Incident --> Graph[Evidence graph]
-    Graph --> Console[Console investigation]
-    Console --> Action[Control action: kill, ban, quarantine]
-    Action --> Receipt[Receipt and audit]
-    Graph --> Export[Evidence pack export]
-```
-
-Critical UI demo flow:
+## Folder Structure
 
 ```text
-Unknown agent starts
-→ prompt captured
-→ model call captured
-→ tool proposal captured
-→ file secret access detected
-→ network exfil blocked
-→ run killed
-→ fingerprint banned
-→ workspace quarantined
-→ receipt chain visible
-→ incident generated
-→ evidence graph exportable
+AegisAgent/
+├── lib/common/               # errors, hashes, metrics; no internal dependencies
+├── lib/api/proto/            # wire-contract source of truth
+├── lib/api/src/              # REST mirrors and records
+├── lib/storage/              # StorageBackend + SQLite/Postgres implementations
+├── lib/policy/               # deterministic Cedar and validation
+├── lib/soc/                  # asynchronous detection/correlation/export
+├── src/src/                  # thin binary composition and protocol adapters
+├── bins/                     # sensor, cage, egress, LLM gateway
+├── config/config.yaml        # defaults; environment overrides at startup
+└── docs/                     # contracts, runbooks, HLD, and LLD
 ```
 
----
+The dependency graph in [Architecture Patterns](architecture.md) is mandatory. A target service extraction must preserve the downward-only crate DAG.
 
-## 17. Ban/quarantine flow
+## Configuration
 
-Bans are first-class policy inputs and enforcement artifacts.
+Performance settings must be explicit, typed, range-validated, and observable. Names below are target additions unless already present in `config/config.yaml`.
 
-Ban targets include:
+```yaml
+gateway:
+  rest_port: 8080
+  grpc_port: 6334
+  authorize_deadline_ms: 75
+  max_concurrent_requests: 512
+  max_body_bytes: 262144
 
-- `agent_id`, `run_id`, `sandbox_id`
-- `agent_fingerprint`, `image_digest`, `repo_hash`, `binary_hash`, `package_lock_hash`
-- `mcp_server_id`, `mcp_tool_id`, `tool_name`
-- `destination_domain`, `destination_ip`, `credential_scope`
-- `prompt_hash`, `behavior_signature`
+storage:
+  backend: postgres
+  max_connections: 64
+  min_connections: 8
+  acquire_timeout_ms: 10
 
-Ban scopes:
+authorization:
+  snapshot_max_tenants: 10000
+  snapshot_idle_ttl_seconds: 900
+  snapshot_refresh_timeout_ms: 500
+  emergency_revocation_fence: true
 
-- run
-- agent
-- tenant
-- organization
-- global admin
+evidence:
+  critical_queue_capacity: 8192
+  telemetry_queue_capacity: 65536
+  writer_shards: 16
+  batch_max_events: 250
+  batch_max_delay_ms: 10
+```
 
-Ban enforcement happens before:
+`authorize_deadline_ms` is the total server budget. `max_concurrent_requests` must be derived from load tests and DB pool capacity. Queue capacities are memory budgets, not throughput knobs. Increasing them hides saturation and increases recovery time.
 
-- sandbox start
-- authorization
-- tool call
-- MCP call
-- egress
-- credential issuance
-- approval consumption
+## Installation
 
-Quarantine prevents new execution, preserves evidence, blocks external access, prevents deletion, attaches to incidents, and supports admin review/release/delete.
+This HLD does not replace the product installation guide. Use [Installation](Installation.md) for prerequisites and [Deployment Guide](deployment-guide.md) for Docker, Helm, and production configuration. Both REST 8080 and gRPC 6334 must be exposed where the deployment model permits access.
 
-Every ban/unban/quarantine/release requires actor, reason, authorization, audit event, receipt, and SOC event.
+## Quick Start
 
----
+For architecture verification, start the gateway, submit the same authorization through REST and gRPC, and confirm both return the same semantic decision, policy IDs, action hash behavior, and receipt class. Then run the benchmark harness at increasing concurrency until the first SLO or saturation threshold is crossed. That point defines the initial safe capacity envelope.
 
-## 18. Deployment models
+## Detailed Walkthrough
 
-### 18.1 Local development
+### Snapshot publication
 
-- Single `aegis-gateway` on `127.0.0.1`.
-- SQLite WAL.
-- Default Cedar policies.
-- Python SDK demo.
-- Optional local mock egress proxy/tool broker/cage stubs.
+A snapshot contains a tenant generation, compiled Cedar policy, tool metadata, MCP trust metadata, environment restrictions, and revocation metadata. A builder validates the complete object before publication. Readers clone an atomic shared pointer in constant time. A failed build leaves the previous valid snapshot active and raises an alert.
 
-### 18.2 Docker Compose
+### Write isolation
 
-- Gateway.
-- SQLite or local Postgres.
-- Node sensor sidecar.
-- Cage runner using Docker with strict no-Docker-socket-in-cage rule.
-- Egress proxy.
-- Tool broker.
-- Console.
+Evidence events are assigned to `hash(tenant_id) % writer_shards`. Each shard owns a bounded mailbox and batches compatible operations. Ordering-sensitive receipt appends stay in the synchronous transaction path or a tenant-serialized durable primitive; they never share a lossy telemetry queue.
 
-### 18.3 Kubernetes
+### Backpressure
 
-- `aegis-gateway` Deployment with HPA.
-- Postgres production storage.
-- `aegis-node-sensor` DaemonSet.
-- `aegis-cage-runner` as Job/Deployment or per-run Job controller.
-- `aegis-egress-proxy` as sidecar/daemonset/service mesh egress path.
-- `aegis-tool-broker` Deployment.
-- `aegis-mcp-gateway` Deployment.
-- `aegis-console` Deployment.
-- NetworkPolicies force cage traffic through egress proxy/tool broker/MCP gateway.
+Every boundary declares capacity and overflow behavior:
 
-### 18.4 Enterprise production
+| Boundary | Full behavior |
+|---|---|
+| Authorization admission | Reject with HTTP 429 / gRPC `RESOURCE_EXHAUSTED` |
+| DB pool | Fail closed when the short acquire deadline expires |
+| Protected durability | Fail closed; never drop |
+| Critical evidence | Persist synchronously or fail according to decision class |
+| Ordinary evidence | Count and surface loss; never block authorize indefinitely |
+| Runtime telemetry | Producer spool/backpressure; drop only policy-approved low-priority events |
 
-- Multi-region control plane option.
-- Postgres with PITR and backups.
-- OIDC/JWT/admin auth.
-- TLS/mTLS for all service-to-service paths.
-- KMS/HSM signing for receipts and command keys.
-- SIEM export.
-- Helm chart.
-- Air-gapped support.
-- Immutable evidence storage option.
+## Code Explanation
 
----
+The implementation blueprint and line-level pseudocode are in [Performance-First LLD](AegisAgent_World_Class_LLD.md). The critical rule is that REST and gRPC call one `AuthorizationService`; neither adapter reimplements hashing, policy, or storage behavior.
 
-## 19. Trust boundaries
+## Live Example
 
-| Boundary | Risk | Control |
-|---|---|---|
-| Agent runtime to SDK | agent may be hijacked | SDK final hash check, fail closed |
-| Unknown agent to cage | untrusted code | sandbox, no host FS, no direct creds/network |
-| Cage to network | exfiltration | egress proxy deny-by-default |
-| Cage to tools/APIs | credential theft | tool broker owns credentials |
-| MCP client/server | tool poisoning, manifest drift | MCP gateway, manifest pinning, quarantine |
-| Sensor to gateway | forged telemetry/control | mutual auth, signed commands, ACKs |
-| Gateway to DB | tenant leakage | `tenant_id` on every table/query, parameterized SQL |
-| Gateway to approval channel | callback forgery | signed callbacks, approver authz |
-| Receipt store | tampering/drop | append-only chain, checkpoints, signatures |
-| Console/admin | destructive control actions | JWT/OIDC, RBAC, receipts, command signing |
+Suppose tenant `acme` authorizes `github.merge_pull_request`:
 
----
+- Identity, quarantine state, and tool permission resolve within `acme`.
+- The final JSON action is canonicalized and hashed.
+- One snapshot generation supplies tool risk, provenance rules, and compiled policy.
+- Cedar returns `require_approval`.
+- A short transaction writes the decision, pending approval bound to `action_hash`, and protected receipt.
+- The response includes the approval reference only after commit.
+- SOC correlation runs later and cannot change this decision.
 
-## 20. Security assumptions
+Expected result: retries with the same idempotency key return the original decision; a changed action hash cannot consume the approval; a receipt failure produces a fail-closed error.
 
-- A compromised or unknown agent is hostile until proven otherwise.
-- LLM output is untrusted and cannot decide enforcement.
-- Source provenance can only be tightened by classifiers, never loosened.
-- Gateway, sensor, broker, proxy, and MCP gateway are trusted computing base components and must be hardened accordingly.
-- Tenants are mutually hostile in SaaS mode.
-- Raw secrets must not enter logs, runtime events, prompt events, or receipts.
-- Receipt loss for protected actions is a security failure, not merely observability loss.
+## API
 
----
+The wire source of truth is `lib/api/proto/*.proto`. Every endpoint must exist on both protocols and call the same service method.
 
-## 21. Non-goals
-
-- AegisAgent is not itself an autonomous agent.
-- AegisAgent does not claim to catch actions that bypass every Aegis choke point.
-- AegisAgent is not a generic SIEM, CNAPP, GRC suite, DLP platform, model-scanning system, or identity lifecycle manager.
-- AegisAgent does not let LLMs make allow/deny/control decisions.
-- AegisAgent does not run untrusted agents inside `aegis-gateway`.
-
----
-
-## 22. Failure modes
-
-| Failure | Observe mode | Enforce mode | Lockdown mode |
+| Operation | REST | gRPC | Inline class |
 |---|---|---|---|
-| Gateway unavailable | buffer events locally | block risky privileged actions and unknown egress | pause/kill unknown agents; deny unknown egress/tools |
-| DB unavailable | ingest may buffer when safe | protected action fails closed | protected action fails closed; command issuance disabled except local emergency |
-| Receipt write failure | low-risk can buffer if policy allows | protected action fails closed | protected action fails closed |
-| Sensor queue full | drop only non-critical after policy; alert | backpressure workload; preserve critical | pause workload until drained or killed |
-| Command signature invalid | reject and emit event | reject and emit event | reject and emit event |
-| Egress proxy down | no enforcement if not inline | fail closed for unknown destinations | deny all unknown egress |
-| Tool broker down | known SDK can deny | tool/API action fails closed | tool/API action fails closed |
-| MCP gateway down | MCP action fails closed | MCP action fails closed | MCP action fails closed |
-| Console down | API remains available | API remains available | API remains available |
-| Policy bundle invalid | keep previous valid bundle | deny if no valid bundle | deny and lockdown affected workloads |
+| Authorize action | `POST /v1/authorize` | `AegisService.Authorize` | Critical |
+| Approve/reject | approval routes | `AegisService.Approve` and contract peers | Critical |
+| Register agent | agent routes | `AegisService.RegisterAgent` | Control |
+| SOC query | `POST /v1/soc/query` | `SocService.Query` | Off-path |
+
+Any missing dual-protocol operation is a contract gap, not permission to implement only one transport.
+
+## CLI
+
+Operational CLI commands must expose the same typed configuration, support a read-only `config validate`, and provide benchmark modes that report decision class, protocol, offered load, achieved throughput, latency histogram, error class, and queue utilization. Exact shipped setup and invocation commands remain documented in [Installation](Installation.md) and [Deployment Guide](deployment-guide.md).
+
+## Configuration Reference
+
+Production defaults are selected by measurement:
+
+- Pool size: start near `2 × available DB cores`, then benchmark; more connections can reduce throughput through contention.
+- Writer shards: power of two for cheap hashing; never exceed useful concurrent DB writers.
+- Snapshot TTL: controls memory reclamation only, not policy freshness; invalidation controls freshness.
+- Batch delay: 5–10 ms is a starting point for evidence, never for protected receipts.
+- Queue memory: calculate `capacity × worst_case_event_bytes` and include allocator overhead.
+
+## Security
+
+The fast path preserves:
+
+- tenant-scoped authentication and parameterized storage access;
+- optional request signatures and mTLS identity;
+- durable replay claims for multi-replica deployments;
+- tighten-only provenance propagation;
+- deterministic Cedar decisions;
+- exact `aegis-jcs-1` action hashes;
+- approval expiry, single consumption, and hash equality;
+- atomic hash-chained protected receipts;
+- no raw secrets in snapshots, logs, events, or receipts.
+
+### Threat model for optimization
+
+| Optimization | Threat | Required control |
+|---|---|---|
+| Identity cache | revoked agent remains active | revocation generation/fence; bounded TTL; fail closed on ambiguity |
+| Snapshot cache | stale allow policy | transactional generation, invalidation ACK, emergency deny overlay |
+| Async writes | missing protected evidence | classify before enqueue; protected class commits synchronously |
+| Batching | cross-tenant data mixing | tenant key on every item and query; isolation tests |
+| Load shedding | attacker starves tenants | tenant-aware quotas and fair admission |
+
+## Performance
+
+### SLOs and saturation signals
+
+| Metric | Design objective |
+|---|---|
+| Authorize p95 | <50 ms within declared capacity |
+| Authorize p99 | <75 ms within declared capacity |
+| Policy evaluation p99 | <8 ms |
+| Admission rejection latency p99 | <10 ms |
+| Unbounded queues | 0 |
+| Protected receipt loss | 0 |
+| Snapshot mixed-generation decisions | 0 |
+
+Benchmark REST and gRPC separately for allow, deny, require-approval, idempotent replay, cache miss, policy refresh, DB degradation, and receipt contention. Report latency histograms—not averages—and identify the load at which p99, errors, CPU, DB pool wait, or queue occupancy first violates threshold.
+
+## Scaling
+
+- Scale gateway replicas on CPU, admitted concurrency, and p95—not raw request count alone.
+- Partition high-volume event tables by tenant/time only after query evidence justifies it.
+- Keep authoritative security reads on the primary unless a consistency protocol proves freshness.
+- Use tenant-aware admission so one noisy tenant cannot monopolize the DB pool.
+- Move evidence to an external transport only when in-process bounded consumers are the measured limiter.
+- Isolate very large tenants onto dedicated shards when their receipt or event volume dominates shared resources.
+
+## Monitoring
+
+Required dimensions are bounded enums or hashed tenant classes; raw tenant IDs and action values must not create unbounded metric cardinality.
+
+- authorization duration by stage, decision class, and protocol;
+- admitted, rejected, timed out, and fail-closed totals;
+- DB pool active/idle/wait duration and transaction latency;
+- snapshot generation, age, rebuild duration, and propagation lag;
+- queue depth, enqueue failures, batch size, and oldest-item age;
+- receipt append duration, conflicts, and verification failures;
+- CPU, resident memory, allocator pressure, storage IOPS, and network bytes.
+
+## Logging
+
+Structured logs include `trace_id`, `decision_id`, hashed tenant/agent correlation keys, snapshot generation, decision class, stage, duration, and error code. They exclude tokens, secrets, raw prompts, and unrestricted parameters. Sampling may reduce successful low-risk logs; denies, approval transitions, integrity failures, and protected receipt failures are never sampled away.
+
+## Alerting
+
+| Alert | Trigger | First action |
+|---|---|---|
+| Authorize p99 breach | >75 ms for 5 minutes within normal load | inspect stage histogram and DB wait |
+| Admission shedding | sustained >1% | reduce offered load or add qualified capacity |
+| Snapshot lag | emergency generation not acknowledged within bound | fence affected tenant and investigate replica |
+| Protected receipt failure | any | page security/SRE; protected actions already fail closed |
+| Evidence queue pressure | >80% or oldest age above bound | scale/drain consumer; inspect DB writes |
+| Replay store unavailable | any multi-replica request failure | restore primary path; do not disable protection |
+
+## Troubleshooting
+
+| Symptom | Likely cause | Verification | Safe response |
+|---|---|---|---|
+| Low CPU, high latency | DB pool wait or lock contention | stage histogram, pool wait, DB locks | reduce concurrency; inspect slow queries |
+| High CPU, low DB wait | canonicalization/policy or serialization | CPU profile by decision class | reduce payload, precompile snapshots, scale CPU |
+| p99 spikes on refresh | snapshot rebuild on reader path | rebuild spans overlap requests | move build off-thread; atomic publish only |
+| Missing ordinary audit | bounded queue overflow | enqueue-failure metric | scale writer; do not increase queue blindly |
+| Protected actions fail | DB/receipt durability unavailable | receipt/transaction errors | restore durability; never bypass receipt |
+| One tenant affects all | unfair admission or hot shard | per-class quota/shard metrics | isolate tenant or rebalance shards |
+
+## Common Mistakes
+
+- Caching final authorization decisions.
+- Adding Redis, Kafka, webhooks, graph queries, or LLM calls to `/v1/authorize`.
+- Increasing queues or DB connections without measuring memory and contention.
+- Returning a protected allow before receipt commit.
+- Reading authoritative revocation state from a lagging replica.
+- Refreshing a mutable policy object in place while readers use it.
+- Implementing REST and gRPC with different business logic.
+- Using raw `SqlitePool` outside `aegis-storage`.
+
+## Best Practices
+
+- Optimize the measured slowest stage, not the most visible component.
+- Preserve one snapshot generation per decision.
+- Make overload cheap, explicit, and observable.
+- Keep transactions short and ordered consistently.
+- Use idempotency keys on retried mutations.
+- Benchmark security-heavy cases, not only cached allows.
+- Maintain a rollback switch for each target optimization.
+- Re-run tenant-isolation, canonicalization parity, approval, and receipt tests after every performance change.
+
+## FAQ
+
+### Why not authorize entirely in the SDK?
+
+It can reduce network latency but cannot reliably observe current quarantine, replay, approval consumption, or policy state. SDK-side logic may perform an early deny; it is not the authority.
+
+### Why not make every write asynchronous?
+
+Protected actions require durable approval and receipt evidence before acknowledgment. Asynchronous loss would violate the security contract.
+
+### Is Redis required?
+
+No. A remote cache adds a hop and failure mode. It is useful only when multi-replica invalidation or measured database pressure justifies it.
+
+### Is PostgreSQL always faster than SQLite?
+
+No. SQLite is excellent for local single-node operation. PostgreSQL is selected for concurrent writers, HA, and multi-replica coordination—not because every individual query is faster.
+
+### What does “zero bottleneck” mean here?
+
+No hidden or unbounded bottleneck: every scarce resource has a limit, metric, overflow policy, benchmark, and scaling action. A finite capacity limit still exists.
+
+## References
+
+- [Architecture Patterns](architecture.md) — mandatory crate and dual-protocol rules
+- [Performance-First LLD](AegisAgent_World_Class_LLD.md) — concrete structures, algorithms, schemas, and API behavior
+- [Implementation Status](Implementation_Status.md) — shipped versus partial versus planned
+- [Performance Baseline](performance-baseline.md) — historical measurements and method
+- [Runtime Authorization API](runtime-authorization-api.md) — authorization contract
+- [Action Receipt Specification](action-receipt-spec.md) — canonical receipt chain
+- [Security Model](security-model.md) and [Fail-Closed Behavior](fail-closed-behavior.md)
+- [Database Schema](database-schema.md) and [Event Schema](event-schema.md)
 
 ---
 
-## 23. Scale model
-
-Design targets:
-
-- Authorization p95 under 50 ms for cached policy.
-- Egress check fast path under 5 ms.
-- Event ingest target 10k events/sec per gateway node.
-- No unbounded queues.
-- UI handles 100k events with virtualization and cursor pagination.
-- Ban lookup O(1) or O(log n).
-- Receipt verification supports streaming/ranges.
-- Local sensor queue supports backpressure and replay.
-
-Scale strategy:
-
-- Stateless gateway replicas behind a load balancer.
-- Postgres production with partitions by `tenant_id` and time for high-volume tables.
-- Tenant-scoped policy and ban caches with invalidation.
-- Runtime event ingest uses bounded Tokio queues and batch writes.
-- Receipt append uses transaction-safe per-tenant chain head locking.
-- Evidence graph materialization can be asynchronous; protected receipts are synchronous.
-
----
-
-## 24. Production hardening checklist
-
-- [ ] Postgres production mode; SQLite local/dev mode only.
-- [ ] TLS/mTLS for service-to-service traffic.
-- [ ] JWT/OIDC and admin RBAC for console/control APIs.
-- [ ] Bootstrap lock after initial admin/key creation.
-- [ ] Signed gateway-to-sensor control commands.
-- [ ] Replay protection for commands and signed agent requests.
-- [ ] Receipt write failure blocks protected actions.
-- [ ] Receipt checkpoints and range verification.
-- [ ] Tenant isolation tests for every API and table.
-- [ ] No raw secrets in logs/events/receipts.
-- [ ] Bounded queues and backpressure everywhere.
-- [ ] Durable node-sensor spool.
-- [ ] Egress deny-by-default option.
-- [ ] Tool broker credential isolation.
-- [ ] No Docker socket in cages.
-- [ ] Health, liveness, readiness, and startup probes.
-- [ ] Structured logs and OpenTelemetry traces.
-- [ ] Prometheus metrics.
-- [ ] Helm chart and Docker Compose.
-- [ ] Backup/restore and retention policy.
-- [ ] Prompt retention/redaction policy.
-- [ ] SBOM, image signing, dependency scans, secret scans.
-
----
-
-## 25. HLD decision summary
-
-AegisAgent should evolve from an action-integrity gateway MVP into a **control plane plus runtime data plane**. The central architectural rule is strict separation:
-
-- `aegis-gateway` decides, records, signs, correlates, and commands.
-- `aegis-node-sensor`, `aegis-cage-runner`, `aegis-egress-proxy`, `aegis-tool-broker`, and `aegis-mcp-gateway` enforce near the workload.
-- `aegis-console` investigates, approves, and controls through authenticated APIs.
-
-This creates real choke points. Without those choke points, Aegis cannot honestly claim control.
+**Decision summary:** adopt the Snapshot-Isolated Fast Lane, tenant-affine bounded writers, and asynchronous evidence processing. Keep protected durability synchronous. Prove the capacity envelope before production, and reject overload early rather than turning the gateway into a queue.

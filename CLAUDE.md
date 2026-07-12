@@ -1,111 +1,90 @@
-# AegisAgent — Coding-Agent Context (`CLAUDE.md`)
+# AegisAgent Coding-Agent Context
 
-Minimal, current context to work in this repo. For *why* the product is shaped this way, read **[`docs/AegisAgent_Gap_Reassessment_2026-06.md`](docs/AegisAgent_Gap_Reassessment_2026-06.md)** (source of truth) — don't re-derive it.
+This file is the compact operational context. Normative rules live in:
 
-## What AegisAgent is (June 2026)
+1. [docs/architecture.md](docs/architecture.md) — mandatory repository law;
+2. [ARCHITECTURE.md](ARCHITECTURE.md) — target HLD and performance contract;
+3. [docs/LLD.md](docs/LLD.md) — byte layouts, ownership and algorithms;
+4. [MIGRATION_MATRIX.md](MIGRATION_MATRIX.md) — current audit and cutover gates;
+5. [CONTRIBUTING.md](CONTRIBUTING.md) — ADR, unsafe, SIMD, test and benchmark requirements.
 
-The **integrity layer for AI agent actions** — open, self-hostable, framework-neutral. The generic gateway loop (intercept -> policy -> allow/deny -> audit -> approval) is commodity, so it is **table stakes here**. The two defensible differentiators are:
+## Product and status
 
-1. **Approval integrity** — the human approval is bound to a SHA-256 hash of the *frozen exact action*; the SDK **fails closed** if a different/edited/expired action would execute (defeats approve-then-swap, replay, render-vs-bytes).
-2. **Deterministic trust-provenance gating** — authorization is gated on the *source trust level* of the triggering content (6 levels), not a text score (confused-deputy defense). Plus **verifiable, hash-chained action receipts** as compliance evidence (SOC 2 / EU AI Act Art. 14).
+AegisAgent is the integrity, guardrail, SIEM, and SOC layer for autonomous-agent actions. Current code is a Rust Cargo workspace using Axum/Tokio/tonic/SQLx/Cedar, SQLite/PostgreSQL, Python/TypeScript/Go fail-closed SDKs, a React SOC console, and sensor/cage/proxy/tool-broker binaries.
 
-> Motto: **Make the approval trustworthy. Trust the source, not the text.**
+The approved **target** is Thread-Per-Core decision/ingestion, cache-padded SPSC rings, Arrow-compatible HCMT telemetry, Aho-Corasick guardrails, owned HNSW+PQ, isolated INT8 ONNX, eBPF containment, and Arrow/WASM/WebGL UI. Target does not mean shipped. Use `current`, `shadow`, `target`, and `qualified` exactly as defined in `docs/architecture.md`.
 
-## Current Status & Feature Parity History
-For the complete feature development records, SDK specifications, and ticket parity logs, see **[`docs/feature_history.md`](docs/feature_history.md)**.
+Performance targets are `<1 ms p99` warm deterministic authorization compute, `>=1M events/s/node` telemetry ingest, `<100 ms p99` first deterministic detection, and 60 FPS qualified UI. Current measured results remain in `docs/performance-baseline.md`; never present targets as measurements.
 
-* **Baseline**: Rust Axum gateway, SQLite/SQLx (tenant-scoped), Cedar policy pack (`policies.cedar` ≡ `src/policies.cedar`, incl. deterministic trust-provenance rules), MCP Gateway Lite, audit events, 3-SDK parity.
-* **Agent-to-gateway mTLS (#1310)**: optional mutual-TLS auth, alternative to bearer tokens, gated on `AEGIS_MTLS_CA_CERT` (CRL revocation via `AEGIS_MTLS_CRL_PATH`). Verified client-cert Subject CN maps to an agent via `agents.mtls_cn` (set through `PATCH /v1/agents/:id`); unrecognized CN fails closed (401); unset env var leaves bearer-token auth unchanged. See `src/src/mtls.rs`.
-* **Signed policy bundles (#1280)**: `POST /v1/policies/bundles` uploads an Ed25519-signed, multi-policy Cedar bundle, gated on `AEGIS_POLICY_SIGNING_KEY` (verifying/public key); unset, every request fails closed (501). Signature covers the `aegis-jcs-1`-canonicalized `{policies, version, created_at}` hash; entries upsert by `policy_key`; all-or-nothing Cedar validation before any write. See `src/src/routes/policy.rs`.
-* **Database encryption at rest (#1192)**: compile-time `sqlcipher` Cargo feature (`cargo build --features sqlcipher`) feature-unifies the workspace's single `libsqlite3-sys` build with SQLCipher (`bundled-sqlcipher-vendored-openssl`), so `sqlx-sqlite` transparently links against SQLCipher instead of plain SQLite. At runtime, set `AEGIS_DB_ENCRYPTION_KEY` to enable the `PRAGMA key` on every connection. Fails closed at startup if the key is set but the binary wasn't compiled with the feature (`PRAGMA cipher_version` detects whether the linked library is SQLCipher-capable). See `lib/storage/src/db/mod.rs`.
-* **Distributed tracing (#1156)**: optional OTLP span export, gated on `AEGIS_OTLP_ENDPOINT`; unset, entirely inert (no exporter, no extra tracing layer, no global OTel state touched). Spans: `authorize`, `cedar_evaluate`, `db_query`, `receipt_hash`, `approval_create`. Propagates an inbound W3C `traceparent` header so a calling SDK's trace stitches together with the gateway's. Exports OTLP/protobuf over plain HTTP with a blocking client (the batch processor runs its own OS thread, not a tokio task). See `src/src/otel.rs`.
-* **Soft-delete for policies & MCP servers (#1193)**: `DELETE /v1/policies/:id` and the new `DELETE /v1/mcp/servers/:key` set `deleted_at` instead of removing the row; `list`/`get` queries filter it back out, GDPR `DELETE /v1/tenants/:id` is unaffected (still a real hard delete). Re-registering a soft-deleted MCP server (same unique `server_key`) revives it. `agents`/`skills` were deliberately left alone — agents already had equivalent soft-delete via `status = 'deleted'`, and skills has no user-facing delete API. Also fixed: `get_agent_by_token`/`get_agent_by_mtls_cn` now exclude `status = 'deleted'` (previously only excluded `quarantined`), closing a gap where a deleted agent could still authenticate.
-* **Release supply-chain integrity (#1172)**: `.github/workflows/release-publish.yml` now signs every published image keylessly with `cosign` (GitHub OIDC → Sigstore Fulcio/Rekor, by digest not tag), attaches a SLSA Level 3 build-provenance attestation via the `slsa-framework/slsa-github-generator` reusable workflow, and generates an SPDX-format SBOM of the shipped container image (`anchore/sbom-action`) alongside the pre-existing CycloneDX SBOM of the Rust dependency graph. Workflow-only change, exercised only on tagged releases (`push: tags: v*`), not via normal PR CI.
-* **Cedar policy hot-reload (#883)**: opt-in background filesystem watcher (`notify-debouncer-mini`) calls the same reload `POST /v1/policies/reload` triggers, automatically, whenever the policy file changes on disk; gated on `AEGIS_POLICY_HOT_RELOAD=true`, inert (no watcher thread) when unset. A failed parse on the new file content never clobbers the last-good policy set. See `src/src/policy_watcher.rs`.
-* **OpenTelemetry metrics export (#1287)**: reuses the existing `AEGIS_OTLP_ENDPOINT` gate from tracing (#1156). `approval_hash_mismatch_total`/`provenance_denials_total` are OTLP observable counters reading the existing `SecurityMetrics` atomics (`lib/common`, kept OTel-agnostic); `authorize_latency_seconds` is a true per-request histogram recorded at the existing latency-measurement site. OTLP/HTTP, not gRPC, for the same reason as traces (avoids a second `tonic` major version). See `src/src/otel.rs`.
-* **Unified `aegis` CLI (#1202)**: kubectl-style `aegis <subcommand>` entry point (`pip install aegisagent`) dispatching to `status`/`freeze-agent`/`unfreeze-agent`/`verify-receipts`/`export-audit`/`soc-summary`; the pre-existing standalone `aegis-*` scripts are unchanged. Consistent `--format {table,json}` across `status`/`freeze-agent`/`soc-summary`; TTY-aware colorized output (respects `NO_COLOR`). See `sdk-python/aegisagent/cli.py`.
-* **Kubernetes Helm chart (#1206)**: `helm install aegis helm/aegis-gateway/` ships Deployment/Service/ConfigMap/Secret/ServiceMonitor/NetworkPolicy/PodDisruptionBudget/HPA templates. Defaults to `replicaCount: 1` and `autoscaling.enabled: false` (HPA template present but inert) since the relational backend is still SQLite+WAL single-writer — PostgreSQL (#1194) is the prerequisite for safe multi-replica writes. Probes wired to the existing `/livez`/`/readyz`/`/startupz` endpoints (#1208); the Cedar policy ConfigMap is checksummed into the pod annotation and `AEGIS_POLICY_HOT_RELOAD=true` by default so a policy-only `helm upgrade` is picked up live via the existing filesystem watcher (#883) without a pod restart. See `helm/aegis-gateway/`.
-* **Configurable SQLite statement cache (#906)**: `AEGIS_DB_STATEMENT_CACHE_CAPACITY` explicitly wires sqlx-sqlite's per-connection prepared-statement LRU cache (previously left at sqlx's hardcoded default of 100, with no way to tune it). `0` is a valid, meaningful value (disables caching) rather than filtered out like other batch/interval env vars; unset behavior is unchanged. See `lib/storage/src/db/mod.rs`.
-* **Webhook subscription reactivation (#1584)**: `POST /v1/webhook_subscriptions/:id/reactivate` resets a `dead` subscription (tripped by the circuit breaker added in #912) back to `delivery_status = "healthy"` with `consecutive_failures = 0`, without disturbing its URL/secret/event filters. Previously the only recovery path was delete + recreate, which churned the delivery secret and event-type config. Writes an audit event (`webhook_subscription_reactivated`); 404s if the subscription doesn't exist for the tenant. See `src/src/routes/webhooks.rs`.
-* **Tenant-existence bloom filter (#917)**: `SqlDbStorage::get_tenant_by_id` (called once per authenticated request via the `TenantId` extractor — the hottest read in the gateway) consults a fixed-size, lock-free bloom filter before hitting the DB; a "definitely absent" result short-circuits to `Ok(None)` without a query. Unlike a `HashMap` cache, the filter's memory is fixed regardless of how many distinct (including bogus) tenant IDs are probed, so it can't be grown unbounded by a client scanning fake IDs. Warmed once at startup from `list_tenants` (`SqlDbStorage::warm_tenant_bloom_filter`, called from `main()` before the storage is wrapped in `Arc<dyn StorageBackend>`) and kept current by inserting into it on every `insert_tenant`. Until warmed (or a tenant is inserted), the filter is inert and every lookup behaves exactly as before. See `lib/storage/src/tenant_bloom.rs`.
-* **Cursor pagination for `api_keys`/`webhook_subscriptions`/`playbooks` list endpoints (#1142)**: `GET /v1/api_keys`, `GET /v1/webhook_subscriptions`, and `GET /v1/playbooks` previously returned every row for the tenant unbounded. Each now has a `*_cursor` `StorageBackend` method (`list_api_keys_cursor`/`list_webhook_subscriptions_cursor`/`list_playbooks_cursor`) added alongside — not replacing — the original method, following the `list_action_receipts`/`list_action_receipts_cursor` precedent so no existing caller (incl. `grpc.rs`'s `list_playbooks` call) breaks. Routes opt in via the existing `parse_cursor`/`paginated_response` convention (`?limit=&offset=&cursor=`, `X-Next-Cursor` response header). Postgres lacks SQLite's implicit `rowid`, so `migrations_postgres/0002_pagination_rowid_columns.sql` adds an explicit `rowid BIGSERIAL UNIQUE` to the three tables, mirroring `action_receipts`/`decisions`/`soc_alerts`/`soc_incidents`, which already had it. `list_agents`, `list_mcp_servers`, `list_approvals` (offset-only) and `list_detection_rules`, `list_policies`, `list_policy_audit_log`, `list_policy_templates` (no pagination) remain for a follow-up — the `policy.rs`-owned ones in particular were left untouched since that file had unrelated concurrent edits in flight.
-* **Memory-mapped SQLite reads (#919)**: `AEGIS_DB_MMAP_SIZE` (bytes) sets `PRAGMA mmap_size` on every pooled connection via `SqliteConnectOptions`, letting read-heavy workloads skip a syscall+copy per page by reading directly from the OS page cache. `0` is valid (explicitly disables mmap, matching SQLite's own semantics) rather than filtered out; unset leaves the linked SQLite's compiled-in default untouched. See `lib/storage/src/db/mod.rs`.
-* **Tokio runtime metrics exporter (#920)**: extends the existing OTLP metrics gate (`AEGIS_OTLP_ENDPOINT`, #1287) with three observable instruments derived from `tokio::runtime::Handle::metrics()` — `tokio_workers_count`, `tokio_worker_poll_count_total`, `tokio_scheduler_utilization_ratio` — the same numbers the ad-hoc `GET /debug/runtime` endpoint (#1160) already exposes, now also available in a real time-series backend. `init_meter_provider` takes a `Handle` parameter (captured once in `main`, inside the runtime) rather than calling `Handle::current()` inside the observable callbacks, since the OTel SDK's periodic exporter invokes those callbacks from its own background thread. See `src/src/otel.rs`.
-* **SQLite WAL checkpoint tuning (#896)**: `AEGIS_DB_JOURNAL_SIZE_LIMIT` (bytes, `-1` = no limit per SQLite's own semantics for this pragma) and `AEGIS_DB_WAL_AUTOCHECKPOINT` (pages, `0` = disable auto-checkpointing) make the two WAL-checkpoint PRAGMAs tunable. Also fixes a pre-existing bug found while wiring this up: `journal_size_limit`, `synchronous`, and `wal_autocheckpoint` were previously set via a one-off `sqlx::query(...).execute(&pool)` *after* the pool was created — since none of the three are persisted in the database file, that only ever reached whichever single connection happened to service that one query, leaving every other pooled connection (and any opened later under load) running with SQLite's own compiled-in defaults instead. Moved onto `SqliteConnectOptions` (like `mmap_size`, #919) so every connection the pool ever opens gets them. See `lib/storage/src/db/mod.rs`.
-* **Flame graph profiling script (#910)**: `scripts/flamegraph.sh [bench-name]` wraps `cargo-flamegraph` around one of the existing criterion benches (`authorize_benchmark`, `policy_eval_benchmark`, `canon_benchmark`, `receipt_hash_benchmark`, `audit_batch_benchmark`, `evidence_graph_benchmark`) rather than a long-running gateway process — benches are self-contained, finite-duration runs, the workload shape `perf` samples cleanly. `CARGO_PROFILE_RELEASE_DEBUG=true` is passed as an env var override (not edited into `src/Cargo.toml`) so debug symbols are only added for the profiling build. Requires `cargo install flamegraph` and (on Linux) `perf`. See `scripts/flamegraph.sh`.
-* **Webhook export circuit breaker (#912)**: `webhook_export::dispatch`'s lookup query (`list_matching_webhook_subscriptions`) now excludes `status != 'active'` and `delivery_status = 'dead'` (>= 10 consecutive failures) subscriptions — previously it had no such filter, so a tenant-configured URL that's permanently unreachable got a fresh 3-attempt delivery burst (exponential backoff, 5s/attempt timeout) on every matching SOC event, forever. The correctly-filtering query (`get_active_webhook_subscriptions`, #938) already existed but had zero callers — this just wires it into the actual dispatch path. By design, a `dead` subscription is never auto-probed again (these are arbitrary tenant-configured URLs, unlike the operator's own trusted Slack webhook in `notify::WebhookSink`, which auto-recovers via a cooldown); recovery today is delete + recreate (tracked as a follow-up UX gap, #1584). See `lib/storage/src/db/webhooks.rs`.
+## Invariants
 
-## Architecture & Performance Roadmap
+- `aegis-jcs-1` bytes are identical across Rust/Python/TS/Go.
+- Approval binds SHA-256 to the exact post-admission executable action.
+- Hash mismatch, expiry, replay, unavailable required authority, or failed protected receipt commit blocks execution.
+- Trust only tightens; unknown is least trusted.
+- Cedar decides. Scores, Aho, vector search, ONNX, and LLM output cannot create allow or loosen trust.
+- Every tenant-owned read/write/index/cache/receipt binds authenticated tenant context.
+- Protected actions are durable before execution acknowledgement.
+- No raw credentials or secrets in agent payloads, telemetry, logs, receipts, models, or browser schemas.
 
-### Storage Architecture (June 2026 evaluation)
+## Current workspace
 
-AegisAgent uses a **two-layer storage model**:
-
-| Layer | Current | Production target |
-|---|---|---|
-| Relational (approvals, receipts, decisions, audit) | SQLite + WAL + `SQLITE_BUSY` retry | PostgreSQL (#1194, MVCC, concurrent writes) |
-| Semantic / vector index | Qdrant (external) via `lib/soc/src/qdrant.rs` | Qdrant (unchanged — already the right tool) |
-
-* **Why not etcd for metadata?** etcd is optimized for distributed consensus KV store. Relational joins, foreign keys, and transactions needed for decisions/approvals make SQLite/PG the correct choice.
-* **Why not a pluggable flat-file store?** Flat-file stores lose ACID/relational integrity.
-* **Current SQLite scalability ceiling:** SQLite serializes writes through a WAL journal. pgBouncer/PostgreSQL (#1194) is the production target.
-
-### Performance Quick Wins (priority order)
-1. **Local embeddings (`--features fastembed`):** CPU-local embedding generation.
-2. **PostgreSQL backend (#1194):** True concurrent MVCC writes.
-3. **JCS-1 canonicalization caching:** Memoizing on `(action_hash, request_id)` to avoid redundant CPU work.
-4. **Kubernetes / Helm packaging:** Gateway scaling with shared PostgreSQL.
-
-## Commands
-
-```bash
-# Gateway (Rust)
-cargo check --workspace
-cargo test --workspace -- --test-threads=1
-cargo test -p gateway --features sqlcipher -- --test-threads=1   # #1192, encryption-at-rest build
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo deny check licenses   # #1174, blocks GPL/AGPL
-cargo llvm-cov --workspace --fail-under-lines 70   # coverage gate
-CEDAR_POLICY_PATH=policies.cedar cargo run -p gateway --bin gateway   # binds 127.0.0.1:8080
-
-# SDK + Demos (Python)
-python3 -m pip install -e sdk-python/
-python3 -m unittest discover -s sdk-python/tests
-python3 examples/integrity_demo.py                     # zero-setup wedge demo
-aegis-verify-receipts <receipts.json>                  # receipt chain verifier
-
-# Go SDK
-cd sdk-go && go test ./...
-
-# TypeScript SDK
-cd sdk-typescript && npm ci && npx tsc --noEmit && npm test
-
-# Local Stack & Playwright E2E
-docker compose up --build -d
-bash scripts/seed-demo.sh
-docker compose -f docker-compose.dev.yml up --build -d    # seeded dev stack
-cd e2e && npm ci && AEGIS_DASHBOARD_URL=http://127.0.0.1:8080 npx playwright test
+```text
+src/                       gateway binary/library, REST/gRPC adapters
+src/canon/                 current aegis-jcs-1 crate
+lib/common/                errors, crypto helpers, metrics
+lib/api/                   protobuf and shared current models
+lib/storage/               StorageBackend, SQLite/PostgreSQL, migrations
+lib/policy/                Cedar and trust provenance
+lib/soc/                   detection, correlation, response, Qdrant adapter
+lib/tool-broker-*          canonical actions, credentials, connectors
+bins/aegis-node-sensor/    polling sensor, durable spool, signed commands
+bins/aegis-cage-runner/    sandbox execution
+bins/aegis-egress-proxy/   network choke point
+bins/aegis-tool-broker/    standalone credential-owning connector executor
+bins/aegis-llm-gateway/    prompt/model metadata proxy
+ui-next/                   React SOC console
+sdk-{python,typescript,go}/ fail-closed SDKs
 ```
 
-## Critical Invariants (do not weaken)
+Target modules are introduced only through accepted ADRs and the sequence in `ROADMAP.md`.
 
-* **Canonicalization `aegis-jcs-1` MUST stay byte-identical across SDK and gateway** (Unicode sorted keys, compact separators, raw UTF-8, reject non-finite floats). Locked by `tests/canonical_action_vectors.json`.
-* **Fail closed:** Unknown agent/tool/MCP server/tool -> deny; critical -> deny; high-risk -> require approval. SDK refuses to execute on hash mismatch, expired approval, or unreachable gateway (mutating/high-risk).
-* **Approval integrity:** Every approval binds to the original `action_hash`; edits re-hash + re-evaluate; single-use atomic consume.
-* **Trust-provenance is deterministic:** Classifiers may only *tighten* a label, never loosen it. Downstream agent hops gate on the most restrictive trust level seen anywhere upstream (`trust_chain::propagate`).
-* **Multi-tenant isolation:** Every tenant-owned query binds/filters `tenant_id`; parameterized SQLx only.
-* **Local binding** `127.0.0.1` for dev/test; redact secrets from logs/receipts; no `.unwrap()`/`.expect()` in production.
-* **Encryption-at-rest fails closed:** if `AEGIS_DB_ENCRYPTION_KEY` is set but the binary was not compiled with `--features sqlcipher`, startup MUST error rather than silently run unencrypted (`verify_encryption_or_fail_closed` in `lib/storage/src/db/mod.rs`).
+## Coding rules
 
-## Where Things Live
+- Read `docs/architecture.md` before editing.
+- Keep protocol adapters thin and call a protocol-neutral typed service.
+- Public control types are protobuf-first; FlatBuffers is internal telemetry; Arrow IPC is analytical output.
+- Do not make HCMT authoritative for approvals, replay claims, control generations, receipt heads, or protected commits.
+- In target hot crates, no `tokio::spawn`, blocking lock, JSON tree, normal telemetry SQL row, unbounded work, or shared mutable cross-core state.
+- Existing transitional code may keep Tokio/JSON/SQL behind current boundaries; do not expand those patterns into target crates.
+- All production paths return typed `Result`; no `.unwrap()`/`.expect()`.
+- Use parameterized SQL and closed enums for dynamic columns/order.
+- Preserve unrelated dirty worktree changes.
+- Stateful changes include migration, shadow comparison, crash recovery and tested rollback.
+- Unsafe/SIMD/lock-free/eBPF/wire/disk/UI-memory changes require the evidence in `CONTRIBUTING.md`.
 
-* `src/`: Routing (`routes/` folder), database (`db` modules/traits under `lib/storage`), policy engine (modules under `lib/policy`), models (`lib/api`), gateway daemon (`main.rs`, `grpc.rs`, etc.), SOC features under `lib/soc/` (detection, correlation, etc.).
-* `sdk-python/aegisagent/`: Canonicalization (`canon.py`), decorator (`decorator.py`), client (`client.py`), receipts (`receipts.py`), verify CLI (`verify_receipts.py`).
-* `sdk-go/`: `canon/canon.go`, `aegis/client.go`, `aegis/protect.go`, `aegis/receipts.go`.
-* `sdk-typescript/src/`: `canon.ts`, `client.ts`, `protect.ts`.
-* Architecture ADRs: `docs/adr/`.
+## Standard commands
 
-## How to Continue
+```bash
+cargo check --workspace
+cargo test --workspace -- --test-threads=1
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo tree --workspace
 
-Use TDD (RED -> GREEN). Run `cargo test/fmt/clippy` after Rust edits; don't stack unverified Rust. `.clauderules`/`.cursorrules` are harness-generated; do not hand-edit. Persona scopes are defined in `AGENTS.md`.
+python3 -m unittest discover -s sdk-python/tests
+(cd sdk-typescript && npm ci && npx tsc --noEmit && npm test)
+(cd sdk-go && go test ./...)
+node scripts/validate-docs.mjs
+```
+
+Current local gateway defaults to `127.0.0.1`, REST `8080`, gRPC `6334`. `protoc` is required. Linux-specific io_uring/eBPF work uses separate target/toolchain gates as those crates land.
+
+## Where to record changes
+
+- architecture or invariant: HLD + LLD + ADR;
+- byte/wire/disk schema: LLD + golden corpus + compatibility matrix;
+- current shipped status: `docs/Implementation_Status.md` only after code lands;
+- measured performance: `docs/performance-baseline.md` plus raw artifacts;
+- migration/cutover/delete gate: `MIGRATION_MATRIX.md`;
+- weekly sequencing: `ROADMAP.md`.
