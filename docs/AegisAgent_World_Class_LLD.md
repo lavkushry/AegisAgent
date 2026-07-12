@@ -343,7 +343,7 @@ Validation rules:
 
 ## Installation
 
-No new endpoint is considered installed until protobuf generation tools are present and both protocol suites pass. Follow [Installation](Installation.md); PostgreSQL target mode additionally requires migrations, pooling, backups, and a completed backend qualification matrix.
+No new endpoint is considered installed until protobuf generation tools are present and both protocol suites pass. Follow [Installation](installation.md); PostgreSQL target mode additionally requires migrations, pooling, backups, and a completed backend qualification matrix.
 
 ## Quick Start
 
