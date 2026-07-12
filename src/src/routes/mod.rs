@@ -1322,12 +1322,16 @@ pub struct AppState {
     /// owned and awaited elsewhere (e.g. graceful shutdown draining the event
     /// channel). Empty in tests, which never spawn the real background tasks.
     pub background_task_handles: std::sync::Mutex<Vec<(&'static str, tokio::task::AbortHandle)>>,
-    /// Phase 6.4: the tool-broker execution engine behind
-    /// `POST /v1/broker/execute`. Built once at startup by
-    /// [`crate::routes::broker::default_broker_executor`]; the route is a
-    /// thin adapter that consumes the approval atomically via storage, then
-    /// delegates here.
-    pub broker_executor: Arc<aegis_tool_broker_connectors::BrokerExecutor>,
+    /// Phase 1 tool-broker extraction (roadmap: "Tool broker | Partial |
+    /// In-gateway execute path; no standalone broker service"): the client
+    /// for the standalone `aegis-tool-broker` binary behind
+    /// `POST /v1/broker/execute`. Built once at startup from
+    /// `AEGIS_TOOL_BROKER_URL`/`AEGIS_TOOL_BROKER_API_TOKEN` via
+    /// `ToolBrokerClient::from_env`. `None` makes every execute call fail
+    /// closed with 501 — there is no in-process fallback; the gateway no
+    /// longer links `aegis-tool-broker-connectors` at all, so it cannot
+    /// resolve a real credential or run a connector even if it wanted to.
+    pub tool_broker: Option<Arc<crate::tool_broker_client::ToolBrokerClient>>,
     /// OIDC console login (roadmap: "OIDC/SAML for console/admin"), built
     /// once at startup via `crate::oidc::discover` if every `AEGIS_OIDC_*`
     /// env var is set (see `crate::oidc::OidcConfig::from_env`). `None`
@@ -2038,7 +2042,7 @@ pub mod benchutil {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2346,7 +2350,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2413,7 +2417,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2471,7 +2475,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2529,7 +2533,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2593,7 +2597,71 @@ pub(crate) mod test_helpers {
                 fail_open,
             ))),
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
+            oidc: None,
+        });
+
+        (state, tenant_id, agent_token)
+    }
+
+    /// Like [`setup_state`], but with `tool_broker` pointed at a
+    /// caller-supplied mock `aegis-tool-broker` HTTP server (see
+    /// `routes::broker::tests::spawn_mock_tool_broker`), for exercising
+    /// `execute_broker_action`'s HTTP call without a real subprocess.
+    pub(crate) async fn setup_state_with_tool_broker(
+        test_name: &str,
+        broker_base_url: &str,
+        api_token: &str,
+    ) -> (Arc<AppState>, String, String) {
+        let (state_raw, tenant_id, agent_token, events_rx) =
+            setup_state_with_events(test_name).await;
+        tokio::spawn(events::drain(
+            events_rx,
+            state_raw.storage.get_pool().clone(),
+            state_raw.metrics.clone(),
+            None,
+        ));
+
+        let policy_engine = PolicyEngine::init("policies.cedar").await.unwrap();
+        let state = Arc::new(AppState {
+            storage: state_raw.storage.clone(),
+            policy_engine,
+            events: state_raw.events.clone(),
+            metrics: state_raw.metrics.clone(),
+            approval_ttl_secs: 1800,
+            rate_limiter: RateLimiter::new(1000.0, 1000.0),
+            quota_manager: QuotaManager::new(0, 86400),
+            approval_callback_ip_limiter: RateLimiter::new(10.0, 10.0 / 60.0),
+            approval_attempt_tracker: ApprovalAttemptTracker::new(5, 3600),
+            auth_failure_tracker: ApprovalAttemptTracker::new(5, 3600),
+            skill_cache: SkillActionCache::new(1024),
+            mcp_server_cache: McpServerCache::new(1024),
+            mcp_tool_cache: McpToolCache::new(1024),
+            canonical_hash_cache: CanonicalHashCache::new(1024),
+            risk_weight_cache: RiskWeightsCache::new(std::time::Duration::from_secs(60)),
+            heartbeat_debouncer: Arc::new(HeartbeatDebouncer::new()),
+            deferred_write_tracker: Arc::new(DeferredWriteTracker::new()),
+            replay_nonce_cache: ReplayNonceCache::new(10_000),
+            replay_store_db: false,
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
+            audit_writer_unhealthy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audit_batch: crate::audit_batch::AuditBatchSink::channel(1024).0,
+            receipt_batch: crate::receipt_batch::ReceiptBatchSink::channel(1024).0,
+            github_webhook_secret: None,
+            policy_signing_verifying_key: None,
+            command_signing_key: None,
+            slack_signing_secret: None,
+            slack_bot_token: None,
+            github_pr_commenter: None,
+            github_checks_client: None,
+            qdrant_exporter: None,
+            admission_webhook: None,
+            background_task_handles: std::sync::Mutex::new(Vec::new()),
+            tool_broker: Some(Arc::new(crate::tool_broker_client::ToolBrokerClient::new(
+                broker_base_url.to_string(),
+                api_token.to_string(),
+                5,
+            ))),
             oidc: None,
         });
 
@@ -2651,7 +2719,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2764,7 +2832,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 
@@ -2898,7 +2966,7 @@ pub(crate) mod test_helpers {
             qdrant_exporter: None,
             admission_webhook: None,
             background_task_handles: std::sync::Mutex::new(Vec::new()),
-            broker_executor: crate::routes::broker::default_broker_executor(),
+            tool_broker: None,
             oidc: None,
         });
 

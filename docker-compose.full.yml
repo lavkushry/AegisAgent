@@ -47,6 +47,15 @@ include:
   - docker-compose.yml
 
 services:
+  # Phase 1 tool-broker extraction: wires the gateway's POST
+  # /v1/broker/execute at the standalone binary below rather than 501ing
+  # (no in-process fallback exists any more). AEGIS_TOOL_BROKER_API_TOKEN
+  # must match the tool-broker service's own token below.
+  gateway:
+    environment:
+      AEGIS_TOOL_BROKER_URL: http://127.0.0.1:8899
+      AEGIS_TOOL_BROKER_API_TOKEN: ${AEGIS_TOOL_BROKER_API_TOKEN:-}
+
   qdrant:
     image: qdrant/qdrant:v1.13.2
     network_mode: host
@@ -147,4 +156,23 @@ services:
       - "${AEGIS_LLM_PROVIDER:-openai}"
       - "--gateway-url"
       - "http://127.0.0.1:8080"
+
+  # Phase 1 tool-broker extraction — standalone connector-execution engine.
+  # The gateway no longer links aegis-tool-broker-connectors at all; without
+  # this service (or an equivalent AEGIS_TOOL_BROKER_URL), POST
+  # /v1/broker/execute 501s. AEGIS_TOOL_BROKER_API_TOKEN is a shared secret
+  # between this service and the gateway above -- distinct from the
+  # gateway's own AEGIS_API_TOKEN.
+  tool-broker:
+    build:
+      context: .
+      dockerfile: bins/aegis-tool-broker/Dockerfile
+    image: aegisagent-tool-broker:local
+    network_mode: host
+    environment:
+      RUST_LOG: info
+      AEGIS_TOOL_BROKER_API_TOKEN: ${AEGIS_TOOL_BROKER_API_TOKEN:?Export a shared secret for gateway<->tool-broker calls}
+    command:
+      - "--listen"
+      - "127.0.0.1:8899"
 

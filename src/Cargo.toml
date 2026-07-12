@@ -20,10 +20,14 @@ aegis-policy = { path = "../lib/policy" }
 aegis-soc = { path = "../lib/soc" }
 aegis-egress = { path = "../lib/egress" }
 # Phase 6 tool broker: canonical action hashing / credential indirection
-# (6.1) and the connector execution engine (6.3), behind
-# POST /v1/broker/execute (6.4).
+# (6.1), used to compute the claimed action_hash before calling out to the
+# standalone aegis-tool-broker binary (Phase 1 extraction, #broker below).
+# Deliberately NOT aegis-tool-broker-connectors as a production dependency
+# any more: the gateway process must not link the connector/credential
+# execution engine at all, so it structurally cannot resolve a real
+# provider credential or run a shell command no matter what bug exists in
+# it. See `tool_broker_client.rs` and `bins/aegis-tool-broker`.
 aegis-tool-broker-core = { path = "../lib/tool-broker-core" }
-aegis-tool-broker-connectors = { path = "../lib/tool-broker-connectors" }
 tonic = "0.12.3"
 prost = "0.13.5"
 axum = { version = "0.7.5", features = ["macros", "ws"] }
@@ -150,6 +154,13 @@ rcgen = "0.14"
 # test-only — a freshly generated key at test time has nothing to flag).
 rsa = { version = "0.9", features = ["pem"] }
 rand = "0.8"
+# routes::broker tests only: runs the real BrokerExecutor inside an in-test
+# mock aegis-tool-broker HTTP server, so the existing execute-path tests can
+# keep asserting the exact same behavior without a real subprocess. This is
+# the one deliberate, test-only exception to "the gateway doesn't link
+# aegis-tool-broker-connectors" -- it must never become a production
+# dependency again.
+aegis-tool-broker-connectors = { path = "../lib/tool-broker-connectors" }
 
 [[bench]]
 name = "authorize_benchmark"
