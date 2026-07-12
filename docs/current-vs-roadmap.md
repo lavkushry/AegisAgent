@@ -79,7 +79,7 @@ Strongest current capabilities:
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | Standalone `aegis-tool-broker` binary + HTTP contract; gateway owns approval/receipts, broker owns credential resolution + connector execution; no mandatory force path, no scoped tokens. |
 | Signed control commands | Partial | Issue + sensor poll + host PID enforce + auto PID discovery (`AEGIS_RUN_ID` process collector); real-host kill proven (`tests/real_host_integration.rs`), production soak pending. |
-| Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
+| Ban / quarantine centers | Available today | Stores/APIs + UI pages; enforced at every choke point (authorize, broker execute, cage create/claim, egress); an `agent` ban also issues signed `kill_run` commands to the agent's live runs. `fingerprint`/`image_digest`/`prompt_hash` target types stored but not yet consulted. |
 | Postgres production mode | Roadmap / partial | Code path now CI-validated against a live Postgres instance (was compile-check only); SQLite single-writer is still the default deploy. |
 | Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |
 
@@ -117,7 +117,7 @@ Do not claim that the current `main` already provides:
 - automatic process kill/quarantine for agents that never call the SDK
 - default network egress blocking for all agent traffic
 - raw credential isolation for every tool path
-- complete unknown-agent sandboxing (cage executor not on main)
+- complete unknown-agent sandboxing (executor shipped; transparent netns forced egress + production soak pending)
 - multi-replica production Kubernetes on SQLite
 - full enterprise SSO (SAML, RBAC, multi-IdP) — a beta self-service OIDC login/link flow exists (single IdP, no per-user attribution/revocation), see Implementation Status
 
@@ -132,7 +132,7 @@ AegisAgent is moving toward this architecture:
 ```text
 Control Plane (gateway) — largely shipped
   + Runtime Sensor — skeleton shipped
-  + Agent Cage — lib shipped, executor WIP
+  + Agent Cage — lib + executor shipped (claim/execute loop, Docker e2e); netns force-path WIP
   + Egress Proxy — binary shipped, force-path WIP
   + Tool Broker — standalone binary shipped (Phase 1); force path + scoped tokens remain
   + LLM choke point — adapter shipped
