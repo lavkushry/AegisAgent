@@ -451,7 +451,7 @@ evidence:
 
 ## Installation
 
-This HLD does not replace the product installation guide. Use [Installation](Installation.md) for prerequisites and [Deployment Guide](deployment-guide.md) for Docker, Helm, and production configuration. Both REST 8080 and gRPC 6334 must be exposed where the deployment model permits access.
+This HLD does not replace the product installation guide. Use [Installation](installation.md) for prerequisites and [Deployment Guide](deployment-guide.md) for Docker, Helm, and production configuration. Both REST 8080 and gRPC 6334 must be exposed where the deployment model permits access.
 
 ## Quick Start
 
@@ -513,7 +513,7 @@ Any missing dual-protocol operation is a contract gap, not permission to impleme
 
 ## CLI
 
-Operational CLI commands must expose the same typed configuration, support a read-only `config validate`, and provide benchmark modes that report decision class, protocol, offered load, achieved throughput, latency histogram, error class, and queue utilization. Exact shipped setup and invocation commands remain documented in [Installation](Installation.md) and [Deployment Guide](deployment-guide.md).
+Operational CLI commands must expose the same typed configuration, support a read-only `config validate`, and provide benchmark modes that report decision class, protocol, offered load, achieved throughput, latency histogram, error class, and queue utilization. Exact shipped setup and invocation commands remain documented in [Installation](installation.md) and [Deployment Guide](deployment-guide.md).
 
 ## Configuration Reference
 
