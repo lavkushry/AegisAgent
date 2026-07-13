@@ -37,7 +37,7 @@ Strongest current capabilities:
 
 ### Partial (built, not end-to-end production)
 
-- **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs), real process/net/fs/secret collectors (`AEGIS_RUN_ID` auto-discovery -> enforcer registration); now proven against a real Linux host (`tests/real_host_integration.rs`: real `/proc`, real signal-killed child, real established TCP socket, real open file descriptor, real secret-shaped env var) rather than only synthetic `/proc` trees; long-running production-host soak still pending
+- **Node sensor** — binary, register/heartbeat, command poll, shipper, host ProcessEnforcer (real kill/pause/resume for registered PIDs), real process/net/fs/secret collectors (`AEGIS_RUN_ID` auto-discovery -> enforcer registration); now proven against a real Linux host (`tests/real_host_integration.rs`: real `/proc`, real signal-killed child, real established TCP socket, real open file descriptor, real secret-shaped env var) rather than only synthetic `/proc` trees; soaked by `scripts/sensor-soak.sh` (nightly CI + PR smoke: sustained workload, signed-kill round-trips, gateway outage, bounded RSS/fd/spool-disk assertions); extended production-deployment soak still pending
 - **Egress proxy** — binary + Helm; not forced for all caged traffic by default
 - **Tool broker** — standalone `aegis-tool-broker` binary exists and is the only execution path when configured (gateway no longer links the connector-execution crate in production); no mandatory-force-path enforcement yet, no scoped per-run agent tokens
 - **Agent cage runner** — binary + claim/execute loop; compose profile `cage` + Helm; host Docker security review + hardened create flags shipped (`docs/AegisAgent_Cage_Docker_Security.md`); full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, both CI-wired)
@@ -75,11 +75,11 @@ Strongest current capabilities:
 | TypeScript SDK | Available today | Canon + protect + client + receipt chain verifier (shared corpus). |
 | Go SDK | Partial | Core path shipped; prompt/model emit parity TBD. |
 | Full web console | Available today | Bun SPA panel suite + cage runs / ban / quarantine / egress / evidence-graph / policy / prompt-timeline / model-calls pages shipped (Phase 9.2/9.3 complete). |
-| Node sensor | Partial | Binary + packaging; real process/net/fs/secret collectors + host enforce, unit-tested and proven against a real Linux host (`tests/real_host_integration.rs`); production-host soak pending. |
+| Node sensor | Partial | Binary + packaging; real process/net/fs/secret collectors + host enforce, unit-tested, proven against a real Linux host (`tests/real_host_integration.rs`), and soaked in CI (`scripts/sensor-soak.sh`, nightly); extended production-deployment soak pending. |
 | Agent cage runner | Partial | Binary + DockerRuntime + compose + Helm; Docker security review + create hardening done; full Docker e2e done (`cage-docker-e2e.sh` + `cage-wave-a-e2e.sh`, CI-wired). |
 | Egress proxy | Partial | Binary + packaging; not default-forced for cages. |
 | Tool broker | Partial | Standalone `aegis-tool-broker` binary + HTTP contract; gateway owns approval/receipts, broker owns credential resolution + connector execution; no mandatory force path, no scoped tokens. |
-| Signed control commands | Partial | Issue + sensor poll + host PID enforce + auto PID discovery (`AEGIS_RUN_ID` process collector); real-host kill proven (`tests/real_host_integration.rs`), production soak pending. |
+| Signed control commands | Partial | Issue + sensor poll + host PID enforce + auto PID discovery (`AEGIS_RUN_ID` process collector); real-host kill proven (`tests/real_host_integration.rs`) and exercised repeatedly by the CI soak; extended production-deployment soak pending. |
 | Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
 | Postgres production mode | Roadmap / partial | Code path now CI-validated against a live Postgres instance (was compile-check only); SQLite single-writer is still the default deploy. |
 | Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |

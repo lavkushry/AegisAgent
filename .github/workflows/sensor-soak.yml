@@ -1,0 +1,69 @@
+name: Sensor Soak
+
+# Long-running node-sensor soak (Implementation_Status.md sensor row:
+# "long-lived production-host soak"). scripts/sensor-soak.sh runs the real
+# sensor against a real gateway on the runner's real Linux /proc under
+# continuous collector workload, signed-kill round-trips, and a mid-soak
+# gateway outage, then asserts bounded RSS/fd/spool-disk, zero panics,
+# full spool drain, and unattended outage recovery.
+#
+# Three entry points:
+#  - nightly schedule: the standing 15-minute soak;
+#  - workflow_dispatch: operator-chosen duration (e.g. multi-hour);
+#  - pull_request (sensor/harness paths only): a short smoke soak so
+#    changes to the sensor or the harness prove themselves in the PR.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      duration_secs:
+        description: "Soak duration in seconds"
+        required: false
+        default: "900"
+  pull_request:
+    paths:
+      - "bins/aegis-node-sensor/**"
+      - "scripts/sensor-soak.sh"
+      - ".github/workflows/sensor-soak.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sensor-soak:
+    name: Node sensor soak (real host)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: sensor-soak
+      - name: Pick soak duration
+        id: duration
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "secs=${{ github.event.inputs.duration_secs }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "secs=180" >> "$GITHUB_OUTPUT"
+          else
+            echo "secs=900" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run sensor soak
+        env:
+          SOAK_DURATION_SECS: ${{ steps.duration.outputs.secs }}
+          RUST_LOG: info
+        run: bash scripts/sensor-soak.sh
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensor-soak-${{ github.run_id }}
+          path: target/sensor-soak/
+          if-no-files-found: ignore
