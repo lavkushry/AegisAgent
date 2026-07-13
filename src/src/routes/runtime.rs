@@ -323,6 +323,31 @@ async fn agent_ban_denial(
     }
 }
 
+/// Image-digest ban enforcement shared by run registration and claim
+/// (#1678: ban target types beyond agent/tool). A banned sandbox image is
+/// blocked before it ever starts; a storage error is a 500 (fail-closed —
+/// unreadable enforcement state blocks).
+async fn image_digest_ban_denial(
+    state: &AppState,
+    tenant_id: &str,
+    image_digest: &str,
+) -> Result<Option<StatusError>, StatusError> {
+    match state
+        .storage
+        .is_banned(tenant_id, "image_digest", image_digest, Utc::now())
+        .await
+    {
+        Err(e) => {
+            error!("Failed to check image-digest ban state: {:?}", e);
+            Err(StatusError::internal("Database error"))
+        }
+        Ok(true) => Ok(Some(StatusError::forbidden(
+            "sandbox image digest is banned; runs are denied (fail-closed)",
+        ))),
+        Ok(false) => Ok(None),
+    }
+}
+
 pub async fn create_agent_run(
     State(state): State<Arc<AppState>>,
     TenantId(tenant_id): TenantId,
@@ -337,6 +362,17 @@ pub async fn create_agent_run(
     // egress/authorize enforcement still applies to whatever runs.
     if let Some(agent_id) = req.agent_id.as_deref() {
         match agent_ban_denial(&state, &tenant_id, agent_id).await {
+            Ok(Some(denial)) => return denial.into_response(),
+            Ok(None) => {}
+            Err(e) => return e.into_response(),
+        }
+    }
+    if let Some(digest) = req
+        .cage_spec
+        .as_ref()
+        .and_then(|spec| spec.image_digest.as_deref())
+    {
+        match image_digest_ban_denial(&state, &tenant_id, digest).await {
             Ok(Some(denial)) => return denial.into_response(),
             Ok(None) => {}
             Err(e) => return e.into_response(),
@@ -485,6 +521,13 @@ pub async fn claim_run(
     };
     if let Some(agent_id) = run.agent_id.as_deref() {
         match agent_ban_denial(&state, &tenant_id, agent_id).await {
+            Ok(Some(denial)) => return denial.into_response(),
+            Ok(None) => {}
+            Err(e) => return e.into_response(),
+        }
+    }
+    if let Some(digest) = run.image_digest.as_deref() {
+        match image_digest_ban_denial(&state, &tenant_id, digest).await {
             Ok(Some(denial)) => return denial.into_response(),
             Ok(None) => {}
             Err(e) => return e.into_response(),
@@ -1822,14 +1865,19 @@ mod tests {
 
     // ── Ban / quarantine enforcement at cage start (Phase 2.4/2.5) ──────────
 
-    async fn ban_agent(state: &Arc<AppState>, tenant_id: &str, agent_id: &str) {
+    async fn ban_target(
+        state: &Arc<AppState>,
+        tenant_id: &str,
+        target_type: &str,
+        target_value: &str,
+    ) {
         state
             .storage
             .insert_ban(&AgentBanRecord {
                 id: Uuid::new_v4().to_string(),
                 tenant_id: tenant_id.to_string(),
-                target_type: "agent".to_string(),
-                target_value: agent_id.to_string(),
+                target_type: target_type.to_string(),
+                target_value: target_value.to_string(),
                 scope: "tenant".to_string(),
                 reason: Some("test ban".to_string()),
                 actor: "test-operator".to_string(),
@@ -1841,6 +1889,10 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    async fn ban_agent(state: &Arc<AppState>, tenant_id: &str, agent_id: &str) {
+        ban_target(state, tenant_id, "agent", agent_id).await;
     }
 
     async fn quarantine_target(
@@ -1911,6 +1963,125 @@ mod tests {
                 root_trace_id: None,
                 root_trust_level: None,
                 cage_spec: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Registering a cage run whose `image_digest` is banned is a fail-closed
+    /// 403 — the `agent_bans` store promises image-digest enforcement
+    /// "before sandbox start" (#1678: target types beyond agent/tool).
+    #[tokio::test]
+    async fn create_agent_run_denies_banned_image_digest() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_create_banned_image",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+        let digest = "sha256:feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface";
+        ban_target(&state, &tenant_id, "image_digest", digest).await;
+
+        let mut spec = sample_cage_spec();
+        spec.image_digest = Some(digest.to_string());
+        let response = create_agent_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(CreateAgentRunRequest {
+                run_key: "run-banned-image".to_string(),
+                agent_id: None,
+                source_component: "cage-runner".to_string(),
+                mode: None,
+                root_trace_id: None,
+                root_trust_level: None,
+                cage_spec: Some(spec),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// A ban on a different image digest must not block an unrelated run.
+    #[tokio::test]
+    async fn create_agent_run_allows_unrelated_image_digest_ban() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_create_other_image_ban",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+        ban_target(
+            &state,
+            &tenant_id,
+            "image_digest",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .await;
+
+        let mut spec = sample_cage_spec();
+        spec.image_digest = Some(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        );
+        let response = create_agent_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(CreateAgentRunRequest {
+                run_key: "run-other-image".to_string(),
+                agent_id: None,
+                source_component: "cage-runner".to_string(),
+                mode: None,
+                root_trace_id: None,
+                root_trust_level: None,
+                cage_spec: Some(spec),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    /// An image-digest ban created AFTER the run was registered still blocks
+    /// the claim — claiming is the moment execution actually starts, so it
+    /// re-checks against the digest stored on the run record.
+    #[tokio::test]
+    async fn claim_run_denies_image_digest_banned_after_registration() {
+        let (state, tenant_id, _agent_token) = setup_state_with_command_signing_key(
+            "cage_claim_banned_image",
+            TEST_COMMAND_SIGNING_SECRET_HEX,
+        )
+        .await;
+        let digest = "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+        let mut spec = sample_cage_spec();
+        spec.image_digest = Some(digest.to_string());
+        let response = create_agent_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Json(CreateAgentRunRequest {
+                run_key: "run-claim-image-ban".to_string(),
+                agent_id: None,
+                source_component: "cage-runner".to_string(),
+                mode: None,
+                root_trace_id: None,
+                root_trust_level: None,
+                cage_spec: Some(spec),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let run: AgentRunRecord = serde_json::from_slice(&body).unwrap();
+
+        ban_target(&state, &tenant_id, "image_digest", digest).await;
+
+        let response = claim_run(
+            State(state.clone()),
+            TenantId(tenant_id.clone()),
+            Path(run.id.clone()),
+            Json(RunnerIdRequest {
+                runner_id: "runner-1".to_string(),
             }),
         )
         .await

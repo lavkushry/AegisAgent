@@ -69,8 +69,10 @@ Blocks multi-replica and enterprise-ops claims.
 - [x] **Ban/quarantine enforcement** at all choke points (authorize, broker,
       cage start/claim, egress) + agent-ban propagation to live runs as signed
       `kill_run` commands — see `feat/ban-enforcement-choke-points`.
-      Remaining: `fingerprint`/`image_digest`/`prompt_hash` ban target types
-      are stored but not yet consulted anywhere.
+      `image_digest` bans now enforced at cage run create + claim
+      (`feat/ban-image-digest-enforcement`). Remaining: `fingerprint` (no
+      carrier field at any choke point yet) and `prompt_hash` (telemetry-only;
+      enforcement = SOC auto-response design) stay stored-but-unenforced.
 - [ ] **Standalone MCP proxy binary** (optional product line; Lite remains prod).
 - [ ] **Branch hygiene** — merge-or-close pass on ~80 remote branches (no bulk
       delete without one-by-one review).
