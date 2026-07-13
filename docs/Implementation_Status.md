@@ -11,6 +11,25 @@
 > - **Unknown-agent runtime control** (cage execution loop + real sensor telemetry + forced egress) is **not** production-complete.  
 > - **Multi-replica K8s** requires Postgres GA (#1194); Helm defaults remain `replicaCount: 1`.
 
+## v2 architecture migration ledger
+
+This ledger uses the canonical `current`, `shadow`, `target`, and `qualified`
+vocabulary from [architecture.md](architecture.md). The larger v1 capability
+matrix below retains its historical release labels until it is migrated as a
+separate documentation change.
+
+| Artifact | Status | Evidence in this checkout | Authority / traffic | Remaining gates |
+|---|---|---|---|---|
+| Unwired SPSC, sealed-page oracle, and published-prefix prototypes | current | `lib/event/`; ring FIFO/full/wrap/drop/layout; safe sealed differential corpus; packed Release/Acquire descriptor-count, byte-watermark, and closure publication with immediate immutable-prefix resolution; native stress; same-algorithm Loom; full Miri; ASan/TSan CI lanes defined; zero-allocation append-plus-resolve test; ADR-0006 through ADR-0008 | No production or `shadow` traffic; cannot carry protected evidence; no performance claim | Green sanitizer CI artifacts, ADR acceptance/security review, composite ring reservation/admission, authenticated registry, bounded page rotation/outstanding pages, generation reuse/epochs, NUMA-owner reclamation, production shadow wiring, UBSan support, qualification |
+| Thread-per-core reactor | target | `ARCHITECTURE.md`, `docs/LLD.md` | None | runtime ADR, core-affinity/io_uring implementation, migration and benchmark gates |
+| HCMT telemetry store | target | `ARCHITECTURE.md`, `docs/LLD.md` | None; SQL remains authoritative/current | WAL/segment ADR, recovery corpus, dual write, shadow equality, qualification |
+
+No v2 component is `qualified` in this checkout. The SPSC, sealed-page, and
+published-prefix prototypes being `current` means only that their isolated,
+unwired code and listed tests are present. The production event fabric remains
+`target`, is neither `shadow` nor `qualified`, and is not
+production-authoritative.
+
 | Capability | Status | Current files | Missing pieces | Related issues | Test coverage | Prod-ready | Next PR |
 |---|---|---|---|---|---|---|---|
 | Gateway authorize | Implemented | `src/src/routes/authorize.rs`, `authorize_decision.rs`, `authorize_canon.rs` | — | #1305–#1313 | unit + integration + bench + fuzz (canon) | prod | perf follow-ups |
