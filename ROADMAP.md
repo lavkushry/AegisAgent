@@ -65,6 +65,19 @@ Gate: legacy versus typed authorization decisions, hashes, approvals, receipts a
 
 ### Week 4 — SPSC ring and slab prototype
 
+Progress (2026-07-13): the `current` checkout has unwired ring, safe sealed-page
+oracle, and append-only published-prefix prototypes under Proposed ADR-0006
+through ADR-0008. Packed Release/Acquire state publishes descriptor count, byte
+watermark, and closure for immediate immutable-prefix resolution. Evidence
+includes a safe sealed differential corpus, native stress, the same publication
+algorithm under Loom, full Miri, defined ASan/TSan CI lanes, and a zero-allocation
+append-plus-resolve test. The production fabric remains `target`, neither
+`shadow` nor `qualified`, and has no performance result. ADR acceptance and
+security review, green sanitizer CI artifacts, composite ring reservation/admission, authenticated registry,
+bounded page rotation/outstanding pages, generation reuse/epochs, NUMA-owner
+reclamation, production shadow wiring, UBSan support in the current Rust
+toolchain, and qualification remain blockers.
+
 Deliverables:
 
 - implement cache-padded SPSC ring, 32-byte descriptor and NUMA-local slab prototype;

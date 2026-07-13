@@ -1,0 +1,27 @@
+[package]
+name = "aegis-event"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Bounded descriptor transport primitives for the AegisAgent target data plane"
+
+[features]
+default = []
+# Model-only replacement for std atomics/UnsafeCell. Never enable in a runtime
+# artifact: Loom synchronization primitives require `loom::model` execution.
+loom = ["dep:loom"]
+
+[dependencies]
+crc32c.workspace = true
+loom = { version = "=0.7.2", optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "spsc_ring"
+harness = false
+
+[[bench]]
+name = "published_slab"
+harness = false

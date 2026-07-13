@@ -2,7 +2,10 @@
 
 **Issue:** [#1197](https://github.com/lavkushry/AegisAgent/issues/1197)
 
-> **Status:** ADR-0001 through ADR-0005 are Accepted. A changed decision requires a new ADR and a supersedes link; do not silently rewrite historical rationale.
+> **Status:** ADR-0001 through ADR-0005 are Accepted. ADR-0006 through ADR-0008
+> are Proposed and permit only unwired prototypes until accepted. A changed
+> decision requires a new ADR and a supersedes link; do not silently rewrite
+> historical rationale.
 
 ## Why ADRs Exist
 
@@ -25,6 +28,9 @@ a new ADR and mark the old one "Superseded by ADR-NNNN."
 | [0003](0003-aegis-jcs-1-canonicalization.md) | `aegis-jcs-1` canonicalization scheme for `action_hash` |
 | [0004](0004-ed25519-receipt-signing.md) | Ed25519 for optional receipt signing |
 | [0005](0005-fail-closed-defaults.md) | Fail-closed defaults for unknown/ambiguous state |
+| [0006](0006-cache-padded-spsc-event-fabric.md) | Cache-padded SPSC descriptor fabric (Proposed) |
+| [0007](0007-sealed-generation-tagged-slab-pages.md) | Sealed generation-tagged slab-page ownership oracle (Proposed) |
+| [0008](0008-append-only-published-prefix-slab-pages.md) | Append-only published-prefix slab pages (Proposed) |
 
 ## Security and Review
 
@@ -33,7 +39,7 @@ An ADR affecting identity, tenant isolation, canonicalization, approvals, receip
 ## Creating an ADR
 
 ```bash
-cp docs/adr/template.md docs/adr/0006-short-decision-name.md
+cp docs/adr/template.md docs/adr/NNNN-short-decision-name.md
 ```
 
 Replace every placeholder, link the issue/design, compare alternatives, name verification, and add the new record here and to MkDocs navigation.

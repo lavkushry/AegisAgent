@@ -77,12 +77,15 @@ Authorization compute and protected commit are measured separately. A warm deter
 | APIs | REST JSON plus partial tonic/protobuf | protobuf-first parity; binary fast path; REST compatibility off benchmark path |
 | Control storage | SQLite/PostgreSQL via `StorageBackend` | split transactional `ControlStore`/`ReceiptLog` |
 | Telemetry storage | row tables and JSON/TEXT fields | WAL + Arrow-compatible HCMT SSTables |
-| Event bus | Tokio bounded MPSC | NUMA-local cache-padded SPSC ring matrix |
+| Event bus | Tokio bounded MPSC; `current`, unwired `aegis-event` SPSC, safe sealed-page, and append-only published-prefix prototypes with packed Release/Acquire count, byte-watermark, and closure publication | `target` NUMA-local cache-padded SPSC/slab matrix after composite admission, registry, rotation, epoch/reclamation, shadow, safety, and qualification gates |
 | Detection | structured scalar rules; optional Qdrant | Aho DFA plus owned HNSW/PQ and isolated INT8 ONNX |
 | Host sensor | procfs polling, spool, signed commands | CO-RE eBPF telemetry/containment with truthful fallback |
 | Console | React JSON polling and SVG | Arrow IPC worker, Rust WASM, WebGL2 instancing |
 
-No target row in this table is a shipped claim until its roadmap gate passes.
+The event prototypes are `current` only as isolated, unwired code. The
+production fabric remains `target`, neither `shadow` nor `qualified`, carries
+no protected evidence, and has no performance claim. No target row in this
+table is a shipped claim until its roadmap gate passes.
 
 ## Quick start
 

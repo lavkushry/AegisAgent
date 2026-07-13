@@ -12,7 +12,7 @@ This inventory makes the all-documentation improvement program measurable. Each 
 |---|---:|---:|---:|
 | authoring | 2 | 90% | 0 |
 | component | 15 | 96% | 0 |
-| decision | 7 | 95% | 0 |
+| decision | 10 | 95% | 0 |
 | flow | 11 | 95% | 0 |
 | guide | 53 | 67% | 38 |
 | landing | 10 | 93% | 0 |
@@ -21,7 +21,7 @@ This inventory makes the all-documentation improvement program measurable. Each 
 | reference | 11 | 85% | 0 |
 | runbook | 7 | 100% | 0 |
 
-**Total:** 123 active Markdown pages · **Migration backlog:** 38 pages below 75%.
+**Total:** 126 active Markdown pages · **Migration backlog:** 38 pages below 75%.
 
 ## Scoring signals
 
@@ -84,7 +84,10 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [adr/0003-aegis-jcs-1-canonicalization.md](adr/0003-aegis-jcs-1-canonicalization.md) | decision | 90 | A | 100% |
 | [adr/0004-ed25519-receipt-signing.md](adr/0004-ed25519-receipt-signing.md) | decision | 85 | B | 83% |
 | [adr/0005-fail-closed-defaults.md](adr/0005-fail-closed-defaults.md) | decision | 97 | A | 100% |
-| [adr/index.md](adr/index.md) | decision | 44 | B | 83% |
+| [adr/0006-cache-padded-spsc-event-fabric.md](adr/0006-cache-padded-spsc-event-fabric.md) | decision | 189 | B | 83% |
+| [adr/0007-sealed-generation-tagged-slab-pages.md](adr/0007-sealed-generation-tagged-slab-pages.md) | decision | 267 | A | 100% |
+| [adr/0008-append-only-published-prefix-slab-pages.md](adr/0008-append-only-published-prefix-slab-pages.md) | decision | 409 | A | 100% |
+| [adr/index.md](adr/index.md) | decision | 50 | B | 83% |
 | [adr/template.md](adr/template.md) | decision | 46 | A | 100% |
 | [AegisAgent_Agent_Cage.md](AegisAgent_Agent_Cage.md) | guide | 581 | B | 78% |
 | [AegisAgent_Agent_SOC_Design.md](AegisAgent_Agent_SOC_Design.md) | guide | 757 | D | 56% |
@@ -134,7 +137,7 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [components/Tool_Broker.md](components/Tool_Broker.md) | component | 66 | A | 100% |
 | [concepts.md](concepts.md) | guide | 415 | B | 78% |
 | [contributing/documentation-standard.md](contributing/documentation-standard.md) | authoring | 207 | B | 80% |
-| [current-vs-roadmap.md](current-vs-roadmap.md) | reference | 144 | A | 100% |
+| [current-vs-roadmap.md](current-vs-roadmap.md) | reference | 146 | A | 100% |
 | [database-schema.md](database-schema.md) | reference | 289 | A | 100% |
 | [demo-github-attack.md](demo-github-attack.md) | guide | 220 | B | 78% |
 | [deployment-guide.md](deployment-guide.md) | guide | 302 | A | 100% |
@@ -161,12 +164,12 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [github-integration.md](github-integration.md) | guide | 125 | D | 56% |
 | [Glossary.md](Glossary.md) | landing | 100 | A | 100% |
 | [How_It_Works.md](How_It_Works.md) | landing | 75 | A | 100% |
-| [Implementation_Status.md](Implementation_Status.md) | reference | 107 | B | 80% |
+| [Implementation_Status.md](Implementation_Status.md) | reference | 126 | B | 80% |
 | [index.md](index.md) | landing | 109 | B | 86% |
 | [installation.md](installation.md) | guide | 127 | A | 100% |
 | [Issue_Backlog_Execution_Plan.md](Issue_Backlog_Execution_Plan.md) | guide | 208 | D | 44% |
 | [Last_Mile_System_Walkthrough.md](Last_Mile_System_Walkthrough.md) | guide | 147 | C | 67% |
-| [LLD.md](LLD.md) | guide | 1454 | A | 100% |
+| [LLD.md](LLD.md) | guide | 1537 | A | 100% |
 | [Local_Development.md](Local_Development.md) | guide | 87 | D | 44% |
 | [mcp-defense-architecture.md](mcp-defense-architecture.md) | guide | 145 | C | 67% |
 | [mission.md](mission.md) | guide | 153 | D | 44% |

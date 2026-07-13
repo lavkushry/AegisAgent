@@ -198,6 +198,25 @@ Admission is a reactor-local counter and byte budget. Permits are acquired befor
 
 ## 5. Disruptor-style SPSC ring
 
+**Implementation status:** `lib/event` contains `current`, unwired prototypes
+governed by Proposed ADR-0006 through ADR-0008. The ring implements
+non-cloneable owning endpoints, checked capacity, modular wrap, closure/drain
+semantics, unread-value destruction, and cache-layout assertions. The safe
+sealed-page reference provides bounded layout, exact descriptor membership,
+CRC32C, and immutable page-level lifetime. The append-only page uses
+Release/Acquire to publish one packed descriptor-count, byte-watermark, and
+closure state, then immediately resolves immutable prefix views while its
+writer appends to a disjoint suffix. Evidence includes a safe sealed
+differential corpus, native stress, the same publication algorithm under Loom,
+full Miri, defined ASan/TSan CI lanes, and a zero-allocation append-plus-resolve
+test. These
+prototypes carry no production or protected-evidence traffic, are neither
+`shadow` nor `qualified`, and make no performance claim. ADR acceptance and
+security review, green sanitizer CI artifacts, composite ring reservation/admission, authenticated registry
+lookup, bounded page rotation and outstanding pages, generation reuse and
+epochs, NUMA-owner reclamation, production shadow wiring, UBSan support, and
+qualification remain `target` gates.
+
 ### 5.1 Memory layout
 
 ```rust
@@ -271,7 +290,14 @@ impl<'a, T, const N: usize> Consumer<'a, T, N> {
 }
 ```
 
-The production implementation MUST add constructor endpoint uniqueness, wraparound proof, shutdown/drop of unread values, loom tests, Miri tests, sanitizer tests, and cache-layout assertions. The code above is an ownership skeleton, not permission to paste unreviewed unsafe code.
+The condensed skeleton shows the cursor ordering, not the complete public API.
+The current prototype uses setup-only `Arc` ownership so endpoints can move to
+independent threads while final destruction waits for both endpoints. It has
+constructor endpoint uniqueness, wraparound, shutdown/drop, Loom, native
+stress, cache-layout tests, Miri coverage, and defined ASan/TSan CI lanes. Green
+CI artifacts remain required. UBSan is unavailable in the current Rust
+toolchain; supported qualification evidence remains mandatory before production
+wiring. This snippet is not permission to copy unreviewed unsafe code.
 
 ### 5.2 Descriptor ABI
 
@@ -291,6 +317,55 @@ pub struct TelemetryDescriptor {
 ```
 
 The descriptor is exactly 32 bytes. Payload bytes reside in a NUMA-local slab. `offset + len` uses checked arithmetic and MUST remain within the referenced immutable page. CRC32C covers the complete FlatBuffer payload. The descriptor’s sequence is monotonic per producer.
+
+#### Current sealed-page reference implementation
+
+The current, unwired `SlabPageBuilder` is a safe ownership oracle, not the
+target concurrent slab. It bounds one page to 64 MiB, one descriptor table to
+65,536 entries, and each frame to 1 MiB. Successful append copies the caller's
+already-verified bytes once into pre-reserved storage and performs no buffer
+growth. Descriptors stay private until `seal(self)` consumes the only mutable
+owner. Sealing moves the pre-reserved vectors behind one page-level `Arc`; this
+allocates page metadata but does not copy payload bytes. The ring then transfers
+only 32-byte descriptors.
+
+Resolution checks arena ID, generation, non-zero length, and exact membership
+in the sealed descriptor table before that canonical entry can select bytes.
+It then checks the range against the used prefix and CRC32C before returning a
+borrowed slice. CRC32C is `O(n)` corruption detection, not
+authentication or FlatBuffer verification. The reference withholds a page's
+descriptors until seal, so it neither overlaps producer/consumer work nor meets
+the target immediate-publication flow. Outstanding-page budgets, bounded flush
+latency, authenticated routing scope, generation reuse/wrap, epoch retirement,
+NUMA ownership, and owner-thread destruction remain production blockers.
+
+#### Current append-only published-prefix prototype
+
+The `current`, unwired `PublishedSlabPage` consumes one setup handle into
+exactly one non-cloneable writer and reader. Its fixed payload and descriptor
+cell arrays never resize. A successful append copies one caller-provided,
+upstream-verified and redacted slice into a never-written suffix, initializes
+its canonical descriptor, and then Release-stores a cache-line-aligned packed
+state containing descriptor count, byte watermark, and writer closure. That
+store is the append linearization point; the descriptor is not returned before
+it completes.
+
+Resolution Acquire-loads one coherent state, rejects invalid reserved bits or
+a sequence outside the published count, requires exact equality with the
+canonical descriptor cell, checks its range against the published byte
+watermark, and verifies CRC32C before returning a native borrowed view. Later
+appends touch only the disjoint unpublished suffix. The shipping append and
+resolve operations allocate nothing after construction; Loom exercises the
+same publication algorithm but uses a disclosed model-only copy because a
+borrow cannot escape its checked-cell guard.
+
+This closes only the within-page publication gap. The production fabric
+remains `target`, neither `shadow` nor `qualified`, and has no performance
+result. ADR acceptance and security review, atomic reservation across page
+bytes and the descriptor ring, bounded page rotation and outstanding-page
+admission, authenticated lookup, generation reuse with epoch retirement,
+NUMA-owner reclamation, production shadow wiring, UBSan coverage when the
+toolchain supports it, and qualification remain blockers.
 
 ### 5.3 Priority and fairness
 
@@ -1382,10 +1457,17 @@ Normal telemetry may be rejected only when its source retains a bounded replay/s
 
 ### 29.2 Unsafe/concurrency
 
-- Loom explores small SPSC publication, full/empty, wrap and shutdown states;
-- Miri runs ring/slab/buffer unit tests;
-- ASan/TSan/UBSan jobs on supported native targets;
-- randomized producer/consumer soak beyond sequence wrap simulation;
+- Loom explores the same SPSC and packed published-prefix
+  count/watermark/closure algorithms used by the `current` prototypes,
+  including shutdown;
+- Miri runs the complete native ring, sealed-page, published-prefix borrow,
+  buffer, and poisoned-suffix corpus;
+- ASan/TSan/UBSan evidence is required on supported native targets; the
+  `current` prototype defines ASan/TSan CI lanes but still requires their green
+  artifacts, while UBSan is unavailable in the current Rust toolchain and
+  remains an explicit gate;
+- randomized producer/consumer soak resolves immutable prefixes while later
+  suffixes are appended and extends beyond sequence-wrap simulation;
 - epoch tests prove no pin crosses blocking I/O and no object frees early;
 - fuzz FlatBuffer verifier, WAL scanner, segment metadata, Gorilla decoder, Arrow envelope and protobuf conversions.
 
@@ -1400,6 +1482,7 @@ Success means no unauthorized execution, no cross-tenant read, no acknowledged p
 | Benchmark | Gate |
 |---|---|
 | SPSC descriptor | cycles/op, cache misses, zero allocations, sustained wrap |
+| published-prefix slab | append/resolve cycles, copied bytes, allocations, publication cache-line transfers, producer/consumer overlap, errors at saturation |
 | FlatBuffer verify | events/s by frame-size distribution |
 | authorize compute | `<1 ms p99` warm snapshot; p99.9 reported |
 | protected commit | hardware-profile p99, group size, zero lost receipts |

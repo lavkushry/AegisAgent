@@ -45,6 +45,7 @@ Strongest current capabilities:
 - **Deploy** — gateway + sensor + egress + cage + llm-gateway + tool-broker Helm; single-writer SQLite default
 - **Postgres** — feature + migrations exist; read/write pool split with replica failover, DB-backed replay store, cross-replica correlation windows, and a live `postgres-integration` CI job now exercise it against a real Postgres instance (not just compile-checked) — but not the default HA production path; real cross-instance failover/load validation still pending
 - **OIDC console login** — self-service login/link flow (`src/src/oidc.rs`, `routes/oidc.rs`), gated on `AEGIS_OIDC_*` + `AEGIS_JWT_SECRET`, fails closed for unrecognized identities (no auto-provisioning); single-IdP-per-gateway, no SAML, no per-SSO-user attribution/revocation
+- **v2 event primitives** — cache-padded SPSC, safe sealed-page oracle, and append-only published-prefix code are `current` in `lib/event`; packed Release/Acquire publication exposes an immediate immutable prefix, with safe differential, native stress, same-algorithm Loom, full Miri, defined ASan/TSan CI lanes, and a zero-allocation append-plus-resolve test. The code is unwired, carries no production traffic or protected evidence, and makes no performance claim. The production Thread-Per-Core event fabric remains `target`, neither `shadow` nor `qualified`.
 
 ### Roadmap / not done
 
@@ -82,6 +83,7 @@ Strongest current capabilities:
 | Ban / quarantine centers | Partial | Stores/APIs; not every choke point + full UI. |
 | Postgres production mode | Roadmap / partial | Code path now CI-validated against a live Postgres instance (was compile-check only); SQLite single-writer is still the default deploy. |
 | Full Kubernetes multi-replica | Roadmap | Blocked on Postgres GA + broader Helm surface. |
+| Thread-Per-Core event fabric | `current` prototypes / `target` fabric | Isolated SPSC, safe sealed-page, and append-only published-prefix prototypes exist. Packed Release/Acquire state publishes count, byte watermark, and closure for immediate immutable-prefix resolution; evidence includes a safe differential corpus, native stress, same-algorithm Loom, full Miri, defined ASan/TSan CI lanes, and a zero-allocation append-plus-resolve test. Production is neither `shadow` nor `qualified`, and no performance result exists. Blockers: green sanitizer CI artifacts, ADR acceptance/security review, composite ring reservation/admission, authenticated registry, bounded page rotation/outstanding pages, generation reuse/epochs, NUMA-owner reclamation, production shadow wiring, UBSan support, and qualification. |
 
 ---
 
@@ -120,6 +122,7 @@ Do not claim that the current `main` already provides:
 - complete unknown-agent sandboxing (cage executor not on main)
 - multi-replica production Kubernetes on SQLite
 - full enterprise SSO (SAML, RBAC, multi-IdP) — a beta self-service OIDC login/link flow exists (single IdP, no per-user attribution/revocation), see Implementation Status
+- production Thread-Per-Core ingestion, HCMT storage, or qualified million-event throughput; only unwired event primitives are `current`
 
 Those remain target architecture goals or incomplete waves (see Implementation Status).
 

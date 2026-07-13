@@ -5,6 +5,7 @@ members = [
     "src/canon",
     "lib/common",
     "lib/api",
+    "lib/event",
     "lib/storage",
     "lib/policy",
     "lib/soc",
@@ -37,3 +38,4 @@ hmac = "0.12"
 axum = { version = "0.7.5", features = ["macros", "ws"] }
 cedar-policy = "3.2.1"
 utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
+crc32c = "=0.6.8"
