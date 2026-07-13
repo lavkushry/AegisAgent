@@ -175,6 +175,7 @@ nav:
           - "ADR-0006: Cache-padded SPSC event fabric": adr/0006-cache-padded-spsc-event-fabric.md
           - "ADR-0007: Sealed generation-tagged slab pages": adr/0007-sealed-generation-tagged-slab-pages.md
           - "ADR-0008: Append-only published-prefix slab pages": adr/0008-append-only-published-prefix-slab-pages.md
+          - "ADR-0009: Failure-atomic slab/ring admission": adr/0009-failure-atomic-slab-ring-admission.md
   - Reference:
       - API reference (OpenAPI/Redoc): api-reference.md
       - Runtime authorization API: runtime-authorization-api.md

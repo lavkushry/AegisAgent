@@ -9,9 +9,10 @@
 **Audited baseline HEAD:** `f027d07` (`feat(tool-broker): extract connector execution into standalone aegis-tool-broker binary`)
 
 **Post-audit delta:** the `current` branch adds unwired `aegis-event` SPSC,
-sealed generation-tagged slab-page, and append-only published-prefix prototypes
-under ADR-0006 through ADR-0008. The lexical counts below remain the frozen
-baseline so future excision is measured against one reproducible commit.
+sealed generation-tagged slab-page, append-only published-prefix, and
+failure-atomic single-page slab/ring admission prototypes under ADR-0006
+through ADR-0009. The lexical counts below remain the frozen baseline so future
+excision is measured against one reproducible commit.
 
 **Companion documents:** [HLD](ARCHITECTURE.md), [LLD](docs/LLD.md), [Roadmap](ROADMAP.md)
 
@@ -245,7 +246,7 @@ The v1 router’s 146 path literals cover agents, tools, MCP, authorization, ing
 | Target capability | Current evidence | Gap |
 |---|---|---|
 | Thread-per-core reactor | Tokio multi-thread runtime; no affinity crate/config | No core ownership, per-core listener, NUMA allocation, or io_uring reactor |
-| Disruptor/SPSC event fabric | Tokio bounded MPSC remains `current`; unwired `lib/event` adds 64-byte-separated cursors, Acquire/Release sequences, 32-byte descriptors, bounded closure/drop behavior, a safe seal-before-publish differential oracle, and an append-only page whose packed Release/Acquire state publishes descriptor count, byte watermark, and closure for immediate immutable-prefix resolution. Evidence includes native stress, the same publication algorithm under Loom, full Miri, defined ASan/TSan CI lanes, and a zero-allocation append-plus-resolve test. | The production fabric remains `target`, neither `shadow` nor `qualified`, and has no performance result. Blockers are green sanitizer CI artifacts, ADR acceptance/security review, composite ring reservation/admission, authenticated registry lookup, bounded page rotation/outstanding pages, generation reuse/epochs, NUMA-owner reclamation, priority lanes, production shadow wiring, UBSan support in the Rust toolchain, and qualification. |
+| Disruptor/SPSC event fabric | Tokio bounded MPSC remains `current`; unwired `lib/event` adds 64-byte-separated cursors, Acquire/Release sequences, 32-byte descriptors, bounded closure/drop, cancelable producer permits, commit-delayed consumer claims, a safe sealed-page oracle, an append-only published prefix, and `VolatileAdmissionChannel` composition. The composite validates before reservation, publishes the page before the ring, withholds capacity until a validated frame lease commits, and distinguishes clean, faulted, and orphaned-prefix termination. Test sources include safe short-trace differential coverage, native tiny-ring stress, shipping-algorithm Loom models, Miri-oriented lifetime cases, defined ASan/TSan CI lanes, and zero-allocation admission/claim checks. | The production fabric remains `target`, neither `shadow` nor `qualified`, carries no protected evidence, and has no performance result. Blockers are formal ADR acceptance/security review, green hosted sanitizer artifacts, real UBSan support, authenticated registry lookup, bounded page rotation/outstanding pages, WAL durability/replay, generation reuse/epochs, NUMA-owner reclamation, priority lanes, production shadow wiring, release-artifact rollback, and qualification. |
 | HCMT/Arrow SSTables | SQLite/PostgreSQL rows; JSON/TEXT payloads | No Arrow dependency, WAL format, memtable, segment manifest, compactor, or mmap query path |
 | Gorilla timestamp codec | none | Codec, block restart points, fallback-to-raw rule, corpus absent |
 | Roaring pruning | none | Bitmap build/serialization/planner absent |

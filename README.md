@@ -77,7 +77,7 @@ Authorization compute and protected commit are measured separately. A warm deter
 | APIs | REST JSON plus partial tonic/protobuf | protobuf-first parity; binary fast path; REST compatibility off benchmark path |
 | Control storage | SQLite/PostgreSQL via `StorageBackend` | split transactional `ControlStore`/`ReceiptLog` |
 | Telemetry storage | row tables and JSON/TEXT fields | WAL + Arrow-compatible HCMT SSTables |
-| Event bus | Tokio bounded MPSC; `current`, unwired `aegis-event` SPSC, safe sealed-page, and append-only published-prefix prototypes with packed Release/Acquire count, byte-watermark, and closure publication | `target` NUMA-local cache-padded SPSC/slab matrix after composite admission, registry, rotation, epoch/reclamation, shadow, safety, and qualification gates |
+| Event bus | Tokio bounded MPSC; `current`, unwired `aegis-event` SPSC, safe sealed-page, append-only published-prefix, and failure-atomic single-page volatile admission prototypes with cancelable permits, commit-delayed claims, and explicit clean/faulted termination; no protected evidence or performance claim | `target` NUMA-local SPSC/slab matrix after formal ADR/security review, hosted sanitizer and UBSan evidence, authenticated registry, bounded rotation, WAL durability/replay, epochs/NUMA reclamation, shadow, rollback, and qualification gates |
 | Detection | structured scalar rules; optional Qdrant | Aho DFA plus owned HNSW/PQ and isolated INT8 ONNX |
 | Host sensor | procfs polling, spool, signed commands | CO-RE eBPF telemetry/containment with truthful fallback |
 | Console | React JSON polling and SVG | Arrow IPC worker, Rust WASM, WebGL2 instancing |

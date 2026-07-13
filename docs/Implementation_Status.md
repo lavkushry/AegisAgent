@@ -20,15 +20,15 @@ separate documentation change.
 
 | Artifact | Status | Evidence in this checkout | Authority / traffic | Remaining gates |
 |---|---|---|---|---|
-| Unwired SPSC, sealed-page oracle, and published-prefix prototypes | current | `lib/event/`; ring FIFO/full/wrap/drop/layout; safe sealed differential corpus; packed Release/Acquire descriptor-count, byte-watermark, and closure publication with immediate immutable-prefix resolution; native stress; same-algorithm Loom; full Miri; ASan/TSan CI lanes defined; zero-allocation append-plus-resolve test; ADR-0006 through ADR-0008 | No production or `shadow` traffic; cannot carry protected evidence; no performance claim | Green sanitizer CI artifacts, ADR acceptance/security review, composite ring reservation/admission, authenticated registry, bounded page rotation/outstanding pages, generation reuse/epochs, NUMA-owner reclamation, production shadow wiring, UBSan support, qualification |
+| Unwired SPSC, slab-page, published-prefix, and single-page admission prototypes | current | `lib/event/`; ring FIFO/full/wrap/drop/layout plus cancelable permits and commit-delayed claims; safe sealed and short-trace differential oracles; packed page publication; page-before-ring admission; must-use frame leases; clean/faulted/orphan terminal checks; native stress; shipping-algorithm Loom; Miri-oriented borrow/drop tests; ASan/TSan CI lanes defined; zero-allocation append/resolve and admission/claim checks; ADR-0006 through ADR-0009 | No production or `shadow` traffic; cannot carry protected evidence; volatile admission is not a receipt or durability acknowledgement; no performance claim | Formal ADR acceptance/security review, green hosted sanitizer artifacts, UBSan support, authenticated registry, bounded page rotation/outstanding pages, WAL durability/replay, generation reuse/epochs, NUMA-owner reclamation, priority lanes, production shadow wiring, release-artifact rollback, qualification |
 | Thread-per-core reactor | target | `ARCHITECTURE.md`, `docs/LLD.md` | None | runtime ADR, core-affinity/io_uring implementation, migration and benchmark gates |
 | HCMT telemetry store | target | `ARCHITECTURE.md`, `docs/LLD.md` | None; SQL remains authoritative/current | WAL/segment ADR, recovery corpus, dual write, shadow equality, qualification |
 
-No v2 component is `qualified` in this checkout. The SPSC, sealed-page, and
-published-prefix prototypes being `current` means only that their isolated,
-unwired code and listed tests are present. The production event fabric remains
-`target`, is neither `shadow` nor `qualified`, and is not
-production-authoritative.
+No v2 component is `qualified` in this checkout. The SPSC, slab-page,
+published-prefix, and single-page admission prototypes being `current` means
+only that their isolated, unwired code and listed tests are present. The
+production event fabric remains `target`, is neither `shadow` nor `qualified`,
+and is not production-authoritative.
 
 | Capability | Status | Current files | Missing pieces | Related issues | Test coverage | Prod-ready | Next PR |
 |---|---|---|---|---|---|---|---|

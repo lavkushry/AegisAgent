@@ -66,26 +66,32 @@ Gate: legacy versus typed authorization decisions, hashes, approvals, receipts a
 ### Week 4 — SPSC ring and slab prototype
 
 Progress (2026-07-13): the `current` checkout has unwired ring, safe sealed-page
-oracle, and append-only published-prefix prototypes under Proposed ADR-0006
-through ADR-0008. Packed Release/Acquire state publishes descriptor count, byte
-watermark, and closure for immediate immutable-prefix resolution. Evidence
-includes a safe sealed differential corpus, native stress, the same publication
-algorithm under Loom, full Miri, defined ASan/TSan CI lanes, and a zero-allocation
-append-plus-resolve test. The production fabric remains `target`, neither
-`shadow` nor `qualified`, and has no performance result. ADR acceptance and
-security review, green sanitizer CI artifacts, composite ring reservation/admission, authenticated registry,
-bounded page rotation/outstanding pages, generation reuse/epochs, NUMA-owner
-reclamation, production shadow wiring, UBSan support in the current Rust
-toolchain, and qualification remain blockers.
+oracle, append-only published-prefix, and failure-atomic single-page admission
+prototypes under Proposed ADR-0006 through ADR-0009. The volatile composite
+validates before reservation, Release-publishes the page before the ring,
+withholds capacity until a must-use validated frame lease commits, and reports
+clean, faulted, and orphaned-prefix terminal states. Test sources include safe
+differential oracles, native tiny-ring stress, shipping-algorithm Loom,
+Miri-oriented borrow/drop cases, defined ASan/TSan CI lanes, and zero-allocation
+admission/claim checks. It carries no production or `shadow` traffic, cannot
+carry protected evidence, is not `qualified`, and has no performance result.
+The production fabric remains `target`. Formal ADR acceptance/security review,
+green hosted sanitizer artifacts, real UBSan support, authenticated registry,
+bounded page rotation/outstanding pages, WAL durability/replay, generation
+reuse/epochs, NUMA-owner reclamation, priority lanes, production shadow wiring,
+release-artifact rollback, and qualification remain blockers.
 
 Deliverables:
 
-- implement cache-padded SPSC ring, 32-byte descriptor and NUMA-local slab prototype;
+- implement cache-padded SPSC ring, 32-byte descriptor, bounded slab, and single-page volatile admission prototype;
 - document linearization, memory ordering, shutdown, wrap, drop and epoch rules;
-- add scalar reference queue, Loom model, Miri tests and native stress benchmark;
+- add safe differential oracles, Loom models, Miri tests and native stress benchmark;
 - instrument allocations, copied bytes, cache misses and cycles/op.
 
-Gate: zero lost/duplicated descriptors; zero steady-state allocations; safety suite green; no false sharing in layout/perf evidence.
+Gate: zero lost/duplicated/reordered descriptors; validation before tail
+acknowledgement; zero steady-state allocations; safety suite and hosted
+sanitizer evidence green; no false sharing in layout/perf evidence. These gates
+do not make the volatile prototype durable or authorize protected evidence.
 
 ### Week 5 — CoreReactor prototype
 

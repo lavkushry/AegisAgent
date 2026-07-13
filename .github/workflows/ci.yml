@@ -104,12 +104,13 @@ jobs:
             --estimates target/criterion/receipt_hash/compute_receipt_hash_mid_chain/new/estimates.json \
             --threshold 0.20
 
-  # ── ADR-0006/0007/0008: event primitive safety gates ────────────────────────
-  # The ring and published-prefix algorithms compile once with native std
-  # atomics/UnsafeCell and once with Loom's modeled equivalents. This job stays
-  # separate from the gateway matrix so the hot-path crate cannot accidentally
-  # acquire Tokio, SQLx, protobuf, or system-service dependencies. CRC32C is the
-  # only default runtime edge; Loom is optional model-checking infrastructure.
+  # ── ADR-0006/0007/0008/0009: event primitive safety gates ────────────────────
+  # The ring, published-prefix, permit/claim, and composite-admission algorithms
+  # compile once with native std atomics/UnsafeCell and once with Loom's modeled
+  # equivalents. This job stays separate from the gateway matrix so the hot-path
+  # crate cannot accidentally acquire Tokio, SQLx, protobuf, or system-service
+  # dependencies. CRC32C is the only default runtime edge; Loom is optional
+  # model-checking infrastructure.
   event-concurrency:
     name: Event primitives native + Loom
     runs-on: ubuntu-latest
@@ -126,7 +127,7 @@ jobs:
         run: cargo test -p aegis-event
       - name: All-feature correctness and feature-isolation tests
         run: cargo test -p aegis-event --all-features
-      - name: Loom ring and published-prefix publication models
+      - name: Loom ring, published-prefix, and admission models
         run: cargo test -p aegis-event --features loom loom_
       - name: All-feature Clippy
         run: cargo clippy -p aegis-event --all-targets --all-features -- -D warnings
@@ -135,7 +136,7 @@ jobs:
           test "$(cargo tree -p aegis-event --edges normal --depth 1 --prefix none | tail -n +2)" = "crc32c v0.6.8"
           test "$(cargo tree -p aegis-event --edges normal --depth 1 --prefix none --all-features | tail -n +2)" = "$(printf 'crc32c v0.6.8\nloom v0.7.2')"
       - name: Compile diagnostic event benchmarks
-        run: cargo bench -p aegis-event --bench spsc_ring --bench published_slab --no-run
+        run: cargo bench -p aegis-event --bench spsc_ring --bench published_slab --bench admission --no-run
 
   event-miri:
     name: Event primitives Miri
@@ -149,14 +150,14 @@ jobs:
         with:
           workspaces: .
           key: event-miri
-      - name: Miri ring, sealed-page, and published-prefix ownership suite
+      - name: Miri ring, slab-page, and admission ownership suite
         run: cargo miri test -p aegis-event
 
   # Rust nightly currently exposes ASan and TSan but no `undefined` sanitizer.
   # Miri is therefore the Rust UB/provenance gate; any future C/C++ ABI must add
   # a real UBSan lane before that boundary can be accepted.
   event-sanitizers:
-    name: Event published-prefix ${{ matrix.sanitizer }} sanitizer
+    name: Event slab/admission ${{ matrix.sanitizer }} sanitizer
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -171,16 +172,20 @@ jobs:
         with:
           workspaces: .
           key: event-${{ matrix.sanitizer }}-sanitizer
-      - name: Native raw-pointer and cross-thread stress
+      - name: Native slab and composite-admission stress
         env:
           RUSTFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           TSAN_OPTIONS: halt_on_error=1
-        run: >-
-          cargo test -Zbuild-std
-          --target x86_64-unknown-linux-gnu
-          -p aegis-event
-          --test published_slab
+        run: |
+          cargo test -Zbuild-std \
+            --target x86_64-unknown-linux-gnu \
+            -p aegis-event \
+            --test published_slab
+          cargo test -Zbuild-std \
+            --target x86_64-unknown-linux-gnu \
+            -p aegis-event \
+            --test admission
 
   # ── #1194 (Postgres GA): live Postgres integration smoke test ────────────
   # Closes the biggest concrete gap named in

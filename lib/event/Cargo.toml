@@ -25,3 +25,7 @@ harness = false
 [[bench]]
 name = "published_slab"
 harness = false
+
+[[bench]]
+name = "admission"
+harness = false

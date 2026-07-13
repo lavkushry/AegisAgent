@@ -66,6 +66,81 @@ fn producer_returns_the_value_when_the_consumer_is_closed() {
     assert_eq!(producer.try_push(11), Err(TryPushError::Disconnected(11)));
 }
 
+#[test]
+fn vacant_slot_cancel_is_a_noop_and_publish_advances_exactly_once() {
+    let ring = SpscRing::<u64, 1>::new().expect("valid ring");
+    let (mut producer, mut consumer) = ring.split();
+
+    let permit = producer.try_reserve().expect("initial slot is vacant");
+    assert_eq!(permit.sequence(), 0);
+    drop(permit);
+    assert_eq!(producer.next_sequence(), 0);
+
+    let permit = producer
+        .try_reserve()
+        .expect("dropped permit leaves the slot vacant");
+    permit.cancel();
+    assert_eq!(producer.next_sequence(), 0);
+    assert_eq!(consumer.try_pop(), Err(TryPopError::Empty));
+
+    let permit = producer.try_reserve().expect("cancelled slot stays vacant");
+    permit.publish(41);
+    assert_eq!(producer.next_sequence(), 1);
+    assert_eq!(consumer.try_pop(), Ok(41));
+}
+
+#[test]
+fn occupied_slot_drop_withholds_capacity_until_infallible_commit() {
+    let ring = SpscRing::<u64, 1>::new().expect("valid ring");
+    let (mut producer, mut consumer) = ring.split();
+    producer
+        .try_reserve()
+        .expect("initial slot is vacant")
+        .publish(7);
+
+    let claim = consumer.try_claim().expect("published slot is claimable");
+    assert_eq!(claim.sequence(), 0);
+    assert_eq!(claim.value(), 7);
+    drop(claim);
+
+    let full = match producer.try_reserve() {
+        Ok(_) => panic!("an uncommitted claim must keep the ring full"),
+        Err(error) => error,
+    };
+    assert_eq!(full.to_string(), "SPSC ring is full");
+
+    let claim = consumer
+        .try_claim()
+        .expect("dropping a claim leaves the same slot claimable");
+    assert_eq!(claim.value(), 7);
+    assert_eq!(claim.commit(), 7);
+
+    producer
+        .try_reserve()
+        .expect("commit reclaims the slot")
+        .publish(8);
+    assert_eq!(consumer.try_pop(), Ok(8));
+}
+
+#[test]
+fn compatibility_push_pop_interoperate_with_permit_and_claim() {
+    let ring = SpscRing::<u64, 2>::new().expect("valid ring");
+    let (mut producer, mut consumer) = ring.split();
+
+    producer.try_push(1).expect("compatibility push succeeds");
+    let claim = consumer
+        .try_claim()
+        .expect("claim observes compatibility publication");
+    assert_eq!(claim.value(), 1);
+    assert_eq!(claim.commit(), 1);
+
+    producer
+        .try_reserve()
+        .expect("permit observes reclaimed capacity")
+        .publish(2);
+    assert_eq!(consumer.try_pop(), Ok(2));
+}
+
 #[derive(Clone, Debug)]
 struct DropProbe(Arc<AtomicUsize>);
 
@@ -92,6 +167,45 @@ fn final_ring_drop_destroys_each_unread_value_once() {
     assert_eq!(drops.load(Ordering::Relaxed), 0);
     drop(producer);
     assert_eq!(drops.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn reserved_publication_may_finish_after_consumer_close_and_drops_once() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let ring = SpscRing::<DropProbe, 1>::new().expect("valid ring");
+    let (mut producer, consumer) = ring.split();
+    let permit = producer
+        .try_reserve()
+        .expect("reservation precedes the close race");
+
+    drop(consumer);
+    permit.publish(DropProbe(Arc::clone(&drops)));
+    assert_eq!(drops.load(Ordering::Relaxed), 0);
+    drop(producer);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn claim_drains_final_publication_before_disconnect() {
+    let ring = SpscRing::<u64, 1>::new().expect("valid ring");
+    let (mut producer, mut consumer) = ring.split();
+    producer
+        .try_reserve()
+        .expect("initial slot is vacant")
+        .publish(19);
+    drop(producer);
+
+    let claim = consumer
+        .try_claim()
+        .expect("published value remains claimable after close");
+    assert_eq!(claim.value(), 19);
+    assert_eq!(claim.commit(), 19);
+
+    let disconnected = match consumer.try_claim() {
+        Ok(_) => panic!("drained closed producer must disconnect"),
+        Err(error) => error,
+    };
+    assert_eq!(disconnected.to_string(), "SPSC producer is disconnected");
 }
 
 #[test]

@@ -199,23 +199,26 @@ Admission is a reactor-local counter and byte budget. Permits are acquired befor
 ## 5. Disruptor-style SPSC ring
 
 **Implementation status:** `lib/event` contains `current`, unwired prototypes
-governed by Proposed ADR-0006 through ADR-0008. The ring implements
-non-cloneable owning endpoints, checked capacity, modular wrap, closure/drain
-semantics, unread-value destruction, and cache-layout assertions. The safe
+governed by Proposed ADR-0006 through ADR-0009. The ring implements
+non-cloneable owning endpoints, checked capacity, modular wrap, closure/drain,
+unread-value destruction, cache-line isolation, cancelable producer permits,
+and consumer claims that withhold tail advancement until commit. The safe
 sealed-page reference provides bounded layout, exact descriptor membership,
-CRC32C, and immutable page-level lifetime. The append-only page uses
-Release/Acquire to publish one packed descriptor-count, byte-watermark, and
-closure state, then immediately resolves immutable prefix views while its
-writer appends to a disjoint suffix. Evidence includes a safe sealed
-differential corpus, native stress, the same publication algorithm under Loom,
-full Miri, defined ASan/TSan CI lanes, and a zero-allocation append-plus-resolve
-test. These
-prototypes carry no production or protected-evidence traffic, are neither
-`shadow` nor `qualified`, and make no performance claim. ADR acceptance and
-security review, green sanitizer CI artifacts, composite ring reservation/admission, authenticated registry
-lookup, bounded page rotation and outstanding pages, generation reuse and
-epochs, NUMA-owner reclamation, production shadow wiring, UBSan support, and
-qualification remain `target` gates.
+CRC32C, and immutable page-level lifetime. The append-only page
+Release/Acquire-publishes a coherent descriptor-count, byte-watermark, and
+closure word. The single-page admission composite validates before reservation,
+publishes the page before the ring, validates a must-use frame lease before
+reclaiming its slot, and distinguishes clean termination, faulted termination,
+and orphaned page prefixes. Tests present in the crate include safe sealed and
+short-trace differential oracles, native stress, shipping-algorithm Loom
+models, Miri-oriented borrow/drop cases, and zero-allocation admission/claim
+checks; ASan/TSan CI lanes are defined. These prototypes carry no production or
+`shadow` traffic, cannot carry protected evidence, are not `qualified`, and
+make no performance claim. Formal ADR acceptance and security review, green
+hosted sanitizer artifacts, real UBSan support, authenticated registry lookup,
+bounded page rotation and outstanding pages, WAL durability/replay,
+generation reuse and epochs, NUMA-owner reclamation, priority lanes,
+production shadow wiring, and qualification remain `target` gates.
 
 ### 5.1 Memory layout
 
@@ -361,11 +364,41 @@ borrow cannot escape its checked-cell guard.
 
 This closes only the within-page publication gap. The production fabric
 remains `target`, neither `shadow` nor `qualified`, and has no performance
-result. ADR acceptance and security review, atomic reservation across page
-bytes and the descriptor ring, bounded page rotation and outstanding-page
-admission, authenticated lookup, generation reuse with epoch retirement,
-NUMA-owner reclamation, production shadow wiring, UBSan coverage when the
-toolchain supports it, and qualification remain blockers.
+result. ADR-0009 composes this page with one bounded descriptor ring but does
+not add rotation, durability, authenticated lookup, reuse, or reclamation.
+
+#### Current failure-atomic single-page admission prototype
+
+The `current`, unwired `VolatileAdmissionChannel<N>` owns exactly one
+`PublishedSlabPage`, one sequence-aligned `SpscRing<TelemetryDescriptor, N>`,
+and one cache-line-isolated terminal-state word. It exposes one non-cloneable
+producer and consumer; raw ring/page endpoints do not escape the composite.
+Validation and page-capacity checks precede a cancelable ring reservation. A
+successful producer initializes and Release-publishes the page prefix before
+an infallible permit commit writes the descriptor and Release-publishes the
+ring head. Ring publication is the volatile admission linearization point.
+
+The consumer claims the next descriptor without advancing the tail, requires
+the exact wrapping sequence, Acquire-validates the canonical page descriptor,
+range, and CRC32C, and returns a must-use borrowed frame lease. Lease commit is
+the only operation that moves the descriptor and Release-advances the consumed
+tail; dropping a lease retries the same descriptor. Clean finish closes the
+page, publishes `CLEAN`, then closes the ring. Ordinary drop and poisoned or
+interrupted operation publish `FAULTED`; after drain, count or terminal-state
+mismatch is terminal data loss rather than a guessed clean stream.
+
+This composition performs one bounded payload copy and no steady-state
+allocation or per-event reference-count operation in the native implementation.
+Its admission token is not a receipt or durability acknowledgement. A consumer
+may close after reservation, and process failure between page and ring Release
+stores can leave an orphaned immutable prefix; terminal-state detection is not
+WAL recovery. The channel therefore carries neither production nor `shadow`
+traffic, cannot carry protected evidence, is not `qualified`, and makes no
+performance claim. Formal ADR acceptance/security review, green hosted
+ASan/TSan artifacts, UBSan support, authenticated registry lookup, bounded page
+rotation/outstanding pages, WAL durability and replay, reuse/epochs,
+NUMA-owner reclamation, priority lanes, production shadow wiring, and
+qualification remain blockers.
 
 ### 5.3 Priority and fairness
 
@@ -1428,6 +1461,16 @@ All library functions return `Result<T, AegisError>` or a narrower error convert
 
 Error payloads contain stable codes, request IDs, and safe metadata, never SQL strings, paths containing secrets, raw prompts, or key material.
 
+For the `current`, unwired single-page admission prototype, invalid/page-full
+input, ring saturation, and a consumer disconnected before reservation leave
+both page and ring logically unchanged. `AdmittedSequence` confirms only
+volatile page-and-ring publication; it is not a receipt, consumption
+acknowledgement, WAL acknowledgement, or authorization result. Frame validation
+failure withholds the ring-tail acknowledgement and terminates the lane.
+Explicit `finish` is required for a clean end; ordinary producer drop is
+faulted. Protected evidence is prohibited from this channel and must fail
+closed at its separate durability boundary.
+
 ## Security and failure model
 
 Security follows four independent fail-closed boundaries:
@@ -1457,17 +1500,20 @@ Normal telemetry may be rejected only when its source retains a bounded replay/s
 
 ### 29.2 Unsafe/concurrency
 
-- Loom explores the same SPSC and packed published-prefix
-  count/watermark/closure algorithms used by the `current` prototypes,
-  including shutdown;
-- Miri runs the complete native ring, sealed-page, published-prefix borrow,
-  buffer, and poisoned-suffix corpus;
+- Loom explores the same SPSC permit/claim, packed published-prefix, composite
+  admission, terminal-state, cancellation, saturation/retry, and shutdown
+  algorithms used by the `current` prototypes;
+- Miri runs the complete native ring permit/claim, sealed-page,
+  published-prefix borrow, admission frame-lease, buffer, and poisoned-suffix
+  corpus;
 - ASan/TSan/UBSan evidence is required on supported native targets; the
-  `current` prototype defines ASan/TSan CI lanes but still requires their green
+  `current` prototypes define ASan/TSan CI lanes but still require green hosted
   artifacts, while UBSan is unavailable in the current Rust toolchain and
   remains an explicit gate;
-- randomized producer/consumer soak resolves immutable prefixes while later
-  suffixes are appended and extends beyond sequence-wrap simulation;
+- deterministic short traces compare admission against a safe
+  `SlabPageBuilder + VecDeque` oracle; native producer/consumer stress holds
+  capacity until frame commit, resolves immutable prefixes while later suffixes
+  are appended, and extends beyond sequence-wrap simulation;
 - epoch tests prove no pin crosses blocking I/O and no object frees early;
 - fuzz FlatBuffer verifier, WAL scanner, segment metadata, Gorilla decoder, Arrow envelope and protobuf conversions.
 
@@ -1483,6 +1529,7 @@ Success means no unauthorized execution, no cross-tenant read, no acknowledged p
 |---|---|
 | SPSC descriptor | cycles/op, cache misses, zero allocations, sustained wrap |
 | published-prefix slab | append/resolve cycles, copied bytes, allocations, publication cache-line transfers, producer/consumer overlap, errors at saturation |
+| single-page volatile admission | validation/reservation, page-to-ring publication, claim/CRC/commit cycles, full-rejection cost, allocations, copies, terminal faults, loss/duplicate/reorder checks |
 | FlatBuffer verify | events/s by frame-size distribution |
 | authorize compute | `<1 ms p99` warm snapshot; p99.9 reported |
 | protected commit | hardware-profile p99, group size, zero lost receipts |
