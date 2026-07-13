@@ -60,6 +60,35 @@ rules:
       references:
         - .claude/rules/rust_standards.md
 
+  - id: rust-unsafe-outside-reviewed-crates
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      `unsafe` outside a crate with an accepted/proposed unsafe-review scope.
+      Repository law (docs/architecture.md §8, CONTRIBUTING.md) requires every
+      unsafe block to be isolated, justified with a `// SAFETY:` comment, and
+      covered by Miri/sanitizers (plus Loom for atomics) — and the crate must
+      be allowlisted here once that evidence exists in CI. Currently only
+      `lib/event` (ADR-0006..0009: SPSC ring, published-prefix slab pages,
+      failure-atomic admission; gated by the event-concurrency, event-miri and
+      event-sanitizers CI lanes) is allowlisted. This replaces the community
+      rust.lang.security.unsafe-usage rule, excluded in
+      .github/workflows/sast.yml.
+    patterns:
+      - pattern-either:
+          - pattern: unsafe { ... }
+          - pattern: unsafe fn $F(...) { ... }
+    paths:
+      exclude:
+        - "lib/event/*"
+    metadata:
+      category: security
+      references:
+        - docs/architecture.md
+        - CONTRIBUTING.md
+        - docs/adr/0006-cache-padded-spsc-event-fabric.md
+        - docs/adr/0009-failure-atomic-slab-ring-admission.md
+
   - id: rust-unredacted-secret-logging
     languages: [generic]
     severity: ERROR
