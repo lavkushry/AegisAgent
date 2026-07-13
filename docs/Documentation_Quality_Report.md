@@ -12,7 +12,7 @@ This inventory makes the all-documentation improvement program measurable. Each 
 |---|---:|---:|---:|
 | authoring | 2 | 90% | 0 |
 | component | 15 | 96% | 0 |
-| decision | 10 | 95% | 0 |
+| decision | 11 | 95% | 0 |
 | flow | 11 | 95% | 0 |
 | guide | 53 | 67% | 38 |
 | landing | 10 | 93% | 0 |
@@ -21,7 +21,7 @@ This inventory makes the all-documentation improvement program measurable. Each 
 | reference | 11 | 85% | 0 |
 | runbook | 7 | 100% | 0 |
 
-**Total:** 126 active Markdown pages · **Migration backlog:** 38 pages below 75%.
+**Total:** 127 active Markdown pages · **Migration backlog:** 38 pages below 75%.
 
 ## Scoring signals
 
@@ -87,7 +87,8 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [adr/0006-cache-padded-spsc-event-fabric.md](adr/0006-cache-padded-spsc-event-fabric.md) | decision | 189 | B | 83% |
 | [adr/0007-sealed-generation-tagged-slab-pages.md](adr/0007-sealed-generation-tagged-slab-pages.md) | decision | 267 | A | 100% |
 | [adr/0008-append-only-published-prefix-slab-pages.md](adr/0008-append-only-published-prefix-slab-pages.md) | decision | 409 | A | 100% |
-| [adr/index.md](adr/index.md) | decision | 50 | B | 83% |
+| [adr/0009-failure-atomic-slab-ring-admission.md](adr/0009-failure-atomic-slab-ring-admission.md) | decision | 427 | A | 100% |
+| [adr/index.md](adr/index.md) | decision | 51 | B | 83% |
 | [adr/template.md](adr/template.md) | decision | 46 | A | 100% |
 | [AegisAgent_Agent_Cage.md](AegisAgent_Agent_Cage.md) | guide | 581 | B | 78% |
 | [AegisAgent_Agent_SOC_Design.md](AegisAgent_Agent_SOC_Design.md) | guide | 757 | D | 56% |
@@ -169,7 +170,7 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [installation.md](installation.md) | guide | 127 | A | 100% |
 | [Issue_Backlog_Execution_Plan.md](Issue_Backlog_Execution_Plan.md) | guide | 208 | D | 44% |
 | [Last_Mile_System_Walkthrough.md](Last_Mile_System_Walkthrough.md) | guide | 147 | C | 67% |
-| [LLD.md](LLD.md) | guide | 1537 | A | 100% |
+| [LLD.md](LLD.md) | guide | 1584 | A | 100% |
 | [Local_Development.md](Local_Development.md) | guide | 87 | D | 44% |
 | [mcp-defense-architecture.md](mcp-defense-architecture.md) | guide | 145 | C | 67% |
 | [mission.md](mission.md) | guide | 153 | D | 44% |

@@ -22,10 +22,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run semgrep (custom rules + Rust/Python security rulesets)
+        # The community blanket unsafe-usage rule is replaced by the
+        # path-scoped rust-unsafe-outside-reviewed-crates rule in
+        # .semgrep/aegisagent-rust.yml: `lib/event` carries isolated,
+        # SAFETY-documented unsafe under ADR-0006..0009 with its own Miri,
+        # Loom, ASan and TSan CI lanes; everywhere else unsafe still blocks.
         run: |
           semgrep scan \
             --config .semgrep/ \
             --config p/rust \
             --config p/python \
             --config p/secrets \
+            --exclude-rule rust.lang.security.unsafe-usage.unsafe-usage \
             --error

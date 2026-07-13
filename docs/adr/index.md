@@ -2,7 +2,7 @@
 
 **Issue:** [#1197](https://github.com/lavkushry/AegisAgent/issues/1197)
 
-> **Status:** ADR-0001 through ADR-0005 are Accepted. ADR-0006 through ADR-0008
+> **Status:** ADR-0001 through ADR-0005 are Accepted. ADR-0006 through ADR-0009
 > are Proposed and permit only unwired prototypes until accepted. A changed
 > decision requires a new ADR and a supersedes link; do not silently rewrite
 > historical rationale.
@@ -31,6 +31,7 @@ a new ADR and mark the old one "Superseded by ADR-NNNN."
 | [0006](0006-cache-padded-spsc-event-fabric.md) | Cache-padded SPSC descriptor fabric (Proposed) |
 | [0007](0007-sealed-generation-tagged-slab-pages.md) | Sealed generation-tagged slab-page ownership oracle (Proposed) |
 | [0008](0008-append-only-published-prefix-slab-pages.md) | Append-only published-prefix slab pages (Proposed) |
+| [0009](0009-failure-atomic-slab-ring-admission.md) | Failure-atomic single-page slab/ring admission (Proposed) |
 
 ## Security and Review
 

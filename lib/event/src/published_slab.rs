@@ -400,23 +400,23 @@ pub struct PublishedSlabWriter {
     _not_sync: PhantomData<Cell<()>>,
 }
 
+#[derive(Clone, Copy)]
+struct AppendPlan {
+    descriptor_index: usize,
+    offset: usize,
+    end: usize,
+    descriptor_offset: u32,
+    descriptor_len: u32,
+    published_bytes: u32,
+    next_count: u32,
+    next_sequence: u64,
+}
+
 impl PublishedSlabWriter {
-    /// Copies, initializes, and Release-publishes one complete payload.
-    ///
-    /// FlatBuffer verification and redaction are upstream preconditions. Every
-    /// returned error is transactional; no descriptor escapes before the state
-    /// publication store.
-    pub fn try_append(
-        &mut self,
-        payload: &[u8],
-        schema_id: u32,
-        flags: u16,
-    ) -> Result<TelemetryDescriptor, SlabAppendError> {
+    fn append_plan(&self, len: usize) -> Result<AppendPlan, SlabAppendError> {
         if self.poisoned {
             return Err(SlabAppendError::WriterPoisoned);
         }
-
-        let len = payload.len();
         if len == 0 {
             return Err(SlabAppendError::EmptyPayload);
         }
@@ -459,32 +459,86 @@ impl PublishedSlabWriter {
             u32::try_from(len).map_err(|_| SlabAppendError::LengthNotAddressable { len })?;
         let published_bytes = u32::try_from(end)
             .map_err(|_| SlabAppendError::OffsetNotAddressable { offset: end })?;
-        let next_count = self.descriptor_count + 1;
-        let next_sequence = self.next_sequence.wrapping_add(1);
+
+        Ok(AppendPlan {
+            descriptor_index,
+            offset,
+            end,
+            descriptor_offset,
+            descriptor_len,
+            published_bytes,
+            next_count: self.descriptor_count + 1,
+            next_sequence: self.next_sequence.wrapping_add(1),
+        })
+    }
+
+    /// Checks every payload-length and current-capacity condition without CRC,
+    /// allocation, page mutation, or publication.
+    pub(crate) fn preflight_append(&self, len: usize) -> Result<(), SlabAppendError> {
+        self.append_plan(len).map(|_| ())
+    }
+
+    /// Replaces the last canonical descriptor for corrupt-input tests.
+    ///
+    /// # Safety
+    ///
+    /// No reader may access the page before this test-only rewrite completes.
+    /// The method deliberately violates published-prefix immutability and must
+    /// never be used outside a single-threaded corruption fixture.
+    #[cfg(all(test, not(feature = "loom")))]
+    pub(crate) unsafe fn overwrite_last_descriptor_for_test(
+        &mut self,
+        descriptor: TelemetryDescriptor,
+    ) {
+        let index =
+            self.descriptor_count
+                .checked_sub(1)
+                .expect("test corruption requires one published descriptor") as usize;
+        let cell = self
+            .inner
+            .descriptors
+            .get(index)
+            .expect("published test descriptor index remains in bounds");
+        cell.write(descriptor);
+    }
+
+    /// Copies, initializes, and Release-publishes one complete payload.
+    ///
+    /// FlatBuffer verification and redaction are upstream preconditions. Every
+    /// returned error is transactional; no descriptor escapes before the state
+    /// publication store.
+    pub fn try_append(
+        &mut self,
+        payload: &[u8],
+        schema_id: u32,
+        flags: u16,
+    ) -> Result<TelemetryDescriptor, SlabAppendError> {
+        let len = payload.len();
+        let plan = self.append_plan(len)?;
         let checksum = crc32c::crc32c(payload);
         let descriptor = TelemetryDescriptor {
             sequence: self.next_sequence,
             arena_generation: self.inner.arena_generation,
             arena_id: self.inner.arena_id,
             flags,
-            offset: descriptor_offset,
-            len: descriptor_len,
+            offset: plan.descriptor_offset,
+            len: plan.descriptor_len,
             crc32c: checksum,
             schema_id,
         };
-        let next_state = encode_publication_state(next_count, published_bytes, false);
+        let next_state = encode_publication_state(plan.next_count, plan.published_bytes, false);
 
         // Stage every bounds-checked reference and native pointer before the
         // first cell is touched. No indexing or fallible work follows.
-        let payload_cells = self
-            .inner
-            .bytes
-            .get(offset..end)
-            .ok_or(SlabAppendError::PageFull {
-                requested: len,
-                remaining,
-            })?;
-        let descriptor_cell = self.inner.descriptors.get(descriptor_index).ok_or(
+        let payload_cells =
+            self.inner
+                .bytes
+                .get(plan.offset..plan.end)
+                .ok_or(SlabAppendError::PageFull {
+                    requested: len,
+                    remaining: self.inner.byte_capacity - plan.offset,
+                })?;
+        let descriptor_cell = self.inner.descriptors.get(plan.descriptor_index).ok_or(
             SlabAppendError::DescriptorCapacityExhausted {
                 capacity: self.inner.descriptor_capacity,
             },
@@ -516,9 +570,9 @@ impl PublishedSlabWriter {
             .publication
             .0
             .store(next_state, Ordering::Release);
-        self.used_bytes = published_bytes;
-        self.descriptor_count = next_count;
-        self.next_sequence = next_sequence;
+        self.used_bytes = plan.published_bytes;
+        self.descriptor_count = plan.next_count;
+        self.next_sequence = plan.next_sequence;
         self.poisoned = false;
 
         Ok(descriptor)
@@ -563,6 +617,13 @@ impl PublishedSlabWriter {
     pub fn is_poisoned(&self) -> bool {
         self.poisoned
     }
+
+    pub(crate) fn close(&mut self) {
+        self.inner
+            .publication
+            .0
+            .fetch_or(WRITER_CLOSED_BIT, Ordering::Release);
+    }
 }
 
 impl Drop for PublishedSlabWriter {
@@ -570,10 +631,7 @@ impl Drop for PublishedSlabWriter {
         // The atomic word, rather than writer-private staged cursors, is the
         // authoritative committed prefix. `fetch_or` cannot regress or expose a
         // partially written suffix if unwinding interrupts an append.
-        self.inner
-            .publication
-            .0
-            .fetch_or(WRITER_CLOSED_BIT, Ordering::Release);
+        self.close();
     }
 }
 
@@ -699,6 +757,16 @@ impl PublishedSlabReader {
     pub fn is_writer_closed(&self) -> bool {
         PublicationSnapshot::decode(self.inner.publication.0.load(Ordering::Acquire)).writer_closed
     }
+
+    /// Returns one validated, coherent publication snapshot.
+    pub fn status(&self) -> Result<PublishedSlabStatus, PublishedSlabReadError> {
+        let snapshot = self.inner.load_snapshot()?;
+        Ok(PublishedSlabStatus {
+            published_count: snapshot.published_count as usize,
+            published_bytes: snapshot.published_bytes as usize,
+            writer_closed: snapshot.writer_closed,
+        })
+    }
 }
 
 impl fmt::Debug for PublishedSlabReader {
@@ -773,6 +841,13 @@ pub struct PublishedSlabLayout {
     pub byte_cell_alignment: usize,
     pub descriptor_cell_size: usize,
     pub descriptor_cell_alignment: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublishedSlabStatus {
+    pub published_count: usize,
+    pub published_bytes: usize,
+    pub writer_closed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

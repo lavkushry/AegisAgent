@@ -183,6 +183,22 @@ There is one SPSC ring for each producer→consumer edge. A writer shard polls i
 
 The fixed ring does not need general garbage collection: its sequence barrier proves slot reuse. `crossbeam-epoch` is limited to slab-page retirement, snapshot publication, manifest generations, and readers that can outlive a ring slot.
 
+The `current`, unwired `VolatileAdmissionChannel` prototype binds one
+preallocated page to one preallocated ring. It validates page capacity before
+reserving a ring slot, Release-publishes the complete immutable page prefix,
+and only then Release-publishes the descriptor ring head. Its consumer claims a
+descriptor without releasing ring capacity, validates canonical page
+membership, bounds, and CRC32C, and advances the consumed tail only when a
+must-use frame lease commits. Explicit clean/faulted terminal state prevents an
+orphaned page prefix or ordinary producer drop from being reported as a clean
+stream. This process-local prototype carries no production or `shadow`
+traffic, cannot carry protected evidence, is not `qualified`, and establishes
+no performance result. The production event fabric remains `target`; WAL
+durability, formal ADR/security review, green hosted ASan/TSan artifacts, real
+UBSan support, authenticated registry lookup, bounded page rotation, reuse,
+epoch/NUMA reclamation, shadow evidence, rollback, and qualification remain
+separate gates.
+
 ### Event admission states
 
 ```mermaid
@@ -193,7 +209,7 @@ stateDiagram-v2
     Validating --> Spooling: critical ring saturated
     Validating --> Rejected: normal ring saturated
     Reserved --> Published: release sequence
-    Published --> Consumed: writer acquire sequence
+    Published --> Consumed: validate and commit frame lease
     Consumed --> Durable: WAL policy satisfied
     Durable --> Indexed: memtable/segment visible
     Spooling --> Published: capacity restored

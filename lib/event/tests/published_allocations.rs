@@ -17,7 +17,7 @@ use std::{
     cell::Cell,
 };
 
-use aegis_event::{PublishedSlabPage, SlabPageConfig};
+use aegis_event::{PublishedSlabPage, SlabPageConfig, TryAdmitError, VolatileAdmissionChannel};
 
 struct ThreadTrackingAllocator;
 
@@ -96,4 +96,69 @@ fn warmed_native_append_and_resolve_allocate_nothing() {
 
     assert_eq!(payload.as_ref(), b"allocation-free");
     assert_eq!(allocations, 0, "append + resolve allocated unexpectedly");
+}
+
+#[test]
+fn warmed_admission_claim_validation_and_commit_allocate_nothing() {
+    let channel = VolatileAdmissionChannel::<2>::new(SlabPageConfig {
+        arena_id: 3,
+        arena_generation: 5,
+        byte_capacity: 64,
+        descriptor_capacity: 2,
+        first_sequence: 7,
+    })
+    .expect("bounded channel");
+    let (mut producer, mut consumer) = channel.split();
+
+    // Warm architecture-specific CRC dispatch before the measured boundary.
+    let _ = crc32c::crc32c(b"warmup");
+    TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
+    ALLOCATION_COUNT.with(|count| count.set(0));
+
+    let token = producer
+        .try_admit(b"allocation-free", 1, 0)
+        .expect("preallocated admission fits");
+    let frame = consumer.try_next().expect("admitted frame validates");
+    let payload_matches = frame.payload() == b"allocation-free";
+    let committed = frame.commit();
+    let allocations = ALLOCATION_COUNT.with(Cell::get);
+    TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
+
+    assert!(payload_matches);
+    assert_eq!(token, committed);
+    assert_eq!(
+        allocations, 0,
+        "admit + claim + validate + commit allocated unexpectedly"
+    );
+}
+
+#[test]
+fn full_admission_rejection_allocates_nothing_and_does_not_mutate_the_page() {
+    let channel = VolatileAdmissionChannel::<1>::new(SlabPageConfig {
+        arena_id: 3,
+        arena_generation: 5,
+        byte_capacity: 64,
+        descriptor_capacity: 2,
+        first_sequence: 7,
+    })
+    .expect("bounded channel");
+    let (mut producer, _consumer) = channel.split();
+    producer
+        .try_admit(b"occupy-ring", 1, 0)
+        .expect("first admission fits");
+    let used_before = producer.used_bytes();
+    let count_before = producer.published_count();
+    let sequence_before = producer.next_sequence();
+
+    TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
+    ALLOCATION_COUNT.with(|count| count.set(0));
+    let result = producer.try_admit(b"must-not-copy", 1, 0);
+    let allocations = ALLOCATION_COUNT.with(Cell::get);
+    TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
+
+    assert_eq!(result, Err(TryAdmitError::RingFull));
+    assert_eq!(producer.used_bytes(), used_before);
+    assert_eq!(producer.published_count(), count_before);
+    assert_eq!(producer.next_sequence(), sequence_before);
+    assert_eq!(allocations, 0, "full rejection allocated unexpectedly");
 }
