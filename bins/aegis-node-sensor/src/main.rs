@@ -38,6 +38,12 @@ const SHIP_TICK_INTERVAL: Duration = Duration::from_secs(2);
 /// How often the sensor polls the gateway for commands addressed to it.
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Acked-prefix size at which a spool lane's log file is compacted after a
+/// ship tick. Acking only advances a watermark — without periodic
+/// compaction the append-only lane file grows without bound on a
+/// long-lived host even while `pending_bytes` stays near zero.
+const SPOOL_COMPACT_THRESHOLD_BYTES: u64 = 262_144;
+
 /// How often `/proc` (Linux) is scanned for `AEGIS_RUN_ID` host agents.
 const PROCESS_COLLECT_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -258,6 +264,14 @@ async fn main() -> ExitCode {
                         Ok(0) => {}
                         Ok(n) => tracing::debug!(lane = ?lane, shipped = n, "shipped events"),
                         Err(e) => tracing::warn!(lane = ?lane, error = %e, "ship tick failed"),
+                    }
+                    match spool.compact_if_reclaimable(lane, SPOOL_COMPACT_THRESHOLD_BYTES) {
+                        Ok(true) => tracing::debug!(lane = ?lane, "compacted spool lane"),
+                        Ok(false) => {}
+                        // Compaction failure never crashes the sensor: the
+                        // lane keeps working append-only and reclamation is
+                        // retried on the next tick.
+                        Err(e) => tracing::warn!(lane = ?lane, error = %e, "spool compaction failed"),
                     }
                 }
             }

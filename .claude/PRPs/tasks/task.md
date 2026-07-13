@@ -30,8 +30,13 @@ Blocks any claim of runtime control over non-cooperative agents.
       sandbox, emit lifecycle events, report status; package Dockerfile/Helm.
 - [ ] **Gateway cage lease APIs on main** — claim / heartbeat / ownership-scoped
       status (if not merged with cage PR).
-- [ ] **Sensor collectors + host enforcement** — real process/fs/net/secret
+- [x] **Sensor collectors + host enforcement** — real process/fs/net/secret
       signals; execute signed pause/kill/quarantine against the host/workload.
+      Done on `main` (`process_collector`/`net`/`fs`/`secret` + `ProcessEnforcer`
+      + `tests/real_host_integration.rs`); soak harness landed
+      (`scripts/sensor-soak.sh` + `sensor-soak.yml` nightly/dispatch/PR-smoke,
+      plus steady-state spool compaction fix). Remaining: extended-duration
+      soak on a production-grade deployment.
 - [ ] **E2E unknown-agent path** — cage + egress deny + control action +
       receipt/incident in compose or Playwright/integration harness.
 - [ ] **Egress forced path for caged runs** — not opt-in only (netns / default

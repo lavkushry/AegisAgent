@@ -327,6 +327,25 @@ impl SpoolQueue {
         self.lane_state(lane).compact(&self.dir, lane)
     }
 
+    /// Steady-state disk reclamation: compact `lane` only once at least
+    /// `min_reclaimable_bytes` of fully-acked prefix would be recovered.
+    /// Without a periodic call to this, the append-only lane file grows
+    /// without bound on a long-lived host even though `pending_bytes`
+    /// stays near zero — acking advances the watermark but never shrinks
+    /// the file. Returns whether a compaction ran.
+    pub fn compact_if_reclaimable(
+        &self,
+        lane: Lane,
+        min_reclaimable_bytes: u64,
+    ) -> Result<bool, SpoolError> {
+        let mut state = self.lane_state(lane);
+        if state.ack_offset == 0 || state.ack_offset < min_reclaimable_bytes {
+            return Ok(false);
+        }
+        state.compact(&self.dir, lane)?;
+        Ok(true)
+    }
+
     /// Bytes not yet acked in `lane` — exposed for heartbeat queue-depth
     /// reporting (Phase 3.2's `queue_depth_critical`/`queue_depth_normal`).
     pub fn pending_bytes(&self, lane: Lane) -> Result<u64, SpoolError> {
@@ -482,6 +501,69 @@ mod tests {
         // The original record must still be intact and readable.
         let record = queue.read_next(Lane::Critical).unwrap().unwrap();
         assert_eq!(record.payload, vec![1u8; record_size]);
+    }
+
+    #[test]
+    fn steady_state_ship_ack_cycles_keep_disk_bounded_with_compaction() {
+        // The long-running healthy path: events are enqueued, shipped, and
+        // acked continuously, so pending_bytes stays near zero — but the
+        // append-only log file itself must not grow without bound across
+        // days of uptime. compact_if_reclaimable is the steady-state
+        // reclamation hook the main loop calls after ship ticks.
+        let dir = tempfile::tempdir().unwrap();
+        let queue = SpoolQueue::open(dir.path(), 10_000_000).unwrap();
+        let record_size = 100usize;
+        let frame_size = HEADER_LEN + record_size as u64;
+        let threshold = frame_size * 10;
+
+        let log_path = dir.path().join("normal.log");
+        for _ in 0..500 {
+            queue
+                .enqueue(Lane::Normal, &vec![7u8; record_size])
+                .unwrap();
+            let record = queue.read_next(Lane::Normal).unwrap().unwrap();
+            queue.ack(Lane::Normal, &record).unwrap();
+            queue
+                .compact_if_reclaimable(Lane::Normal, threshold)
+                .unwrap();
+
+            let len = std::fs::metadata(&log_path).unwrap().len();
+            assert!(
+                len <= threshold + frame_size,
+                "log file grew past the compaction bound: {len} > {}",
+                threshold + frame_size
+            );
+        }
+    }
+
+    #[test]
+    fn compact_if_reclaimable_below_threshold_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = SpoolQueue::open(dir.path(), 1_000_000).unwrap();
+        queue.enqueue(Lane::Normal, b"acked").unwrap();
+        queue.enqueue(Lane::Normal, b"pending").unwrap();
+        let first = queue.read_next(Lane::Normal).unwrap().unwrap();
+        queue.ack(Lane::Normal, &first).unwrap();
+
+        // Reclaimable bytes (one small acked frame) are below the threshold:
+        // nothing is rewritten and the unacked record is untouched.
+        let compacted = queue
+            .compact_if_reclaimable(Lane::Normal, 1_048_576)
+            .unwrap();
+        assert!(!compacted);
+        let second = queue.read_next(Lane::Normal).unwrap().unwrap();
+        assert_eq!(second.payload, b"pending");
+
+        // At-or-above threshold, the acked prefix is reclaimed and the
+        // unacked record survives the rewrite.
+        let compacted = queue.compact_if_reclaimable(Lane::Normal, 1).unwrap();
+        assert!(compacted);
+        let second = queue.read_next(Lane::Normal).unwrap().unwrap();
+        assert_eq!(second.payload, b"pending");
+        let len = std::fs::metadata(dir.path().join("normal.log"))
+            .unwrap()
+            .len();
+        assert_eq!(len, HEADER_LEN + b"pending".len() as u64);
     }
 
     #[test]
