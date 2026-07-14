@@ -61,6 +61,7 @@ pub struct MockRuntime {
     pub quarantines: Mutex<u32>,
     pub escalations: Mutex<u32>,
     pub provenance_denials: Mutex<u32>,
+    pub best_effort_receipts: Mutex<u32>,
 }
 
 impl Default for MockRuntime {
@@ -103,6 +104,7 @@ impl Default for MockRuntime {
             quarantines: Mutex::new(0),
             escalations: Mutex::new(0),
             provenance_denials: Mutex::new(0),
+            best_effort_receipts: Mutex::new(0),
         }
     }
 }
@@ -288,6 +290,7 @@ impl DecisionRuntime for MockRuntime {
         _: &str,
         _: &str,
     ) {
+        *self.best_effort_receipts.lock().expect("lock") += 1;
     }
 
     async fn quarantine_agent(&self, _: &str, _: &str) -> Result<(), AegisError> {

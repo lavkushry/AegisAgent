@@ -115,6 +115,26 @@ async fn admit_empty_tenant_is_bad_request() {
 }
 
 #[tokio::test]
+async fn admit_empty_mtls_cn_unauthorized() {
+    let rt = MockRuntime::default();
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        addr(),
+        Transport::Rest,
+        AuthCredential::MtlsCn("".into()),
+    );
+    let err = admit_authorize(&rt, &ctx, &minimal_body("dev"))
+        .await
+        .expect_err("empty cn");
+    assert_eq!(err.http_status, 401);
+    match err.body {
+        DecisionBody::Failure(f) => assert!(f.message.contains("Missing agent token")),
+        other => panic!("expected Failure, got {other:?}"),
+    }
+    assert_eq!(*rt.auth_failures.lock().expect("l"), 1);
+}
+
+#[tokio::test]
 async fn admit_empty_bearer_token_unauthorized() {
     let rt = MockRuntime::default();
     let ctx = AuthorizeContext::new(

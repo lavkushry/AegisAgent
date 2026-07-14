@@ -62,10 +62,13 @@ async fn evaluate_allow_low_risk_writes() {
         DecisionBody::Decision(resp) => {
             assert_eq!(resp.decision, "allow");
             assert_eq!(resp.risk_score, 10);
+            assert!(resp.receipt.is_none());
         }
         _ => panic!("decision"),
     }
     assert_eq!(*rt.writes.lock().expect("l"), 1);
+    assert_eq!(*rt.best_effort_receipts.lock().expect("l"), 1);
+    assert_eq!(*rt.receipts.lock().expect("l"), 0);
 }
 
 #[tokio::test]

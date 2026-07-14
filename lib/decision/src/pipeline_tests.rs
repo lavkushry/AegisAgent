@@ -192,11 +192,15 @@ async fn pipeline_allow_writes_decision_and_heartbeats() {
         DecisionBody::Decision(resp) => {
             assert_eq!(resp.decision, "allow");
             assert_eq!(resp.reason, "ok");
+            // Low-risk non-mutating allow uses best-effort receipt, not durable.
+            assert!(resp.receipt.is_none());
         }
         other => panic!("expected decision, got {other:?}"),
     }
     assert_eq!(*rt.writes.lock().expect("l"), 1);
     assert_eq!(*rt.heartbeats.lock().expect("l"), 1);
+    assert_eq!(*rt.receipts.lock().expect("l"), 0);
+    assert_eq!(*rt.best_effort_receipts.lock().expect("l"), 1);
 }
 
 #[tokio::test]
@@ -688,6 +692,40 @@ async fn pipeline_mcp_unapproved_tool_denies() {
         other => panic!("expected MCP tool status deny, got {other:?}"),
     }
     assert_eq!(*rt.writes.lock().expect("l"), 1);
+}
+
+#[tokio::test]
+async fn pipeline_unknown_mcp_tool_critical_requires_approval() {
+    // Registered server, unknown tool → metadata marks critical + unknown;
+    // secure default upgrades Cedar allow to require_approval.
+    let rt = MockRuntime {
+        mcp_server_status: Some("active".into()),
+        mcp_tool: None,
+        ..MockRuntime::default()
+    };
+    let out = run_authorize_pipeline(
+        &rt,
+        &ctx(),
+        &mcp_body_json("fs", "never_registered"),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "require_approval");
+            assert!(
+                resp.matched_policies
+                    .iter()
+                    .any(|p| p == "critical_risk_requires_approval"),
+                "policies={:?}",
+                resp.matched_policies
+            );
+            assert!(resp.approval.is_some());
+        }
+        other => panic!("expected critical unknown-tool approval, got {other:?}"),
+    }
+    assert_eq!(*rt.approvals.lock().expect("l"), 1);
 }
 
 #[tokio::test]
