@@ -6,6 +6,7 @@ members = [
     "lib/common",
     "lib/api",
     "lib/event",
+    "lib/decision",
     "lib/storage",
     "lib/policy",
     "lib/soc",

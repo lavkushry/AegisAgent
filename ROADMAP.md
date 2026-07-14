@@ -72,13 +72,14 @@ codes — the JSON-bridge round-trip and `AEGIS_TYPED_AUTHORIZE` flag are
 **deleted** (Phase D). Phase C equality corpus (`equality_*` tests) covers
 allow / deny / require_approval / dry-run / frozen agent / bad token / missing
 tenant / replay-nonce conflict, plus approval `action_hash` length parity.
-Follow-on progress: typed `AuthorizedOutcome` seam covers **authorize**,
-**approve/reject**, **register_agent**, **create_tenant**,
-**register_mcp_server**, **discover_mcp_tools**, **soc_query**, and
-**close_incident**. Storage-direct SOC gRPC methods (playbooks, contact
-points, dashboards, lists, …) map `AegisError` via `aegis_error_to_tonic`
-(NotFound/Conflict/pool exhaustion → proper tonic codes; no
-`Status::internal` collapse). Remaining: later `aegis-decision` crate move.
+Follow-on progress: typed `AuthorizedOutcome` seam covers authorize,
+approve/reject, register_agent, create_tenant, register/discover MCP,
+soc_query, and close_incident. Storage-direct SOC gRPC errors map via
+`aegis_error_to_tonic`. **`lib/decision` (`aegis-decision`)** is in the
+workspace with protocol-neutral `AuthorizeContext` / `AuthCredential` /
+`Transport` and the target `AuthorizeService` trait; gateway re-exports the
+context types and still owns evaluation + wire mapping. Remaining: move
+`authorize_action_impl` evaluation behind `AuthorizeService` into this crate.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

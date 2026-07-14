@@ -8,15 +8,16 @@
 //! collapse.
 //!
 //! Service surface:
-//! - [`Transport`] / [`AuthorizeContext`] / [`AuthCredential`] — adapter inputs
-//! - [`authorize`] / [`authorize_raw`] → [`AuthorizedOutcome`] (typed; adapters
-//!   never see an Axum `Response`)
+//! - [`Transport`] / [`AuthorizeContext`] / [`AuthCredential`] — re-exported
+//!   from [`aegis_decision`] (library seam; no Axum/tonic in that crate)
+//! - [`authorize`] / [`authorize_raw`] → [`AuthorizedOutcome`] (gateway wire
+//!   outcome; adapters never see an Axum `Response` from these entry points)
 //! - [`outcome_to_tonic`] / [`outcome_to_response`] — wire mapping helpers
 //! - [`error_reason_to_tonic_code`] / [`status_error_to_tonic`]
 //!
-//! [`authorize_action_impl`] returns [`AuthorizedOutcome`] in place (no Axum
-//! `Response` on the authorize hot path). Follow-on: later `aegis-decision`
-//! crate move.
+//! Evaluation still lives in [`crate::routes::authorize_action_impl`]. The
+//! target is to implement [`aegis_decision::AuthorizeService`] in
+//! `aegis-decision` and leave only composition + mapping here.
 
 use std::sync::Arc;
 
@@ -30,73 +31,9 @@ use crate::error::{ErrorReason, StatusError};
 use crate::models::{AuthorizeRequest, AuthorizeResponse};
 use crate::routes::AppState;
 
-/// Which protocol admitted this authorization request. The service treats the
-/// two identically; adapters differ only in how they authenticate and encode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transport {
-    Rest,
-    Grpc,
-}
-
-/// How the adapter proved the caller's agent identity.
-///
-/// Fail-closed: if neither credential form can be established, the adapter
-/// returns its transport error and never builds an [`AuthorizeContext`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AuthCredential {
-    /// Bearer agent token (already stripped of the `Bearer ` prefix).
-    BearerToken(String),
-    /// Verified mTLS client-certificate Subject CN from the TLS accept loop.
-    MtlsCn(String),
-}
-
-/// Transport-neutral, already-authenticated context for one authorization
-/// evaluation. An adapter constructs this only after it has verified the
-/// caller (bearer token, mTLS CN, or request signature) and resolved the
-/// tenant; the service trusts these fields and never re-reads a header for
-/// tenant authority.
-///
-/// Fail-closed by construction: if an adapter cannot authenticate the caller
-/// or determine the tenant, it returns its transport-appropriate error and
-/// never builds an `AuthorizeContext`.
-#[derive(Debug, Clone)]
-pub struct AuthorizeContext {
-    /// The authenticated runtime tenant (from `X-Aegis-Tenant-ID` on REST,
-    /// request `tenant_id` / metadata on gRPC). Single tenant authority the
-    /// service uses — it does not consult any other source.
-    pub tenant_id: String,
-    /// Real remote peer, used to key the auth-failure tracker. gRPC supplies
-    /// tonic's `remote_addr`, never a forged loopback address.
-    pub client_addr: std::net::SocketAddr,
-    /// Admitting protocol.
-    pub transport: Transport,
-    /// Agent identity credential resolved by the adapter.
-    pub credential: AuthCredential,
-    /// Optional `X-Aegis-Request-Signature` value (agents with signing keys).
-    pub request_signature: Option<String>,
-}
-
-impl AuthorizeContext {
-    pub fn new(
-        tenant_id: impl Into<String>,
-        client_addr: std::net::SocketAddr,
-        transport: Transport,
-        credential: AuthCredential,
-    ) -> Self {
-        Self {
-            tenant_id: tenant_id.into(),
-            client_addr,
-            transport,
-            credential,
-            request_signature: None,
-        }
-    }
-
-    pub fn with_request_signature(mut self, sig: Option<String>) -> Self {
-        self.request_signature = sig.filter(|s| !s.is_empty());
-        self
-    }
-}
+// Protocol-neutral context types live in `aegis-decision` so library code can
+// depend on them without pulling the gateway binary.
+pub use aegis_decision::{AuthCredential, AuthorizeContext, AuthorizeService, Transport};
 
 /// Body carried by a completed authorization evaluation.
 ///
@@ -387,21 +324,6 @@ mod tests {
     use crate::error::StatusError;
     use axum::http::StatusCode;
     use tonic::Code;
-
-    #[test]
-    fn context_filters_empty_request_signature() {
-        let addr = std::net::SocketAddr::from(([10, 0, 0, 1], 4443));
-        let ctx = AuthorizeContext::new(
-            "tenant_a",
-            addr,
-            Transport::Grpc,
-            AuthCredential::BearerToken("tok".into()),
-        )
-        .with_request_signature(Some(String::new()));
-        assert_eq!(ctx.request_signature, None);
-        assert_eq!(ctx.tenant_id, "tenant_a");
-        assert_eq!(ctx.transport, Transport::Grpc);
-    }
 
     #[test]
     fn auth_and_policy_failures_are_not_collapsed_to_internal() {

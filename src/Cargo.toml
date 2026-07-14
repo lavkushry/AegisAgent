@@ -15,6 +15,7 @@ publish = false
 aegis-canon = { path = "canon" }
 aegis-common = { path = "../lib/common" }
 aegis-api = { path = "../lib/api" }
+aegis-decision = { path = "../lib/decision" }
 aegis-storage = { path = "../lib/storage" }
 aegis-policy = { path = "../lib/policy" }
 aegis-soc = { path = "../lib/soc" }

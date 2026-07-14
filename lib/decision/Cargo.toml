@@ -1,0 +1,18 @@
+[package]
+name = "aegis-decision"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Protocol-neutral authorization decision seam for AegisAgent (Week-3 typed service target)"
+publish = false
+
+[dependencies]
+aegis-api = { path = "../api" }
+aegis-common = { path = "../common" }
+async-trait = "0.1.89"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
