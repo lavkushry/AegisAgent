@@ -35,9 +35,9 @@ use crate::routes::AppState;
 // Protocol-neutral context / outcome / runtime types live in `aegis-decision`
 // so library code can depend on them without pulling the gateway binary.
 pub use aegis_decision::{
-    admit_authorize, AuthCredential, AuthorizeAgent, AuthorizeContext, AuthorizeService,
-    DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome, DecisionRuntime,
-    Transport,
+    admit_authorize, preflight_authorize, AuthCredential, AuthorizeAgent, AuthorizeContext,
+    AuthorizeService, DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome,
+    DecisionRuntime, PreflightTerminal, PreflightedAuthorize, Transport,
 };
 
 /// Body carried by a completed authorization evaluation.
@@ -432,6 +432,67 @@ impl DecisionRuntime for GatewayDecisionRuntime {
         let key = crate::routes::auth_failure_tracker_key(&client_addr, tenant_id);
         self.state.auth_failure_tracker.record_failure(&key);
         self.state.metrics.inc_auth_failure_attempt();
+    }
+
+    async fn agent_tool_permitted(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        tool: &str,
+    ) -> Result<bool, aegis_common::errors::AegisError> {
+        self.state
+            .storage
+            .agent_tool_permission_status(tenant_id, agent_id, tool)
+            .await
+    }
+
+    async fn get_decision_by_request_id(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        request_id: &str,
+    ) -> Result<Option<crate::models::DecisionRecord>, aegis_common::errors::AegisError> {
+        self.state
+            .storage
+            .get_decision_by_request_id(tenant_id, agent_id, request_id)
+            .await
+    }
+
+    async fn check_and_record_nonce(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        nonce: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, aegis_common::errors::AegisError> {
+        // Mirror the 5-minute window used by timestamp validation and the
+        // historical REPLAY_NONCE_WINDOW_SECS in authorize.rs.
+        const REPLAY_NONCE_WINDOW_SECS: i64 = 300;
+        if self.state.replay_store_db {
+            let expires_at = now + chrono::Duration::seconds(REPLAY_NONCE_WINDOW_SECS);
+            self.state
+                .storage
+                .check_and_insert_replay_nonce(tenant_id, agent_id, nonce, expires_at)
+                .await
+        } else {
+            let nonce_key = crate::routes::ReplayNonceCache::cache_key(tenant_id, agent_id, nonce);
+            Ok(self
+                .state
+                .replay_nonce_cache
+                .check_and_insert(&nonce_key, now))
+        }
+    }
+
+    async fn check_rate_limit(&self, tenant_id: &str) -> bool {
+        self.state.rate_limiter.check_rate_limit(tenant_id).await
+    }
+
+    fn check_quota(&self, tenant_id: &str) -> bool {
+        self.state.quota_manager.check_quota(tenant_id)
+    }
+
+    fn touch_heartbeat(&self, tenant_id: &str, agent_id: &str) {
+        self.state.heartbeat_debouncer.touch(tenant_id, agent_id);
     }
 }
 

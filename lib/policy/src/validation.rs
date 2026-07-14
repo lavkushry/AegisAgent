@@ -1,4 +1,17 @@
 use chrono::{DateTime, Utc};
+use unicode_normalization::UnicodeNormalization;
+
+/// Normalize a tool/action identifier for authorization lookups (#1335).
+///
+/// Percent-decode → Unicode NFC → trim → lowercase. Same algorithm Cedar uses
+/// when building entity UIDs so lookup and policy evaluation agree.
+pub fn normalize_tool_identifier(value: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| value.to_string());
+    decoded.nfc().collect::<String>().trim().to_lowercase()
+}
 
 /// Environment restriction check (#1391): returns Err if the agent is not
 /// permitted to operate in the declared environment. NULL or empty means unrestricted.

@@ -4,20 +4,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use unicode_normalization::UnicodeNormalization;
 
-/// Normalize a tool or action identifier before building the Cedar entity UID.
-/// Applies the same algorithm as `routes::normalize_tool_identifier`:
-/// percent-decode → Unicode NFC → trim whitespace → lowercase.
-/// This prevents case/encoding/Unicode-form variations from bypassing Cedar
-/// deny rules (e.g. `GitHub` and `github` must match the same policy).
-fn normalize_policy_identifier(value: &str) -> String {
-    let decoded = percent_encoding::percent_decode_str(value)
-        .decode_utf8()
-        .map(|s| s.into_owned())
-        .unwrap_or_else(|_| value.to_string());
-    decoded.nfc().collect::<String>().trim().to_lowercase()
-}
+use crate::validation::normalize_tool_identifier as normalize_policy_identifier;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {

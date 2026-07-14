@@ -84,11 +84,13 @@ dependencies = [
  "aegis-common",
  "aegis-policy",
  "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

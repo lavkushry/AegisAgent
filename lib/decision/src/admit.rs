@@ -6,11 +6,11 @@
 //! gateway until subsequent extraction stages.
 
 use aegis_api::models::AuthorizeRequest;
-use aegis_common::errors::AegisError;
 use tracing::warn;
 
 use crate::agent::AuthorizeAgent;
 use crate::context::{AuthCredential, AuthorizeContext};
+use crate::error_map::aegis_err_to_outcome;
 use crate::outcome::{DecisionFailure, DecisionOutcome};
 use crate::runtime::DecisionRuntime;
 
@@ -168,44 +168,14 @@ pub async fn admit_authorize(
     })
 }
 
-fn aegis_err_to_outcome(e: AegisError) -> DecisionOutcome {
-    // Preserve the AegisError class so adapters map the same way as
-    // `StatusError::from(AegisError)` on the gateway (including pool
-    // exhaustion → 503 without pulling sqlx into this crate).
-    if e.is_pool_exhausted() {
-        return DecisionOutcome::failure(DecisionFailure {
-            class: crate::outcome::DecisionFailureClass::ServiceUnavailable,
-            message: "Database connection pool exhausted".into(),
-            details: None,
-        });
-    }
-    let failure = match e {
-        AegisError::Unauthorized(m) => DecisionFailure::unauthorized(m),
-        AegisError::NotFound(m) => DecisionFailure {
-            class: crate::outcome::DecisionFailureClass::NotFound,
-            message: m,
-            details: None,
-        },
-        AegisError::BadRequest(m) => DecisionFailure::bad_request(m),
-        AegisError::Conflict(m) => DecisionFailure {
-            class: crate::outcome::DecisionFailureClass::Conflict,
-            message: m,
-            details: None,
-        },
-        AegisError::Serialization(err) => {
-            DecisionFailure::bad_request(format!("Serialization error: {err}"))
-        }
-        AegisError::Database(_) => DecisionFailure::internal("Database error"),
-        AegisError::Internal(m) => DecisionFailure::internal(m),
-    };
-    DecisionOutcome::failure(failure)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::context::{AuthCredential, AuthorizeContext, Transport};
     use crate::outcome::DecisionBody;
+    use aegis_api::models::DecisionRecord;
+    use aegis_common::errors::AegisError;
+    use chrono::{DateTime, Utc};
     use std::net::SocketAddr;
     use std::sync::Mutex;
 
@@ -240,6 +210,44 @@ mod tests {
         fn record_auth_failure(&self, _client_addr: SocketAddr, _tenant_id: &str) {
             *self.failures.lock().expect("lock") += 1;
         }
+
+        async fn agent_tool_permitted(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<bool, AegisError> {
+            Ok(true)
+        }
+
+        async fn get_decision_by_request_id(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<DecisionRecord>, AegisError> {
+            Ok(None)
+        }
+
+        async fn check_and_record_nonce(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: DateTime<Utc>,
+        ) -> Result<bool, AegisError> {
+            Ok(false)
+        }
+
+        async fn check_rate_limit(&self, _: &str) -> bool {
+            true
+        }
+
+        fn check_quota(&self, _: &str) -> bool {
+            true
+        }
+
+        fn touch_heartbeat(&self, _: &str, _: &str) {}
     }
 
     fn addr() -> SocketAddr {

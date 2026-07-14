@@ -11,10 +11,14 @@ aegis-api = { path = "../api" }
 aegis-common = { path = "../common" }
 aegis-policy = { path = "../policy" }
 async-trait = "0.1.89"
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# uuid already a main dep for tests that build DecisionRecord ids
+

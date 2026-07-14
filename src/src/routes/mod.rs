@@ -1515,13 +1515,8 @@ pub(crate) fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
 /// original, un-normalized strings from `payload.tool_call` — only
 /// authorization lookups use the normalized form.
 pub(crate) fn normalize_tool_identifier(value: &str) -> String {
-    let decoded = percent_encoding::percent_decode_str(value)
-        .decode_utf8()
-        .map(|s| s.into_owned())
-        .unwrap_or_else(|_| value.to_string());
-    // Trim surrounding whitespace BEFORE lowercasing so any Unicode
-    // whitespace-lookalike at boundaries is removed regardless of case.
-    decoded.nfc().collect::<String>().trim().to_lowercase()
+    // Shared with Cedar + aegis-decision preflight (aegis_policy::validation).
+    aegis_policy::validation::normalize_tool_identifier(value)
 }
 
 /// Order-independent, subset-extracted canonical value shared by

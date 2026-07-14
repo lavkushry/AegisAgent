@@ -35,11 +35,6 @@ pub(crate) use super::authorize_canon::*;
 pub(crate) use super::authorize_decision::*;
 pub(crate) use super::authorize_receipts::*;
 
-/// PR8: replay-nonce retention window for the DB-backed store, mirroring the
-/// 5-minute stale-timestamp bound enforced just above the nonce check. A nonce
-/// row past this window is treated as unseen again (and is cleanup-eligible).
-const REPLAY_NONCE_WINDOW_SECS: i64 = 300;
-
 /// Idempotent replay (#0072): rebuild the `AuthorizeResponse` for a previously
 /// recorded decision instead of re-evaluating Cedar / writing duplicate audit
 /// events, approvals, or receipts. For `require_approval` decisions, the
@@ -161,13 +156,30 @@ pub async fn authorize_action_impl(
         }
     };
 
-    let mut payload = admitted.request;
-    let dry_run = admitted.dry_run;
-    let root_trust_level = admitted.root_trust_level;
-    let agent = admitted.agent;
-    let is_mtls = admitted.used_mtls;
+    // Library-owned preflight (`aegis-decision::preflight_authorize`): tool
+    // permission, replay protection, idempotency lookup, heartbeat, rate
+    // limit, quota. Reuses the same GatewayDecisionRuntime as admit.
+    let preflighted = match crate::authorize_service::preflight_authorize(&runtime, admitted).await
+    {
+        Ok(p) => p,
+        Err(crate::authorize_service::PreflightTerminal::Outcome(outcome)) => {
+            return crate::authorize_service::decision_outcome_to_authorized(outcome);
+        }
+        Err(crate::authorize_service::PreflightTerminal::IdempotentReplay(record)) => {
+            let tenant = record.tenant_id.clone();
+            return idempotent_replay_response(&state, &tenant, *record).await;
+        }
+    };
+
+    let mut payload = preflighted.request;
+    let dry_run = preflighted.dry_run;
+    let root_trust_level = preflighted.root_trust_level;
+    let agent = preflighted.agent;
+    let is_mtls = preflighted.used_mtls;
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
+    let normalized_tool = preflighted.normalized_tool;
+    let normalized_action = preflighted.normalized_action;
 
     // #1602: the action hash is computed AFTER the admission webhook block below,
     // not here — the webhook can mutate `payload.tool_call.parameters`, and the
@@ -177,183 +189,6 @@ pub async fn authorize_action_impl(
     // the "approval bound to the exact executable bytes" guarantee. `action_hash`
     // is not referenced between this point and the admission block, so deferring
     // its computation is safe.
-
-    // #1510: the agent-to-tool permission check and the idempotency lookup
-    // below are independent reads — neither depends on the other's result —
-    // so run them concurrently instead of serially. The nonce/replay check
-    // between them is pure in-memory logic with no DB dependency, so
-    // interleaving it here doesn't change behavior; each result is still
-    // checked in the original priority order (permission denial, then
-    // replay, then idempotent replay) below. Tradeoff: a permission-denied
-    // call that also carries a `request_id` now does one "wasted" idempotency
-    // read it previously would have skipped — an acceptable cost for lower
-    // latency on the much more common allowed path.
-    let (permission_result, idempotency_result) = tokio::join!(
-        state
-            .storage
-            .agent_tool_permission_status(&tenant_id, &agent_id, &payload.tool_call.tool,),
-        async {
-            if dry_run {
-                return Ok(None);
-            }
-            match payload.request_id.as_deref().filter(|r| !r.is_empty()) {
-                Some(request_id) => {
-                    state
-                        .storage
-                        .get_decision_by_request_id(&tenant_id, &agent_id, request_id)
-                        .await
-                }
-                None => Ok(None),
-            }
-        }
-    );
-
-    // Agent-to-tool permission check (#1390, opt-in fail-closed): if the agent
-    // has any explicit tool bindings, only those tools may be called. No
-    // bindings = unrestricted (backwards-compatible with pre-#1390 agents).
-    match permission_result {
-        Ok(false) => {
-            warn!(
-                "Tool permission denied: agent={} tenant={} tool={}",
-                agent_id, tenant_id, payload.tool_call.tool
-            );
-            return crate::authorize_service::AuthorizedOutcome {
-                status: StatusCode::FORBIDDEN,
-                body: crate::authorize_service::AuthorizedBody::Json(json!({
-                    "decision": "deny",
-                    "reason": format!(
-                        "agent not permitted to call tool '{}'",
-                        payload.tool_call.tool
-                    )
-                })),
-            };
-        }
-        Ok(true) => {}
-        Err(e) => {
-            error!("DB error checking tool permissions: {:?}", e);
-            return crate::authorize_service::AuthorizedOutcome::status_error(StatusError::from(e));
-        }
-    }
-
-    // Replay protection (#1306, opt-in): only runs when the caller supplies
-    // `nonce`. Placed after agent-token authentication (fail-closed: an
-    // attacker without a valid token can't probe nonce/timestamp state) but
-    // before any policy evaluation or DB writes, so a replayed request is
-    // rejected as cheaply as possible.
-    if let Some(nonce) = payload.nonce.as_deref().filter(|n| !n.is_empty()) {
-        let now = Utc::now();
-
-        // Timestamp window check (AC #3): a `timestamp` more than 5 minutes
-        // in the past is treated as a stale/replayed request. We also reject
-        // timestamps more than 5 minutes in the *future*, since a clock-skew
-        // window that large is itself suspicious and the same bound keeps
-        // the check simple/symmetric; legitimate clients should always send
-        // a current timestamp.
-        if let Err(reason) =
-            aegis_policy::validation::validate_replay_timestamp(now, payload.timestamp)
-        {
-            warn!(
-                "Replay protection: rejecting request with stale timestamp for tenant={} agent={} (timestamp validation failed)",
-                tenant_id, agent_id
-            );
-            return crate::authorize_service::AuthorizedOutcome::status_error(
-                StatusError::conflict(reason)
-                    .with_details(serde_json::json!({"reason": "replay_timestamp_expired"})),
-            );
-        }
-
-        // Nonce dedup check (AC #2/#4/#6): scoped per (tenant, agent) so two
-        // different agents (or tenants) reusing the same nonce string don't
-        // collide. Backed by a capacity-bounded in-memory LRU rather than a
-        // strict 5-minute store -- see `ReplayNonceCache` for why this, in
-        // combination with the timestamp check above, approximates the
-        // 5-minute replay window from the issue.
-        // PR8: dispatch to the durable, shared store when AEGIS_REPLAY_STORE=db
-        // (replay-safe across restart + multiple instances), else the
-        // per-process in-memory cache. Both return true == replay. The nonce
-        // window mirrors the timestamp check above (5 min).
-        let is_replay = if state.replay_store_db {
-            let expires_at = now + Duration::seconds(REPLAY_NONCE_WINDOW_SECS);
-            match state
-                .storage
-                .check_and_insert_replay_nonce(&tenant_id, &agent_id, nonce, expires_at)
-                .await
-            {
-                Ok(replayed) => replayed,
-                Err(e) => {
-                    // Fail closed: if we can't consult the replay store we must
-                    // not silently accept a possibly-replayed request.
-                    error!("Replay store error (failing closed): {:?}", e);
-                    return crate::authorize_service::AuthorizedOutcome::status_error(
-                        StatusError::internal("Replay protection unavailable"),
-                    );
-                }
-            }
-        } else {
-            let nonce_key = ReplayNonceCache::cache_key(&tenant_id, &agent_id, nonce);
-            state.replay_nonce_cache.check_and_insert(&nonce_key, now)
-        };
-        if is_replay {
-            warn!(
-                "Replay protection: rejecting duplicate nonce for tenant={} agent={}",
-                tenant_id, agent_id
-            );
-            return crate::authorize_service::AuthorizedOutcome::status_error(
-                StatusError::conflict("Duplicate nonce: possible replay attack")
-                    .with_details(serde_json::json!({"reason": "replay_nonce_reused"})),
-            );
-        }
-    }
-
-    // #1335: normalized forms of the tool/action identifiers, used for every
-    // authorization lookup (MCP server/tool resolution, skill_action lookup)
-    // so percent-encoding/Unicode-form/case variations can't dodge the
-    // deny-by-default "unknown tool" checks. The action_hash / canonicalized
-    // payload below always uses the original `payload.tool_call` values.
-    let normalized_tool = normalize_tool_identifier(&payload.tool_call.tool);
-    let normalized_action = normalize_tool_identifier(&payload.tool_call.action);
-
-    // Idempotency (#0072): a repeat call with the same request_id returns the
-    // original decision unchanged instead of re-evaluating Cedar and writing
-    // duplicate audit events / approvals / receipts. Dry-run requests never
-    // touch idempotency state (#1281) — the lookup itself was already skipped
-    // above (the joined future short-circuits to `Ok(None)` for dry-run).
-    // #1510: `idempotency_result` was already fetched concurrently with the
-    // permission check above, not re-queried here.
-    if !dry_run {
-        match idempotency_result {
-            Ok(Some(record)) => {
-                return idempotent_replay_response(&state, &tenant_id, record).await;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                error!("Idempotency lookup failed: {:?}", e);
-                return crate::authorize_service::AuthorizedOutcome::status_error(
-                    StatusError::from(e),
-                );
-            }
-        }
-
-        // Heartbeat (#0080): record this contact as the agent's most recent
-        // activity. #1511: debounced — this only touches an in-memory set
-        // (no DB write on the hot path); `jobs::run_heartbeat_flush_job`
-        // periodically flushes it to `last_seen_at`. Skipped for dry-run (#1281).
-        state.heartbeat_debouncer.touch(&tenant_id, &agent_id);
-    } // !dry_run (idempotency + heartbeat)
-
-    // Check Rate Limiting (TASK-0012)
-    if !state.rate_limiter.check_rate_limit(&tenant_id).await {
-        return crate::authorize_service::AuthorizedOutcome::status_error(
-            StatusError::too_many_requests("Too many requests. Rate limit exceeded."),
-        );
-    }
-
-    // Check Request Quota (TASK-0013)
-    if !state.quota_manager.check_quota(&tenant_id) {
-        return crate::authorize_service::AuthorizedOutcome::status_error(
-            StatusError::too_many_requests("Request quota exceeded."),
-        );
-    }
 
     // Check if the agent is frozen or revoked (TASK-0014)
     if agent.status == "frozen" || agent.status == "revoked" {
