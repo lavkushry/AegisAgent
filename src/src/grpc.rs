@@ -157,9 +157,10 @@ impl AegisService for AegisGrpcServiceImpl {
         request: Request<AuthorizeRequest>,
     ) -> Result<Response<AuthorizeResponse>, Status> {
         // architecture.md §5: parse/auth → typed service → map Status.
-        // Service returns AuthorizedOutcome; adapter never buffers an Axum body.
+        // GatewayAuthorizeService::evaluate returns AuthorizedOutcome; adapter
+        // never buffers an Axum body.
         use crate::authorize_service::{
-            authorize, outcome_to_tonic, AuthCredential, AuthorizeContext, Transport,
+            outcome_to_tonic, AuthCredential, AuthorizeContext, GatewayAuthorizeService, Transport,
         };
 
         let client_addr = request
@@ -213,7 +214,8 @@ impl AegisService for AegisGrpcServiceImpl {
         .with_request_signature(request_signature);
 
         let rest_req = map_authorize_request(req);
-        let outcome = authorize(self._state.clone(), ctx, &rest_req).await;
+        let service = GatewayAuthorizeService::new(self._state.clone());
+        let outcome = service.evaluate(ctx, &rest_req).await;
         let res = outcome_to_tonic(outcome)?;
         Ok(Response::new(map_authorize_response(res)))
     }

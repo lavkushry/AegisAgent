@@ -2484,6 +2484,7 @@ dependencies = [
  "aegis-storage",
  "aegis-tool-broker-connectors",
  "aegis-tool-broker-core",
+ "async-trait",
  "aws-config",
  "aws-sdk-kms",
  "axum",

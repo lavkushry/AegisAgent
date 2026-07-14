@@ -1,9 +1,9 @@
 //! Target service trait for authorization evaluation.
 //!
-//! The gateway currently implements evaluation in
-//! `routes::authorize_action_impl`. This trait documents the long-term
-//! boundary: a library-owned service that takes protocol-neutral inputs and
-//! returns a domain outcome without Axum or tonic types.
+//! Gateway implements this trait via `GatewayAuthorizeService` (see the
+//! gateway `authorize_service` module). Evaluation still runs in the gateway
+//! binary; this trait is the stable library boundary for adapters and future
+//! extraction of `authorize_action_impl` into this crate.
 
 use aegis_api::models::AuthorizeRequest;
 use aegis_common::errors::AegisError;
@@ -21,18 +21,18 @@ use crate::AuthorizeContext;
 ///   `deny`/`require_approval` decision should surface as an error the adapter
 ///   maps to a client-visible failure class.
 ///
-/// # Current implementors
+/// # Implementors
 ///
-/// None in this crate yet. Gateway evaluation will implement this trait (or a
-/// richer outcome type) when `authorize_action_impl` is extracted.
+/// - Gateway: `GatewayAuthorizeService` — full evaluation today; richer wire
+///   outcomes (`AuthorizedOutcome`) are available on that type's `evaluate`
+///   method for REST/gRPC adapters that need StatusError/partial-JSON fidelity.
 #[async_trait::async_trait]
 pub trait AuthorizeService: Send + Sync {
     /// Evaluate one authorization request.
     ///
-    /// The default associated outcome type is deliberately minimal
-    /// (`AuthorizeResponse` or error). Gateway's richer
-    /// `AuthorizedOutcome` (StatusError envelopes + partial JSON denials)
-    /// will collapse into this shape or a successor enum during extraction.
+    /// Success is a full [`aegis_api::models::AuthorizeResponse`] (including
+    /// policy `allow` / `deny` / `require_approval` on HTTP 200 paths). Auth,
+    /// rate-limit, and similar failures map to [`AegisError`].
     async fn authorize(
         &self,
         ctx: AuthorizeContext,

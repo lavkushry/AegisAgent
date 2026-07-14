@@ -75,11 +75,11 @@ tenant / replay-nonce conflict, plus approval `action_hash` length parity.
 Follow-on progress: typed `AuthorizedOutcome` seam covers authorize,
 approve/reject, register_agent, create_tenant, register/discover MCP,
 soc_query, and close_incident. Storage-direct SOC gRPC errors map via
-`aegis_error_to_tonic`. **`lib/decision` (`aegis-decision`)** is in the
-workspace with protocol-neutral `AuthorizeContext` / `AuthCredential` /
-`Transport` and the target `AuthorizeService` trait; gateway re-exports the
-context types and still owns evaluation + wire mapping. Remaining: move
-`authorize_action_impl` evaluation behind `AuthorizeService` into this crate.
+`aegis_error_to_tonic`. **`lib/decision` (`aegis-decision`)** holds context
+types + `AuthorizeService` trait; gateway **`GatewayAuthorizeService`**
+implements the trait and gRPC authorize calls `evaluate` through it. Evaluation
+code still lives in `authorize_action_impl`. Remaining: move evaluation body
+into `aegis-decision` as the trait implementor.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

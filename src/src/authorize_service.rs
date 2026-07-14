@@ -15,9 +15,10 @@
 //! - [`outcome_to_tonic`] / [`outcome_to_response`] — wire mapping helpers
 //! - [`error_reason_to_tonic_code`] / [`status_error_to_tonic`]
 //!
-//! Evaluation still lives in [`crate::routes::authorize_action_impl`]. The
-//! target is to implement [`aegis_decision::AuthorizeService`] in
-//! `aegis-decision` and leave only composition + mapping here.
+//! Evaluation still lives in [`crate::routes::authorize_action_impl`].
+//! [`GatewayAuthorizeService`] implements [`AuthorizeService`] so adapters can
+//! depend on the library trait; the next extraction moves evaluation into
+//! `aegis-decision` proper.
 
 use std::sync::Arc;
 
@@ -318,6 +319,118 @@ pub async fn authorize_raw(
     crate::routes::authorize_action_impl(state, headers, raw_body, ctx.client_addr).await
 }
 
+/// Gateway-owned implementor of [`AuthorizeService`].
+///
+/// Holds shared [`AppState`] and runs evaluation through
+/// [`authorize`] / [`authorize_action_impl`]. Adapters that need full wire
+/// fidelity (StatusError envelopes, partial JSON denials) should call
+/// [`GatewayAuthorizeService::evaluate`]; the trait method
+/// [`AuthorizeService::authorize`] returns the narrower
+/// `Result<AuthorizeResponse, AegisError>` contract.
+#[derive(Clone)]
+pub struct GatewayAuthorizeService {
+    state: Arc<AppState>,
+}
+
+impl GatewayAuthorizeService {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+
+    /// Full evaluation with gateway wire outcome (preferred by REST/gRPC).
+    pub async fn evaluate(
+        &self,
+        ctx: AuthorizeContext,
+        request: &AuthorizeRequest,
+    ) -> AuthorizedOutcome {
+        authorize(self.state.clone(), ctx, request).await
+    }
+
+    /// Full evaluation with caller-supplied raw body (REST HMAC path).
+    pub async fn evaluate_raw(&self, ctx: AuthorizeContext, raw_body: Bytes) -> AuthorizedOutcome {
+        authorize_raw(self.state.clone(), ctx, raw_body).await
+    }
+}
+
+#[async_trait::async_trait]
+impl AuthorizeService for GatewayAuthorizeService {
+    async fn authorize(
+        &self,
+        ctx: AuthorizeContext,
+        request: AuthorizeRequest,
+    ) -> Result<AuthorizeResponse, aegis_common::errors::AegisError> {
+        let outcome = self.evaluate(ctx, &request).await;
+        outcome_to_authorize_result(outcome)
+    }
+}
+
+/// Map a rich gateway outcome to the library [`AuthorizeService`] result shape.
+pub fn outcome_to_authorize_result(
+    outcome: AuthorizedOutcome,
+) -> Result<AuthorizeResponse, aegis_common::errors::AegisError> {
+    use aegis_common::errors::AegisError;
+    match outcome.body {
+        AuthorizedBody::Decision(resp) if outcome.is_success() => Ok(*resp),
+        AuthorizedBody::Status(err) => Err(status_error_to_aegis(*err)),
+        AuthorizedBody::Json(v) => {
+            // Partial deny JSON or unstructured failure — fail closed with a
+            // stable client-visible class derived from the HTTP status.
+            let msg = v
+                .get("reason")
+                .or_else(|| v.get("message"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("authorization failed")
+                .to_string();
+            Err(match outcome.status.as_u16() {
+                400 | 422 | 415 => AegisError::BadRequest(msg),
+                401 => AegisError::Unauthorized(msg),
+                404 => AegisError::NotFound(msg),
+                409 => AegisError::Conflict(msg),
+                _ => AegisError::Internal(msg),
+            })
+        }
+        AuthorizedBody::Decision(_) => Err(aegis_common::errors::AegisError::Internal(format!(
+            "authorize returned decision body with HTTP {}",
+            outcome.status
+        ))),
+    }
+}
+
+fn status_error_to_aegis(err: StatusError) -> aegis_common::errors::AegisError {
+    use aegis_common::errors::AegisError;
+    match err.reason {
+        ErrorReason::Unauthorized => AegisError::Unauthorized(err.message),
+        ErrorReason::NotFound => AegisError::NotFound(err.message),
+        ErrorReason::BadRequest | ErrorReason::Invalid | ErrorReason::UnsupportedMediaType => {
+            AegisError::BadRequest(err.message)
+        }
+        ErrorReason::Conflict | ErrorReason::AlreadyExists => AegisError::Conflict(err.message),
+        ErrorReason::Forbidden
+        | ErrorReason::Timeout
+        | ErrorReason::TooManyRequests
+        | ErrorReason::NotImplemented
+        | ErrorReason::ServiceUnavailable
+        | ErrorReason::InternalError
+        | ErrorReason::Unknown => AegisError::Internal(err.message),
+    }
+}
+
+/// Map [`AegisError`] from the library trait back to a gateway [`StatusError`]
+/// for adapters that still prefer the rich error envelope.
+pub fn aegis_error_to_status_error(err: aegis_common::errors::AegisError) -> StatusError {
+    match err {
+        aegis_common::errors::AegisError::Unauthorized(m) => StatusError::unauthorized(m),
+        aegis_common::errors::AegisError::NotFound(m) => StatusError::not_found(m),
+        aegis_common::errors::AegisError::BadRequest(m) => StatusError::bad_request(m),
+        aegis_common::errors::AegisError::Conflict(m) => StatusError::conflict(m),
+        aegis_common::errors::AegisError::Database(e) => StatusError::from(e),
+        aegis_common::errors::AegisError::Serialization(e) => {
+            StatusError::bad_request(format!("Serialization error: {e}"))
+        }
+        aegis_common::errors::AegisError::Internal(m) => StatusError::internal(m),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +458,49 @@ mod tests {
             error_reason_to_tonic_code(ErrorReason::BadRequest),
             Code::Internal
         );
+    }
+
+    #[test]
+    fn outcome_to_authorize_result_maps_status_error_to_aegis_error() {
+        let outcome = AuthorizedOutcome::status_error(StatusError::unauthorized("bad token"));
+        let err = outcome_to_authorize_result(outcome).expect_err("must err");
+        match err {
+            aegis_common::errors::AegisError::Unauthorized(m) => {
+                assert_eq!(m, "bad token");
+            }
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn outcome_to_authorize_result_passes_through_decision() {
+        let resp = AuthorizeResponse {
+            decision_id: uuid::Uuid::nil(),
+            decision: "allow".into(),
+            risk_score: 0,
+            risk_level: "low".into(),
+            composite_risk_score: 0,
+            reason: "ok".into(),
+            matched_policies: vec![],
+            approval: None,
+            redacted_fields: vec![],
+            root_trust_level: "trusted_internal_unsigned".into(),
+            dry_run: false,
+            receipt: None,
+        };
+        let outcome = AuthorizedOutcome::decision(resp.clone());
+        let got = outcome_to_authorize_result(outcome).expect("ok");
+        assert_eq!(got.decision, "allow");
+        assert_eq!(got.reason, "ok");
+    }
+
+    #[test]
+    fn aegis_error_status_error_round_trip_preserves_class() {
+        let se = StatusError::not_found("missing");
+        let ae = status_error_to_aegis(se.clone());
+        let back = aegis_error_to_status_error(ae);
+        assert_eq!(back.reason, ErrorReason::NotFound);
+        assert_eq!(back.message, "missing");
     }
 
     #[test]
