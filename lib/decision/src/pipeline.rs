@@ -119,6 +119,9 @@ mod tests {
         agent: Option<AuthorizeAgent>,
         cedar: PolicyDecisionView,
         idempotent: Option<DecisionRecord>,
+        tool_permitted: bool,
+        admission: AdmissionEffect,
+        enforcement: EnforcementStatus,
         writes: Mutex<u32>,
         heartbeats: Mutex<u32>,
     }
@@ -135,6 +138,9 @@ mod tests {
                     redacted_fields: vec![],
                 },
                 idempotent: None,
+                tool_permitted: true,
+                admission: AdmissionEffect::Disabled,
+                enforcement: EnforcementStatus::Clear,
                 writes: Mutex::new(0),
                 heartbeats: Mutex::new(0),
             }
@@ -167,7 +173,7 @@ mod tests {
             _: &str,
             _: &str,
         ) -> Result<bool, AegisError> {
-            Ok(true)
+            Ok(self.tool_permitted)
         }
         async fn get_decision_by_request_id(
             &self,
@@ -206,7 +212,7 @@ mod tests {
             &self,
             _: &AuthorizeRequest,
         ) -> Result<AdmissionEffect, AegisError> {
-            Ok(AdmissionEffect::Disabled)
+            Ok(self.admission.clone())
         }
         fn compute_action_hash(
             &self,
@@ -222,7 +228,7 @@ mod tests {
             _: &str,
             _: &str,
         ) -> Result<EnforcementStatus, AegisError> {
-            Ok(EnforcementStatus::Clear)
+            Ok(self.enforcement)
         }
         async fn skill_action_meta(
             &self,
@@ -674,5 +680,148 @@ mod tests {
             other => panic!("expected fresh dry-run allow, got {other:?}"),
         }
         assert_eq!(*rt.writes.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_cedar_deny_persists() {
+        let rt = PipelineRt {
+            cedar: PolicyDecisionView {
+                decision: "deny".into(),
+                matched_policies: vec!["forbid_tool".into()],
+                approver_group: None,
+                reason: "policy deny".into(),
+                redacted_fields: vec![],
+            },
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert_eq!(resp.reason, "policy deny");
+                assert_eq!(resp.matched_policies, vec!["forbid_tool".to_string()]);
+                assert!(resp.approval.is_none());
+            }
+            other => panic!("expected cedar deny, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+        assert_eq!(*rt.heartbeats.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_revoked_agent_denies() {
+        let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
+        agent.status = "revoked".into();
+        let rt = PipelineRt {
+            agent: Some(agent),
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert!(resp.reason.contains("revoked"), "reason={}", resp.reason);
+                assert_eq!(resp.matched_policies, vec!["agent_revoked".to_string()]);
+            }
+            other => panic!("expected revoked deny, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_admission_webhook_reject_denies() {
+        let rt = PipelineRt {
+            admission: AdmissionEffect::Reject("webhook blocked".into()),
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert_eq!(resp.reason, "webhook blocked");
+                assert_eq!(
+                    resp.matched_policies,
+                    vec!["admission_webhook_reject".to_string()]
+                );
+            }
+            other => panic!("expected webhook reject deny, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_agent_banned_denies() {
+        let rt = PipelineRt {
+            enforcement: EnforcementStatus::AgentBanned,
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert!(resp.reason.contains("banned"), "reason={}", resp.reason);
+                assert_eq!(resp.matched_policies, vec!["agent_banned".to_string()]);
+            }
+            other => panic!("expected ban deny, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+        assert_eq!(*rt.heartbeats.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_tool_not_permitted_partial_deny() {
+        let rt = PipelineRt {
+            tool_permitted: false,
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        assert_eq!(out.http_status, 403);
+        match out.body {
+            DecisionBody::PartialDeny { reason } => {
+                assert!(
+                    reason.contains("not permitted"),
+                    "reason={reason}"
+                );
+            }
+            other => panic!("expected PartialDeny, got {other:?}"),
+        }
+        // Preflight partial deny does not write a full decision row.
+        assert_eq!(*rt.writes.lock().expect("l"), 0);
+        assert_eq!(*rt.heartbeats.lock().expect("l"), 0);
     }
 }

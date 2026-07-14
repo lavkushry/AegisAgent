@@ -13,7 +13,10 @@ All notable changes to this project are documented here. The format is based on
   behind `DecisionRuntime` ports. REST/gRPC adapters build `AuthorizeContext`,
   call the pipeline via `GatewayDecisionRuntime`, and map `DecisionOutcome` /
   `AuthorizedOutcome` only (no gRPC→REST JSON bridge). Equality corpus covers
-  REST HeaderMap vs typed-context parity. See `ROADMAP.md` Week 3.
+  REST HeaderMap vs typed-context parity. Pipeline mock e2e covers allow,
+  401, idempotent replay, require_approval, frozen/revoked, dry-run, Cedar
+  deny, admission-webhook reject, ban, and tool permission deny. See
+  `ROADMAP.md` Week 3.
 
 ### Added
 

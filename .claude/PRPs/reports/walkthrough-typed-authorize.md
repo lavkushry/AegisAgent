@@ -32,8 +32,9 @@
 
 ```bash
 cargo test -p aegis-decision --lib -- --test-threads=1
-# pipeline e2e mocks: allow, 401, idempotent, require_approval, frozen deny,
-# dry_run allow (no receipt/heartbeat), dry_run bypasses idempotent replay
+# pipeline e2e mocks: allow, 401, idempotent, require_approval, frozen/revoked,
+# dry_run allow, dry_run vs idempotent, cedar deny, webhook reject, ban,
+# tool not permitted
 cargo test -p gateway --lib equality_ -- --test-threads=1
 cargo test -p gateway --lib -- --test-threads=1 authorize_
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
