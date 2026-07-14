@@ -20,7 +20,8 @@ All notable changes to this project are documented here. The format is based on
   rate-limit/quota 429, audit-stream fail-closed, durable receipt on
   mutating allow, and dry-run require_approval (no approval row). Shared
   `MockRuntime` for decision tests; gateway drops unused Axum→tonic body
-  bridge. See `ROADMAP.md` Week 3.
+  bridge; durable-receipt failure fail-closed covered on the pipeline path.
+  See `ROADMAP.md` Week 3.
 
 ### Added
 

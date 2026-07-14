@@ -41,6 +41,8 @@ pub struct MockRuntime {
     pub audit_capacity: bool,
     /// When true, `write_decision_and_audit` returns an internal error.
     pub write_fail: bool,
+    /// When true, `emit_receipt_durable` fails (protected-path fail-closed).
+    pub receipt_fail: bool,
     pub action_hash: String,
     pub writes: Mutex<u32>,
     pub heartbeats: Mutex<u32>,
@@ -74,6 +76,7 @@ impl Default for MockRuntime {
             },
             audit_capacity: true,
             write_fail: false,
+            receipt_fail: false,
             action_hash: "deadbeef".into(),
             writes: Mutex::new(0),
             heartbeats: Mutex::new(0),
@@ -235,6 +238,9 @@ impl DecisionRuntime for MockRuntime {
         _: &str,
         _: &str,
     ) -> Result<ReceiptIdentity, AegisError> {
+        if self.receipt_fail {
+            return Err(AegisError::Internal("receipt store unavailable".into()));
+        }
         *self.receipts.lock().expect("lock") += 1;
         Ok(ReceiptIdentity {
             receipt_id: "r1".into(),

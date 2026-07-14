@@ -683,6 +683,34 @@ async fn pipeline_mutating_allow_emits_durable_receipt() {
 }
 
 #[tokio::test]
+async fn pipeline_durable_receipt_failure_fail_closed() {
+    // Protected decisions (mutating allow) must not report success if the
+    // receipt store is unavailable — even after the decision row was written.
+    let rt = MockRuntime {
+        receipt_fail: true,
+        ..MockRuntime::default()
+    };
+    let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+    body["tool_call"]["mutates_state"] = serde_json::json!(true);
+    let raw = serde_json::to_vec(&body).expect("ser");
+    let out =
+        run_authorize_pipeline(&rt, &ctx(), &raw, Instant::now(), EvaluateConfig::default()).await;
+    assert_eq!(out.http_status, 500);
+    match out.body {
+        DecisionBody::Failure(f) => {
+            assert!(
+                f.message.contains("durably record") || f.message.contains("evidence"),
+                "message={}",
+                f.message
+            );
+        }
+        other => panic!("expected Failure when receipt store is down, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 1);
+    assert_eq!(*rt.receipts.lock().expect("l"), 0);
+}
+
+#[tokio::test]
 async fn pipeline_dry_run_require_approval_creates_no_approval_row() {
     let rt = MockRuntime {
         cedar: PolicyDecisionView {
