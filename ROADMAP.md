@@ -78,11 +78,11 @@ soc_query, and close_incident. Storage-direct SOC gRPC errors map via
 `aegis_error_to_tonic`. **`lib/decision` (`aegis-decision`)** holds context
 types + `AuthorizeService` trait; gateway **`GatewayAuthorizeService`**
 implements the trait and gRPC authorize calls `evaluate` through it.
-**Full authorize pipeline** (admit → preflight → guard → metadata → evaluate)
-now lives in `aegis-decision` behind `DecisionRuntime` ports. Evaluate covers
-Cedar, decision/audit write, durable receipts, require_approval, quarantine,
-risk escalation, and GitHub side effects. Gateway `authorize_action_impl` is
-a thin stage driver + wire mapping.
+**Full authorize pipeline** lives in `aegis-decision::run_authorize_pipeline`
+(admit → preflight → guard → metadata → evaluate) behind `DecisionRuntime`
+ports, including idempotent-replay reconstruction. Gateway REST/gRPC adapters
+build `AuthorizeContext`, call the pipeline, and map `DecisionOutcome` /
+`AuthorizedOutcome` only — Week-3 evaluation extraction **complete**.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

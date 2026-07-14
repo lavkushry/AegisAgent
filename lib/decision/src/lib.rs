@@ -11,7 +11,7 @@
 //! ## Status
 //!
 //! **Current (this crate):** full authorize pipeline orchestration behind
-//! [`DecisionRuntime`] ports:
+//! [`DecisionRuntime`] ports. Prefer [`run_authorize_pipeline`] from adapters:
 //!
 //! ```text
 //! admit → preflight → guard → metadata → evaluate
@@ -36,6 +36,7 @@ mod evaluate;
 mod guard;
 mod metadata;
 mod outcome;
+mod pipeline;
 mod preflight;
 mod risk;
 mod runtime;
@@ -49,6 +50,7 @@ pub use evaluate::{evaluate_authorize, EvaluateConfig};
 pub use guard::{guard_authorize, mcp_server_key_from_tool, GuardedAuthorize};
 pub use metadata::{metadata_authorize, MetadataAuthorize};
 pub use outcome::{DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome};
+pub use pipeline::{authorize_response_from_decision_record, run_authorize_pipeline};
 pub use preflight::{preflight_authorize, PreflightTerminal, PreflightedAuthorize};
 pub use risk::{
     decision_requires_durable_receipt, is_high_risk_for_audit, risk_level_for_score,

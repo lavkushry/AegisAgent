@@ -15,10 +15,9 @@
 //! - [`outcome_to_tonic`] / [`outcome_to_response`] — wire mapping helpers
 //! - [`error_reason_to_tonic_code`] / [`status_error_to_tonic`]
 //!
-//! Evaluation still lives in [`crate::routes::authorize_action_impl`].
-//! [`GatewayAuthorizeService`] implements [`AuthorizeService`] so adapters can
-//! depend on the library trait; the next extraction moves evaluation into
-//! `aegis-decision` proper.
+//! Evaluation runs in [`aegis_decision::run_authorize_pipeline`] via
+//! [`GatewayDecisionRuntime`]. Adapters only build [`AuthorizeContext`] and
+//! map [`DecisionOutcome`] / [`AuthorizedOutcome`] to REST or gRPC.
 
 use std::sync::Arc;
 
@@ -35,11 +34,12 @@ use crate::routes::AppState;
 // Protocol-neutral context / outcome / runtime types live in `aegis-decision`
 // so library code can depend on them without pulling the gateway binary.
 pub use aegis_decision::{
-    admit_authorize, evaluate_authorize, guard_authorize, metadata_authorize, preflight_authorize,
-    AdmissionEffect, ApprovalCreateParams, AuthCredential, AuthorizeAgent, AuthorizeContext,
-    AuthorizeService, DecisionAuditWrite, DecisionBody, DecisionFailure, DecisionFailureClass,
-    DecisionOutcome, DecisionRuntime, EnforcementStatus, EvaluateConfig, GuardedAuthorize,
-    McpToolMeta, MetadataAuthorize, PolicyDecisionView, PreflightTerminal, PreflightedAuthorize,
+    admit_authorize, authorize_response_from_decision_record, evaluate_authorize, guard_authorize,
+    metadata_authorize, preflight_authorize, run_authorize_pipeline, AdmissionEffect,
+    ApprovalCreateParams, AuthCredential, AuthorizeAgent, AuthorizeContext, AuthorizeService,
+    DecisionAuditWrite, DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome,
+    DecisionRuntime, EnforcementStatus, EvaluateConfig, GuardedAuthorize, McpToolMeta,
+    MetadataAuthorize, PolicyDecisionView, PreflightTerminal, PreflightedAuthorize,
     RegisteredActionMeta, Transport,
 };
 
@@ -1066,18 +1066,42 @@ impl DecisionRuntime for GatewayDecisionRuntime {
             }
         }
     }
+
+    async fn idempotent_replay(
+        &self,
+        record: crate::models::DecisionRecord,
+    ) -> Result<AuthorizeResponse, aegis_common::errors::AegisError> {
+        use crate::models::ApprovalResponseInfo;
+        use uuid::Uuid;
+
+        let tenant_id = record.tenant_id.clone();
+        let mut approval = None;
+        if record.decision == "require_approval" {
+            if let Ok(Some(app)) = self
+                .state
+                .storage
+                .get_approval_by_decision_id(&tenant_id, &record.id)
+                .await
+            {
+                approval = Some(ApprovalResponseInfo {
+                    approval_id: Uuid::parse_str(&app.id).unwrap_or_else(|_| Uuid::nil()),
+                    status: app.status,
+                    approver_group: app.approver_group,
+                    expires_at: app.expires_at.unwrap_or(record.created_at),
+                    action_hash: app.original_call_hash,
+                });
+            }
+        }
+        Ok(authorize_response_from_decision_record(record, approval))
+    }
 }
 
 /// Protocol-neutral authorize entry used by REST (optional) and gRPC.
 ///
-/// Serializes `payload` for the HMAC-over-body check still performed inside
-/// `authorize_action_impl`, builds service headers from [`AuthorizeContext`],
-/// evaluates with the **real** client address, and returns a typed
-/// [`AuthorizedOutcome`]. Adapters map the outcome to their wire format via
-/// [`outcome_to_response`] or [`outcome_to_tonic`].
-///
-/// Callers that already hold raw REST body bytes should prefer
-/// [`authorize_raw`] so signature verification stays bound to the signed bytes.
+/// Runs [`run_authorize_pipeline`] with the real client address and returns a
+/// typed [`AuthorizedOutcome`]. Adapters map via [`outcome_to_response`] or
+/// [`outcome_to_tonic`]. Prefer [`authorize_raw`] when the caller already holds
+/// the signed REST body bytes.
 pub async fn authorize(
     state: Arc<AppState>,
     ctx: AuthorizeContext,
@@ -1100,20 +1124,30 @@ pub async fn authorize_raw(
     ctx: AuthorizeContext,
     raw_body: Bytes,
 ) -> AuthorizedOutcome {
-    let headers = match build_service_headers(&ctx) {
-        Ok(h) => h,
-        Err(e) => return AuthorizedOutcome::status_error(e),
-    };
-    crate::routes::authorize_action_impl(state, headers, raw_body, ctx.client_addr).await
+    // Optional: build headers only for OTel parent propagation parity with REST.
+    if let Ok(headers) = build_service_headers(&ctx) {
+        crate::otel::set_parent_from_headers(&headers);
+    }
+    let started_at = std::time::Instant::now();
+    let runtime = GatewayDecisionRuntime::new(state.clone());
+    let outcome = run_authorize_pipeline(
+        &runtime,
+        &ctx,
+        &raw_body,
+        started_at,
+        EvaluateConfig {
+            approval_ttl_secs: state.approval_ttl_secs,
+        },
+    )
+    .await;
+    decision_outcome_to_authorized(outcome)
 }
 
 /// Gateway-owned implementor of [`AuthorizeService`].
 ///
-/// Holds shared [`AppState`]. Evaluation uses library admit
-/// (`aegis_decision::admit_authorize` via [`GatewayDecisionRuntime`]) then the
-/// remaining gateway pipeline in `authorize_action_impl`. Adapters that need
-/// full wire fidelity should call [`GatewayAuthorizeService::evaluate`]; the
-/// trait method [`AuthorizeService::authorize`] returns the narrower
+/// Holds shared [`AppState`] and runs [`run_authorize_pipeline`] through
+/// [`GatewayDecisionRuntime`]. Prefer [`GatewayAuthorizeService::evaluate`] for
+/// full wire fidelity; [`AuthorizeService::authorize`] returns the narrower
 /// `Result<AuthorizeResponse, AegisError>` contract.
 #[derive(Clone)]
 pub struct GatewayAuthorizeService {

@@ -1,13 +1,11 @@
 # Blueprint: Week-3 typed AuthorizeService extraction
 
 **Roadmap:** Phase 1 Week 3 · **Law:** `docs/architecture.md` §5 (thin
-adapters), §4 (target seams) · **Status:** Phases A–D complete; service and
-`authorize_action_impl` both return `AuthorizedOutcome` (no Response on the
-authorize evaluation path). gRPC uses `outcome_to_tonic`; REST uses
-`outcome_to_response` at the handler edge. **`aegis-decision`** owns context,
-`AuthorizeService`, `DecisionRuntime` ports, `DecisionOutcome`, pure risk
-helpers, and the **admit** phase (`admit_authorize`). Remaining: move Cedar
-evaluation + persistence/receipts into the library via the same ports.
+adapters), §4 (target seams) · **Status:** Phases A–D **and evaluation
+extraction complete**. `aegis-decision::run_authorize_pipeline` owns admit →
+preflight → guard → metadata → evaluate behind `DecisionRuntime`. Gateway
+adapters only build `AuthorizeContext` and map outcomes (`outcome_to_response`
+/ `outcome_to_tonic`).
 
 ## 1. Architectural scope & impact
 

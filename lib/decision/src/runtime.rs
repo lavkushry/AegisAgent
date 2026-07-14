@@ -6,7 +6,8 @@
 //! storage remains a binary-composed dependency of the runtime implementor.
 
 use aegis_api::models::{
-    ApprovalResponseInfo, AuthorizeRequest, AuthorizeToolCall, DecisionRecord, ReceiptIdentity,
+    ApprovalResponseInfo, AuthorizeRequest, AuthorizeResponse, AuthorizeToolCall, DecisionRecord,
+    ReceiptIdentity,
 };
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
@@ -302,4 +303,10 @@ pub trait DecisionRuntime: Send + Sync {
         decision_id: Uuid,
         matched_policies: &[String],
     );
+
+    /// Rebuild the authorize response for an idempotent `request_id` replay.
+    async fn idempotent_replay(
+        &self,
+        record: DecisionRecord,
+    ) -> Result<AuthorizeResponse, AegisError>;
 }

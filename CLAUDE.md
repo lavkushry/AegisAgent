@@ -35,7 +35,7 @@ src/src/authorize_service.rs  Week-3 typed authorize seam (gRPC authorize always
 src/canon/                 current aegis-jcs-1 crate
 lib/common/                errors, crypto helpers, metrics
 lib/api/                   protobuf and shared current models
-lib/decision/              aegis-decision: authorize context, DecisionRuntime/admit, AuthorizeService trait
+lib/decision/              aegis-decision: full authorize pipeline (admit→evaluate) + DecisionRuntime
 lib/storage/               StorageBackend, SQLite/PostgreSQL, migrations
 lib/policy/                Cedar and trust provenance
 lib/soc/                   detection, correlation, response, Qdrant adapter

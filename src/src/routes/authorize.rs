@@ -35,71 +35,6 @@ pub(crate) use super::authorize_canon::*;
 pub(crate) use super::authorize_decision::*;
 pub(crate) use super::authorize_receipts::*;
 
-/// Idempotent replay (#0072): rebuild the `AuthorizeResponse` for a previously
-/// recorded decision instead of re-evaluating Cedar / writing duplicate audit
-/// events, approvals, or receipts. For `require_approval` decisions, the
-/// associated approval (if any) is looked up so the caller still sees its
-/// current `status` (e.g. an approval created by the first call may since have
-/// been approved/rejected).
-pub(crate) async fn idempotent_replay_response(
-    state: &Arc<AppState>,
-    tenant_id: &str,
-    record: DecisionRecord,
-) -> crate::authorize_service::AuthorizedOutcome {
-    let decision_id = match Uuid::parse_str(&record.id) {
-        Ok(id) => id,
-        Err(_) => Uuid::nil(),
-    };
-    let risk_score = record.risk_score.unwrap_or(0);
-    let composite_risk_score = record.composite_risk_score.unwrap_or(risk_score);
-    let matched_policies: Vec<String> = record
-        .matched_policy_ids
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
-
-    let mut approval = None;
-    if record.decision == "require_approval" {
-        if let Ok(Some(app)) = state
-            .storage
-            .get_approval_by_decision_id(tenant_id, &record.id)
-            .await
-        {
-            approval = Some(ApprovalResponseInfo {
-                approval_id: Uuid::parse_str(&app.id).unwrap_or(Uuid::nil()),
-                status: app.status,
-                approver_group: app.approver_group,
-                expires_at: app.expires_at.unwrap_or(record.created_at),
-                action_hash: app.original_call_hash,
-            });
-        }
-    }
-
-    crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
-        decision_id,
-        decision: record.decision,
-        risk_score,
-        risk_level: risk_level_for_score(risk_score),
-        composite_risk_score,
-        reason: record.reason.unwrap_or_default(),
-        matched_policies,
-        approval,
-        redacted_fields: vec![],
-        root_trust_level: record
-            .root_trust_level
-            .unwrap_or_else(|| "unknown".to_string()),
-        // Idempotency replays only ever read a previously-persisted real
-        // decision — dry-run requests bypass idempotency entirely (#1281).
-        dry_run: false,
-        // The original decision already wrote its durable receipt; a replay
-        // returns the cached decision and does not re-emit one.
-        receipt: None,
-    })
-}
-
 /// Composite tracker key for `/v1/authorize` auth-failure lockout (#1604).
 /// Used by [`crate::authorize_service::GatewayDecisionRuntime`].
 pub(crate) fn auth_failure_tracker_key(client_addr: &SocketAddr, tenant_id: &str) -> String {
@@ -119,6 +54,7 @@ pub async fn authorize_action(
     )
 }
 
+/// Thin REST entry: OTel parent, context from headers, library pipeline, map outcome.
 #[tracing::instrument(name = "authorize", skip_all)]
 #[doc(hidden)]
 pub async fn authorize_action_impl(
@@ -128,18 +64,10 @@ pub async fn authorize_action_impl(
     client_addr: SocketAddr,
 ) -> crate::authorize_service::AuthorizedOutcome {
     // #1156: parent this span to the caller's trace, if the SDK sent a W3C
-    // `traceparent` header. A no-op when OTel export isn't configured (the
-    // global propagator stays the no-op default — see `otel::init_tracer_provider`).
+    // `traceparent` header. A no-op when OTel export isn't configured.
     crate::otel::set_parent_from_headers(&headers);
 
-    // #0081: wall-clock time for this evaluation, persisted on the decision row
-    // for SOC/perf dashboards. Captured first so it covers agent resolution too.
     let started_at = std::time::Instant::now();
-
-    // Library-owned admit phase (`aegis-decision::admit_authorize`): parse,
-    // auth-failure lockout, agent resolve (mTLS/bearer), request signature,
-    // environment restriction. REST still arrives as HeaderMap; we build a
-    // typed AuthorizeContext once at this boundary.
     let auth_ctx =
         match crate::authorize_service::authorize_context_from_headers(&headers, client_addr) {
             Ok(c) => c,
@@ -147,63 +75,19 @@ pub async fn authorize_action_impl(
                 return crate::authorize_service::AuthorizedOutcome::status_error(e);
             }
         };
+
     let runtime = crate::authorize_service::GatewayDecisionRuntime::new(state.clone());
-    let admitted = match crate::authorize_service::admit_authorize(&runtime, &auth_ctx, &body).await
-    {
-        Ok(a) => a,
-        Err(outcome) => {
-            return crate::authorize_service::decision_outcome_to_authorized(outcome);
-        }
-    };
-
-    // Library-owned preflight (`aegis-decision::preflight_authorize`): tool
-    // permission, replay protection, idempotency lookup, heartbeat, rate
-    // limit, quota. Reuses the same GatewayDecisionRuntime as admit.
-    let preflighted = match crate::authorize_service::preflight_authorize(&runtime, admitted).await
-    {
-        Ok(p) => p,
-        Err(crate::authorize_service::PreflightTerminal::Outcome(outcome)) => {
-            return crate::authorize_service::decision_outcome_to_authorized(outcome);
-        }
-        Err(crate::authorize_service::PreflightTerminal::IdempotentReplay(record)) => {
-            let tenant = record.tenant_id.clone();
-            return idempotent_replay_response(&state, &tenant, *record).await;
-        }
-    };
-
-    // Library-owned guard (`aegis-decision::guard_authorize`): frozen/revoked,
-    // admission webhook, post-mutation action hash, ban/quarantine. Early
-    // denials are persisted via DecisionRuntime::write_decision_and_audit.
-    let guarded =
-        match crate::authorize_service::guard_authorize(&runtime, preflighted, started_at).await {
-            Ok(g) => g,
-            Err(outcome) => {
-                return crate::authorize_service::decision_outcome_to_authorized(outcome);
-            }
-        };
-
-    // Library-owned metadata (`aegis-decision::metadata_authorize`): skill-action
-    // risk defaults, MCP permission, server quarantine, tool approval status.
-    let meta =
-        match crate::authorize_service::metadata_authorize(&runtime, guarded, started_at).await {
-            Ok(m) => m,
-            Err(outcome) => {
-                return crate::authorize_service::decision_outcome_to_authorized(outcome);
-            }
-        };
-
-    // Library-owned Cedar evaluation + decision write, receipts, approval,
-    // quarantine, risk escalation, and GitHub side effects.
-    let outcome = crate::authorize_service::evaluate_authorize(
+    let outcome = crate::authorize_service::run_authorize_pipeline(
         &runtime,
-        meta,
+        &auth_ctx,
+        &body,
         started_at,
         crate::authorize_service::EvaluateConfig {
             approval_ttl_secs: state.approval_ttl_secs,
         },
     )
     .await;
-    return crate::authorize_service::decision_outcome_to_authorized(outcome);
+    crate::authorize_service::decision_outcome_to_authorized(outcome)
 }
 
 #[cfg(test)]

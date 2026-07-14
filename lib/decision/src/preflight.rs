@@ -422,6 +422,15 @@ mod tests {
             _: &[String],
         ) {
         }
+
+        async fn idempotent_replay(
+            &self,
+            record: aegis_api::models::DecisionRecord,
+        ) -> Result<aegis_api::models::AuthorizeResponse, AegisError> {
+            Ok(crate::pipeline::authorize_response_from_decision_record(
+                record, None,
+            ))
+        }
     }
 
     fn admitted(nonce: Option<&str>, request_id: Option<&str>) -> AdmittedAuthorize {
