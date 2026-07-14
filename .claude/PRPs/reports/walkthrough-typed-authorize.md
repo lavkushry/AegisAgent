@@ -26,6 +26,7 @@
 
 ```bash
 cargo test -p aegis-decision --lib -- --test-threads=1
+# includes pipeline e2e mocks: allow, bad token, idempotent replay, require_approval
 cargo test -p gateway --lib equality_ -- --test-threads=1
 cargo test -p gateway --lib -- --test-threads=1 authorize_
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
