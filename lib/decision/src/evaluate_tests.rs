@@ -3,235 +3,9 @@ use crate::agent::AuthorizeAgent;
 use crate::guard::GuardedAuthorize;
 use crate::metadata::MetadataAuthorize;
 use crate::outcome::DecisionBody;
-use crate::runtime::{
-    AdmissionEffect, DecisionRuntime, EnforcementStatus, McpToolMeta, PolicyDecisionView,
-    RegisteredActionMeta,
-};
-use aegis_api::models::{AuthorizeRequest, AuthorizeToolCall, DecisionRecord};
-use aegis_common::errors::AegisError;
-use chrono::{DateTime, Utc};
-use std::net::SocketAddr;
-use std::sync::Mutex;
+use crate::runtime::PolicyDecisionView;
+use crate::test_runtime::MockRuntime;
 use std::time::Instant;
-
-struct MockRt {
-    cedar: PolicyDecisionView,
-    capacity: bool,
-    write_fail: bool,
-    writes: Mutex<u32>,
-}
-
-#[async_trait::async_trait]
-impl DecisionRuntime for MockRt {
-    async fn get_agent_by_token(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<AuthorizeAgent>, AegisError> {
-        Ok(None)
-    }
-    async fn get_agent_by_mtls_cn(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<AuthorizeAgent>, AegisError> {
-        Ok(None)
-    }
-    fn auth_failure_blocked(&self, _: SocketAddr, _: &str) -> bool {
-        false
-    }
-    fn record_auth_failure(&self, _: SocketAddr, _: &str) {}
-    async fn agent_tool_permitted(&self, _: &str, _: &str, _: &str) -> Result<bool, AegisError> {
-        Ok(true)
-    }
-    async fn get_decision_by_request_id(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<DecisionRecord>, AegisError> {
-        Ok(None)
-    }
-    async fn check_and_record_nonce(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: DateTime<Utc>,
-    ) -> Result<bool, AegisError> {
-        Ok(false)
-    }
-    async fn check_rate_limit(&self, _: &str) -> bool {
-        true
-    }
-    fn check_quota(&self, _: &str) -> bool {
-        true
-    }
-    fn touch_heartbeat(&self, _: &str, _: &str) {}
-    async fn write_decision_and_audit(&self, w: DecisionAuditWrite<'_>) -> Result<i32, AegisError> {
-        if self.write_fail {
-            return Err(AegisError::Internal("db down".into()));
-        }
-        *self.writes.lock().expect("l") += 1;
-        Ok(w.risk_score)
-    }
-    async fn call_admission_webhook(
-        &self,
-        _: &AuthorizeRequest,
-    ) -> Result<AdmissionEffect, AegisError> {
-        Ok(AdmissionEffect::Disabled)
-    }
-    fn compute_action_hash(&self, _: &str, _: Option<&str>, _: &AuthorizeToolCall) -> String {
-        "h".into()
-    }
-    async fn enforcement_status(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<EnforcementStatus, AegisError> {
-        Ok(EnforcementStatus::Clear)
-    }
-    async fn skill_action_meta(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<RegisteredActionMeta>, AegisError> {
-        Ok(None)
-    }
-    async fn agent_mcp_server_permitted(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<bool, AegisError> {
-        Ok(true)
-    }
-    async fn mcp_server_status(&self, _: &str, _: &str) -> Result<Option<String>, AegisError> {
-        Ok(None)
-    }
-    async fn mcp_tool_meta(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<McpToolMeta>, AegisError> {
-        Ok(None)
-    }
-    async fn ensure_policies_loaded(&self, _: &str) -> Result<(), AegisError> {
-        Ok(())
-    }
-    async fn evaluate_cedar(
-        &self,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: &str,
-        _: bool,
-        _: bool,
-    ) -> Result<PolicyDecisionView, AegisError> {
-        Ok(self.cedar.clone())
-    }
-    fn record_provenance_denial(&self) {}
-    fn audit_stream_has_capacity(&self) -> bool {
-        self.capacity
-    }
-    fn set_audit_writer_healthy(&self, _: bool) {}
-    async fn emit_receipt_durable(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: Uuid,
-        _: &str,
-        _: &str,
-    ) -> Result<ReceiptIdentity, AegisError> {
-        Ok(ReceiptIdentity {
-            receipt_id: "r1".into(),
-            receipt_hash: "rh".into(),
-            prev_receipt_hash: "ph".into(),
-            canon_version: "aegis-jcs-1".into(),
-        })
-    }
-    async fn emit_receipt_best_effort(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: Uuid,
-        _: &str,
-        _: &str,
-    ) {
-    }
-    async fn quarantine_agent(&self, _: &str, _: &str) -> Result<(), AegisError> {
-        Ok(())
-    }
-    fn emit_agent_quarantined(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: i32,
-        _: &str,
-        _: &[String],
-    ) {
-    }
-    async fn create_approval(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        params: ApprovalCreateParams,
-    ) -> Result<ApprovalResponseInfo, AegisError> {
-        Ok(ApprovalResponseInfo {
-            approval_id: Uuid::nil(),
-            status: "created".into(),
-            approver_group: None,
-            expires_at: Utc::now(),
-            action_hash: params.action_hash,
-        })
-    }
-    async fn maybe_escalate_risk_tier(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<(String, String)>, AegisError> {
-        Ok(None)
-    }
-    async fn emit_risk_escalated(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: &str,
-        _: Uuid,
-        _: i32,
-        _: &str,
-        _: &str,
-        _: &[String],
-    ) {
-    }
-    fn notify_github_decision(
-        &self,
-        _: &AuthorizeRequest,
-        _: &str,
-        _: &str,
-        _: i32,
-        _: Uuid,
-        _: &[String],
-    ) {
-    }
-
-    async fn idempotent_replay(
-        &self,
-        record: aegis_api::models::DecisionRecord,
-    ) -> Result<aegis_api::models::AuthorizeResponse, AegisError> {
-        Ok(crate::pipeline::authorize_response_from_decision_record(
-            record, None,
-        ))
-    }
-}
 
 fn meta_allow() -> MetadataAuthorize {
     let body = serde_json::json!({
@@ -270,7 +44,7 @@ fn meta_allow() -> MetadataAuthorize {
 
 #[tokio::test]
 async fn evaluate_allow_low_risk_writes() {
-    let rt = MockRt {
+    let rt = MockRuntime {
         cedar: PolicyDecisionView {
             decision: "allow".into(),
             matched_policies: vec!["p1".into()],
@@ -278,9 +52,9 @@ async fn evaluate_allow_low_risk_writes() {
             reason: "ok".into(),
             redacted_fields: vec![],
         },
-        capacity: true,
+        audit_capacity: true,
         write_fail: false,
-        writes: Mutex::new(0),
+        ..MockRuntime::default()
     };
     let out =
         evaluate_authorize(&rt, meta_allow(), Instant::now(), EvaluateConfig::default()).await;
@@ -299,7 +73,7 @@ async fn evaluate_audit_capacity_fail_closed_high_risk() {
     let mut m = meta_allow();
     m.risk_level = "critical".into();
     m.risk_score = 95;
-    let rt = MockRt {
+    let rt = MockRuntime {
         cedar: PolicyDecisionView {
             decision: "allow".into(),
             matched_policies: vec![],
@@ -307,9 +81,9 @@ async fn evaluate_audit_capacity_fail_closed_high_risk() {
             reason: "ok".into(),
             redacted_fields: vec![],
         },
-        capacity: false,
+        audit_capacity: false,
         write_fail: false,
-        writes: Mutex::new(0),
+        ..MockRuntime::default()
     };
     let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
     match out.body {
