@@ -1,11 +1,11 @@
 # Blueprint: Week-3 typed AuthorizeService extraction
 
 **Roadmap:** Phase 1 Week 3 · **Law:** `docs/architecture.md` §5 (thin
-adapters), §4 (target seams) · **Status:** Phases A–D complete; service now
-returns [`AuthorizedOutcome`] and gRPC maps via `outcome_to_tonic` (no Axum
-body in the adapter). Remaining: in-place Result returns inside
-`authorize_action_impl` (eliminate internal Response decode) and later
-`aegis-decision` crate move.
+adapters), §4 (target seams) · **Status:** Phases A–D complete; service and
+`authorize_action_impl` both return `AuthorizedOutcome` (no Response on the
+authorize evaluation path). gRPC uses `outcome_to_tonic`; REST uses
+`outcome_to_response` at the handler edge. Remaining: `aegis-decision` crate
+move and typed extraction of other gRPC RPCs.
 
 ## 1. Architectural scope & impact
 

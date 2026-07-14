@@ -50,7 +50,7 @@ pub(crate) async fn idempotent_replay_response(
     state: &Arc<AppState>,
     tenant_id: &str,
     record: DecisionRecord,
-) -> axum::response::Response {
+) -> crate::authorize_service::AuthorizedOutcome {
     let decision_id = match Uuid::parse_str(&record.id) {
         Ok(id) => id,
         Err(_) => Uuid::nil(),
@@ -83,30 +83,26 @@ pub(crate) async fn idempotent_replay_response(
         }
     }
 
-    (
-        StatusCode::OK,
-        Json(AuthorizeResponse {
-            decision_id,
-            decision: record.decision,
-            risk_score,
-            risk_level: risk_level_for_score(risk_score),
-            composite_risk_score,
-            reason: record.reason.unwrap_or_default(),
-            matched_policies,
-            approval,
-            redacted_fields: vec![],
-            root_trust_level: record
-                .root_trust_level
-                .unwrap_or_else(|| "unknown".to_string()),
-            // Idempotency replays only ever read a previously-persisted real
-            // decision — dry-run requests bypass idempotency entirely (#1281).
-            dry_run: false,
-            // The original decision already wrote its durable receipt; a replay
-            // returns the cached decision and does not re-emit one.
-            receipt: None,
-        }),
-    )
-        .into_response()
+    crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
+        decision_id,
+        decision: record.decision,
+        risk_score,
+        risk_level: risk_level_for_score(risk_score),
+        composite_risk_score,
+        reason: record.reason.unwrap_or_default(),
+        matched_policies,
+        approval,
+        redacted_fields: vec![],
+        root_trust_level: record
+            .root_trust_level
+            .unwrap_or_else(|| "unknown".to_string()),
+        // Idempotency replays only ever read a previously-persisted real
+        // decision — dry-run requests bypass idempotency entirely (#1281).
+        dry_run: false,
+        // The original decision already wrote its durable receipt; a replay
+        // returns the cached decision and does not re-emit one.
+        receipt: None,
+    })
 }
 
 /// Composite tracker key for `/v1/authorize` auth-failure lockout (#1604).
@@ -120,17 +116,16 @@ pub(crate) fn authorize_auth_failure_guard(
     state: &Arc<AppState>,
     client_addr: &SocketAddr,
     tenant_id: &str,
-) -> Option<axum::response::Response> {
+) -> Option<crate::authorize_service::AuthorizedOutcome> {
     let key = auth_failure_tracker_key(client_addr, tenant_id);
     if state.auth_failure_tracker.is_blocked(&key) {
         state.metrics.inc_auth_failure_lockout();
-        return Some(
+        return Some(crate::authorize_service::AuthorizedOutcome::status_error(
             StatusError::too_many_requests(
                 "Too many failed authentication attempts. Try again later.",
             )
-            .with_details(serde_json::json!({"reason": "rate_limited_auth_failures"}))
-            .into_response(),
-        );
+            .with_details(serde_json::json!({"reason": "rate_limited_auth_failures"})),
+        ));
     }
     None
 }
@@ -154,7 +149,9 @@ pub async fn authorize_action(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    authorize_action_impl(state, headers, body, client_addr).await
+    crate::authorize_service::outcome_to_response(
+        authorize_action_impl(state, headers, body, client_addr).await,
+    )
 }
 
 #[tracing::instrument(name = "authorize", skip_all)]
@@ -164,7 +161,7 @@ pub async fn authorize_action_impl(
     headers: HeaderMap,
     body: Bytes,
     client_addr: SocketAddr,
-) -> axum::response::Response {
+) -> crate::authorize_service::AuthorizedOutcome {
     // #1156: parent this span to the caller's trace, if the SDK sent a W3C
     // `traceparent` header. A no-op when OTel export isn't configured (the
     // global propagator stays the no-op default — see `otel::init_tracer_provider`).
@@ -177,7 +174,11 @@ pub async fn authorize_action_impl(
     // Parse JSON from raw bytes — keeping bytes for HMAC signature verification (#1403).
     let mut payload: AuthorizeRequest = match serde_json::from_slice(&body) {
         Ok(p) => p,
-        Err(_) => return StatusError::bad_request("Invalid JSON body").into_response(),
+        Err(_) => {
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::bad_request("Invalid JSON body"),
+            )
+        }
     };
 
     // #1281: dry-run / simulation mode — evaluate but persist nothing. Read
@@ -202,8 +203,9 @@ pub async fn authorize_action_impl(
     let runtime_tenant_id = match get_runtime_tenant_from_headers(&headers) {
         Some(tid) => tid,
         None => {
-            return StatusError::bad_request("Missing X-Aegis-Tenant-ID or X-Tenant-ID header")
-                .into_response()
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::bad_request("Missing X-Aegis-Tenant-ID or X-Tenant-ID header"),
+            )
         }
     };
 
@@ -234,12 +236,15 @@ pub async fn authorize_action_impl(
             Ok(Some(a)) => a,
             Ok(None) => {
                 record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
-                return StatusError::unauthorized("Unrecognized mTLS client certificate")
-                    .into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::unauthorized("Unrecognized mTLS client certificate"),
+                );
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
         }
     } else {
@@ -248,7 +253,9 @@ pub async fn authorize_action_impl(
             Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
             _ => {
                 record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
-                return StatusError::unauthorized("Missing agent token").into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::unauthorized("Missing agent token"),
+                );
             }
         };
         match state
@@ -263,12 +270,15 @@ pub async fn authorize_action_impl(
             Ok(Some(a)) => a,
             Ok(None) => {
                 record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
-                return StatusError::unauthorized("Invalid or quarantined agent token")
-                    .into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::unauthorized("Invalid or quarantined agent token"),
+                );
             }
             Err(e) => {
                 error!("Database lookup error: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
         }
     };
@@ -300,7 +310,9 @@ pub async fn authorize_action_impl(
                     "Request signature missing for agent={} tenant={}",
                     agent_id, tenant_id
                 );
-                return StatusError::unauthorized("missing_request_signature").into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::unauthorized("missing_request_signature"),
+                );
             }
         };
         if !aegis_common::hash::verify_request_signature(signing_key, &body, &sig_header) {
@@ -308,7 +320,9 @@ pub async fn authorize_action_impl(
                 "Request signature invalid for agent={} tenant={}",
                 agent_id, tenant_id
             );
-            return StatusError::unauthorized("invalid_request_signature").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::unauthorized("invalid_request_signature"),
+            );
         }
     }
 
@@ -322,14 +336,13 @@ pub async fn authorize_action_impl(
             "Environment restriction: agent={} tenant={} env={} error={}",
             agent_id, tenant_id, payload.agent.environment, reason
         );
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
+        return crate::authorize_service::AuthorizedOutcome {
+            status: StatusCode::FORBIDDEN,
+            body: crate::authorize_service::AuthorizedBody::Json(json!({
                 "decision": "deny",
                 "reason": reason
             })),
-        )
-            .into_response();
+        };
     }
 
     // #1510: the agent-to-tool permission check and the idempotency lookup
@@ -371,22 +384,21 @@ pub async fn authorize_action_impl(
                 "Tool permission denied: agent={} tenant={} tool={}",
                 agent_id, tenant_id, payload.tool_call.tool
             );
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({
+            return crate::authorize_service::AuthorizedOutcome {
+                status: StatusCode::FORBIDDEN,
+                body: crate::authorize_service::AuthorizedBody::Json(json!({
                     "decision": "deny",
                     "reason": format!(
                         "agent not permitted to call tool '{}'",
                         payload.tool_call.tool
                     )
                 })),
-            )
-                .into_response();
+            };
         }
         Ok(true) => {}
         Err(e) => {
             error!("DB error checking tool permissions: {:?}", e);
-            return StatusError::from(e).into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(StatusError::from(e));
         }
     }
 
@@ -411,9 +423,10 @@ pub async fn authorize_action_impl(
                 "Replay protection: rejecting request with stale timestamp for tenant={} agent={} (timestamp validation failed)",
                 tenant_id, agent_id
             );
-            return StatusError::conflict(reason)
-                .with_details(serde_json::json!({"reason": "replay_timestamp_expired"}))
-                .into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::conflict(reason)
+                    .with_details(serde_json::json!({"reason": "replay_timestamp_expired"})),
+            );
         }
 
         // Nonce dedup check (AC #2/#4/#6): scoped per (tenant, agent) so two
@@ -438,7 +451,9 @@ pub async fn authorize_action_impl(
                     // Fail closed: if we can't consult the replay store we must
                     // not silently accept a possibly-replayed request.
                     error!("Replay store error (failing closed): {:?}", e);
-                    return StatusError::internal("Replay protection unavailable").into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::internal("Replay protection unavailable"),
+                    );
                 }
             }
         } else {
@@ -450,9 +465,10 @@ pub async fn authorize_action_impl(
                 "Replay protection: rejecting duplicate nonce for tenant={} agent={}",
                 tenant_id, agent_id
             );
-            return StatusError::conflict("Duplicate nonce: possible replay attack")
-                .with_details(serde_json::json!({"reason": "replay_nonce_reused"}))
-                .into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::conflict("Duplicate nonce: possible replay attack")
+                    .with_details(serde_json::json!({"reason": "replay_nonce_reused"})),
+            );
         }
     }
 
@@ -479,7 +495,9 @@ pub async fn authorize_action_impl(
             Ok(None) => {}
             Err(e) => {
                 error!("Idempotency lookup failed: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
         }
 
@@ -492,13 +510,16 @@ pub async fn authorize_action_impl(
 
     // Check Rate Limiting (TASK-0012)
     if !state.rate_limiter.check_rate_limit(&tenant_id).await {
-        return StatusError::too_many_requests("Too many requests. Rate limit exceeded.")
-            .into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::too_many_requests("Too many requests. Rate limit exceeded."),
+        );
     }
 
     // Check Request Quota (TASK-0013)
     if !state.quota_manager.check_quota(&tenant_id) {
-        return StatusError::too_many_requests("Request quota exceeded.").into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::too_many_requests("Request quota exceeded."),
+        );
     }
 
     // Check if the agent is frozen or revoked (TASK-0014)
@@ -544,28 +565,26 @@ pub async fn authorize_action_impl(
             Ok(score) => score,
             Err(e) => {
                 error!("Failed to write agent-frozen denial: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
         };
 
-        return (
-            StatusCode::OK,
-            Json(AuthorizeResponse {
-                decision_id,
-                decision: "deny".to_string(),
-                risk_score,
-                risk_level,
-                composite_risk_score,
-                reason,
-                matched_policies,
-                approval: None,
-                redacted_fields: vec![],
-                root_trust_level: root_trust_level.clone(),
-                dry_run,
-                receipt: None,
-            }),
-        )
-            .into_response();
+        return crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
+            decision_id,
+            decision: "deny".to_string(),
+            risk_score,
+            risk_level,
+            composite_risk_score,
+            reason,
+            matched_policies,
+            approval: None,
+            redacted_fields: vec![],
+            root_trust_level: root_trust_level.clone(),
+            dry_run,
+            receipt: None,
+        });
     }
 
     // Admission webhook (#1143, API-004): optional pre-authorize hook letting
@@ -616,28 +635,26 @@ pub async fn authorize_action_impl(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write admission-webhook denial: {:?}", e);
-                        return StatusError::from(e).into_response();
+                        return crate::authorize_service::AuthorizedOutcome::status_error(
+                            StatusError::from(e),
+                        );
                     }
                 };
 
-                return (
-                    StatusCode::OK,
-                    Json(AuthorizeResponse {
-                        decision_id,
-                        decision: "deny".to_string(),
-                        risk_score,
-                        risk_level,
-                        composite_risk_score,
-                        reason,
-                        matched_policies,
-                        approval: None,
-                        redacted_fields: vec![],
-                        root_trust_level: root_trust_level.clone(),
-                        dry_run,
-                        receipt: None,
-                    }),
-                )
-                    .into_response();
+                return crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
+                    decision_id,
+                    decision: "deny".to_string(),
+                    risk_score,
+                    risk_level,
+                    composite_risk_score,
+                    reason,
+                    matched_policies,
+                    approval: None,
+                    redacted_fields: vec![],
+                    root_trust_level: root_trust_level.clone(),
+                    dry_run,
+                    receipt: None,
+                });
             }
         }
     }
@@ -678,7 +695,9 @@ pub async fn authorize_action_impl(
         let denial = match (agent_banned, tool_banned, agent_quarantined) {
             (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
                 error!("Failed to check ban/quarantine enforcement state: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
             (Ok(true), _, _) => Some((
                 "agent_banned",
@@ -732,28 +751,26 @@ pub async fn authorize_action_impl(
                 Ok(score) => score,
                 Err(e) => {
                     error!("Failed to write ban/quarantine denial: {:?}", e);
-                    return StatusError::from(e).into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::from(e),
+                    );
                 }
             };
 
-            return (
-                StatusCode::OK,
-                Json(AuthorizeResponse {
-                    decision_id,
-                    decision: "deny".to_string(),
-                    risk_score: 100,
-                    risk_level: "critical".to_string(),
-                    composite_risk_score,
-                    reason,
-                    matched_policies,
-                    approval: None,
-                    redacted_fields: vec![],
-                    root_trust_level: root_trust_level.clone(),
-                    dry_run,
-                    receipt: None,
-                }),
-            )
-                .into_response();
+            return crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
+                decision_id,
+                decision: "deny".to_string(),
+                risk_score: 100,
+                risk_level: "critical".to_string(),
+                composite_risk_score,
+                reason,
+                matched_policies,
+                approval: None,
+                redacted_fields: vec![],
+                root_trust_level: root_trust_level.clone(),
+                dry_run,
+                receipt: None,
+            });
         }
     }
 
@@ -857,7 +874,9 @@ pub async fn authorize_action_impl(
             Ok(None) => None,
             Err(e) => {
                 error!("Failed to look up registered action: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
         },
     };
@@ -885,21 +904,22 @@ pub async fn authorize_action_impl(
                     "MCP server permission denied: agent={} tenant={} server={}",
                     agent_id, tenant_id, server_key
                 );
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({
+                return crate::authorize_service::AuthorizedOutcome {
+                    status: StatusCode::FORBIDDEN,
+                    body: crate::authorize_service::AuthorizedBody::Json(json!({
                         "decision": "deny",
                         "reason": format!(
                             "agent not permitted to call MCP server '{}'",
                             server_key
                         )
                     })),
-                )
-                    .into_response();
+                };
             }
             Err(e) => {
                 error!("Failed to check MCP server permission: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
             Ok(true) => {}
         }
@@ -916,7 +936,9 @@ pub async fn authorize_action_impl(
                 Ok(None) => None,
                 Err(e) => {
                     error!("Failed to look up MCP server status: {:?}", e);
-                    return StatusError::from(e).into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::from(e),
+                    );
                 }
             },
         };
@@ -958,28 +980,26 @@ pub async fn authorize_action_impl(
                     Ok(score) => score,
                     Err(e) => {
                         error!("Failed to write quarantined-server denial: {:?}", e);
-                        return StatusError::from(e).into_response();
+                        return crate::authorize_service::AuthorizedOutcome::status_error(
+                            StatusError::from(e),
+                        );
                     }
                 };
 
-                return (
-                    StatusCode::OK,
-                    Json(AuthorizeResponse {
-                        decision_id,
-                        decision: "deny".to_string(),
-                        risk_score,
-                        risk_level,
-                        composite_risk_score,
-                        reason,
-                        matched_policies,
-                        approval: None,
-                        redacted_fields: vec![],
-                        root_trust_level: root_trust_level.clone(),
-                        dry_run,
-                        receipt: None,
-                    }),
-                )
-                    .into_response();
+                return crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
+                    decision_id,
+                    decision: "deny".to_string(),
+                    risk_score,
+                    risk_level,
+                    composite_risk_score,
+                    reason,
+                    matched_policies,
+                    approval: None,
+                    redacted_fields: vec![],
+                    root_trust_level: root_trust_level.clone(),
+                    dry_run,
+                    receipt: None,
+                });
             }
         }
 
@@ -996,7 +1016,9 @@ pub async fn authorize_action_impl(
                 Ok(None) => None,
                 Err(e) => {
                     error!("Failed to look up MCP tool: {:?}", e);
-                    return StatusError::from(e).into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::from(e),
+                    );
                 }
             },
         };
@@ -1041,13 +1063,14 @@ pub async fn authorize_action_impl(
                         Ok(score) => score,
                         Err(e) => {
                             error!("Failed to write MCP denial decision: {:?}", e);
-                            return StatusError::from(e).into_response();
+                            return crate::authorize_service::AuthorizedOutcome::status_error(
+                                StatusError::from(e),
+                            );
                         }
                     };
 
-                    return (
-                        StatusCode::OK,
-                        Json(AuthorizeResponse {
+                    return crate::authorize_service::AuthorizedOutcome::decision(
+                        AuthorizeResponse {
                             decision_id,
                             decision: "deny".to_string(),
                             risk_score,
@@ -1060,9 +1083,8 @@ pub async fn authorize_action_impl(
                             root_trust_level: root_trust_level.clone(),
                             dry_run,
                             receipt: None,
-                        }),
-                    )
-                        .into_response();
+                        },
+                    );
                 }
             }
             None => {
@@ -1079,7 +1101,9 @@ pub async fn authorize_action_impl(
             Ok(p) => p,
             Err(e) => {
                 error!("Failed to fetch policies for reloading: {:?}", e);
-                return StatusError::from(e).into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::from(e),
+                );
             }
         };
         if let Err(e) = state
@@ -1087,11 +1111,12 @@ pub async fn authorize_action_impl(
             .reload_tenant_policies(&tenant_id, &db_policies)
         {
             error!("Failed to reload policies: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Failed to load tenant policies"})),
-            )
-                .into_response();
+            return crate::authorize_service::AuthorizedOutcome {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                body: crate::authorize_service::AuthorizedBody::Json(
+                    json!({"error": "Failed to load tenant policies"}),
+                ),
+            };
         }
     }
 
@@ -1109,7 +1134,9 @@ pub async fn authorize_action_impl(
         Ok(d) => d,
         Err(e) => {
             error!("Policy engine error: {:?}", e);
-            return StatusError::internal(format!("Policy engine failure: {}", e)).into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal(format!("Policy engine failure: {}", e)),
+            );
         }
     };
 
@@ -1156,9 +1183,7 @@ pub async fn authorize_action_impl(
         && is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state)
         && !state.events.has_capacity()
     {
-        return (
-            StatusCode::OK,
-            Json(AuthorizeResponse {
+        return crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
                 decision_id,
                 decision: "deny".to_string(),
                 risk_score,
@@ -1171,9 +1196,7 @@ pub async fn authorize_action_impl(
                 root_trust_level: root_trust_level.clone(),
                 dry_run,
                 receipt: None,
-            }),
-        )
-            .into_response();
+            });
     }
 
     let composite_risk_score = match write_decision_and_audit(
@@ -1215,9 +1238,7 @@ pub async fn authorize_action_impl(
                 .store(true, std::sync::atomic::Ordering::Relaxed);
 
             if is_high_risk_for_audit(&risk_level, payload.tool_call.mutates_state) {
-                return (
-                    StatusCode::OK,
-                    Json(AuthorizeResponse {
+                return crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
                         decision_id,
                         decision: "deny".to_string(),
                         risk_score,
@@ -1230,9 +1251,7 @@ pub async fn authorize_action_impl(
                         root_trust_level: root_trust_level.clone(),
                         dry_run,
                         receipt: None,
-                    }),
-                )
-                    .into_response();
+                    });
             }
 
             // Low-risk, non-mutating action: degrade gracefully — allow without a
@@ -1242,24 +1261,20 @@ pub async fn authorize_action_impl(
                 action = %payload.tool_call.action,
                 "Audit writer unavailable for low-risk action; allowing without persisted audit record"
             );
-            return (
-                StatusCode::OK,
-                Json(AuthorizeResponse {
-                    decision_id,
-                    decision: decision_str,
-                    risk_score,
-                    risk_level,
-                    composite_risk_score: risk_score,
-                    reason,
-                    matched_policies,
-                    approval: None,
-                    redacted_fields: vec![],
-                    root_trust_level: root_trust_level.clone(),
-                    dry_run,
-                    receipt: None,
-                }),
-            )
-                .into_response();
+            return crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
+                decision_id,
+                decision: decision_str,
+                risk_score,
+                risk_level,
+                composite_risk_score: risk_score,
+                reason,
+                matched_policies,
+                approval: None,
+                redacted_fields: vec![],
+                root_trust_level: root_trust_level.clone(),
+                dry_run,
+                receipt: None,
+            });
         }
     };
 
@@ -1306,10 +1321,11 @@ pub async fn authorize_action_impl(
                         "Fail-closed: durable receipt write failed for protected decision: {:?}",
                         e
                     );
-                    return StatusError::internal(
-                        "Failed to durably record decision evidence; action not authorized",
-                    )
-                    .into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::internal(
+                            "Failed to durably record decision evidence; action not authorized",
+                        ),
+                    );
                 }
             }
         } else {
@@ -1394,8 +1410,9 @@ pub async fn authorize_action_impl(
         let (callback_url, callback_secret_hash) = match &payload.callback {
             Some(cb) => {
                 if let Err(e) = aegis_common::ssrf::validate_callback_url(&cb.url) {
-                    return StatusError::bad_request(format!("Invalid callback URL: {e}"))
-                        .into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::bad_request(format!("Invalid callback URL: {e}")),
+                    );
                 }
                 (
                     Some(cb.url.clone()),
@@ -1426,7 +1443,9 @@ pub async fn authorize_action_impl(
 
         if let Err(e) = state.storage.insert_approval(&approval_record).await {
             error!("Failed to create approval request: {:?}", e);
-            return StatusError::internal("Failed to create approval request").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Failed to create approval request"),
+            );
         }
 
         // Write audit event for approval creation
@@ -1604,24 +1623,20 @@ pub async fn authorize_action_impl(
         redacted_fields.clear();
     }
 
-    (
-        StatusCode::OK,
-        Json(AuthorizeResponse {
-            decision_id,
-            decision: decision_str,
-            risk_score,
-            risk_level,
-            composite_risk_score,
-            reason,
-            matched_policies,
-            approval: approval_info,
-            redacted_fields,
-            root_trust_level,
-            dry_run,
-            receipt: receipt_identity,
-        }),
-    )
-        .into_response()
+    crate::authorize_service::AuthorizedOutcome::decision(AuthorizeResponse {
+        decision_id,
+        decision: decision_str,
+        risk_score,
+        risk_level,
+        composite_risk_score,
+        reason,
+        matched_policies,
+        approval: approval_info,
+        redacted_fields,
+        root_trust_level,
+        dry_run,
+        receipt: receipt_identity,
+    })
 }
 
 #[cfg(test)]
@@ -1629,6 +1644,20 @@ pub async fn authorize_action_impl(
 mod tests {
     use super::*;
     use crate::db;
+
+    /// Test helper: authorize_action_impl returns AuthorizedOutcome; many
+    /// legacy tests assert on Axum Response status/body.
+    async fn authorize_action_impl_resp(
+        state: std::sync::Arc<AppState>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+        client_addr: std::net::SocketAddr,
+    ) -> axum::response::Response {
+        crate::authorize_service::outcome_to_response(
+            authorize_action_impl(state, headers, body, client_addr).await,
+        )
+    }
+
     use crate::events;
     use crate::metrics::SecurityMetrics;
     use crate::models::*;
@@ -1873,7 +1902,7 @@ mod tests {
             format!("Bearer {}", agent_token).parse().unwrap(),
         );
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             headers,
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -1904,7 +1933,7 @@ mod tests {
 
         for attempt in 1..=6u32 {
             let headers = agent_headers("definitely-not-a-valid-token", &tenant_id);
-            let response = authorize_action_impl(
+            let response = authorize_action_impl_resp(
                 state.clone(),
                 headers,
                 Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -1959,7 +1988,7 @@ mod tests {
 
         state.storage.get_pool().close().await;
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             headers,
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -1989,7 +2018,7 @@ mod tests {
         let request = mcp_authorize_request("filesystem", "read_file");
         let headers = agent_headers(&agent_token, &tenant_id);
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             headers,
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -2354,7 +2383,7 @@ mod tests {
         let headers = agent_headers(&agent_token, &tenant_id);
 
         // First request is allowed through rate limiter
-        let resp1 = authorize_action_impl(
+        let resp1 = authorize_action_impl_resp(
             state.clone(),
             headers.clone(),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -2366,7 +2395,7 @@ mod tests {
         assert_ne!(resp1.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Immediate second request is blocked by rate limiter (429)
-        let resp2 = authorize_action_impl(
+        let resp2 = authorize_action_impl_resp(
             state.clone(),
             headers.clone(),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -2417,7 +2446,7 @@ mod tests {
         });
 
         // First request is allowed through quota
-        let resp3 = authorize_action_impl(
+        let resp3 = authorize_action_impl_resp(
             state_quota.clone(),
             headers.clone(),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -2427,7 +2456,7 @@ mod tests {
         assert_ne!(resp3.status(), StatusCode::TOO_MANY_REQUESTS);
 
         // Second request is blocked by quota (429)
-        let resp4 = authorize_action_impl(
+        let resp4 = authorize_action_impl_resp(
             state_quota.clone(),
             headers.clone(),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -3130,7 +3159,7 @@ mod tests {
 
         let request = mcp_authorize_request("github", "push_commit");
         let headers = agent_headers(&agent_token, &tenant_id);
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             headers,
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -4073,8 +4102,10 @@ mod tests {
         let mut request = mcp_authorize_request("deployer", "ship");
         request.tool_call.mutates_state = true;
         request.context.source_trust = "semi_trusted_customer".to_string();
+        // Use a public IP literal so SSRF validation does not depend on DNS
+        // (hostname resolution fails in offline CI/sandboxes).
         request.callback = Some(crate::models::ApprovalCallback {
-            url: "https://example.com/aegis-callback".to_string(),
+            url: "https://1.1.1.1/aegis-callback".to_string(),
             secret: Some("topsecret".to_string()),
         });
 
@@ -4091,7 +4122,7 @@ mod tests {
 
         assert_eq!(
             stored.callback_url.as_deref(),
-            Some("https://example.com/aegis-callback")
+            Some("https://1.1.1.1/aegis-callback")
         );
         assert_eq!(
             stored.callback_secret_hash.as_deref(),
@@ -4115,7 +4146,7 @@ mod tests {
             secret: None,
         });
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -4347,7 +4378,7 @@ mod tests {
         request.timestamp = Some(Utc::now());
 
         // First request succeeds normally.
-        let first = authorize_action_impl(
+        let first = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -4357,7 +4388,7 @@ mod tests {
         assert_eq!(first.status(), StatusCode::OK);
 
         // Replaying the exact same nonce is rejected.
-        let second = authorize_action_impl(
+        let second = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -4382,7 +4413,7 @@ mod tests {
         request.nonce = Some("nonce-stale-1".to_string());
         request.timestamp = Some(Utc::now() - Duration::seconds(301));
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -4410,7 +4441,7 @@ mod tests {
         request2.nonce = Some("nonce-two".to_string());
         request2.timestamp = Some(Utc::now());
 
-        let first = authorize_action_impl(
+        let first = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&request1).unwrap()),
@@ -4419,7 +4450,7 @@ mod tests {
         .await;
         assert_eq!(first.status(), StatusCode::OK);
 
-        let second = authorize_action_impl(
+        let second = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&request2).unwrap()),
@@ -4471,7 +4502,7 @@ mod tests {
         let mut headers = agent_headers(&agent_token, &tenant_id);
         headers.insert("x-aegis-request-signature", sig.parse().unwrap());
 
-        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+        let resp = authorize_action_impl_resp(state, headers, body, test_conn_info())
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -4489,7 +4520,7 @@ mod tests {
         // No X-Aegis-Request-Signature header
         let headers = agent_headers(&agent_token, &tenant_id);
 
-        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+        let resp = authorize_action_impl_resp(state, headers, body, test_conn_info())
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -4512,7 +4543,7 @@ mod tests {
         let forged = signing_header("wrong-key", &body);
         headers.insert("x-aegis-request-signature", forged.parse().unwrap());
 
-        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+        let resp = authorize_action_impl_resp(state, headers, body, test_conn_info())
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -4539,7 +4570,7 @@ mod tests {
         let mut headers = agent_headers(&agent_token, &tenant_id);
         headers.insert("x-aegis-request-signature", sig.parse().unwrap());
 
-        let resp = authorize_action_impl(state, headers, tampered_body, test_conn_info())
+        let resp = authorize_action_impl_resp(state, headers, tampered_body, test_conn_info())
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -4558,7 +4589,7 @@ mod tests {
 
         // No signature header — should still pass since agent has no signing_key
         let headers = agent_headers(&agent_token, &tenant_id);
-        let resp = authorize_action_impl(state, headers, body, test_conn_info())
+        let resp = authorize_action_impl_resp(state, headers, body, test_conn_info())
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -5167,7 +5198,7 @@ mod tests {
         let mut req = mcp_authorize_request("filesystem", "read_file");
         req.agent.environment = "staging".to_string();
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5319,7 +5350,7 @@ mod tests {
             .unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5439,7 +5470,7 @@ mod tests {
             .await
             .unwrap();
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(
@@ -5528,7 +5559,7 @@ mod tests {
     #[tokio::test]
     async fn authorize_action_unrestricted_agent_allows_any_mcp_server() {
         let (state, tenant_id, agent_token) = setup_state("mcp_perm_unrestricted").await;
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state,
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(
@@ -5564,7 +5595,7 @@ mod tests {
         // quarantine_canary / trigger → ToolAction::"quarantine_canary_trigger"
         // matches the @decision("quarantine") canary policy in policies.cedar.
         let req = mcp_authorize_request("quarantine_canary", "trigger");
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5607,7 +5638,7 @@ mod tests {
 
         // First call: trigger quarantine.
         let req = mcp_authorize_request("quarantine_canary", "trigger");
-        let _ = authorize_action_impl(
+        let _ = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5617,7 +5648,7 @@ mod tests {
 
         // Second call: any tool — must be 401 (agent no longer resolvable).
         let req2 = mcp_authorize_request("filesystem", "read_file");
-        let resp2 = authorize_action_impl(
+        let resp2 = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req2).unwrap()),
@@ -5645,7 +5676,7 @@ mod tests {
         state.storage.update_agent(&agent).await.unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state.clone(),
             mtls_headers("agent-cert-007", &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5668,7 +5699,7 @@ mod tests {
         let (state, tenant_id, _agent_token) = setup_state("mtls_cn_unrecognized").await;
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state.clone(),
             mtls_headers("never-bound-cn", &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5696,7 +5727,7 @@ mod tests {
         state.storage.update_agent(&agent).await.unwrap();
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state.clone(),
             mtls_headers("agent-cert-quarantined", &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5715,7 +5746,7 @@ mod tests {
         let (state, tenant_id, agent_token) = setup_state("mtls_cn_fallback").await;
 
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5751,7 +5782,7 @@ mod tests {
         agent_token: &str,
     ) -> serde_json::Value {
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state,
             agent_headers(agent_token, tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5912,7 +5943,7 @@ mod tests {
 
         // Old token now rejected.
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_old = authorize_action_impl(
+        let resp_old = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&old_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -5959,7 +5990,7 @@ mod tests {
 
         // Original token still works.
         let req = mcp_authorize_request("filesystem", "read_file");
-        let resp_after = authorize_action_impl(
+        let resp_after = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&token, &tenant_id),
             Bytes::from(serde_json::to_vec(&req).unwrap()),
@@ -6039,7 +6070,7 @@ mod tests {
             }
         });
 
-        let resp_canonical = authorize_action_impl(
+        let resp_canonical = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&canonical_payload).unwrap()),
@@ -6055,7 +6086,7 @@ mod tests {
         .unwrap();
         let decision_canonical = body_canonical["decision"].as_str().unwrap().to_string();
 
-        let resp_mixed = authorize_action_impl(
+        let resp_mixed = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&mixed_case_payload).unwrap()),
@@ -6098,7 +6129,7 @@ mod tests {
             }
         });
 
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&payload).unwrap()),
@@ -6142,7 +6173,7 @@ mod tests {
             }
         });
 
-        let resp = authorize_action_impl(
+        let resp = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&payload).unwrap()),
@@ -6928,7 +6959,7 @@ mod tests {
         let mut request = mcp_authorize_request("filesystem", "read_file");
         request.request_id = Some("perm-denied-with-request-id".to_string());
 
-        let response = authorize_action_impl(
+        let response = authorize_action_impl_resp(
             state.clone(),
             agent_headers(&agent_token, &tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
@@ -7458,7 +7489,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let _permit = semaphore.acquire().await.unwrap();
                 let request = mcp_authorize_request("filesystem", "read_file");
-                let response = authorize_action_impl(
+                let response = authorize_action_impl_resp(
                     state,
                     agent_headers(&agent_token, &tenant_id),
                     Bytes::from(serde_json::to_vec(&request).unwrap()),

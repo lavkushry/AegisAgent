@@ -3033,17 +3033,23 @@ pub(crate) mod test_helpers {
         agent_token: &str,
         request: AuthorizeRequest,
     ) -> AuthorizeResponse {
-        let response = authorize_action_impl(
+        let outcome = authorize_action_impl(
             state,
             agent_headers(agent_token, tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
             test_conn_info(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        serde_json::from_slice(&body).unwrap()
+        assert!(
+            outcome.is_success(),
+            "call_authorize expected success, got status={} body={:?}",
+            outcome.status,
+            outcome.body
+        );
+        match outcome.body {
+            crate::authorize_service::AuthorizedBody::Decision(resp) => *resp,
+            other => panic!("call_authorize expected Decision body, got {other:?}"),
+        }
     }
 
     pub(crate) fn make_test_approval(

@@ -1836,7 +1836,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_before.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp_before.status, StatusCode::UNAUTHORIZED);
 
         // Restore the agent.
         let restore_resp = restore_agent(
@@ -1863,7 +1863,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_after.status(), StatusCode::OK);
+        assert_eq!(resp_after.status, StatusCode::OK);
     }
 
     // ── #1295: Auto-Rotate Leaked Agent Token ───────────────────────────────
@@ -1904,7 +1904,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_old.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp_old.status, StatusCode::UNAUTHORIZED);
 
         // New token works.
         let req2 = mcp_authorize_request("filesystem", "read_file");
@@ -1915,7 +1915,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_new.status(), StatusCode::OK);
+        assert_eq!(resp_new.status, StatusCode::OK);
 
         // Audit event recorded.
         let events = state

@@ -14,13 +14,13 @@
 //! - [`outcome_to_tonic`] / [`outcome_to_response`] — wire mapping helpers
 //! - [`error_reason_to_tonic_code`] / [`status_error_to_tonic`]
 //!
-//! Internally the evaluation still runs through `authorize_action_impl` and
-//! is decoded once into [`AuthorizedOutcome`]. Full in-place Result returns
-//! from the 1.4k-line body (no Response at all) is the next mechanical split.
+//! [`authorize_action_impl`] returns [`AuthorizedOutcome`] in place (no Axum
+//! `Response` on the authorize hot path). Follow-on: later `aegis-decision`
+//! crate move.
 
 use std::sync::Arc;
 
-use axum::body::{to_bytes, Bytes};
+use axum::body::Bytes;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -204,50 +204,6 @@ pub fn http_error_to_tonic(status: StatusCode, body: &[u8]) -> tonic::Status {
     tonic::Status::new(code, msg)
 }
 
-/// Decode a transitional Axum `Response` from `authorize_action_impl` into a
-/// typed [`AuthorizedOutcome`]. Called only inside this module so adapters
-/// never buffer response bodies themselves.
-async fn response_to_outcome(response: Response) -> AuthorizedOutcome {
-    let status = response.status();
-    let body = match to_bytes(response.into_body(), usize::MAX).await {
-        Ok(b) => b,
-        Err(e) => {
-            return AuthorizedOutcome::status_error(StatusError::internal(format!(
-                "Failed to read authorize response body: {e}"
-            )));
-        }
-    };
-
-    if status == StatusCode::OK || status == StatusCode::CREATED {
-        if let Ok(resp) = serde_json::from_slice::<AuthorizeResponse>(&body) {
-            return AuthorizedOutcome {
-                status,
-                body: AuthorizedBody::Decision(Box::new(resp)),
-            };
-        }
-    }
-
-    if let Ok(err) = serde_json::from_slice::<StatusError>(&body) {
-        return AuthorizedOutcome {
-            status,
-            body: AuthorizedBody::Status(Box::new(err)),
-        };
-    }
-
-    if let Ok(v) = serde_json::from_slice::<Value>(&body) {
-        return AuthorizedOutcome {
-            status,
-            body: AuthorizedBody::Json(v),
-        };
-    }
-
-    let msg = String::from_utf8_lossy(&body).into_owned();
-    AuthorizedOutcome {
-        status,
-        body: AuthorizedBody::Json(serde_json::json!({ "message": msg })),
-    }
-}
-
 /// Map a typed outcome back to an Axum `Response` (REST adapter / tests).
 pub fn outcome_to_response(outcome: AuthorizedOutcome) -> Response {
     match outcome.body {
@@ -352,9 +308,7 @@ pub async fn authorize_raw(
         Ok(h) => h,
         Err(e) => return AuthorizedOutcome::status_error(e),
     };
-    let response =
-        crate::routes::authorize_action_impl(state, headers, raw_body, ctx.client_addr).await;
-    response_to_outcome(response).await
+    crate::routes::authorize_action_impl(state, headers, raw_body, ctx.client_addr).await
 }
 
 #[cfg(test)]
@@ -675,10 +629,6 @@ mod tests {
         }
     }
 
-    async fn fingerprint_response(response: axum::response::Response) -> DecisionFingerprint {
-        fingerprint_outcome(&response_to_outcome(response).await)
-    }
-
     async fn run_legacy(
         state: Arc<crate::routes::AppState>,
         tenant_id: &str,
@@ -688,9 +638,8 @@ mod tests {
     ) -> DecisionFingerprint {
         let headers = agent_headers(agent_token, tenant_id);
         let body = Bytes::from(serde_json::to_vec(request).expect("serialize"));
-        let response =
-            crate::routes::authorize_action_impl(state, headers, body, client_addr).await;
-        fingerprint_response(response).await
+        let outcome = crate::routes::authorize_action_impl(state, headers, body, client_addr).await;
+        fingerprint_outcome(&outcome)
     }
 
     async fn run_typed(
@@ -904,9 +853,9 @@ mod tests {
         let mut headers = agent_headers(&token, "ignored");
         headers.remove("X-Aegis-Tenant-ID");
         let body = Bytes::from(serde_json::to_vec(&request).unwrap());
-        let legacy_resp =
+        let legacy_outcome =
             crate::routes::authorize_action_impl(state.clone(), headers, body, peer).await;
-        let legacy = fingerprint_response(legacy_resp).await;
+        let legacy = fingerprint_outcome(&legacy_outcome);
 
         let ctx = AuthorizeContext::new(
             "",
@@ -917,8 +866,8 @@ mod tests {
         let typed = match build_service_headers(&ctx) {
             Ok(h) => {
                 let body = Bytes::from(serde_json::to_vec(&request).unwrap());
-                let response = crate::routes::authorize_action_impl(state, h, body, peer).await;
-                fingerprint_response(response).await
+                let outcome = crate::routes::authorize_action_impl(state, h, body, peer).await;
+                fingerprint_outcome(&outcome)
             }
             Err(e) => fingerprint_outcome(&AuthorizedOutcome::status_error(e)),
         };
