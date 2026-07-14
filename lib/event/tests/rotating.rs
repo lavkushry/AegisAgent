@@ -2,6 +2,13 @@
 //! page rotations under concurrent produce/consume, exercised natively and
 //! under the ASan/TSan CI lanes. Asserts no loss, duplication, reordering,
 //! or payload mismatch across epoch seams, quota backpressure included.
+//!
+//! Disabled under `--features loom`: `RotatingAdmissionChannel` swaps in Loom
+//! atomics, which must only run inside `loom::model` (see unit `loom_tests`).
+//! Native `std::thread` stress here would panic outside a Loom model. Same
+//! gate as `admission.rs` / `published_slab.rs` / `spsc.rs`.
+
+#![cfg(not(feature = "loom"))]
 
 use std::thread;
 
