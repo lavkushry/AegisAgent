@@ -199,7 +199,7 @@ Admission is a reactor-local counter and byte budget. Permits are acquired befor
 ## 5. Disruptor-style SPSC ring
 
 **Implementation status:** `lib/event` contains `current`, unwired prototypes
-governed by Proposed ADR-0006 through ADR-0009. The ring implements
+governed by Proposed ADR-0006 through ADR-0010. The ring implements
 non-cloneable owning endpoints, checked capacity, modular wrap, closure/drain,
 unread-value destruction, cache-line isolation, cancelable producer permits,
 and consumer claims that withhold tail advancement until commit. The safe
@@ -209,16 +209,18 @@ Release/Acquire-publishes a coherent descriptor-count, byte-watermark, and
 closure word. The single-page admission composite validates before reservation,
 publishes the page before the ring, validates a must-use frame lease before
 reclaiming its slot, and distinguishes clean termination, faulted termination,
-and orphaned page prefixes. Tests present in the crate include safe sealed and
-short-trace differential oracles, native stress, shipping-algorithm Loom
-models, Miri-oriented borrow/drop cases, and zero-allocation admission/claim
-checks; ASan/TSan CI lanes are defined. These prototypes carry no production or
-`shadow` traffic, cannot carry protected evidence, are not `qualified`, and
-make no performance claim. Formal ADR acceptance and security review, green
-hosted sanitizer artifacts, real UBSan support, authenticated registry lookup,
-bounded page rotation and outstanding pages, WAL durability/replay,
-generation reuse and epochs, NUMA-owner reclamation, priority lanes,
-production shadow wiring, and qualification remain `target` gates.
+and orphaned page prefixes. The rotating admission composite (ADR-0010) adds a
+fixed pool of `P` pages, generation-tagged exclusive rebind, a handoff ring for
+successor readers, and typed `PageQuotaExhausted` backpressure. Tests present
+in the crate include safe sealed and short-trace differential oracles, native
+stress, shipping-algorithm Loom models, Miri-oriented borrow/drop cases, and
+zero-allocation admission/claim checks; ASan/TSan CI lanes are defined;
+diagnostic criterion benches compile under CI. These prototypes carry no
+production or `shadow` traffic, cannot carry protected evidence, are not
+`qualified`, and make no performance claim. Formal ADR acceptance and security
+review, green hosted sanitizer artifacts, real UBSan support, authenticated
+registry lookup, WAL durability/replay, NUMA-owner reclamation, priority
+lanes, production shadow wiring, and qualification remain `target` gates.
 
 ### 5.1 Memory layout
 
@@ -396,9 +398,96 @@ WAL recovery. The channel therefore carries neither production nor `shadow`
 traffic, cannot carry protected evidence, is not `qualified`, and makes no
 performance claim. Formal ADR acceptance/security review, green hosted
 ASan/TSan artifacts, UBSan support, authenticated registry lookup, bounded page
-rotation/outstanding pages, WAL durability and replay, reuse/epochs,
+rotation (see ADR-0010 prototype below), WAL durability and replay,
 NUMA-owner reclamation, priority lanes, production shadow wiring, and
 qualification remain blockers.
+
+#### Current bounded rotating admission prototype (ADR-0010)
+
+The `current`, unwired `RotatingAdmissionChannel<N, P>` binds **one** SPSC
+descriptor ring of capacity `N` to a **fixed pool of `P >= 2` identically
+configured published-prefix pages** (power-of-two `P`, construction rejects
+nonzero `arena_generation`). Page epochs are monotonic `u64` values starting
+at zero; epoch `e` occupies pool slot `e mod P` and stamps descriptors with
+`arena_generation = e as u32`. Sequence space is continuous: epoch `e+1` opens
+with `first_sequence` equal to the sealed page `e`'s `next_sequence`.
+
+**Construction and allocation.** All `P` pages are preallocated at `new`.
+Rotation rebinds a freed slot via exclusive `PublishedSlabPage::rebind`
+(generation + first_sequence reset, publication state cleared, cells returned
+to uninit). No page allocation, deallocation, or steady-state reference-count
+traffic occurs after construction on the native path. Construction also
+allocates a second bounded SPSC **handoff ring** of capacity `P` that carries
+the successor epoch's `PublishedSlabReader` producer→consumer.
+
+**Producer rotation algorithm (linearization and ordering).**
+
+```text
+preflight payload against ACTIVE page
+on page/descriptor full:
+    Acquire-load released_epoch                              [A]
+    require next_epoch <= released_epoch + P                 (slot free?)
+    on failure: return PageQuotaExhausted — zero page/ring mutation
+    reserve handoff slot; Full despite quota is terminal
+    seal active page writer (ADR-0008 close)                 [S]
+    exclusive rebind pool[next_epoch mod P]
+    open writer/reader endpoints; publish reader on handoff  (Release)
+    active_epoch = next_epoch
+    re-preflight against the fresh page
+then the unchanged ADR-0009 admit sequence:
+    reserve data ring, append + page Release [P],
+    descriptor write, ring Release [R]
+```
+
+- **`[R]` remains the volatile admission linearization point** for each event
+  (same as ADR-0009). Rotation does not invent a second admission authority.
+- **`[A]` is the reclamation observation edge:** the producer never rebinds
+  slot `e mod P` without Acquire-observing that epoch `e − P` (when defined)
+  was released. A refused rotation leaves the active page open for smaller
+  payloads.
+- **`[S]` is failure-atomic with respect to retry:** after seal, rotation
+  faults fault the lane; the caller must not assume the prior page is still
+  writable.
+- Handoff reader publication is program-ordered **before** the first data-ring
+  `[R]` of the new epoch, so a consumer that Acquire-observes that descriptor
+  also observes the handoff slot as occupied. An empty handoff at an epoch
+  boundary is a **terminal invariant**, never a transient race.
+
+**Consumer release protocol.**
+
+Consumption remains strictly in-order FIFO. On the first descriptor of epoch
+`e+1`:
+
+1. require the sealed page `e`'s published count to equal the per-epoch
+   committed count (orphaned-prefix / shortfall is terminal at the seam);
+2. pop the handoff reader and require exact generation identity;
+3. Release-store `released_epoch = e + 1` (implementation stores the new
+   current epoch after the bind) as reclamation edge **`[E]`**;
+4. proceed with ADR-0009 validation against the successor page.
+
+Frame leases mutably borrow the consumer, so no payload borrow of page `e` can
+be live when `[E]` runs. Clean end-of-stream aggregates published counts across
+epochs and still requires total committed equals total published.
+
+**Wrap, drop, and terminal states.**
+
+- Modular wrap of the **data** ring is unchanged (ADR-0006). Epoch counters are
+  `u64` and do not wrap for any realistic process lifetime; generation tags are
+  unambiguous while `P < 2^32`.
+- Producer drop / caught unwind after seal faults the shared terminal word
+  (`FAULTED`) and closes shared endpoints, matching ADR-0009's retained-
+  producer contract.
+- Clean finish seals the **active** page, stores `CLEAN`, then closes the data
+  ring; the consumer drains remaining frames and verifies aggregate counts.
+
+**Status and non-claims.** The rotating channel is still volatile, process-
+local, and unwired. Success tokens are not receipts, WAL acknowledgements, or
+authorization results. Diagnostic criterion benches measure relative path shape
+only. The production fabric remains `target`, neither `shadow` nor
+`qualified`. Remaining blockers include formal ADR acceptance/security review,
+green hosted sanitizer evidence, UBSan, authenticated registry, WAL
+durability/replay, NUMA-owner reclamation, priority lanes, production shadow
+wiring, release-artifact rollback, and qualification.
 
 ### 5.3 Priority and fairness
 
