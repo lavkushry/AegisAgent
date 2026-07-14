@@ -278,18 +278,18 @@ impl AegisService for AegisGrpcServiceImpl {
         .await
         .into_response();
 
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
+        // Transitional bridge: map StatusError envelopes to tonic codes (no
+        // Status::internal collapse). Full typed extraction follows authorize/approve.
+        let (status, value) =
+            crate::authorize_service::axum_response_to_tonic_json(response).await?;
         if status != axum::http::StatusCode::OK && status != axum::http::StatusCode::CREATED {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
+            // axum_response_to_tonic_json only returns Ok for success statuses
+            return Err(Status::internal("unexpected non-success after mapping"));
         }
-
-        let res: crate::models::RegisterAgentResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        let res: crate::models::RegisterAgentResponse =
+            serde_json::from_value(value).map_err(|e| {
+                Status::internal(format!("Failed to parse register_agent response: {e}"))
+            })?;
 
         Ok(Response::new(RegisterAgentResponse {
             id: res.id.to_string(),
@@ -301,6 +301,8 @@ impl AegisService for AegisGrpcServiceImpl {
         &self,
         request: Request<ApproveRequest>,
     ) -> Result<Response<ApproveResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
         let payload = crate::models::ApproveRequest {
             approver_user_id: req.approver_user_id,
@@ -316,7 +318,7 @@ impl AegisService for AegisGrpcServiceImpl {
             Err(_) => return Err(Status::invalid_argument("Invalid approval_id UUID")),
         };
 
-        let response = crate::routes::approve_approval_inner(
+        let outcome = crate::routes::approve_approval_inner(
             self._state.clone(),
             req.tenant_id,
             approval_uuid,
@@ -324,21 +326,12 @@ impl AegisService for AegisGrpcServiceImpl {
         )
         .await;
 
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let res: serde_json::Value = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
-
-        let status_str = res["status"].as_str().unwrap_or_default().to_string();
-        let approval_id_str = res["approval_id"].as_str().unwrap_or_default().to_string();
+        let value = outcome_to_tonic_json(outcome)?;
+        let status_str = value["status"].as_str().unwrap_or_default().to_string();
+        let approval_id_str = value["approval_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
 
         Ok(Response::new(ApproveResponse {
             status: status_str,
@@ -377,18 +370,14 @@ impl AdminService for AdminGrpcServiceImpl {
         .await
         .into_response();
 
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
+        let (status, value) =
+            crate::authorize_service::axum_response_to_tonic_json(response).await?;
         if status != axum::http::StatusCode::CREATED {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
+            return Err(Status::internal("unexpected non-success after mapping"));
         }
-
-        let res: crate::models::TenantRecord = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        let res: crate::models::TenantRecord = serde_json::from_value(value).map_err(|e| {
+            Status::internal(format!("Failed to parse create_tenant response: {e}"))
+        })?;
 
         Ok(Response::new(CreateTenantResponse {
             id: res.id,

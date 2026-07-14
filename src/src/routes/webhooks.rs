@@ -264,7 +264,7 @@ pub async fn slack_callback(
         reason: Some("Decided via Slack interactive callback".to_string()),
     };
 
-    let response = match action_id {
+    let outcome = match action_id {
         Some("approve") => {
             approve_approval_inner(state.clone(), tenant_id, approval_id, decision_payload).await
         }
@@ -275,8 +275,8 @@ pub async fn slack_callback(
             return StatusError::bad_request("unsupported action_id").into_response();
         }
     };
-    record_approval_attempt_failure(&state, &response, &approval_id);
-    response
+    record_approval_attempt_failure(&state, outcome.status, &approval_id);
+    crate::authorize_service::outcome_to_response(outcome)
 }
 
 /// `POST /v1/ingest` (SOC-004, #1187) — agentless event ingestion.

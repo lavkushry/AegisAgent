@@ -232,6 +232,46 @@ pub fn outcome_to_tonic(outcome: AuthorizedOutcome) -> Result<AuthorizeResponse,
     }
 }
 
+/// Map a typed outcome whose success body is JSON (approve/reject style) to
+/// either the JSON value or a tonic `Status`. No Axum body buffering.
+#[allow(clippy::result_large_err)]
+pub fn outcome_to_tonic_json(
+    outcome: AuthorizedOutcome,
+) -> Result<serde_json::Value, tonic::Status> {
+    match outcome.body {
+        AuthorizedBody::Json(v) if outcome.is_success() => Ok(v),
+        AuthorizedBody::Decision(resp) if outcome.is_success() => serde_json::to_value(*resp)
+            .map_err(|e| tonic::Status::internal(format!("serialize decision: {e}"))),
+        AuthorizedBody::Status(err) => Err(status_error_to_tonic(&err)),
+        AuthorizedBody::Json(v) => {
+            let bytes = serde_json::to_vec(&v).unwrap_or_default();
+            Err(http_error_to_tonic(outcome.status, &bytes))
+        }
+        AuthorizedBody::Decision(_) => Err(tonic::Status::internal(format!(
+            "service returned decision body with HTTP {}",
+            outcome.status
+        ))),
+    }
+}
+
+/// Map any remaining Axum `Response` bridge to tonic, preferring StatusError
+/// envelopes over collapsed `Status::internal`. Prefer typed outcomes when
+/// available; this is the transitional helper for RPCs not yet extracted.
+pub async fn axum_response_to_tonic_json(
+    response: Response,
+) -> Result<(StatusCode, serde_json::Value), tonic::Status> {
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .map_err(|e| tonic::Status::internal(e.to_string()))?;
+    if status.is_success() {
+        let v: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| tonic::Status::internal(format!("Failed to parse response JSON: {e}")))?;
+        return Ok((status, v));
+    }
+    Err(http_error_to_tonic(status, &body))
+}
+
 /// Build the HeaderMap the current `authorize_action_impl` still reads for
 /// tenant, agent credential, optional mTLS CN, and request signature.
 ///

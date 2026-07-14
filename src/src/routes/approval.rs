@@ -149,10 +149,10 @@ pub(crate) async fn approval_callback_rate_limit_guard(
 /// further attempts against it will already 409.
 pub(crate) fn record_approval_attempt_failure(
     state: &Arc<AppState>,
-    response: &axum::response::Response,
+    status: axum::http::StatusCode,
     approval_id: &Uuid,
 ) {
-    if response.status().is_client_error() {
+    if status.is_client_error() {
         state
             .approval_attempt_tracker
             .record_failure(&approval_id.to_string());
@@ -174,7 +174,7 @@ pub(crate) async fn conflict_response_for_failed_transition(
     tenant_id: &str,
     approval_id: &Uuid,
     expired_tamper_kind: &str,
-) -> axum::response::Response {
+) -> crate::authorize_service::AuthorizedOutcome {
     let approval = state
         .storage
         .get_approval_by_id(tenant_id, &approval_id.to_string())
@@ -195,13 +195,26 @@ pub(crate) async fn conflict_response_for_failed_transition(
                 Some(&approval.decision_id),
             )
             .await;
-            StatusError::conflict("Approval has expired").with_details(serde_json::json!({"approval_id": approval_id, "reason": "approval_expired"}))
-                .into_response()
+            crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::conflict("Approval has expired").with_details(serde_json::json!({
+                    "approval_id": approval_id,
+                    "reason": "approval_expired"
+                })),
+            )
         }
-        Some(approval) => StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
-            .into_response(),
-        None => StatusError::conflict("Approval already decided").with_details(serde_json::json!({"approval_id": approval_id, "reason": "approval_already_decided"}))
-            .into_response(),
+        Some(approval) => crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::conflict("Approval already decided").with_details(serde_json::json!({
+                "status": approval.status,
+                "approval_id": approval_id,
+                "reason": "approval_already_decided"
+            })),
+        ),
+        None => crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::conflict("Approval already decided").with_details(serde_json::json!({
+                "approval_id": approval_id,
+                "reason": "approval_already_decided"
+            })),
+        ),
     }
 }
 
@@ -434,9 +447,9 @@ pub async fn approve_approval(
         return resp;
     }
 
-    let response = approve_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
-    record_approval_attempt_failure(&state, &response, &approval_id);
-    response
+    let outcome = approve_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
+    record_approval_attempt_failure(&state, outcome.status, &approval_id);
+    crate::authorize_service::outcome_to_response(outcome)
 }
 
 pub(crate) async fn approve_approval_inner(
@@ -444,7 +457,7 @@ pub(crate) async fn approve_approval_inner(
     tenant_id: String,
     approval_id: Uuid,
     payload: ApproveRequest,
-) -> axum::response::Response {
+) -> crate::authorize_service::AuthorizedOutcome {
     // Load the approval first so we can fail closed on stale or already-decided
     // requests instead of blindly transitioning to APPROVED.
     let approval = match state
@@ -454,11 +467,15 @@ pub(crate) async fn approve_approval_inner(
     {
         Ok(Some(app)) => app,
         Ok(None) => {
-            return StatusError::not_found("Approval request not found").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::not_found("Approval request not found"),
+            );
         }
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
     };
 
@@ -466,8 +483,8 @@ pub(crate) async fn approve_approval_inner(
     // APPROVED/REJECTED one). An edited approval stays `created` and is
     // approvable — approve binds to its effective (edited) hash.
     if approval.status != "created" {
-        return StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
-            .into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(StatusError::conflict("Approval already decided").with_details(serde_json::json!({"status": approval.status, "approval_id": approval_id, "reason": "approval_already_decided"}))
+            );
     }
 
     // Fail closed if the approval window has already passed. Granting an expired
@@ -485,11 +502,11 @@ pub(crate) async fn approve_approval_inner(
             Some(&approval.decision_id),
         )
         .await;
-        return StatusError::conflict("Approval has expired")
-            .with_details(
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::conflict("Approval has expired").with_details(
                 serde_json::json!({"approval_id": approval_id, "reason": "approval_expired"}),
-            )
-            .into_response();
+            ),
+        );
     }
 
     // Atomically transition to APPROVED (#1300). The UPDATE itself is the
@@ -511,7 +528,9 @@ pub(crate) async fn approve_approval_inner(
         Ok(updated) => updated,
         Err(e) => {
             error!("Failed to approve request: {:?}", e);
-            return StatusError::internal("Failed to approve request").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Failed to approve request"),
+            );
         }
     };
 
@@ -554,11 +573,12 @@ pub(crate) async fn approve_approval_inner(
 
     spawn_github_check_resolution_for_approval(&state, &approval, true);
 
-    (
-        StatusCode::OK,
-        Json(json!({"status": "success", "approval_id": approval_id})),
-    )
-        .into_response()
+    crate::authorize_service::AuthorizedOutcome {
+        status: StatusCode::OK,
+        body: crate::authorize_service::AuthorizedBody::Json(
+            json!({"status": "success", "approval_id": approval_id}),
+        ),
+    }
 }
 
 /// #1380: close the loop `gh_checks::spawn_record_decision` opens -- a
@@ -616,9 +636,9 @@ pub async fn reject_approval(
         return resp;
     }
 
-    let response = reject_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
-    record_approval_attempt_failure(&state, &response, &approval_id);
-    response
+    let outcome = reject_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
+    record_approval_attempt_failure(&state, outcome.status, &approval_id);
+    crate::authorize_service::outcome_to_response(outcome)
 }
 
 pub(crate) async fn reject_approval_inner(
@@ -626,7 +646,7 @@ pub(crate) async fn reject_approval_inner(
     tenant_id: String,
     approval_id: Uuid,
     payload: ApproveRequest,
-) -> axum::response::Response {
+) -> crate::authorize_service::AuthorizedOutcome {
     // 404 if the approval doesn't exist for this tenant.
     let approval = match state
         .storage
@@ -635,11 +655,15 @@ pub(crate) async fn reject_approval_inner(
     {
         Ok(Some(app)) => app,
         Ok(None) => {
-            return StatusError::not_found("Approval request not found").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::not_found("Approval request not found"),
+            );
         }
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
     };
 
@@ -662,7 +686,9 @@ pub(crate) async fn reject_approval_inner(
         Ok(updated) => updated,
         Err(e) => {
             error!("Failed to reject request: {:?}", e);
-            return StatusError::internal("Failed to reject request").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Failed to reject request"),
+            );
         }
     };
 
@@ -707,11 +733,12 @@ pub(crate) async fn reject_approval_inner(
 
     spawn_github_check_resolution_for_approval(&state, &approval, false);
 
-    (
-        StatusCode::OK,
-        Json(json!({"status": "success", "approval_id": approval_id})),
-    )
-        .into_response()
+    crate::authorize_service::AuthorizedOutcome {
+        status: StatusCode::OK,
+        body: crate::authorize_service::AuthorizedBody::Json(
+            json!({"status": "success", "approval_id": approval_id}),
+        ),
+    }
 }
 
 // Edit parameters handler
@@ -730,7 +757,7 @@ pub async fn edit_approval(
     }
 
     let response = edit_approval_inner(state.clone(), tenant_id, approval_id, payload).await;
-    record_approval_attempt_failure(&state, &response, &approval_id);
+    record_approval_attempt_failure(&state, response.status(), &approval_id);
     response
 }
 
@@ -797,13 +824,15 @@ pub(crate) async fn edit_approval_inner(
     };
 
     if !updated {
-        return conflict_response_for_failed_transition(
-            &state,
-            &tenant_id,
-            &approval_id,
-            "edit_expired",
-        )
-        .await;
+        return crate::authorize_service::outcome_to_response(
+            conflict_response_for_failed_transition(
+                &state,
+                &tenant_id,
+                &approval_id,
+                "edit_expired",
+            )
+            .await,
+        );
     }
 
     // Write audit event. The approval stays pending after an edit; record the
