@@ -22,7 +22,6 @@ use aegis_api::grpc::aegis::{
     SilenceItem, SocDashboardItem, SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
     UpdateSocDashboardRequest, UpdateSocDashboardResponse,
 };
-use axum::response::IntoResponse;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -542,17 +541,9 @@ impl SocService for SocGrpcServiceImpl {
             cursor: req.cursor,
         };
 
-        let response = crate::routes::soc_query(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::Json(rest_request),
-        )
-        .await
-        .into_response();
-        // Transitional: faithful StatusError→tonic mapping; full typed SOC
-        // service extraction is follow-on work.
-        let (_status, value) =
-            crate::authorize_service::axum_response_to_tonic_json(response).await?;
+        let outcome =
+            crate::routes::soc_query_inner(self._state.clone(), req.tenant_id, rest_request).await;
+        let value = crate::authorize_service::outcome_to_tonic_json(outcome)?;
         let result_json = value.to_string();
         Ok(Response::new(SocQueryResponse { result_json }))
     }
@@ -678,16 +669,13 @@ impl SocService for SocGrpcServiceImpl {
             return Err(Status::invalid_argument("Missing incident_id"));
         }
 
-        let response = crate::routes::close_incident(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::extract::Path(req.incident_id.clone()),
+        let outcome = crate::routes::close_incident_inner(
+            self._state.clone(),
+            req.tenant_id,
+            req.incident_id.clone(),
         )
-        .await
-        .into_response();
-
-        // Transitional bridge with StatusError→tonic mapping.
-        let _value = crate::authorize_service::axum_response_to_tonic_json(response).await?;
+        .await;
+        let _value = crate::authorize_service::outcome_to_tonic_json(outcome)?;
 
         Ok(Response::new(CloseIncidentResponse {
             status: "closed".to_string(),

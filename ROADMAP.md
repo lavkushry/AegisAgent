@@ -74,11 +74,12 @@ allow / deny / require_approval / dry-run / frozen agent / bad token / missing
 tenant / replay-nonce conflict, plus approval `action_hash` length parity.
 Follow-on progress: typed `AuthorizedOutcome` seam covers **authorize**,
 **approve/reject**, **register_agent**, **create_tenant**,
-**register_mcp_server**, and **discover_mcp_tools** (REST thin adapters + gRPC
-`outcome_to_tonic` / `outcome_to_tonic_json`, no Axum body buffer). Remaining
-SOC gRPC RPCs still REST-bridge; `soc_query` / `close_incident` use
-`axum_response_to_tonic_json` for StatusError→tonic codes. Remaining: typed
-SOC extraction; later `aegis-decision` crate move.
+**register_mcp_server**, **discover_mcp_tools**, **soc_query**, and
+**close_incident** (REST thin adapters + gRPC `outcome_to_tonic` /
+`outcome_to_tonic_json`, no Axum body buffer). Remaining SOC gRPC methods
+(playbooks, contact points, dashboards, …) already call storage directly.
+Remaining: later `aegis-decision` crate move; optional typed wrappers for
+storage-direct SOC RPCs.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 
