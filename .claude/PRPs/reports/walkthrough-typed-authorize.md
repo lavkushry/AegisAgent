@@ -18,7 +18,8 @@
 2. **Gateway adapters**
    - `decision_runtime.rs` — `GatewayDecisionRuntime`
    - `authorize_service.rs` — wire map + `GatewayAuthorizeService` (no Axum body bridge)
-   - `authorize_service_tests.rs` + `authorize_equality.rs` path modules
+   - `authorize_service_tests.rs` (wire map + header context + DecisionOutcome
+     mapping) + `authorize_equality.rs` path modules
    - `routes/authorize.rs` — ~80-line REST entry
    - gRPC `authorize` → context → `evaluate` → `outcome_to_tonic`
 

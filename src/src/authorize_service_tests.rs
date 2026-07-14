@@ -1,6 +1,6 @@
 use super::*;
 use crate::error::StatusError;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use tonic::Code;
 
 #[test]
@@ -248,4 +248,125 @@ fn build_service_headers_sets_mtls_cn_without_bearer() {
         Some("agent.example")
     );
     assert!(headers.get(axum::http::header::AUTHORIZATION).is_none());
+}
+
+#[test]
+fn decision_outcome_to_authorized_maps_decision_body() {
+    let resp = AuthorizeResponse {
+        decision_id: uuid::Uuid::nil(),
+        decision: "allow".into(),
+        risk_score: 10,
+        risk_level: "low".into(),
+        composite_risk_score: 10,
+        reason: "ok".into(),
+        matched_policies: vec!["p1".into()],
+        approval: None,
+        redacted_fields: vec![],
+        root_trust_level: "trusted_internal_unsigned".into(),
+        dry_run: false,
+        receipt: None,
+    };
+    let outcome = DecisionOutcome {
+        http_status: 200,
+        body: DecisionBody::Decision(Box::new(resp.clone())),
+    };
+    let wired = decision_outcome_to_authorized(outcome);
+    assert_eq!(wired.status, StatusCode::OK);
+    match wired.body {
+        AuthorizedBody::Decision(got) => {
+            assert_eq!(got.decision, "allow");
+            assert_eq!(got.reason, "ok");
+            assert_eq!(got.matched_policies, vec!["p1".to_string()]);
+        }
+        other => panic!("expected Decision, got {other:?}"),
+    }
+}
+
+#[test]
+fn decision_outcome_to_authorized_maps_failure_preserving_http_status() {
+    let outcome = DecisionOutcome {
+        http_status: 429,
+        body: DecisionBody::Failure(DecisionFailure::too_many_requests("rate limited")),
+    };
+    let wired = decision_outcome_to_authorized(outcome);
+    assert_eq!(wired.status, StatusCode::TOO_MANY_REQUESTS);
+    match wired.body {
+        AuthorizedBody::Status(err) => {
+            assert_eq!(err.reason, ErrorReason::TooManyRequests);
+            assert_eq!(err.message, "rate limited");
+            assert_eq!(err.code, 429);
+        }
+        other => panic!("expected Status, got {other:?}"),
+    }
+}
+
+#[test]
+fn decision_outcome_to_authorized_maps_partial_deny_to_json_403() {
+    let outcome = DecisionOutcome {
+        http_status: 403,
+        body: DecisionBody::PartialDeny {
+            reason: "agent not permitted to call tool 'echo'".into(),
+        },
+    };
+    let wired = decision_outcome_to_authorized(outcome);
+    assert_eq!(wired.status, StatusCode::FORBIDDEN);
+    match wired.body {
+        AuthorizedBody::Json(v) => {
+            assert_eq!(v.get("decision").and_then(|x| x.as_str()), Some("deny"));
+            assert_eq!(
+                v.get("reason").and_then(|x| x.as_str()),
+                Some("agent not permitted to call tool 'echo'")
+            );
+        }
+        other => panic!("expected Json partial deny, got {other:?}"),
+    }
+}
+
+#[test]
+fn authorize_context_from_headers_bearer_and_tenant() {
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Aegis-Tenant-ID", "tenant_z".parse().expect("hv"));
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "Bearer tok-xyz".parse().expect("hv"),
+    );
+    headers.insert("x-aegis-request-signature", "sig-1".parse().expect("hv"));
+    let addr = std::net::SocketAddr::from(([198, 51, 100, 7], 4443));
+    let ctx = authorize_context_from_headers(&headers, addr).expect("ctx");
+    assert_eq!(ctx.tenant_id, "tenant_z");
+    assert_eq!(ctx.client_addr, addr);
+    assert_eq!(ctx.transport, Transport::Rest);
+    match ctx.credential {
+        AuthCredential::BearerToken(t) => assert_eq!(t, "tok-xyz"),
+        AuthCredential::MtlsCn(_) => panic!("expected bearer"),
+    }
+    assert_eq!(ctx.request_signature.as_deref(), Some("sig-1"));
+}
+
+#[test]
+fn authorize_context_from_headers_prefers_mtls_cn() {
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Tenant-ID", "t-mtls".parse().expect("hv"));
+    headers.insert(crate::mtls::MTLS_CN_HEADER, "agent.cn".parse().expect("hv"));
+    // Bearer present but mTLS CN wins when header is set.
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "Bearer ignored".parse().expect("hv"),
+    );
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9));
+    let ctx = authorize_context_from_headers(&headers, addr).expect("ctx");
+    assert_eq!(ctx.tenant_id, "t-mtls");
+    match ctx.credential {
+        AuthCredential::MtlsCn(cn) => assert_eq!(cn, "agent.cn"),
+        AuthCredential::BearerToken(_) => panic!("expected mtls"),
+    }
+}
+
+#[test]
+fn authorize_context_from_headers_missing_tenant_is_bad_request() {
+    let headers = HeaderMap::new();
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 1));
+    let err = authorize_context_from_headers(&headers, addr).expect_err("no tenant");
+    assert_eq!(err.reason, ErrorReason::BadRequest);
+    assert!(err.message.contains("Tenant"));
 }
