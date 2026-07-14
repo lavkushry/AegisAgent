@@ -52,6 +52,23 @@ Deliverables:
 
 Gate: round-trip/differential corpus equality; malformed length/depth/version fuzz seeds rejected without allocation spikes.
 
+Progress (2026-07-14): **protobuf v2 control skeleton landed** as an unwired
+prototype under Proposed ADR-0011. `lib/api/proto/aegis_v2.proto` (package
+`aegis.v2`, from LLD §22) is generated beside the wired v1 protos through a
+separate `tonic_build::configure()` call — v1 output unchanged — and exposed at
+`aegis_api::grpc::aegis_v2`; nothing serves or dials it. Field numbers are
+reserved permanently on every message, and `IngestFrame.flatbuffer_frame` /
+`ArrowChunk.ipc_message` map to `bytes::Bytes` (no `Vec<u8>` clone). The Week-2
+gate is partially met for this format: `cargo test -p aegis-api --lib wire_v2`
+covers `AuthorizeRequest`/`AuthorizeResponse` round-trip equality, the
+`Bytes`-typed payload proof, malformed length/varint rejection without
+allocating the advertised size, and fail-closed proto3 zero-value enum defaults.
+**Still open** (follow-on increments under ADR-0011): FlatBuffer telemetry v2
+(§23, introduces `flatbuffers`), Arrow logical schema + fingerprint + `AAS2`
+browser envelope (§9.2/§24, introduces `arrow`), and the full four-way
+logical-event conversion corpus across REST/protobuf/FlatBuffer/Arrow. No
+production or `shadow` wiring, no performance claim.
+
 ### Week 3 — Extract typed authorization service
 
 Deliverables:

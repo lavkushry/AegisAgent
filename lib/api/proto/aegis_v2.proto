@@ -1,0 +1,134 @@
+// AegisAgent v2 control-plane wire contract (target).
+//
+// This is the Week-2 "public protobuf skeleton" from docs/LLD.md §22. It is an
+// UNWIRED prototype governed by Proposed ADR-0011: the generated types compile
+// into `aegis_api::grpc::aegis_v2`, but no server serves them and no client
+// calls them. Field numbering is reserved PERMANENTLY once committed — see the
+// `reserved` ranges on every message. Schema evolution adds fields with new
+// numbers; it never renumbers, never reuses a retired number, and never
+// changes an enum value's meaning.
+//
+// Protobuf remains the public source of truth. FlatBuffer telemetry (LLD §23)
+// and the Arrow logical schema (LLD §9.2 / §24) are separate follow-on
+// increments under the same ADR; the opaque payload fields here are the seams
+// they attach to (`IngestFrame.flatbuffer_frame`, `ArrowChunk.ipc_message`).
+
+syntax = "proto3";
+
+package aegis.v2;
+
+service DecisionService {
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+  rpc ConsumeApproval(ConsumeApprovalRequest) returns (AuthorizeResponse);
+}
+
+service TelemetryService {
+  rpc Ingest(stream IngestFrame) returns (stream IngestAck);
+}
+
+service QueryService {
+  rpc Query(QueryRequest) returns (stream ArrowChunk);
+}
+
+message Action {
+  string tool = 1;
+  string operation = 2;
+  string resource = 3;
+  bool mutates_state = 4;
+  bytes canonical_json_parameters = 5; // verified aegis-jcs-1-compatible value bytes
+
+  // Reserve headroom for typed parameter descriptors and resource scoping.
+  reserved 6 to 15;
+}
+
+message Provenance {
+  enum Trust {
+    TRUST_UNSPECIFIED = 0;
+    TRUSTED_INTERNAL_SIGNED = 1;
+    TRUSTED_INTERNAL_UNSIGNED = 2;
+    SEMI_TRUSTED_CUSTOMER = 3;
+    UNTRUSTED_EXTERNAL = 4;
+    MALICIOUS_SUSPECTED = 5;
+    UNKNOWN = 6;
+  }
+  Trust source_trust = 1;
+  Trust root_trust = 2;
+  bytes trace_id = 3;
+  bytes parent_event_id = 4;
+
+  reserved 5 to 15;
+}
+
+message AuthorizeRequest {
+  bytes request_id = 1;
+  bytes nonce = 2;
+  uint64 issued_at_unix_ns = 3;
+  Action action = 4;
+  Provenance provenance = 5;
+  string environment = 6;
+
+  reserved 7 to 20;
+}
+
+message AuthorizeResponse {
+  enum Decision {
+    DECISION_UNSPECIFIED = 0;
+    ALLOW = 1;
+    DENY = 2;
+    REQUIRE_APPROVAL = 3;
+    QUARANTINE = 4;
+  }
+  Decision decision = 1;
+  bytes action_hash_sha256 = 2;
+  uint64 policy_generation = 3;
+  string reason_code = 4;
+  bytes approval_id = 5;
+  bytes receipt_id = 6;
+  bytes receipt_hash_sha256 = 7;
+  uint64 expires_at_unix_ns = 8;
+
+  reserved 9 to 20;
+}
+
+message ConsumeApprovalRequest {
+  bytes approval_id = 1;
+  bytes request_id = 2;
+  bytes nonce = 3;
+
+  reserved 4 to 15;
+}
+
+message IngestFrame {
+  uint32 schema_id = 1;
+  uint64 stream_sequence = 2;
+  bytes flatbuffer_frame = 3;
+  uint32 crc32c = 4;
+
+  reserved 5 to 15;
+}
+
+message IngestAck {
+  uint64 contiguous_sequence = 1;
+  uint64 durable_sequence = 2;
+  uint32 credit_frames = 3;
+  uint64 credit_bytes = 4;
+  string error_code = 5;
+
+  reserved 6 to 15;
+}
+
+message QueryRequest {
+  bytes tenant_scoped_plan = 1; // generated typed query message replaces opaque bytes before GA
+
+  reserved 2 to 15;
+}
+
+message ArrowChunk {
+  uint64 stream_id = 1;
+  uint64 sequence = 2;
+  bytes ipc_message = 3;
+  uint32 crc32c = 4;
+  bool end_of_stream = 5;
+
+  reserved 6 to 15;
+}

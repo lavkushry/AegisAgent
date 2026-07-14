@@ -21,14 +21,16 @@ separate documentation change.
 | Artifact | Status | Evidence in this checkout | Authority / traffic | Remaining gates |
 |---|---|---|---|---|
 | Unwired SPSC, slab-page, published-prefix, and single-page admission prototypes | current | `lib/event/`; ring FIFO/full/wrap/drop/layout plus cancelable permits and commit-delayed claims; safe sealed and short-trace differential oracles; packed page publication; page-before-ring admission; must-use frame leases; clean/faulted/orphan terminal checks; native stress; shipping-algorithm Loom; Miri-oriented borrow/drop tests; ASan/TSan CI lanes defined; zero-allocation append/resolve and admission/claim checks; ADR-0006 through ADR-0009 | No production or `shadow` traffic; cannot carry protected evidence; volatile admission is not a receipt or durability acknowledgement; no performance claim | Formal ADR acceptance/security review, green hosted sanitizer artifacts, UBSan support, authenticated registry, bounded page rotation/outstanding pages + generation reuse (ADR-0010 Proposed with an unwired prototype; in-place slot reuse still required before shadow), WAL durability/replay, epochs for any multi-reader future, NUMA-owner reclamation, priority lanes, production shadow wiring, release-artifact rollback, qualification |
+| Unwired v2 protobuf control skeleton | current | `lib/api/proto/aegis_v2.proto` (package `aegis.v2`, LLD §22) generated beside wired v1 via a separate `tonic_build::configure()`; exposed at `aegis_api::grpc::aegis_v2`; permanent `reserved` field ranges; `IngestFrame.flatbuffer_frame`/`ArrowChunk.ipc_message` mapped to `bytes::Bytes`; `wire_v2` tests cover round-trip equality, `Bytes` payload proof, malformed length/varint rejection without allocation, fail-closed proto3 enum defaults; ADR-0011 | No production or `shadow` traffic; not served or dialed; cannot mint `allow` or a receipt; no performance claim | FlatBuffer telemetry v2 (§23), Arrow logical schema + fingerprint + `AAS2` envelope (§9.2/§24), full four-way REST/protobuf/FlatBuffer/Arrow conversion corpus, typed `QueryRequest` predicates, formal ADR acceptance/security review, shadow wiring, qualification |
 | Thread-per-core reactor | target | `ARCHITECTURE.md`, `docs/LLD.md` | None | runtime ADR, core-affinity/io_uring implementation, migration and benchmark gates |
 | HCMT telemetry store | target | `ARCHITECTURE.md`, `docs/LLD.md` | None; SQL remains authoritative/current | WAL/segment ADR, recovery corpus, dual write, shadow equality, qualification |
 
 No v2 component is `qualified` in this checkout. The SPSC, slab-page,
-published-prefix, and single-page admission prototypes being `current` means
-only that their isolated, unwired code and listed tests are present. The
-production event fabric remains `target`, is neither `shadow` nor `qualified`,
-and is not production-authoritative.
+published-prefix, and single-page admission prototypes and the v2 protobuf
+control skeleton being `current` means only that their isolated, unwired code
+and listed tests are present. The production event fabric and the v2 wire
+contracts remain `target`, are neither `shadow` nor `qualified`, and are not
+production-authoritative.
 
 | Capability | Status | Current files | Missing pieces | Related issues | Test coverage | Prod-ready | Next PR |
 |---|---|---|---|---|---|---|---|
