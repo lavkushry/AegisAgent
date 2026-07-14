@@ -107,7 +107,7 @@ For end-to-end checks, we use a loopback integration server.
 ### Runbook Steps:
 1. Ensure the gateway server is compiling and running:
    ```bash
-   cargo run --manifest-path gateway/Cargo.toml
+   cargo run -p gateway
    ```
 2. In a separate shell, run the integration harness script:
    ```bash

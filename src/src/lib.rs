@@ -50,6 +50,7 @@ pub use aegis_common::metrics;
 // Binary-specific modules
 pub mod admission;
 pub mod airgap;
+pub mod authorize_service;
 pub mod error;
 pub mod gh_checks;
 pub mod gh_comment;

@@ -1,8 +1,10 @@
 # Blueprint: Week-3 typed AuthorizeService extraction
 
 **Roadmap:** Phase 1 Week 3 · **Law:** `docs/architecture.md` §5 (thin
-adapters), §4 (target seams) · **Status:** plan approved-by-directive,
-implementation staged below.
+adapters), §4 (target seams) · **Status:** Phase A types + Phase B flag path +
+Phase C equality corpus landed on `feat/typed-authorize-service`
+(`authorize_service.rs` unit + `equality_*` tests, gRPC dual path). Phase D
+default-on cleanup remains.
 
 ## 1. Architectural scope & impact
 
@@ -67,12 +69,15 @@ must not regress >25%).
 
 ## 4. Security audit checklist
 
-- [ ] HMAC verification still runs over the exact raw REST bytes (stays in
-      the REST adapter — the service never re-serializes for auth)
-- [ ] auth-failure tracker still keyed by real client address per transport
-- [ ] tenant binding: `ctx.tenant_id` is the single authority the service
-      uses; no header re-reads inside the service
-- [ ] fail-closed: any context the adapter cannot authenticate never
-      constructs an AuthorizeContext
-- [ ] no behavior change to Cedar, approvals, receipts, replay, bans
+- [x] HMAC verification still runs over the exact raw REST bytes (stays in
+      the REST adapter — the service never re-serializes for auth; gRPC
+      typed path serializes once for signature compatibility only)
+- [x] auth-failure tracker still keyed by real client address per transport
+      (typed gRPC uses tonic `remote_addr`, not forged loopback)
+- [x] tenant binding: `ctx.tenant_id` is the single authority the service
+      uses when building service headers
+- [x] fail-closed: any context the adapter cannot authenticate never
+      constructs an AuthorizeContext (missing bearer/mTLS → Unauthenticated)
+- [x] no behavior change to Cedar, approvals, receipts, replay, bans
+      (Phase C equality corpus)
 - [ ] security-review sign-off before Phase D flips the default

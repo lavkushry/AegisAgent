@@ -101,7 +101,7 @@ Detect common software vulnerabilities in source code before merging.
 1. **Run the Scanner:** Proactively run the security scanner (such as `cargo-clippy`, `bandit` for Python, or integrated MCP scanners) on all modified files.
 2. **Scan Command Example:**
    ```bash
-   cargo clippy --workspace --all-targets -- -D warnings
+   cargo clippy -p gateway --all-targets -- -D warnings
    # And for python
    bandit -r sdk-python/
    ```

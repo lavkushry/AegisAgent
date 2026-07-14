@@ -36,6 +36,85 @@ impl AegisGrpcServiceImpl {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { _state: state }
     }
+
+    /// Typed authorize path (AEGIS_TYPED_AUTHORIZE): real peer address, no
+    /// forged loopback, credential/tenant resolved into AuthorizeContext, and
+    /// StatusError → tonic::Code mapping instead of Status::internal collapse.
+    async fn authorize_typed(
+        &self,
+        request: Request<AuthorizeRequest>,
+    ) -> Result<Response<AuthorizeResponse>, Status> {
+        use crate::authorize_service::{
+            authorize, http_error_to_tonic, AuthCredential, AuthorizeContext, Transport,
+        };
+
+        let client_addr = request
+            .remote_addr()
+            .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
+
+        let metadata = request.metadata();
+        let bearer = metadata
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim())
+            .and_then(|s| {
+                s.strip_prefix("Bearer ")
+                    .or_else(|| s.strip_prefix("bearer "))
+                    .map(|t| t.to_string())
+            });
+        let mtls_cn = metadata
+            .get("x-aegis-mtls-cn")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let request_signature = metadata
+            .get("x-aegis-request-signature")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        let credential = if let Some(cn) = mtls_cn {
+            AuthCredential::MtlsCn(cn)
+        } else if let Some(token) = bearer {
+            AuthCredential::BearerToken(token)
+        } else {
+            return Err(Status::unauthenticated(
+                "Missing agent token (authorization metadata) or mTLS CN",
+            ));
+        };
+
+        let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "Missing tenant_id on AuthorizeRequest",
+            ));
+        }
+
+        let ctx = AuthorizeContext::new(
+            req.tenant_id.clone(),
+            client_addr,
+            Transport::Grpc,
+            credential,
+        )
+        .with_request_signature(request_signature);
+
+        let rest_req = map_authorize_request(req);
+        let response = authorize(self._state.clone(), ctx, &rest_req).await;
+
+        let status = response.status();
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        if status != axum::http::StatusCode::OK && status != axum::http::StatusCode::CREATED {
+            return Err(http_error_to_tonic(status, &body_bytes));
+        }
+
+        let res: crate::models::AuthorizeResponse = serde_json::from_slice(&body_bytes)
+            .map_err(|e| Status::internal(format!("Failed to parse authorize response: {}", e)))?;
+
+        Ok(Response::new(map_authorize_response(res)))
+    }
 }
 
 fn map_authorize_request(
@@ -158,6 +237,17 @@ impl AegisService for AegisGrpcServiceImpl {
         &self,
         request: Request<AuthorizeRequest>,
     ) -> Result<Response<AuthorizeResponse>, Status> {
+        // Week-3 typed path (architecture.md §5): adapters resolve tenant /
+        // credential / real peer, then call the protocol-neutral service.
+        // Gated on AEGIS_TYPED_AUTHORIZE (default off) until the equality
+        // corpus is green — see authorize_service module docs.
+        if crate::authorize_service::typed_authorize_enabled() {
+            return self.authorize_typed(request).await;
+        }
+
+        // Legacy path: gRPC → forge headers + JSON body → REST impl → parse
+        // JSON. Violates architecture.md §5; retained only as the off-flag
+        // rollback until Phase D deletes it.
         let mut headers = HeaderMap::new();
         if let Some(auth_val) = request.metadata().get("authorization") {
             if let Ok(val) = axum::http::HeaderValue::from_bytes(auth_val.as_bytes()) {

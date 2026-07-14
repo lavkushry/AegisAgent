@@ -1,6 +1,6 @@
 ---
 globs:
-  - "gateway/src/**/*.rs"
+  - "src/src/**/*.rs"
   - "src/**/*.rs"
 ---
 

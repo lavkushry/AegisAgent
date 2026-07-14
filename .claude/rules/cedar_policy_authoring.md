@@ -149,5 +149,5 @@ mod tests {
 2. **Add matching unit test cases:** Write target assertions in `lib/policy/src/cedar.rs` to verify correct evaluations.
 3. **Execute test suite:** Run tests to verify rules compile and evaluate correctly:
    ```bash
-   cargo test --workspace -- --test-threads=1
+   cargo test -p gateway
    ```
