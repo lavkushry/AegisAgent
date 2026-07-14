@@ -909,7 +909,10 @@ impl fmt::Display for SlabRebindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OutstandingEndpoints => {
-                write!(f, "cannot rebind page while writer/reader endpoints are live")
+                write!(
+                    f,
+                    "cannot rebind page while writer/reader endpoints are live"
+                )
             }
         }
     }

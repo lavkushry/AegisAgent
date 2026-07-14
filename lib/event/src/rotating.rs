@@ -843,8 +843,12 @@ pub enum RotatingConfigError {
     Ring(RingConfigError),
     Handoff(RingConfigError),
     Slab(SlabConfigError),
-    PoolTooSmall { pool: usize },
-    GenerationNotZero { arena_generation: u32 },
+    PoolTooSmall {
+        pool: usize,
+    },
+    GenerationNotZero {
+        arena_generation: u32,
+    },
     /// Internal: fixed pool length did not match `P` after construction.
     PoolBuildLength,
 }
@@ -1188,9 +1192,7 @@ mod native_tests {
         let page = PublishedSlabPage::new(config()).expect("page");
         let (_w, _r) = page.open();
         let mut page = page;
-        let err = page
-            .rebind(1, 99)
-            .expect_err("open endpoints block rebind");
+        let err = page.rebind(1, 99).expect_err("open endpoints block rebind");
         assert_eq!(err, crate::SlabRebindError::OutstandingEndpoints);
     }
 
