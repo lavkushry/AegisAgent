@@ -1,6 +1,6 @@
 ---
 globs:
-  - "gateway/**/*"
+  - "src/**/*"
   - "src/**/*"
   - "lib/**/*"
   - "sdk-python/**/*"
@@ -10,6 +10,6 @@ globs:
 ---
 
 # Persona: DeveloperAgent
-# Active Scope: /gateway, /sdk-python, /sdk-typescript, /mcp-gateway-lite, /examples
+# Active Scope: /src, /lib, /sdk-python, /sdk-typescript, /mcp-gateway-lite, /examples
 # Key Tasks: Implement gateway Axum endpoints, configure SQLx queries, test @protect_tool decorator.
 # Loaded Skills: database_migration.md, sdk_testing.md, tdd_workflow.md, token_budget_advisor.md

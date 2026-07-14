@@ -114,7 +114,7 @@ In AWS Cedar, policy evaluations natively return a binary `Allow` or `Deny` deci
 
 ## 5. Testing Policy Evaluation in Rust
 
-Policies should be verified via unit tests inside the Rust gateway (`gateway/src/policy.rs`).
+Policies should be verified via unit tests inside the Rust gateway (`lib/policy/src/cedar.rs`).
 
 ### Example Integration Test:
 
@@ -145,9 +145,9 @@ mod tests {
 ---
 
 ## 6. Runbook for Modifying Policies
-1. **Edit `gateway/policies.cedar`:** Add or adjust rules according to authorization needs.
-2. **Add matching unit test cases:** Write target assertions in `gateway/src/policy.rs` to verify correct evaluations.
+1. **Edit `policies.cedar`:** Add or adjust rules according to authorization needs.
+2. **Add matching unit test cases:** Write target assertions in `lib/policy/src/cedar.rs` to verify correct evaluations.
 3. **Execute test suite:** Run tests to verify rules compile and evaluate correctly:
    ```bash
-   cargo test --manifest-path gateway/Cargo.toml
+   cargo test --workspace -- --test-threads=1
    ```
