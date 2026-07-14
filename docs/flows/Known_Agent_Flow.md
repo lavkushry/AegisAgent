@@ -42,13 +42,13 @@ sequenceDiagram
 |---|---|---|
 | 1 | Developer wraps the function | `@protect_tool` — `sdk-python/aegisagent/decorator.py`, `sdk-go/aegis/protect.go`, `sdk-typescript/src/protect.ts` |
 | 2 | Canonicalize + hash | `sdk-python/aegisagent/canon.py` ↔ gateway `src/canon/` (byte parity: `tests/canonical_action_vectors.json`) |
-| 3 | Authorize request | `POST /v1/authorize` → `src/src/routes/authorize.rs` |
-| 4 | Preflight | `TenantId` extractor, `RateLimiter`/`QuotaManager`, agent status check, `normalize_tool_identifier` (`routes/mod.rs`) — plus optional admission webhook (#1143), replay-nonce dedup (#1306), timestamp staleness check |
-| 5 | Registry lookup | skill/action metadata (`SkillActionCache` → `db::get_skill_action`); unknown tool → **deny** |
-| 6 | Policy | `lib/policy/src/cedar.rs` + `trust_chain.rs` + `risk.rs` — allow / deny / `@decision("require_approval")` |
+| 3 | Authorize request | `POST /v1/authorize` → thin `routes/authorize.rs` → `AuthorizeContext` |
+| 4 | Pipeline | `aegis-decision::run_authorize_pipeline` via `GatewayDecisionRuntime` (admit → preflight → guard → metadata → evaluate) |
+| 5 | Preflight / guard | Rate limit, quota, tool permission, replay nonce, frozen/banned, optional admission webhook |
+| 6 | Registry + policy | Skill/MCP metadata ports; Cedar via `lib/policy` + decision overrides; unknown → **deny** / critical approval defaults |
 | 7 | Approval branch | [../components/Approval_Engine.md](../components/Approval_Engine.md) |
 | 8 | Execute | only in developer code, only after a valid decision — the SDK raises on deny/mismatch/expiry/unreachable |
-| 9 | Persist | decision + audit (`write_decision_and_audit`, batched audit #1315), receipt append (`routes/authorize_receipts.rs`) |
+| 9 | Persist | decision + audit (`DecisionRuntime::write_decision_and_audit`), receipt append (`routes/authorize_receipts.rs`) |
 | 10 | SOC | `EventSink` (`lib/soc/src/events.rs`) → `lib/soc` pipeline → alerts/incidents/containment |
 
 ## Latency shape

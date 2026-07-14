@@ -713,7 +713,7 @@ Two new gateway pieces this needs (plan the Rust):
 
 | Capability | State | Where |
 |---|---|---|
-| Inline authorize + Cedar gate | ✅ | `src/src/routes/authorize.rs`, `lib/policy/src/cedar.rs`, `policies.cedar` |
+| Inline authorize + Cedar gate | ✅ | `lib/decision` (`run_authorize_pipeline`), thin `routes/authorize.rs`, `lib/policy/src/cedar.rs`, `policies.cedar` |
 | Trust-provenance (6 levels, deterministic) | ✅ | `policies.cedar`, `cedar_policy_authoring.md` |
 | Approval integrity (hash-bound, single-use, expiry) | ✅ | `src/src/routes/approval.rs`, `lib/storage/src/db/approvals.rs`, SDK protect wrappers |
 | Hash-chained receipts + verifier + CLI | ✅ | `receipts.py`, `verify_receipts.py`, `action_receipts` |

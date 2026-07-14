@@ -192,7 +192,7 @@ The following table maps security properties to their implementation location fo
 | SOC out-of-band isolation | `lib/soc/src/events.rs` → `tokio::mpsc` channel; `drain` runs in dedicated Tokio task |
 | Deterministic detection (no LLM) | `lib/soc/src/detect.rs`; `lib/soc/src/rule_dsl.rs` |
 | RCA LLM sandboxing | `lib/soc/src/narrate.rs` — no tools, no authority, display-only output |
-| Advisory-only composite risk | `lib/policy/src/risk.rs`; `src/src/routes/authorize_decision.rs` — score written to `decisions` row and response; never read by Cedar |
+| Advisory-only composite risk | `lib/policy/src/risk.rs`; authorize evaluate path via `lib/decision` / `authorize_decision.rs` — score written to `decisions` row and response; never read by Cedar |
 | MCP manifest pinning | `src/src/routes/mcp.rs` → `discover_mcp_tools`; `mcp_servers.manifest_hash` column |
 | Redaction of secrets | `src/src/main.rs` → `redact_secrets`; hashes stored, not raw payloads |
 
