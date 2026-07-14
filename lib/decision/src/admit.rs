@@ -1,9 +1,9 @@
 //! Admit phase of authorization evaluation (library-owned).
 //!
-//! Covers the front of the former gateway `authorize_action_impl` through
-//! agent authentication, request-signature verification, and environment
-//! restriction. Cedar evaluation, persistence, and receipts remain in the
-//! gateway until subsequent extraction stages.
+//! Parses the request body, authenticates the agent (bearer or mTLS), verifies
+//! optional request signatures, and applies environment restrictions. On
+//! success returns an [`AdmittedAuthorize`] for preflight → guard → metadata →
+//! evaluate (see [`crate::run_authorize_pipeline`]).
 
 use aegis_api::models::AuthorizeRequest;
 use tracing::warn;
@@ -14,7 +14,7 @@ use crate::error_map::aegis_err_to_outcome;
 use crate::outcome::{DecisionFailure, DecisionOutcome};
 use crate::runtime::DecisionRuntime;
 
-/// Successfully admitted request ready for policy evaluation and persistence.
+/// Successfully admitted request ready for preflight (and later pipeline stages).
 #[derive(Debug, Clone)]
 pub struct AdmittedAuthorize {
     pub request: AuthorizeRequest,

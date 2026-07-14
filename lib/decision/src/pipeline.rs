@@ -122,6 +122,9 @@ mod tests {
         tool_permitted: bool,
         admission: AdmissionEffect,
         enforcement: EnforcementStatus,
+        mcp_server_permitted: bool,
+        mcp_server_status: Option<String>,
+        mcp_tool: Option<McpToolMeta>,
         writes: Mutex<u32>,
         heartbeats: Mutex<u32>,
     }
@@ -141,6 +144,9 @@ mod tests {
                 tool_permitted: true,
                 admission: AdmissionEffect::Disabled,
                 enforcement: EnforcementStatus::Clear,
+                mcp_server_permitted: true,
+                mcp_server_status: None,
+                mcp_tool: None,
                 writes: Mutex::new(0),
                 heartbeats: Mutex::new(0),
             }
@@ -244,14 +250,14 @@ mod tests {
             _: &str,
             _: &str,
         ) -> Result<bool, AegisError> {
-            Ok(true)
+            Ok(self.mcp_server_permitted)
         }
         async fn mcp_server_status(
             &self,
             _: &str,
             _: &str,
         ) -> Result<Option<String>, AegisError> {
-            Ok(None)
+            Ok(self.mcp_server_status.clone())
         }
         async fn mcp_tool_meta(
             &self,
@@ -259,7 +265,7 @@ mod tests {
             _: &str,
             _: &str,
         ) -> Result<Option<McpToolMeta>, AegisError> {
-            Ok(None)
+            Ok(self.mcp_tool.clone())
         }
         async fn ensure_policies_loaded(&self, _: &str) -> Result<(), AegisError> {
             Ok(())
@@ -378,6 +384,23 @@ mod tests {
             "tool_call": {
                 "tool": "echo",
                 "action": "run",
+                "parameters": {},
+                "mutates_state": false
+            },
+            "context": {
+                "source_trust": "trusted_internal_unsigned",
+                "contains_sensitive_data": false
+            }
+        }))
+        .expect("json")
+    }
+
+    fn mcp_body_json(server: &str, action: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "agent": { "id": "a1", "environment": "dev" },
+            "tool_call": {
+                "tool": format!("mcp:{server}"),
+                "action": action,
                 "parameters": {},
                 "mutates_state": false
             },
@@ -823,5 +846,133 @@ mod tests {
         // Preflight partial deny does not write a full decision row.
         assert_eq!(*rt.writes.lock().expect("l"), 0);
         assert_eq!(*rt.heartbeats.lock().expect("l"), 0);
+    }
+
+    #[tokio::test]
+    async fn pipeline_mcp_server_not_permitted_partial_deny() {
+        let rt = PipelineRt {
+            mcp_server_permitted: false,
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &mcp_body_json("fs", "read_file"),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        assert_eq!(out.http_status, 403);
+        match out.body {
+            DecisionBody::PartialDeny { reason } => {
+                assert!(
+                    reason.contains("MCP server"),
+                    "reason={reason}"
+                );
+            }
+            other => panic!("expected MCP permission PartialDeny, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 0);
+    }
+
+    #[tokio::test]
+    async fn pipeline_mcp_quarantined_server_denies() {
+        let rt = PipelineRt {
+            mcp_server_status: Some("quarantined".into()),
+            mcp_tool: Some(McpToolMeta {
+                risk: "medium".into(),
+                approval_required: false,
+                status: "approved".into(),
+            }),
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &mcp_body_json("fs", "read_file"),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert!(
+                    resp.reason.contains("quarantined"),
+                    "reason={}",
+                    resp.reason
+                );
+                assert_eq!(
+                    resp.matched_policies,
+                    vec!["mcp_server_quarantined".to_string()]
+                );
+            }
+            other => panic!("expected MCP quarantine deny, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_mcp_unapproved_tool_denies() {
+        let rt = PipelineRt {
+            mcp_server_status: Some("active".into()),
+            mcp_tool: Some(McpToolMeta {
+                risk: "high".into(),
+                approval_required: false,
+                status: "pending".into(),
+            }),
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &mcp_body_json("github", "merge_pr"),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert!(
+                    resp.reason.contains("not approved"),
+                    "reason={}",
+                    resp.reason
+                );
+                assert_eq!(resp.matched_policies, vec!["mcp_tool_status".to_string()]);
+            }
+            other => panic!("expected MCP tool status deny, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_mcp_approved_tool_allows() {
+        let rt = PipelineRt {
+            mcp_server_status: Some("active".into()),
+            mcp_tool: Some(McpToolMeta {
+                risk: "low".into(),
+                approval_required: false,
+                status: "approved".into(),
+            }),
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &mcp_body_json("fs", "read_file"),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "allow");
+                assert_eq!(resp.reason, "ok");
+            }
+            other => panic!("expected MCP allow, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+        assert_eq!(*rt.heartbeats.lock().expect("l"), 1);
     }
 }

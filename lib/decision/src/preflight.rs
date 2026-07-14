@@ -2,7 +2,7 @@
 //!
 //! Tool permission, replay protection, idempotency lookup, heartbeat touch,
 //! rate limit, and quota. On success returns a [`PreflightedAuthorize`] for
-//! admission-webhook / ban / Cedar stages still hosted in the gateway.
+//! the guard stage (`guard_authorize`).
 
 use aegis_api::models::{AuthorizeRequest, DecisionRecord};
 use chrono::Utc;

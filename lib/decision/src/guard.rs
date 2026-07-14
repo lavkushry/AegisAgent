@@ -4,7 +4,7 @@
 //! and ban/quarantine enforcement. Early denials are persisted through the
 //! host [`DecisionRuntime::write_decision_and_audit`] port (including dry-run
 //! score-only path). On success returns a [`GuardedAuthorize`] for skill/MCP
-//! metadata and Cedar stages still hosted in the gateway.
+//! metadata (`metadata_authorize`) then Cedar evaluation (`evaluate_authorize`).
 
 use aegis_api::models::{AuthorizeRequest, AuthorizeResponse};
 use tracing::error;
