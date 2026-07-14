@@ -549,4 +549,130 @@ mod tests {
         }
         assert_eq!(*rt.writes.lock().expect("l"), 1);
     }
+
+    #[tokio::test]
+    async fn pipeline_frozen_agent_denies_and_persists() {
+        let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
+        agent.status = "frozen".into();
+        let rt = PipelineRt {
+            agent: Some(agent),
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert!(
+                    resp.reason.contains("frozen"),
+                    "reason should mention frozen: {}",
+                    resp.reason
+                );
+                assert_eq!(resp.matched_policies, vec!["agent_frozen".to_string()]);
+                assert!(resp.approval.is_none());
+                assert!(resp.receipt.is_none());
+            }
+            other => panic!("expected frozen deny decision, got {other:?}"),
+        }
+        // Early deny still records a decision row (fail-closed audit trail).
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+        // Heartbeat is touched during preflight before the frozen guard.
+        assert_eq!(*rt.heartbeats.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_dry_run_allow_skips_receipt_and_side_effects() {
+        let rt = PipelineRt::default();
+        let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+        body["dry_run"] = serde_json::json!(true);
+        body["request_id"] = serde_json::json!("dry-req-1");
+        let raw = serde_json::to_vec(&body).expect("ser");
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &raw,
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "allow");
+                assert!(resp.dry_run, "response must echo dry_run");
+                assert!(resp.receipt.is_none(), "dry-run must not emit receipts");
+                assert!(resp.approval.is_none());
+            }
+            other => panic!("expected dry-run allow, got {other:?}"),
+        }
+        // Host port is still invoked for composite score (#1281 score-only path);
+        // durable side effects (heartbeat, receipts, approvals) stay off.
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+        assert_eq!(*rt.heartbeats.lock().expect("l"), 0);
+    }
+
+    #[tokio::test]
+    async fn pipeline_dry_run_bypasses_idempotent_replay() {
+        // A prior real decision exists for request_id, but dry-run must ignore it
+        // and re-evaluate (idempotency is for durable requests only).
+        let record = DecisionRecord {
+            id: Uuid::nil().to_string(),
+            tenant_id: "tenant-1".into(),
+            agent_id: "agent-1".into(),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            skill: "echo".into(),
+            action: "run".into(),
+            resource: None,
+            input_json: "{}".into(),
+            decision: "deny".into(),
+            risk_score: Some(99),
+            reason: Some("cached deny".into()),
+            matched_policy_ids: None,
+            request_id: Some("req-dry".into()),
+            latency_ms: None,
+            composite_risk_score: Some(99),
+            root_trust_level: Some("trusted_internal_unsigned".into()),
+            parent_run_id: None,
+            created_at: Utc::now(),
+        };
+        let rt = PipelineRt {
+            idempotent: Some(record),
+            cedar: PolicyDecisionView {
+                decision: "allow".into(),
+                matched_policies: vec!["base_allow".into()],
+                approver_group: None,
+                reason: "fresh dry-run allow".into(),
+                redacted_fields: vec![],
+            },
+            ..PipelineRt::default()
+        };
+        let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+        body["dry_run"] = serde_json::json!(true);
+        body["request_id"] = serde_json::json!("req-dry");
+        let raw = serde_json::to_vec(&body).expect("ser");
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &raw,
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "allow");
+                assert_eq!(resp.reason, "fresh dry-run allow");
+                assert!(resp.dry_run);
+            }
+            other => panic!("expected fresh dry-run allow, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+    }
 }

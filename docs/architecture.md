@@ -4,7 +4,7 @@
 
 **Status:** repository law during the v1 → v2 architecture migration
 
-**Last reviewed:** 2026-07-12
+**Last reviewed:** 2026-07-14
 
 ## Why these laws exist
 
@@ -98,8 +98,15 @@ Hard rules:
 Until extraction is complete, the current downward flow remains valid:
 
 ```text
-aegis-common ← aegis-api ← aegis-storage / aegis-policy ← aegis-soc ← src binary
+aegis-common ← aegis-api ← aegis-storage / aegis-policy
+                                    ↓
+                           aegis-decision  (authorize pipeline + DecisionRuntime ports)
+                                    ↓
+                    aegis-soc ← gateway binary (thin REST/gRPC adapters)
 ```
+
+- **Current:** `aegis-decision` owns the full authorize sequence (`admit → preflight → guard → metadata → evaluate`) behind host-implemented `DecisionRuntime` ports. The gateway implements those ports (`decision_runtime.rs`) and keeps REST/gRPC adapters thin.
+- **Still transitional:** decision I/O remains async storage via ports (not reactor snapshots / `ControlStore`). Target hot-path restrictions in §7 apply once reactor cutover lands.
 
 New code MUST move toward the target seams; it MUST NOT expand the existing 245-method storage trait or add new business logic to route modules when a focused service/trait can own it.
 

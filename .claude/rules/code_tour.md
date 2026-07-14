@@ -42,6 +42,7 @@ AegisAgent/
 │   │       └── records.rs # DB record types
 │   ├── storage/          # aegis-storage: StorageBackend trait + SQLite/PG impls
 │   ├── policy/           # aegis-policy: Cedar, trust chain, risk scoring
+│   ├── decision/         # aegis-decision: run_authorize_pipeline + DecisionRuntime ports
 │   ├── event/            # aegis-event: unwired ADR-0006..0010 prototypes (no production traffic)
 │   └── soc/              # aegis-soc: detection, correlation, response engine
 ├── sdk-python/           # Python SDK (@protect_tool, approval polling)
@@ -74,16 +75,20 @@ When exploring the codebase, study modules in this order:
    How Cedar evaluates trust level, action classification, and policy decisions.
    Deterministic — scores never gate. Policy pack lives at repo-root `policies.cedar`.
 
-5. **Binary Startup (`src/src/main.rs`):**
+5. **Authorize pipeline (`lib/decision/`):**
+   Protocol-neutral `run_authorize_pipeline` (admit → preflight → guard → metadata →
+   evaluate) behind `DecisionRuntime` ports. Gateway adapters stay thin.
+
+6. **Binary Startup (`src/src/main.rs`):**
    How config is loaded, both servers (REST + gRPC) are spawned on separate Tokio tasks,
    and `AppState` (shared between both) is constructed.
 
-6. **REST Handlers (`src/src/routes/`) + gRPC Impls (`src/src/grpc.rs`):**
+7. **REST Handlers (`src/src/routes/`) + gRPC Impls (`src/src/grpc.rs`):**
    Both are THIN — parse → service call → respond. They must call the same typed
    service seam (`docs/architecture.md` §5). gRPC must not bridge through REST handlers.
 
-7. **SOC Pipeline (`lib/soc/`):**
+8. **SOC Pipeline (`lib/soc/`):**
    Asynchronous detection, correlation, and response. NEVER in the inline authorize path.
 
-8. **Client SDK (`sdk-python/aegisagent/decorator.py`):**
+9. **Client SDK (`sdk-python/aegisagent/decorator.py`):**
    The `@protect_tool` wrapper, authorization requests, and approval polling.

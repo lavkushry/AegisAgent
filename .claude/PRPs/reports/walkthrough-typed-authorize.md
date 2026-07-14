@@ -22,11 +22,18 @@
    - Route tests: `authorize_tests.rs` (co-located, path module)
    - Docs: ROADMAP, MIGRATION_MATRIX, LLD §7, Implementation_Status, CHANGELOG
 
+## Docs polish (post-extraction)
+
+- `docs/architecture.md` transitional DAG includes `aegis-decision` + `DecisionRuntime` note
+- README authorization row reflects thin adapters → decision pipeline
+- `.claude/rules/code_tour.md` lists `lib/decision/` in tree + onboarding order
+
 ## Verification commands run
 
 ```bash
 cargo test -p aegis-decision --lib -- --test-threads=1
-# includes pipeline e2e mocks: allow, bad token, idempotent replay, require_approval
+# pipeline e2e mocks: allow, 401, idempotent, require_approval, frozen deny,
+# dry_run allow (no receipt/heartbeat), dry_run bypasses idempotent replay
 cargo test -p gateway --lib equality_ -- --test-threads=1
 cargo test -p gateway --lib -- --test-threads=1 authorize_
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
@@ -37,3 +44,4 @@ cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
 - Reactor-owned snapshots / generation binding (target AuthorizeService LLD shape)
 - Move `authorize_tests` to workspace integration crate
 - Further typed SOC gRPC RPCs still on storage-direct paths
+- Push branch + open PR when requested
