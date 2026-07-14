@@ -26,7 +26,8 @@ AegisAgent/
 │   ├── main.rs           # startup, config/env resolution, dual-server spawn (REST 8080 + gRPC 6334)
 │   ├── routes/           # REST handlers (parse → typed service → respond)
 │   ├── grpc.rs           # gRPC service impls (tonic::Request → typed service → tonic::Response)
-│   ├── authorize_service.rs  # protocol-neutral authorize seam (Week 3 extraction)
+│   ├── authorize_service.rs  # wire map + GatewayAuthorizeService (Week 3)
+│   ├── decision_runtime.rs   # GatewayDecisionRuntime (DecisionRuntime ports)
 │   ├── sign.rs, mtls.rs, oidc.rs, policy_watcher.rs, …   # focused gateway modules
 │   └── bin/              # auxiliary binaries
 ├── lib/

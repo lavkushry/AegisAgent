@@ -46,9 +46,19 @@ cargo test -p gateway --lib equality_ -- --test-threads=1
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
 ```
 
+## Ship checklist
+
+- [x] Evaluation fully library-owned (`run_authorize_pipeline`)
+- [x] REST + gRPC thin adapters; no gRPC→Axum JSON bridge
+- [x] Equality corpus (`equality_*`) for HeaderMap vs typed context
+- [x] Stage + pipeline e2e with shared `MockRuntime` (87+ decision tests)
+- [x] Wire-map unit tests (`authorize_service_tests`)
+- [x] Docs: architecture transitional DAG, ROADMAP Week 3, Gateway.md, LLD §7,
+      Implementation_Status, CLAUDE.md, code_tour / skills onboarding
+- [ ] Push branch + open PR (when requested)
+
 ## Follow-ons (not this branch)
 
 - Reactor-owned snapshots / generation binding (target AuthorizeService LLD shape)
 - Move large `authorize_tests.rs` to workspace integration crate
 - Further typed SOC gRPC RPCs still on storage-direct paths
-- Push branch + open PR when requested

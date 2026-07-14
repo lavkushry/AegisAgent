@@ -1,7 +1,9 @@
 //! TASK-1313: end-to-end criterion benchmark for `POST /v1/authorize`.
 //!
-//! This benchmarks the real `gateway::routes::authorize_action` handler
-//! in-process against a real (tempfile) SQLite pool with migrations applied,
+//! This benchmarks the real thin REST adapter (`authorize_action` →
+//! `AuthorizeContext` → `aegis_decision::run_authorize_pipeline` via
+//! `GatewayDecisionRuntime`) in-process against a real (tempfile) SQLite pool
+//! with migrations applied,
 //! seeded with:
 //!   - 1 primary "bench agent" (the one authenticating each request),
 //!   - 100 additional registered agents (TASK-1313 implementation note: "100
