@@ -311,6 +311,116 @@ mod tests {
         ) -> Result<Option<crate::runtime::McpToolMeta>, AegisError> {
             Ok(None)
         }
+
+        async fn ensure_policies_loaded(&self, _: &str) -> Result<(), AegisError> {
+            Ok(())
+        }
+        async fn evaluate_cedar(
+            &self,
+            _: &str,
+            _: &AuthorizeRequest,
+            _: &str,
+            _: bool,
+            _: bool,
+        ) -> Result<crate::runtime::PolicyDecisionView, AegisError> {
+            Ok(crate::runtime::PolicyDecisionView {
+                decision: "allow".into(),
+                matched_policies: vec![],
+                approver_group: None,
+                reason: "ok".into(),
+                redacted_fields: vec![],
+            })
+        }
+        fn record_provenance_denial(&self) {}
+        fn audit_stream_has_capacity(&self) -> bool {
+            true
+        }
+        fn set_audit_writer_healthy(&self, _: bool) {}
+        async fn emit_receipt_durable(
+            &self,
+            _: &str,
+            _: &str,
+            _: &AuthorizeRequest,
+            _: uuid::Uuid,
+            _: &str,
+            _: &str,
+        ) -> Result<aegis_api::models::ReceiptIdentity, AegisError> {
+            Ok(aegis_api::models::ReceiptIdentity {
+                receipt_id: "r".into(),
+                receipt_hash: "h".into(),
+                prev_receipt_hash: "p".into(),
+                canon_version: "aegis-jcs-1".into(),
+            })
+        }
+        async fn emit_receipt_best_effort(
+            &self,
+            _: &str,
+            _: &str,
+            _: &AuthorizeRequest,
+            _: uuid::Uuid,
+            _: &str,
+            _: &str,
+        ) {
+        }
+        async fn quarantine_agent(&self, _: &str, _: &str) -> Result<(), AegisError> {
+            Ok(())
+        }
+        fn emit_agent_quarantined(
+            &self,
+            _: &str,
+            _: &str,
+            _: &AuthorizeRequest,
+            _: i32,
+            _: &str,
+            _: &[String],
+        ) {
+        }
+        async fn create_approval(
+            &self,
+            _: &str,
+            _: &str,
+            _: &AuthorizeRequest,
+            _: crate::runtime::ApprovalCreateParams,
+        ) -> Result<aegis_api::models::ApprovalResponseInfo, AegisError> {
+            Ok(aegis_api::models::ApprovalResponseInfo {
+                approval_id: uuid::Uuid::nil(),
+                status: "created".into(),
+                approver_group: None,
+                expires_at: chrono::Utc::now(),
+                action_hash: "h".into(),
+            })
+        }
+        async fn maybe_escalate_risk_tier(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<(String, String)>, AegisError> {
+            Ok(None)
+        }
+        async fn emit_risk_escalated(
+            &self,
+            _: &str,
+            _: &str,
+            _: &AuthorizeRequest,
+            _: &str,
+            _: uuid::Uuid,
+            _: i32,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) {
+        }
+        fn notify_github_decision(
+            &self,
+            _: &AuthorizeRequest,
+            _: &str,
+            _: &str,
+            _: i32,
+            _: uuid::Uuid,
+            _: &[String],
+        ) {
+        }
     }
 
     fn addr() -> SocketAddr {

@@ -35,11 +35,12 @@ use crate::routes::AppState;
 // Protocol-neutral context / outcome / runtime types live in `aegis-decision`
 // so library code can depend on them without pulling the gateway binary.
 pub use aegis_decision::{
-    admit_authorize, guard_authorize, metadata_authorize, preflight_authorize, AdmissionEffect,
-    AuthCredential, AuthorizeAgent, AuthorizeContext, AuthorizeService, DecisionAuditWrite,
-    DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome, DecisionRuntime,
-    EnforcementStatus, GuardedAuthorize, McpToolMeta, MetadataAuthorize, PreflightTerminal,
-    PreflightedAuthorize, RegisteredActionMeta, Transport,
+    admit_authorize, evaluate_authorize, guard_authorize, metadata_authorize, preflight_authorize,
+    AdmissionEffect, ApprovalCreateParams, AuthCredential, AuthorizeAgent, AuthorizeContext,
+    AuthorizeService, DecisionAuditWrite, DecisionBody, DecisionFailure, DecisionFailureClass,
+    DecisionOutcome, DecisionRuntime, EnforcementStatus, EvaluateConfig, GuardedAuthorize,
+    McpToolMeta, MetadataAuthorize, PolicyDecisionView, PreflightTerminal, PreflightedAuthorize,
+    RegisteredActionMeta, Transport,
 };
 
 /// Body carried by a completed authorization evaluation.
@@ -693,6 +694,376 @@ impl DecisionRuntime for GatewayDecisionRuntime {
                 Ok(Some(meta))
             }
             None => Ok(None),
+        }
+    }
+
+    async fn ensure_policies_loaded(
+        &self,
+        tenant_id: &str,
+    ) -> Result<(), aegis_common::errors::AegisError> {
+        if self.state.policy_engine.has_tenant(tenant_id) {
+            return Ok(());
+        }
+        let db_policies = self.state.storage.list_policies(tenant_id).await?;
+        self.state
+            .policy_engine
+            .reload_tenant_policies(tenant_id, &db_policies)
+            .map_err(|e| {
+                aegis_common::errors::AegisError::Internal(format!(
+                    "Failed to load tenant policies: {e}"
+                ))
+            })
+    }
+
+    async fn evaluate_cedar(
+        &self,
+        tenant_id: &str,
+        request: &AuthorizeRequest,
+        agent_risk_tier: &str,
+        is_tool_known: bool,
+        is_mtls: bool,
+    ) -> Result<PolicyDecisionView, aegis_common::errors::AegisError> {
+        let d = self
+            .state
+            .policy_engine
+            .authorize(tenant_id, request, agent_risk_tier, is_tool_known, is_mtls)
+            .map_err(|e| {
+                aegis_common::errors::AegisError::Internal(format!("Policy engine failure: {e}"))
+            })?;
+        Ok(PolicyDecisionView {
+            decision: d.decision,
+            matched_policies: d.matched_policies,
+            approver_group: d.approver_group,
+            reason: d.reason,
+            redacted_fields: d.redacted_fields,
+        })
+    }
+
+    fn record_provenance_denial(&self) {
+        self.state.metrics.inc_provenance_denial();
+    }
+
+    fn audit_stream_has_capacity(&self) -> bool {
+        self.state.events.has_capacity()
+    }
+
+    fn set_audit_writer_healthy(&self, healthy: bool) {
+        self.state
+            .audit_writer_unhealthy
+            .store(!healthy, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    async fn emit_receipt_durable(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        request: &AuthorizeRequest,
+        decision_id: uuid::Uuid,
+        decision: &str,
+        action_hash: &str,
+    ) -> Result<crate::models::ReceiptIdentity, aegis_common::errors::AegisError> {
+        let receipt = crate::routes::emit_action_receipt_durable(
+            &self.state.storage,
+            tenant_id,
+            agent_id,
+            request,
+            decision_id,
+            decision,
+            action_hash,
+        )
+        .await?;
+        Ok(crate::models::ReceiptIdentity {
+            receipt_id: receipt.id,
+            receipt_hash: receipt.receipt_hash,
+            prev_receipt_hash: receipt.prev_receipt_hash,
+            canon_version: receipt.canon_version,
+        })
+    }
+
+    async fn emit_receipt_best_effort(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        request: &AuthorizeRequest,
+        decision_id: uuid::Uuid,
+        decision: &str,
+        action_hash: &str,
+    ) {
+        crate::routes::emit_action_receipt(
+            &self.state.receipt_batch,
+            &self.state.storage,
+            tenant_id,
+            agent_id,
+            request,
+            decision_id,
+            decision,
+            action_hash,
+        )
+        .await;
+    }
+
+    async fn quarantine_agent(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+    ) -> Result<(), aegis_common::errors::AegisError> {
+        self.state
+            .storage
+            .set_agent_status(tenant_id, agent_id, "quarantined")
+            .await
+            .map(|_| ())
+    }
+
+    fn emit_agent_quarantined(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        request: &AuthorizeRequest,
+        risk_score: i32,
+        reason: &str,
+        matched_policies: &[String],
+    ) {
+        use crate::events::AseEvent;
+        self.state.events.emit(AseEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            tenant_id: tenant_id.to_string(),
+            kind: "agent_quarantined".to_string(),
+            agent_id: agent_id.to_string(),
+            decision: "quarantine".to_string(),
+            tool: request.tool_call.tool.clone(),
+            action: request.tool_call.action.clone(),
+            resource: request.tool_call.resource.clone(),
+            risk_score,
+            reason: reason.to_string(),
+            run_id: request.trace.as_ref().map(|t| t.run_id.clone()),
+            trace_id: request.trace.as_ref().map(|t| t.trace_id.clone()),
+            matched_policies: matched_policies.to_vec(),
+            redacted_fields: vec![],
+            schema_version: 1,
+            evidence: None,
+            prompt_injection: None,
+            rag_poisoning: None,
+        });
+    }
+
+    async fn create_approval(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        request: &AuthorizeRequest,
+        params: ApprovalCreateParams,
+    ) -> Result<crate::models::ApprovalResponseInfo, aegis_common::errors::AegisError> {
+        use crate::models::{ApprovalRecord, ApprovalResponseInfo, AuditEventRecord};
+        use crate::routes::sha256_hex;
+
+        if let Some(ref url) = params.callback_url {
+            if let Err(e) = aegis_common::ssrf::validate_callback_url(url) {
+                return Err(aegis_common::errors::AegisError::BadRequest(format!(
+                    "Invalid callback URL: {e}"
+                )));
+            }
+        }
+
+        let approval_id = uuid::Uuid::new_v4();
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(params.approval_ttl_secs);
+        let callback_secret_hash = params
+            .callback_secret
+            .as_ref()
+            .map(|s| sha256_hex(s.as_bytes()));
+
+        let approval_record = ApprovalRecord {
+            id: approval_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            decision_id: params.decision_id.to_string(),
+            status: "created".to_string(),
+            approver_group: params.approver_group.clone(),
+            approver_user_id: None,
+            reason: None,
+            original_skill_call: serde_json::to_string(&request.tool_call).unwrap_or_default(),
+            original_call_hash: params.action_hash.clone(),
+            edited_skill_call: None,
+            effective_call_hash: None,
+            expires_at: Some(expires_at),
+            decided_at: None,
+            callback_url: params.callback_url,
+            callback_secret_hash,
+            created_at: chrono::Utc::now(),
+        };
+
+        self.state
+            .storage
+            .insert_approval(&approval_record)
+            .await
+            .map_err(|_| {
+                aegis_common::errors::AegisError::Internal(
+                    "Failed to create approval request".into(),
+                )
+            })?;
+
+        let audit_app_record = AuditEventRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            event_type: "approval_created".to_string(),
+            agent_id: Some(agent_id.to_string()),
+            user_id: request.user.as_ref().map(|u| u.id.clone()),
+            run_id: request.trace.as_ref().map(|t| t.run_id.clone()),
+            trace_id: request.trace.as_ref().map(|t| t.trace_id.clone()),
+            span_id: None,
+            skill: Some(request.tool_call.tool.clone()),
+            action: Some(request.tool_call.action.clone()),
+            resource: request.tool_call.resource.clone(),
+            event_json: serde_json::to_string(&approval_record).unwrap_or_default(),
+            input_hash: Some(params.action_hash.clone()),
+            output_hash: None,
+            decision_id: Some(params.decision_id.to_string()),
+            approval_id: Some(approval_id.to_string()),
+            created_at: chrono::Utc::now(),
+        };
+        let _ = self
+            .state
+            .storage
+            .insert_audit_event(&audit_app_record)
+            .await;
+
+        Ok(ApprovalResponseInfo {
+            approval_id,
+            status: "created".to_string(),
+            approver_group: params.approver_group,
+            expires_at,
+            action_hash: params.action_hash,
+        })
+    }
+
+    async fn maybe_escalate_risk_tier(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        current_tier: &str,
+    ) -> Result<Option<(String, String)>, aegis_common::errors::AegisError> {
+        self.state
+            .storage
+            .maybe_escalate_agent_risk_tier(tenant_id, agent_id, current_tier)
+            .await
+    }
+
+    async fn emit_risk_escalated(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        request: &AuthorizeRequest,
+        decision: &str,
+        decision_id: uuid::Uuid,
+        risk_score: i32,
+        old_tier: &str,
+        new_tier: &str,
+        matched_policies: &[String],
+    ) {
+        use crate::events::AseEvent;
+        use crate::models::AuditEventRecord;
+
+        let audit = AuditEventRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            tenant_id: tenant_id.to_string(),
+            event_type: "agent_risk_escalated".to_string(),
+            agent_id: Some(agent_id.to_string()),
+            user_id: None,
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            skill: None,
+            action: None,
+            resource: None,
+            event_json: serde_json::to_string(&serde_json::json!({
+                "old_risk_tier": old_tier,
+                "new_risk_tier": new_tier
+            }))
+            .unwrap_or_default(),
+            input_hash: None,
+            output_hash: None,
+            decision_id: Some(decision_id.to_string()),
+            approval_id: None,
+            created_at: chrono::Utc::now(),
+        };
+        let _ = self.state.storage.insert_audit_event(&audit).await;
+
+        self.state.events.emit(AseEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            tenant_id: tenant_id.to_string(),
+            kind: "agent_risk_escalated".to_string(),
+            agent_id: agent_id.to_string(),
+            decision: decision.to_string(),
+            tool: request.tool_call.tool.clone(),
+            action: request.tool_call.action.clone(),
+            resource: request.tool_call.resource.clone(),
+            risk_score,
+            reason: format!("risk_tier escalated {old_tier} -> {new_tier} after repeated denials"),
+            run_id: request.trace.as_ref().map(|t| t.run_id.clone()),
+            trace_id: request.trace.as_ref().map(|t| t.trace_id.clone()),
+            matched_policies: matched_policies.to_vec(),
+            redacted_fields: vec![],
+            schema_version: 1,
+            evidence: None,
+            prompt_injection: None,
+            rag_poisoning: None,
+        });
+    }
+
+    fn notify_github_decision(
+        &self,
+        request: &AuthorizeRequest,
+        decision: &str,
+        reason: &str,
+        risk_score: i32,
+        decision_id: uuid::Uuid,
+        matched_policies: &[String],
+    ) {
+        if decision == "deny" {
+            if let Some(commenter) = self.state.github_pr_commenter.as_ref() {
+                if request.tool_call.tool == "github" {
+                    if let Some(resource) = request.tool_call.resource.as_deref() {
+                        if let Some((repo, pr_number)) = crate::gh_comment::extract_pr_ref(resource)
+                        {
+                            let comment_body = crate::gh_comment::format_deny_comment(
+                                reason,
+                                matched_policies,
+                                risk_score,
+                                &decision_id.to_string(),
+                                &request.tool_call.tool,
+                                &request.tool_call.action,
+                            );
+                            crate::gh_comment::spawn_pr_comment(
+                                std::sync::Arc::clone(commenter),
+                                repo,
+                                pr_number,
+                                comment_body,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(checks_client) = self.state.github_checks_client.as_ref() {
+            if request.tool_call.tool == "github" {
+                if let Some(resource) = request.tool_call.resource.as_deref() {
+                    if let Some((repo, pr_number)) = crate::gh_comment::extract_pr_ref(resource) {
+                        crate::gh_checks::spawn_record_decision(
+                            std::sync::Arc::clone(checks_client),
+                            repo,
+                            pr_number,
+                            crate::gh_checks::DecisionInfo {
+                                tool: request.tool_call.tool.clone(),
+                                action: request.tool_call.action.clone(),
+                                decision: decision.to_string(),
+                                reason: reason.to_string(),
+                                risk_score,
+                            },
+                        );
+                    }
+                }
+            }
         }
     }
 }

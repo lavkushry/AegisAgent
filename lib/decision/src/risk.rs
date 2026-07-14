@@ -33,6 +33,22 @@ pub fn is_high_risk_for_audit(risk_level: &str, mutates_state: bool) -> bool {
     mutates_state || risk_level != "low"
 }
 
+/// Protected decisions require a durable, hash-chained receipt before success
+/// is reported (mutating, high/critical risk, or any non-`allow` decision).
+pub fn decision_requires_durable_receipt(
+    decision: &str,
+    risk_level: &str,
+    mutates_state: bool,
+) -> bool {
+    if mutates_state {
+        return true;
+    }
+    if matches!(risk_level, "high" | "critical") {
+        return true;
+    }
+    decision != "allow"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,5 +68,16 @@ mod tests {
         assert!(is_high_risk_for_audit("low", true));
         assert!(is_high_risk_for_audit("medium", false));
         assert!(!is_high_risk_for_audit("low", false));
+    }
+
+    #[test]
+    fn durable_receipt_rules() {
+        assert!(decision_requires_durable_receipt("allow", "low", true));
+        assert!(decision_requires_durable_receipt(
+            "allow", "critical", false
+        ));
+        assert!(decision_requires_durable_receipt("deny", "low", false));
+        assert!(!decision_requires_durable_receipt("allow", "low", false));
+        assert!(!decision_requires_durable_receipt("allow", "medium", false));
     }
 }

@@ -87,20 +87,7 @@ pub(crate) async fn emit_action_receipt(
 /// that is itself security-relevant — `deny`, `require_approval`, `quarantine`,
 /// `redact`, `log_only`'s siblings — i.e. everything except a plain low/medium
 /// read-only `allow`.
-pub(crate) fn decision_requires_durable_receipt(
-    decision: &str,
-    risk_level: &str,
-    mutates_state: bool,
-) -> bool {
-    if mutates_state {
-        return true;
-    }
-    if matches!(risk_level, "high" | "critical") {
-        return true;
-    }
-    // Any non-allow decision is security-relevant evidence.
-    decision != "allow"
-}
+pub(crate) use aegis_decision::decision_requires_durable_receipt;
 
 /// Synchronously append the decision's receipt to the hash chain and return the
 /// persisted record (with `receipt_hash`/`prev_receipt_hash` filled in). Used
