@@ -67,7 +67,11 @@ Gate: legacy versus typed authorization decisions, hashes, approvals, receipts a
 
 Progress (2026-07-13): the `current` checkout has unwired ring, safe sealed-page
 oracle, append-only published-prefix, and failure-atomic single-page admission
-prototypes under Proposed ADR-0006 through ADR-0009. The volatile composite
+prototypes under Proposed ADR-0006 through ADR-0009, and a design-only
+Proposed ADR-0010 specifying bounded page rotation with generation-tagged
+reuse (fixed pool of P slots, epoch-addressed, single released-epoch
+reclamation edge, typed PageQuotaExhausted backpressure) — no rotation
+code exists yet. The volatile composite
 validates before reservation, Release-publishes the page before the ring,
 withholds capacity until a must-use validated frame lease commits, and reports
 clean, faulted, and orphaned-prefix terminal states. Test sources include safe
