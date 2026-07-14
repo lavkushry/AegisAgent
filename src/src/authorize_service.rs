@@ -21,21 +21,13 @@ use crate::error::{ErrorReason, StatusError};
 use crate::models::{AuthorizeRequest, AuthorizeResponse};
 use crate::routes::AppState;
 
-// Protocol-neutral context / outcome / runtime types live in `aegis-decision`
-// so library code can depend on them without pulling the gateway binary.
-// Adapter-facing library surface. Stage functions (admit/preflight/…) stay
-// crate-private to `aegis-decision`; callers use the unified pipeline.
+// Adapter-facing library surface. Prefer `run_authorize_pipeline` from REST/gRPC;
+// stage types (`GuardedAuthorize`, …) stay on `aegis_decision` for the host
+// port implementor (`decision_runtime`) rather than re-exported here.
 pub use aegis_decision::{
     authorize_response_from_decision_record, run_authorize_pipeline, AuthCredential,
     AuthorizeContext, AuthorizeService, DecisionBody, DecisionFailure, DecisionFailureClass,
     DecisionOutcome, DecisionRuntime, EvaluateConfig, Transport,
-};
-
-// Re-export runtime port types used by `decision_runtime` and advanced callers.
-pub use aegis_decision::{
-    AdmissionEffect, ApprovalCreateParams, AuthorizeAgent, DecisionAuditWrite, EnforcementStatus,
-    GuardedAuthorize, McpToolMeta, MetadataAuthorize, PolicyDecisionView, PreflightTerminal,
-    PreflightedAuthorize, RegisteredActionMeta,
 };
 
 /// Body carried by a completed authorization evaluation.

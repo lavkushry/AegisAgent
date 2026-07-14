@@ -25,6 +25,16 @@
 //! binary. It depends on `aegis-policy` for trust-chain, environment,
 //! identifier normalization, and decision overrides (target DAG:
 //! Decision → Policy).
+//!
+//! ## Public surface
+//!
+//! **Adapter path (preferred):** [`run_authorize_pipeline`], [`AuthorizeContext`],
+//! [`DecisionOutcome`], [`DecisionRuntime`], [`AuthorizeService`],
+//! [`EvaluateConfig`], risk helpers.
+//!
+//! **Stage APIs** (`admit_authorize`, `preflight_authorize`, …) remain public for
+//! unit testing and gradual host migration; production adapters should call the
+//! unified pipeline.
 
 #![forbid(unsafe_code)]
 
@@ -42,6 +52,9 @@ mod risk;
 mod runtime;
 mod service;
 mod write;
+
+#[cfg(test)]
+mod test_runtime;
 
 pub use admit::{admit_authorize, AdmittedAuthorize};
 pub use agent::AuthorizeAgent;

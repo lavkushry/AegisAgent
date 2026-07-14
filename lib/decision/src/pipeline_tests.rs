@@ -2,278 +2,12 @@ use super::*;
 use crate::agent::AuthorizeAgent;
 use crate::context::{AuthCredential, Transport};
 use crate::outcome::DecisionBody;
-use crate::runtime::{
-    AdmissionEffect, ApprovalCreateParams, DecisionRuntime, EnforcementStatus, McpToolMeta,
-    PolicyDecisionView, RegisteredActionMeta,
-};
-use crate::write::DecisionAuditWrite;
-use aegis_api::models::{
-    ApprovalResponseInfo, AuthorizeRequest, AuthorizeToolCall, ReceiptIdentity,
-};
-use aegis_common::errors::AegisError;
-use chrono::{DateTime, Utc};
+use crate::runtime::{AdmissionEffect, EnforcementStatus, McpToolMeta, PolicyDecisionView};
+use crate::test_runtime::MockRuntime;
+use aegis_api::models::DecisionRecord;
+use chrono::Utc;
 use std::net::SocketAddr;
-use std::sync::Mutex;
 use std::time::Instant;
-
-/// Full-stack mock for `run_authorize_pipeline` integration tests.
-struct PipelineRt {
-    agent: Option<AuthorizeAgent>,
-    cedar: PolicyDecisionView,
-    idempotent: Option<DecisionRecord>,
-    tool_permitted: bool,
-    admission: AdmissionEffect,
-    enforcement: EnforcementStatus,
-    mcp_server_permitted: bool,
-    mcp_server_status: Option<String>,
-    mcp_tool: Option<McpToolMeta>,
-    rate_ok: bool,
-    quota_ok: bool,
-    audit_capacity: bool,
-    writes: Mutex<u32>,
-    heartbeats: Mutex<u32>,
-    receipts: Mutex<u32>,
-    approvals: Mutex<u32>,
-}
-
-impl Default for PipelineRt {
-    fn default() -> Self {
-        Self {
-            agent: Some(AuthorizeAgent::new("agent-1", "tenant-1", "low")),
-            cedar: PolicyDecisionView {
-                decision: "allow".into(),
-                matched_policies: vec!["base_allow".into()],
-                approver_group: None,
-                reason: "ok".into(),
-                redacted_fields: vec![],
-            },
-            idempotent: None,
-            tool_permitted: true,
-            admission: AdmissionEffect::Disabled,
-            enforcement: EnforcementStatus::Clear,
-            mcp_server_permitted: true,
-            mcp_server_status: None,
-            mcp_tool: None,
-            rate_ok: true,
-            quota_ok: true,
-            audit_capacity: true,
-            writes: Mutex::new(0),
-            heartbeats: Mutex::new(0),
-            receipts: Mutex::new(0),
-            approvals: Mutex::new(0),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl DecisionRuntime for PipelineRt {
-    async fn get_agent_by_token(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<AuthorizeAgent>, AegisError> {
-        Ok(self.agent.clone())
-    }
-    async fn get_agent_by_mtls_cn(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<AuthorizeAgent>, AegisError> {
-        Ok(self.agent.clone())
-    }
-    fn auth_failure_blocked(&self, _: SocketAddr, _: &str) -> bool {
-        false
-    }
-    fn record_auth_failure(&self, _: SocketAddr, _: &str) {}
-    async fn agent_tool_permitted(&self, _: &str, _: &str, _: &str) -> Result<bool, AegisError> {
-        Ok(self.tool_permitted)
-    }
-    async fn get_decision_by_request_id(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<DecisionRecord>, AegisError> {
-        Ok(self.idempotent.clone())
-    }
-    async fn check_and_record_nonce(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: DateTime<Utc>,
-    ) -> Result<bool, AegisError> {
-        Ok(false)
-    }
-    async fn check_rate_limit(&self, _: &str) -> bool {
-        self.rate_ok
-    }
-    fn check_quota(&self, _: &str) -> bool {
-        self.quota_ok
-    }
-    fn touch_heartbeat(&self, _: &str, _: &str) {
-        *self.heartbeats.lock().expect("l") += 1;
-    }
-    async fn write_decision_and_audit(&self, w: DecisionAuditWrite<'_>) -> Result<i32, AegisError> {
-        *self.writes.lock().expect("l") += 1;
-        Ok(w.risk_score)
-    }
-    async fn call_admission_webhook(
-        &self,
-        _: &AuthorizeRequest,
-    ) -> Result<AdmissionEffect, AegisError> {
-        Ok(self.admission.clone())
-    }
-    fn compute_action_hash(&self, _: &str, _: Option<&str>, _: &AuthorizeToolCall) -> String {
-        "deadbeef".into()
-    }
-    async fn enforcement_status(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<EnforcementStatus, AegisError> {
-        Ok(self.enforcement)
-    }
-    async fn skill_action_meta(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<RegisteredActionMeta>, AegisError> {
-        Ok(None)
-    }
-    async fn agent_mcp_server_permitted(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<bool, AegisError> {
-        Ok(self.mcp_server_permitted)
-    }
-    async fn mcp_server_status(&self, _: &str, _: &str) -> Result<Option<String>, AegisError> {
-        Ok(self.mcp_server_status.clone())
-    }
-    async fn mcp_tool_meta(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<McpToolMeta>, AegisError> {
-        Ok(self.mcp_tool.clone())
-    }
-    async fn ensure_policies_loaded(&self, _: &str) -> Result<(), AegisError> {
-        Ok(())
-    }
-    async fn evaluate_cedar(
-        &self,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: &str,
-        _: bool,
-        _: bool,
-    ) -> Result<PolicyDecisionView, AegisError> {
-        Ok(self.cedar.clone())
-    }
-    fn record_provenance_denial(&self) {}
-    fn audit_stream_has_capacity(&self) -> bool {
-        self.audit_capacity
-    }
-    fn set_audit_writer_healthy(&self, _: bool) {}
-    async fn emit_receipt_durable(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: Uuid,
-        _: &str,
-        _: &str,
-    ) -> Result<ReceiptIdentity, AegisError> {
-        *self.receipts.lock().expect("l") += 1;
-        Ok(ReceiptIdentity {
-            receipt_id: "r1".into(),
-            receipt_hash: "rh".into(),
-            prev_receipt_hash: "ph".into(),
-            canon_version: "aegis-jcs-1".into(),
-        })
-    }
-    async fn emit_receipt_best_effort(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: Uuid,
-        _: &str,
-        _: &str,
-    ) {
-    }
-    async fn quarantine_agent(&self, _: &str, _: &str) -> Result<(), AegisError> {
-        Ok(())
-    }
-    fn emit_agent_quarantined(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: i32,
-        _: &str,
-        _: &[String],
-    ) {
-    }
-    async fn create_approval(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        params: ApprovalCreateParams,
-    ) -> Result<ApprovalResponseInfo, AegisError> {
-        *self.approvals.lock().expect("l") += 1;
-        Ok(ApprovalResponseInfo {
-            approval_id: Uuid::nil(),
-            status: "created".into(),
-            approver_group: params.approver_group,
-            expires_at: Utc::now(),
-            action_hash: params.action_hash,
-        })
-    }
-    async fn maybe_escalate_risk_tier(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<(String, String)>, AegisError> {
-        Ok(None)
-    }
-    async fn emit_risk_escalated(
-        &self,
-        _: &str,
-        _: &str,
-        _: &AuthorizeRequest,
-        _: &str,
-        _: Uuid,
-        _: i32,
-        _: &str,
-        _: &str,
-        _: &[String],
-    ) {
-    }
-    fn notify_github_decision(
-        &self,
-        _: &AuthorizeRequest,
-        _: &str,
-        _: &str,
-        _: i32,
-        _: Uuid,
-        _: &[String],
-    ) {
-    }
-    async fn idempotent_replay(
-        &self,
-        record: DecisionRecord,
-    ) -> Result<AuthorizeResponse, AegisError> {
-        Ok(authorize_response_from_decision_record(record, None))
-    }
-}
 
 fn body_json() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
@@ -353,7 +87,7 @@ fn response_from_record_maps_fields() {
 
 #[tokio::test]
 async fn pipeline_allow_writes_decision_and_heartbeats() {
-    let rt = PipelineRt::default();
+    let rt = MockRuntime::default();
     let out = run_authorize_pipeline(
         &rt,
         &ctx(),
@@ -375,9 +109,9 @@ async fn pipeline_allow_writes_decision_and_heartbeats() {
 
 #[tokio::test]
 async fn pipeline_bad_token_unauthorized() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         agent: None,
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -416,9 +150,9 @@ async fn pipeline_idempotent_replay_skips_cedar_write() {
         parent_run_id: None,
         created_at: Utc::now(),
     };
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         idempotent: Some(record),
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
     body["request_id"] = serde_json::json!("req-1");
@@ -439,7 +173,7 @@ async fn pipeline_idempotent_replay_skips_cedar_write() {
 
 #[tokio::test]
 async fn pipeline_require_approval_creates_approval_info() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         cedar: PolicyDecisionView {
             decision: "require_approval".into(),
             matched_policies: vec!["needs_human".into()],
@@ -447,7 +181,7 @@ async fn pipeline_require_approval_creates_approval_info() {
             reason: "human gate".into(),
             redacted_fields: vec![],
         },
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
     body["tool_call"]["mutates_state"] = serde_json::json!(true);
@@ -471,9 +205,9 @@ async fn pipeline_require_approval_creates_approval_info() {
 async fn pipeline_frozen_agent_denies_and_persists() {
     let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
     agent.status = "frozen".into();
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         agent: Some(agent),
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -505,7 +239,7 @@ async fn pipeline_frozen_agent_denies_and_persists() {
 
 #[tokio::test]
 async fn pipeline_dry_run_allow_skips_receipt_and_side_effects() {
-    let rt = PipelineRt::default();
+    let rt = MockRuntime::default();
     let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
     body["dry_run"] = serde_json::json!(true);
     body["request_id"] = serde_json::json!("dry-req-1");
@@ -553,7 +287,7 @@ async fn pipeline_dry_run_bypasses_idempotent_replay() {
         parent_run_id: None,
         created_at: Utc::now(),
     };
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         idempotent: Some(record),
         cedar: PolicyDecisionView {
             decision: "allow".into(),
@@ -562,7 +296,7 @@ async fn pipeline_dry_run_bypasses_idempotent_replay() {
             reason: "fresh dry-run allow".into(),
             redacted_fields: vec![],
         },
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
     body["dry_run"] = serde_json::json!(true);
@@ -583,7 +317,7 @@ async fn pipeline_dry_run_bypasses_idempotent_replay() {
 
 #[tokio::test]
 async fn pipeline_cedar_deny_persists() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         cedar: PolicyDecisionView {
             decision: "deny".into(),
             matched_policies: vec!["forbid_tool".into()],
@@ -591,7 +325,7 @@ async fn pipeline_cedar_deny_persists() {
             reason: "policy deny".into(),
             redacted_fields: vec![],
         },
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -618,9 +352,9 @@ async fn pipeline_cedar_deny_persists() {
 async fn pipeline_revoked_agent_denies() {
     let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
     agent.status = "revoked".into();
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         agent: Some(agent),
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -643,9 +377,9 @@ async fn pipeline_revoked_agent_denies() {
 
 #[tokio::test]
 async fn pipeline_admission_webhook_reject_denies() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         admission: AdmissionEffect::Reject("webhook blocked".into()),
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -671,9 +405,9 @@ async fn pipeline_admission_webhook_reject_denies() {
 
 #[tokio::test]
 async fn pipeline_agent_banned_denies() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         enforcement: EnforcementStatus::AgentBanned,
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -697,9 +431,9 @@ async fn pipeline_agent_banned_denies() {
 
 #[tokio::test]
 async fn pipeline_tool_not_permitted_partial_deny() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         tool_permitted: false,
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -723,9 +457,9 @@ async fn pipeline_tool_not_permitted_partial_deny() {
 
 #[tokio::test]
 async fn pipeline_mcp_server_not_permitted_partial_deny() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         mcp_server_permitted: false,
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -747,14 +481,14 @@ async fn pipeline_mcp_server_not_permitted_partial_deny() {
 
 #[tokio::test]
 async fn pipeline_mcp_quarantined_server_denies() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         mcp_server_status: Some("quarantined".into()),
         mcp_tool: Some(McpToolMeta {
             risk: "medium".into(),
             approval_required: false,
             status: "approved".into(),
         }),
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -784,14 +518,14 @@ async fn pipeline_mcp_quarantined_server_denies() {
 
 #[tokio::test]
 async fn pipeline_mcp_unapproved_tool_denies() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         mcp_server_status: Some("active".into()),
         mcp_tool: Some(McpToolMeta {
             risk: "high".into(),
             approval_required: false,
             status: "pending".into(),
         }),
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -818,14 +552,14 @@ async fn pipeline_mcp_unapproved_tool_denies() {
 
 #[tokio::test]
 async fn pipeline_mcp_approved_tool_allows() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         mcp_server_status: Some("active".into()),
         mcp_tool: Some(McpToolMeta {
             risk: "low".into(),
             approval_required: false,
             status: "approved".into(),
         }),
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -848,9 +582,9 @@ async fn pipeline_mcp_approved_tool_allows() {
 
 #[tokio::test]
 async fn pipeline_rate_limit_returns_429() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         rate_ok: false,
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -872,9 +606,9 @@ async fn pipeline_rate_limit_returns_429() {
 
 #[tokio::test]
 async fn pipeline_quota_exceeded_returns_429() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         quota_ok: false,
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let out = run_authorize_pipeline(
         &rt,
@@ -896,9 +630,9 @@ async fn pipeline_quota_exceeded_returns_429() {
 
 #[tokio::test]
 async fn pipeline_audit_stream_full_fail_closed_for_mutating() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         audit_capacity: false,
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
     body["tool_call"]["mutates_state"] = serde_json::json!(true);
@@ -928,7 +662,7 @@ async fn pipeline_audit_stream_full_fail_closed_for_mutating() {
 
 #[tokio::test]
 async fn pipeline_mutating_allow_emits_durable_receipt() {
-    let rt = PipelineRt::default();
+    let rt = MockRuntime::default();
     let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
     body["tool_call"]["mutates_state"] = serde_json::json!(true);
     let raw = serde_json::to_vec(&body).expect("ser");
@@ -950,7 +684,7 @@ async fn pipeline_mutating_allow_emits_durable_receipt() {
 
 #[tokio::test]
 async fn pipeline_dry_run_require_approval_creates_no_approval_row() {
-    let rt = PipelineRt {
+    let rt = MockRuntime {
         cedar: PolicyDecisionView {
             decision: "require_approval".into(),
             matched_policies: vec!["needs_human".into()],
@@ -958,7 +692,7 @@ async fn pipeline_dry_run_require_approval_creates_no_approval_row() {
             reason: "human gate".into(),
             redacted_fields: vec![],
         },
-        ..PipelineRt::default()
+        ..MockRuntime::default()
     };
     let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
     body["dry_run"] = serde_json::json!(true);

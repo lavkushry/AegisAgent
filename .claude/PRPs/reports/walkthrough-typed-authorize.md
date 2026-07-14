@@ -10,9 +10,10 @@
    - Pipeline: `run_authorize_pipeline` = admit → preflight → guard → metadata → evaluate
    - Ports: `DecisionRuntime` (storage, Cedar, caches, SOC, GitHub side effects)
    - Outcomes: `DecisionOutcome` / `DecisionBody` (no Axum/tonic)
-   - Tests: stage units in `admit_tests`/`preflight_tests`/`guard_tests`/
-     `metadata_tests`/`evaluate_tests`; pipeline e2e in `pipeline_tests.rs`;
-     `error_map` class mapping
+   - Tests: stage units in `*_tests.rs`; shared `test_runtime::MockRuntime`;
+     pipeline e2e in `pipeline_tests.rs`; `error_map` class mapping
+   - Gateway re-exports only adapter surface (`run_authorize_pipeline`,
+     context/outcome types); stage types stay on `aegis_decision`
 
 2. **Gateway adapters**
    - `decision_runtime.rs` — `GatewayDecisionRuntime`
