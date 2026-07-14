@@ -72,15 +72,13 @@ codes — the JSON-bridge round-trip and `AEGIS_TYPED_AUTHORIZE` flag are
 **deleted** (Phase D). Phase C equality corpus (`equality_*` tests) covers
 allow / deny / require_approval / dry-run / frozen agent / bad token / missing
 tenant / replay-nonce conflict, plus approval `action_hash` length parity.
-Follow-on progress: `authorize` / `authorize_raw` return `AuthorizedOutcome`.
-gRPC maps via `outcome_to_tonic` (no adapter Axum body). **`authorize_action_impl`
-itself returns `AuthorizedOutcome` in place**. **Approve/reject** inners
-(`approve_approval_inner` / `reject_approval_inner`) also return
-`AuthorizedOutcome`; gRPC `approve` uses `outcome_to_tonic_json` (no body
-buffer). Remaining bridged RPCs (`register_agent`, `create_tenant`, …) map
-errors via `axum_response_to_tonic_json` (StatusError→tonic codes; no
-`Status::internal` collapse) pending full extraction. Remaining: later
-`aegis-decision` move and typed extraction of remaining gRPC RPCs.
+Follow-on progress: typed `AuthorizedOutcome` seam now covers **authorize**,
+**approve/reject**, **register_agent**, **create_tenant**, and
+**register_mcp_server** (REST thin adapters + gRPC `outcome_to_tonic` /
+`outcome_to_tonic_json`, no Axum body buffer on those RPCs). Remaining gRPC
+RPCs (MCP discover, SOC, …) still REST-bridge via `axum_response_to_tonic_json`
+or raw body parse. Remaining: full typed extraction of residual RPCs; later
+`aegis-decision` crate move.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

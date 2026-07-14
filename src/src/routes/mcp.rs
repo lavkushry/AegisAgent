@@ -35,6 +35,17 @@ pub async fn register_mcp_server(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterMcpServerRequest>,
 ) -> impl IntoResponse {
+    crate::authorize_service::outcome_to_response(
+        register_mcp_server_inner(state, tenant_id, payload).await,
+    )
+}
+
+/// Protocol-neutral MCP server registration (REST + gRPC admin).
+pub(crate) async fn register_mcp_server_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    payload: RegisterMcpServerRequest,
+) -> crate::authorize_service::AuthorizedOutcome {
     let server_id = Uuid::new_v4().to_string();
     let record = McpServerRecord {
         id: server_id.clone(),
@@ -59,7 +70,9 @@ pub async fn register_mcp_server(
         Ok(_) => {}
         Err(e) => {
             error!("Failed to register MCP server: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
     };
 
@@ -76,15 +89,17 @@ pub async fn register_mcp_server(
         .mcp_server_cache
         .invalidate(&McpServerCache::cache_key(&tenant_id, &payload.server_key));
 
-    (
-        StatusCode::CREATED,
-        Json(RegisterMcpServerResponse {
-            server_id: final_server.id,
-            server_key: payload.server_key,
-            status: "active".to_string(),
-        }),
-    )
-        .into_response()
+    let body = RegisterMcpServerResponse {
+        server_id: final_server.id,
+        server_key: payload.server_key,
+        status: "active".to_string(),
+    };
+    match serde_json::to_value(&body) {
+        Ok(v) => crate::authorize_service::AuthorizedOutcome::json_created(v),
+        Err(e) => crate::authorize_service::AuthorizedOutcome::status_error(StatusError::internal(
+            format!("serialize mcp register response: {e}"),
+        )),
+    }
 }
 
 pub async fn discover_mcp_tools(

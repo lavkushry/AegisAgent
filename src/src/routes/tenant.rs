@@ -520,13 +520,25 @@ pub async fn create_tenant(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTenantRequest>,
 ) -> impl IntoResponse {
+    crate::authorize_service::outcome_to_response(create_tenant_inner(state, payload).await)
+}
+
+/// Protocol-neutral tenant creation (REST + gRPC admin).
+pub(crate) async fn create_tenant_inner(
+    state: Arc<AppState>,
+    payload: CreateTenantRequest,
+) -> crate::authorize_service::AuthorizedOutcome {
     match state.storage.get_tenant_by_id(&payload.id).await {
         Ok(Some(_)) => {
-            return StatusError::conflict("Tenant already exists").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::conflict("Tenant already exists"),
+            );
         }
         Err(e) => {
             error!("Database error checking tenant existence: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
         _ => {}
     }
@@ -541,10 +553,17 @@ pub async fn create_tenant(
         slack_approver_group: None,
     };
     match state.storage.insert_tenant(&record).await {
-        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Ok(()) => match serde_json::to_value(&record) {
+            Ok(v) => crate::authorize_service::AuthorizedOutcome::json_created(v),
+            Err(e) => crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal(format!("serialize tenant: {e}")),
+            ),
+        },
         Err(e) => {
             error!("Failed to register tenant: {:?}", e);
-            StatusError::internal("Database error").into_response()
+            crate::authorize_service::AuthorizedOutcome::status_error(StatusError::internal(
+                "Database error",
+            ))
         }
     }
 }

@@ -22,7 +22,6 @@ use aegis_api::grpc::aegis::{
     SilenceItem, SocDashboardItem, SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
     UpdateSocDashboardRequest, UpdateSocDashboardResponse,
 };
-use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -224,14 +223,12 @@ impl AegisService for AegisGrpcServiceImpl {
         &self,
         request: Request<RegisterAgentRequest>,
     ) -> Result<Response<RegisterAgentResponse>, Status> {
-        let mut headers = HeaderMap::new();
-        if let Some(auth_val) = request.metadata().get("authorization") {
-            if let Ok(val) = axum::http::HeaderValue::from_bytes(auth_val.as_bytes()) {
-                headers.insert(axum::http::header::AUTHORIZATION, val);
-            }
-        }
+        use crate::authorize_service::outcome_to_tonic_json;
 
         let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
+        }
         let rest_req = crate::models::RegisterAgentRequest {
             agent_key: req.agent_key,
             name: req.name,
@@ -270,22 +267,9 @@ impl AegisService for AegisGrpcServiceImpl {
             },
         };
 
-        let response = crate::routes::register_agent(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::Json(rest_req),
-        )
-        .await
-        .into_response();
-
-        // Transitional bridge: map StatusError envelopes to tonic codes (no
-        // Status::internal collapse). Full typed extraction follows authorize/approve.
-        let (status, value) =
-            crate::authorize_service::axum_response_to_tonic_json(response).await?;
-        if status != axum::http::StatusCode::OK && status != axum::http::StatusCode::CREATED {
-            // axum_response_to_tonic_json only returns Ok for success statuses
-            return Err(Status::internal("unexpected non-success after mapping"));
-        }
+        let outcome =
+            crate::routes::register_agent_inner(self._state.clone(), req.tenant_id, rest_req).await;
+        let value = outcome_to_tonic_json(outcome)?;
         let res: crate::models::RegisterAgentResponse =
             serde_json::from_value(value).map_err(|e| {
                 Status::internal(format!("Failed to parse register_agent response: {e}"))
@@ -356,6 +340,8 @@ impl AdminService for AdminGrpcServiceImpl {
         &self,
         request: Request<CreateTenantRequest>,
     ) -> Result<Response<CreateTenantResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
         let payload = crate::models::CreateTenantRequest {
             id: req.id,
@@ -363,18 +349,8 @@ impl AdminService for AdminGrpcServiceImpl {
             plan: req.plan,
         };
 
-        let response = crate::routes::create_tenant(
-            axum::extract::State(self._state.clone()),
-            axum::Json(payload),
-        )
-        .await
-        .into_response();
-
-        let (status, value) =
-            crate::authorize_service::axum_response_to_tonic_json(response).await?;
-        if status != axum::http::StatusCode::CREATED {
-            return Err(Status::internal("unexpected non-success after mapping"));
-        }
+        let outcome = crate::routes::create_tenant_inner(self._state.clone(), payload).await;
+        let value = outcome_to_tonic_json(outcome)?;
         let res: crate::models::TenantRecord = serde_json::from_value(value).map_err(|e| {
             Status::internal(format!("Failed to parse create_tenant response: {e}"))
         })?;
@@ -391,7 +367,12 @@ impl AdminService for AdminGrpcServiceImpl {
         &self,
         request: Request<RegisterMcpServerRequest>,
     ) -> Result<Response<RegisterMcpServerResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
+        }
         let payload = crate::models::RegisterMcpServerRequest {
             server_key: req.server_key,
             name: req.name,
@@ -416,26 +397,12 @@ impl AdminService for AdminGrpcServiceImpl {
             manifest_signing_public_key: None,
         };
 
-        let response = crate::routes::register_mcp_server(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::Json(payload),
-        )
-        .await
-        .into_response();
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::CREATED {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let res: crate::models::RegisterMcpServerResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        let outcome =
+            crate::routes::register_mcp_server_inner(self._state.clone(), req.tenant_id, payload)
+                .await;
+        let value = outcome_to_tonic_json(outcome)?;
+        let res: crate::models::RegisterMcpServerResponse = serde_json::from_value(value)
+            .map_err(|e| Status::internal(format!("Failed to parse register_mcp_server: {e}")))?;
 
         Ok(Response::new(RegisterMcpServerResponse {
             server_id: res.server_id,

@@ -134,6 +134,22 @@ impl AuthorizedOutcome {
         }
     }
 
+    /// Success with an arbitrary JSON body (register_agent, create_tenant, …).
+    pub fn json(status: StatusCode, value: Value) -> Self {
+        Self {
+            status,
+            body: AuthorizedBody::Json(value),
+        }
+    }
+
+    pub fn json_ok(value: Value) -> Self {
+        Self::json(StatusCode::OK, value)
+    }
+
+    pub fn json_created(value: Value) -> Self {
+        Self::json(StatusCode::CREATED, value)
+    }
+
     pub fn is_success(&self) -> bool {
         self.status == StatusCode::OK || self.status == StatusCode::CREATED
     }
