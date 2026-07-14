@@ -1,0 +1,7 @@
+title: AegisAgent
+description: Open, self-hostable security control plane for AI agent actions.
+theme: jekyll-theme-cayman
+show_downloads: true
+
+# GitHub Pages reads this file when publishing from the /docs directory.
+# Keep this config intentionally small so the site works with GitHub Pages' default Jekyll environment.

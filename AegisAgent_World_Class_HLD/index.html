@@ -1,0 +1,6916 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The integrity layer for AI agent actions — delivered as an integrity-anchored Agent SOC.">
+      
+      
+        <meta name="author" content="AegisAgent">
+      
+      
+        <link rel="canonical" href="https://lavkushry.github.io/AegisAgent/AegisAgent_World_Class_HLD/">
+      
+      
+        <link rel="prev" href="../AegisAgent_Control_Command_Protocol/">
+      
+      
+        <link rel="next" href="../AegisAgent_World_Class_LLD/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>World-class HLD - AegisAgent Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#aegisagent-performance-first-high-level-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AegisAgent Documentation" class="md-header__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AegisAgent Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              World-class HLD
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../START_HERE/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Start here
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Mission
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../onboarding/For_New_Engineer/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Onboarding
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../flows/Known_Agent_Flow/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Flows
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../components/Gateway/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Components
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../deployment-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../approve-then-swap-demo/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Demos
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Integration_Connectivity/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Integration & connectivity
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../AegisAgent_Agent_SOC_Design/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User manual
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../contributing/documentation-standard/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Contributing
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AegisAgent Documentation" class="md-nav__button md-logo" aria-label="AegisAgent Documentation" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    AegisAgent Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lavkushry/AegisAgent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lavkushry/AegisAgent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start here
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Start here
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../START_HERE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start here
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../What_Is_AegisAgent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What is AegisAgent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Why_AegisAgent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why AegisAgent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../The_One_Minute_Tour/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The one-minute tour
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../How_It_Works/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How it works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Product_Overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Product overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Last_Mile_System_Walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Last-mile system walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Architecture_Overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Implementation_Status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Implementation status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Documentation_Index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10-minute quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Local_Development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Onboarding
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Onboarding
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../onboarding/For_New_Engineer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    New engineer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../onboarding/For_Security_Architect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security architect
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../onboarding/For_SOC_Analyst/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC analyst
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../onboarding/For_SDK_Developer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK developer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../onboarding/For_Frontend_Engineer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Frontend engineer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../onboarding/For_DevOps_Engineer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DevOps engineer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Flows
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Flows
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Known_Agent_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Unknown_Agent_Cage_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unknown agent (cage)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Approval_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Receipt_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receipt
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/SOC_Incident_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC incident
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Ban_Quarantine_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ban & quarantine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/MCP_Gateway_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP gateway
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Tool_Broker_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool broker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Egress_Block_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Egress block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Prompt_To_Action_Lineage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prompt-to-action lineage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../flows/Control_Command_Flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Control command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Components
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Components
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateway
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/SDK/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Policy_Engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Approval_Engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approval engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Receipt_Engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receipt engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/SOC_Engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/MCP_Gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP gateway
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Console_UI/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Prompt_Model_Capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prompt & model capture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Agent_Cage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent cage (planned)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Node_Sensor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node sensor (planned)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Egress_Proxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Egress proxy (planned)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../components/Tool_Broker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool broker (planned)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demos
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Demos
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../approve-then-swap-demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Approve-then-swap blocked
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration & connectivity
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integration & connectivity
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Integration_Connectivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../github-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub App integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slack-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Slack integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User manual
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User manual
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_SOC_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Agent SOC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_SOC_UI_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOC Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workforce_Governance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workforce governance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../runbooks/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_12_4" id="__nav_12_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_12_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/deny-storm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deny storm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/data-exfiltration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data exfiltration pattern
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/agent-token-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent token rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/receipt-chain-verification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receipt chain verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/secret-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mandatory architecture law
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../LLD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Target low-level design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Technical_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Threat_Model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Operational_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operational design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-defense-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP defense architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Diagram_Index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Diagram index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13_9" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_13_9" id="__nav_13_9_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime data plane (target design)
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_13_9_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_13_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runtime data plane (target design)
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Runtime_Data_Plane/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Agent_Cage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent cage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Cage_Docker_Security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cage Docker security review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Control_Command_Protocol/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Control command protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    World-class HLD
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    World-class HLD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#design-status-vocabulary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design status vocabulary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why This Exists
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#problem-statement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem Statement
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Problem Statement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#non-negotiable-design-laws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-negotiable design laws
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#solution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Solution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Solution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#architectural-alternatives-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architectural alternatives considered
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#converged-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converged decision
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#explicit-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Explicit non-goals
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#latency-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Latency budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#component-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Component Breakdown
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Component Breakdown">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dependency-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency direction
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#request-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#control-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Control Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequence-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequence Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#state-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#class-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Class Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deployment Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deployment-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#availability-backup-and-disaster-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Availability, backup, and disaster recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#release-strategies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Release strategies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interactive-3d-architecture-concept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive 3D architecture concept
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#folder-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Folder Structure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detailed-walkthrough" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detailed Walkthrough
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Detailed Walkthrough">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#snapshot-publication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snapshot publication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#write-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backpressure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backpressure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-explanation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code Explanation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#live-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#threat-model-for-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat model for optimization
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#slos-and-saturation-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SLOs and saturation signals
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alerting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alerting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-mistakes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Mistakes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-not-authorize-entirely-in-the-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why not authorize entirely in the SDK?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-not-make-every-write-asynchronous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why not make every write asynchronous?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#is-redis-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is Redis required?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#is-postgresql-always-faster-than-sqlite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is PostgreSQL always faster than SQLite?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-does-zero-bottleneck-mean-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What does “zero bottleneck” mean here?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_World_Class_LLD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    World-class LLD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Phased_PR_Plan/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Phased PR plan
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13_10" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision records
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_13_10" id="__nav_13_10_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_13_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decision records
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-cedar-policy-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Cedar policy engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-sqlite-first-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: SQLite-first storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003-aegis-jcs-1-canonicalization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: aegis-jcs-1 canonicalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0004-ed25519-receipt-signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Ed25519 receipt signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0005-fail-closed-defaults/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Fail-closed defaults
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0006-cache-padded-spsc-event-fabric/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Cache-padded SPSC event fabric
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0007-sealed-generation-tagged-slab-pages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Sealed generation-tagged slab pages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0008-append-only-published-prefix-slab-pages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Append-only published-prefix slab pages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0009-failure-atomic-slab-ring-admission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Failure-atomic slab/ring admission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0010-bounded-page-rotation-generation-reuse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Bounded page rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0011-v2-wire-contracts-logical-event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: v2 wire contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference (OpenAPI/Redoc)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-authorization-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime authorization API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AegisAgent_Debugging_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugging guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Repo_Knowledge_Map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Repo knowledge map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fail-closed-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fail-closed behavior guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../action-receipt-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Action receipt spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database schema (ERD)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk-parity-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK parity status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/documentation-standard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation standard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../templates/component-page/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Component page template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#design-status-vocabulary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design status vocabulary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why This Exists
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#problem-statement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem Statement
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Problem Statement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#non-negotiable-design-laws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-negotiable design laws
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#solution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Solution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Solution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#architectural-alternatives-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architectural alternatives considered
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#converged-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converged decision
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#explicit-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Explicit non-goals
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#latency-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Latency budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#component-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Component Breakdown
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Component Breakdown">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dependency-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency direction
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#request-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#control-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Control Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequence-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequence Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#state-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#class-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Class Diagram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deployment Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deployment-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#availability-backup-and-disaster-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Availability, backup, and disaster recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#release-strategies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Release strategies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interactive-3d-architecture-concept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive 3D architecture concept
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#folder-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Folder Structure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detailed-walkthrough" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detailed Walkthrough
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Detailed Walkthrough">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#snapshot-publication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snapshot publication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#write-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backpressure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backpressure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-explanation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code Explanation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#live-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#threat-model-for-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat model for optimization
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#slos-and-saturation-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SLOs and saturation signals
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alerting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alerting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-mistakes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Mistakes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-not-authorize-entirely-in-the-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why not authorize entirely in the SDK?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-not-make-every-write-asynchronous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why not make every write asynchronous?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#is-redis-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is Redis required?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#is-postgresql-always-faster-than-sqlite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is PostgreSQL always faster than SQLite?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-does-zero-bottleneck-mean-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What does “zero bottleneck” mean here?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/lavkushry/AegisAgent/edit/main/docs/AegisAgent_World_Class_HLD.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="aegisagent-performance-first-high-level-design">AegisAgent Performance-First High-Level Design<a class="headerlink" href="#aegisagent-performance-first-high-level-design" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> normative target design with current-state annotations</p>
+<p><strong>Last reviewed:</strong> 2026-07-12</p>
+<p><strong>Owners:</strong> Architecture, Platform Security, Gateway, Storage, SRE
+<strong>Audience:</strong> students, developers, security engineers, SREs, and enterprise architects</p>
+<blockquote>
+<p><strong>Performance contract, not a slogan.</strong> No finite system can guarantee “zero bottlenecks” under unlimited load. This design removes avoidable serialization, bounds every queue, sheds excess work before resources collapse, and defines a capacity envelope that must be proven by benchmark. Security invariants are never traded for speed.</p>
+</blockquote>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>AegisAgent is the integrity layer for AI-agent actions. Before an agent invokes a tool, changes data, calls an MCP server, or uses a privileged API, AegisAgent determines whether the exact action is allowed, denied, or requires human approval. It then creates evidence that can be independently verified.</p>
+<p>The performance-first architecture separates work into three lanes:</p>
+<ol>
+<li><strong>Decision lane:</strong> authenticate, normalize, verify provenance, evaluate deterministic policy, and respond.</li>
+<li><strong>Durability lane:</strong> atomically persist protected decisions, approvals, replay state, and hash-chained receipts.</li>
+<li><strong>Evidence lane:</strong> batch non-critical audit, telemetry, detection, correlation, export, and UI projections asynchronously.</li>
+</ol>
+<p>The selected design is the <strong>Snapshot-Isolated Fast Lane</strong>: immutable tenant-scoped control snapshots serve read-heavy authorization without global locks; independent storage reads execute concurrently; tenant-affine bounded writers reduce write contention; and protected actions synchronously cross the durability boundary before a response is returned.</p>
+<h3 id="design-status-vocabulary">Design status vocabulary<a class="headerlink" href="#design-status-vocabulary" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Current</strong></td>
+<td>Present in the repository and described by the implementation ledger.</td>
+</tr>
+<tr>
+<td><strong>Target</strong></td>
+<td>Approved architecture direction; implementation and benchmark evidence are still required.</td>
+</tr>
+<tr>
+<td><strong>Conditional</strong></td>
+<td>Enabled only by configuration or deployment mode.</td>
+</tr>
+</tbody>
+</table>
+<p>The authoritative shipped-status ledger is <a href="../Implementation_Status/">Implementation Status</a>. This page does not promote a target capability to “shipped.”</p>
+<h2 id="why-this-exists">Why This Exists<a class="headerlink" href="#why-this-exists" title="Permanent link">&para;</a></h2>
+<p>An AI agent can create a pull request, delete cloud data, send money, read secrets, or call an untrusted tool in milliseconds. Traditional IAM often answers only “may this identity access this service?” It does not bind approval to the exact canonical action, preserve source provenance, or produce a tamper-evident action history.</p>
+<p>A slow control point is bypassed. An unreliable control point blocks legitimate work. A fast but eventually consistent security decision may authorize against stale policy. AegisAgent therefore needs low latency <strong>and</strong> deterministic, fail-closed integrity.</p>
+<p>Real example: an agent requests approval to transfer ₹10,000 and later changes the payload to ₹100,000. A text-only approval can be misleading. AegisAgent canonicalizes the executable action, hashes it, binds approval to that hash, and rejects any mismatch.</p>
+<h2 id="problem-statement">Problem Statement<a class="headerlink" href="#problem-statement" title="Permanent link">&para;</a></h2>
+<p>Companies face five coupled problems:</p>
+<ul>
+<li><strong>Latency:</strong> every inline database round trip increases agent execution time.</li>
+<li><strong>Contention:</strong> decision, audit, receipt, and telemetry writes can fight for the same pool or SQLite writer lock.</li>
+<li><strong>Staleness:</strong> aggressive caching can continue to allow a quarantined agent or revoked policy.</li>
+<li><strong>Overload:</strong> unbounded work queues convert a traffic spike into memory growth and multi-second tail latency.</li>
+<li><strong>Evidence integrity:</strong> making every write asynchronous is fast but can acknowledge a protected action without durable proof.</li>
+</ul>
+<p>If these are not solved, operators see timeouts, retry storms, duplicated approvals, missing evidence, cross-tenant risk, and pressure to bypass the gateway.</p>
+<h3 id="non-negotiable-design-laws">Non-negotiable design laws<a class="headerlink" href="#non-negotiable-design-laws" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Deterministic policy decides; advisory risk scores never gate.</li>
+<li>An LLM may investigate or explain; it never allows, denies, approves, or executes.</li>
+<li>The inline authorization path is sacred; detection and correlation run out of band.</li>
+<li>Canonical action hashing, approval binding, expiry, replay protection, tenant isolation, and receipt-chain integrity remain fail closed.</li>
+</ol>
+<h2 id="solution">Solution<a class="headerlink" href="#solution" title="Permanent link">&para;</a></h2>
+<h3 id="architectural-alternatives-considered">Architectural alternatives considered<a class="headerlink" href="#architectural-alternatives-considered" title="Permanent link">&para;</a></h3>
+<p>The following candidates are intentionally diverse. Scores are relative, from 1 (poor) to 5 (excellent), for AegisAgent’s security and workload shape.</p>
+<table>
+<thead>
+<tr>
+<th>Candidate</th>
+<th>Core idea</th>
+<th style="text-align: right;">Median speed</th>
+<th style="text-align: right;">Tail latency</th>
+<th style="text-align: right;">CPU/memory efficiency</th>
+<th style="text-align: right;">Consistency</th>
+<th style="text-align: right;">Operational cost</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Lock-free snapshot gateway</td>
+<td>Immutable per-tenant compiled policy and metadata snapshots; atomic pointer swap</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">4</td>
+<td><strong>Selected foundation</strong></td>
+</tr>
+<tr>
+<td>Tenant-affine actors</td>
+<td>Hash tenant to a single mailbox/writer; eliminate lock competition within a shard</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">4</td>
+<td><strong>Selected for writes</strong></td>
+</tr>
+<tr>
+<td>Edge/WASM authorization</td>
+<td>Push compiled policy beside every agent and reconcile centrally</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2</td>
+<td>Rejected as authority; optional preflight only</td>
+</tr>
+<tr>
+<td>Append-log-first CQRS</td>
+<td>Append every request to a durable log, decide from materialized projections</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">2</td>
+<td>Rejected for inline decisions; selected for async evidence</td>
+</tr>
+<tr>
+<td>Stateless replicas + remote cache/bus</td>
+<td>Redis for reads, Kafka/NATS for all writes, Postgres source of truth</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">2</td>
+<td>Useful at scale, but remote hops are not the default fast path</td>
+</tr>
+</tbody>
+</table>
+<h3 id="converged-decision">Converged decision<a class="headerlink" href="#converged-decision" title="Permanent link">&para;</a></h3>
+<p>Use a hybrid of the first, second, and fourth candidates:</p>
+<ul>
+<li><strong>Immutable snapshots</strong> make normal control reads local and lock-light.</li>
+<li><strong>Tenant-affine writer shards</strong> serialize only writes that must be ordered, without a global writer lock.</li>
+<li><strong>Append-oriented evidence processing</strong> absorbs telemetry efficiently after the decision.</li>
+<li><strong>PostgreSQL transactions</strong> provide multi-replica durability; <strong>SQLite WAL</strong> remains the local/single-node mode.</li>
+<li><strong>Edge policy</strong> may provide a non-authoritative early deny, but only the gateway returns the authoritative decision.</li>
+</ul>
+<p>Why this wins: it performs the least network and storage coordination compatible with the security contract. It does not place Kafka, Redis, an LLM, or a graph query on the authorization path.</p>
+<h3 id="explicit-non-goals">Explicit non-goals<a class="headerlink" href="#explicit-non-goals" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Unlimited throughput or universal latency guarantees.</li>
+<li>Caching final allow/deny decisions.</li>
+<li>Running untrusted agents inside the gateway.</li>
+<li>Using eventual consistency for quarantine, approval consumption, replay claims, or protected receipts.</li>
+<li>Treating SQLite as a multi-writer, multi-replica production database.</li>
+</ul>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart LR
+    subgraph Clients[Agent workloads]
+        SDK[SDK / Tool Broker]
+        MCP[MCP Gateway]
+        Cage[Cage / Node Sensor]
+    end
+
+    subgraph Gateway[Aegis Gateway]
+        Proto[REST 8080 + gRPC 6334 adapters]
+        Admit[Bounded admission + deadlines]
+        Auth[Identity / replay validation]
+        Snap[Immutable Tenant Snapshot]
+        Cedar[Deterministic Cedar Evaluation]
+        Classify[Durability Classifier]
+    end
+
+    subgraph Durable[Durable state]
+        Store[(StorageBackend\nPostgres or SQLite WAL)]
+        Chain[Receipt Chain]
+    end
+
+    subgraph Async[Bounded asynchronous plane]
+        Critical[Priority evidence queue]
+        Bulk[Telemetry queue]
+        Batch[Batch writers]
+        SOC[Detection / correlation / export]
+    end
+
+    SDK --&gt; Proto
+    MCP --&gt; Proto
+    Cage --&gt; Proto
+    Proto --&gt; Admit --&gt; Auth
+    Auth --&gt; Snap --&gt; Cedar --&gt; Classify
+    Auth &lt;--&gt; Store
+    Classify --&gt;|protected: synchronous transaction| Store
+    Store --&gt; Chain
+    Classify --&gt;|ordinary evidence| Critical
+    Classify --&gt;|telemetry| Bulk
+    Critical --&gt; Batch --&gt; Store
+    Bulk --&gt; Batch
+    Batch --&gt; SOC
+    Classify --&gt; Proto</code></pre>
+<p>The diagram shows the essential isolation. A request cannot enter an unbounded queue. Cedar reads an immutable snapshot. Protected actions wait for the required database transaction and receipt append; ordinary evidence is offered to bounded queues. SOC never feeds a probabilistic decision back into the current authorization.</p>
+<h3 id="latency-budget">Latency budget<a class="headerlink" href="#latency-budget" title="Permanent link">&para;</a></h3>
+<p>Budgets are targets within a benchmarked capacity envelope, not promises for arbitrary infrastructure.</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th style="text-align: right;">p99 target</th>
+<th>Bound/strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Protocol parsing and validation</td>
+<td style="text-align: right;">3 ms</td>
+<td>body limit, protobuf/JSON validation, no blocking I/O</td>
+</tr>
+<tr>
+<td>Authentication and replay</td>
+<td style="text-align: right;">12 ms</td>
+<td>indexed lookup; bounded cache only with revocation epoch; atomic nonce claim when enabled</td>
+</tr>
+<tr>
+<td>Metadata acquisition</td>
+<td style="text-align: right;">12 ms</td>
+<td>immutable snapshot first; independent misses joined concurrently</td>
+</tr>
+<tr>
+<td>Canonicalization and hash</td>
+<td style="text-align: right;">4 ms</td>
+<td><code>aegis-jcs-1</code>; bounded payload size; cache canonical hashes only for identical immutable input</td>
+</tr>
+<tr>
+<td>Cedar evaluation</td>
+<td style="text-align: right;">8 ms</td>
+<td>precompiled tenant policy snapshot; deterministic evaluation</td>
+</tr>
+<tr>
+<td>Protected durability</td>
+<td style="text-align: right;">25 ms</td>
+<td>one short transaction; indexed chain-head access; no SOC work</td>
+</tr>
+<tr>
+<td>Serialization/network margin</td>
+<td style="text-align: right;">11 ms</td>
+<td>response encoding and local network variability</td>
+</tr>
+<tr>
+<td><strong>End-to-end hard objective</strong></td>
+<td style="text-align: right;"><strong>&lt;75 ms</strong></td>
+<td>measured per decision class and protocol</td>
+</tr>
+</tbody>
+</table>
+<p>The current historical local baseline is documented in <a href="../performance-baseline/">Performance Baseline</a>. It is evidence from a specific environment, not a production SLA.</p>
+<h2 id="component-breakdown">Component Breakdown<a class="headerlink" href="#component-breakdown" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Responsibility</th>
+<th>Hot-path rule</th>
+<th>Scale unit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>REST/gRPC adapters</td>
+<td>Parse, authenticate transport, call shared service, map errors</td>
+<td>No business logic or SQL</td>
+<td>Gateway replica</td>
+</tr>
+<tr>
+<td>Authorization service</td>
+<td>Orchestrate canonicalization, provenance, policy, decision class</td>
+<td>One implementation for both protocols</td>
+<td>Gateway replica</td>
+</tr>
+<tr>
+<td>Snapshot manager</td>
+<td>Build validated tenant control snapshots and atomically publish generations</td>
+<td>Reads never wait for refresh</td>
+<td>Tenant generation</td>
+</tr>
+<tr>
+<td>Policy engine</td>
+<td>Deterministic Cedar evaluation</td>
+<td>No storage dependency; no network</td>
+<td>CPU core</td>
+</tr>
+<tr>
+<td>StorageBackend</td>
+<td>Tenant-scoped persistence contract</td>
+<td>Parameterized, indexed, deadline-aware</td>
+<td>DB pool/shard</td>
+</tr>
+<tr>
+<td>Receipt service</td>
+<td>Canonical hash-chain append and verification</td>
+<td>Protected receipt is synchronous</td>
+<td>Tenant chain</td>
+</tr>
+<tr>
+<td>Admission controller</td>
+<td>Limit concurrent work and shed overload</td>
+<td>Reject before DB exhaustion</td>
+<td>Gateway replica</td>
+</tr>
+<tr>
+<td>Evidence writers</td>
+<td>Batch decisions/audit/runtime events</td>
+<td>Bounded queues and explicit overflow policy</td>
+<td>Tenant shard</td>
+</tr>
+<tr>
+<td>SOC engine</td>
+<td>Detect, correlate, respond, export</td>
+<td>Always asynchronous from authorize</td>
+<td>Consumer replica</td>
+</tr>
+<tr>
+<td>Runtime data plane</td>
+<td>Sensor, cage, egress, broker, LLM gateway</td>
+<td>Enforce near workload; spool telemetry locally</td>
+<td>Node/workload</td>
+</tr>
+</tbody>
+</table>
+<h3 id="dependency-direction">Dependency direction<a class="headerlink" href="#dependency-direction" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart BT
+    Common[aegis-common]
+    API[aegis-api]
+    Storage[aegis-storage]
+    Policy[aegis-policy]
+    SOC[aegis-soc]
+    Binary[src binary]
+    API --&gt; Common
+    Storage --&gt; API
+    Storage --&gt; Common
+    Policy --&gt; API
+    Policy --&gt; Common
+    SOC --&gt; Storage
+    SOC --&gt; API
+    SOC --&gt; Common
+    Binary --&gt; Storage
+    Binary --&gt; Policy
+    Binary --&gt; SOC</code></pre>
+<p>Arrows mean “depends on.” <code>aegis-policy</code> never depends on storage. The binary composes the crates and keeps REST and gRPC adapters thin. This prevents policy evaluation from silently acquiring database or network dependencies.</p>
+<h2 id="data-flow">Data Flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h2>
+<ol>
+<li>The adapter applies request-size, authentication-attempt, and concurrency limits.</li>
+<li>Identity is resolved within the tenant boundary; quarantine and environment restrictions fail closed.</li>
+<li>Tool permission and idempotency reads execute concurrently when both are required.</li>
+<li>The final post-admission action is normalized and canonicalized with <code>aegis-jcs-1</code>.</li>
+<li>Replay state is atomically claimed when the durable replay store is enabled.</li>
+<li>The authorization service reads one immutable snapshot generation.</li>
+<li>Cedar evaluates deterministic facts and returns <code>allow</code>, <code>deny</code>, or
+   <code>require_approval</code> (annotations may escalate to <code>redact</code> or <code>quarantine</code>).</li>
+<li>The durability classifier chooses the commit protocol:</li>
+<li>protected/mutating/approval/control action: synchronous transaction and receipt;</li>
+<li>low-risk read-only action: decision response plus bounded asynchronous evidence, according to policy.</li>
+<li>Detection, correlation, webhooks, risk samples, and UI projections consume events asynchronously.</li>
+</ol>
+<h2 id="request-flow">Request Flow<a class="headerlink" href="#request-flow" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>sequenceDiagram
+    autonumber
+    participant A as Agent SDK
+    participant G as Protocol Adapter
+    participant S as Authorization Service
+    participant C as Tenant Snapshot
+    participant P as Cedar
+    participant D as StorageBackend
+    participant Q as Evidence Queue
+
+    A-&gt;&gt;G: Authorize(request_id, nonce, exact action)
+    G-&gt;&gt;G: Size limit + admission + deadline
+    G-&gt;&gt;S: Typed request context
+    par Independent indexed reads
+        S-&gt;&gt;D: Resolve identity / replay claim
+    and
+        S-&gt;&gt;D: Permission / idempotency lookup
+    end
+    S-&gt;&gt;C: Load one immutable generation
+    S-&gt;&gt;S: Normalize + canonicalize + hash
+    S-&gt;&gt;P: Evaluate facts from same generation
+    P--&gt;&gt;S: allow / deny / require_approval / redact / quarantine
+    alt Protected action
+        S-&gt;&gt;D: Atomic decision + approval? + receipt append
+        D--&gt;&gt;S: Committed receipt
+    else Ordinary evidence
+        S-&gt;&gt;Q: try_send bounded event
+    end
+    S--&gt;&gt;G: Typed response
+    G--&gt;&gt;A: REST JSON or gRPC protobuf</code></pre>
+<p>Parallelism is used only for independent operations. The response is tied to one snapshot generation, preventing a policy refresh from mixing old metadata with new policy inside a single decision.</p>
+<h2 id="control-flow">Control Flow<a class="headerlink" href="#control-flow" title="Permanent link">&para;</a></h2>
+<p>Control changes—policy activation, agent quarantine, tool revocation, ban, or key rotation—follow a versioned publish protocol:</p>
+<ol>
+<li>Validate and persist the new control state.</li>
+<li>Increment the tenant control generation in the same transaction.</li>
+<li>Publish an invalidation notification after commit.</li>
+<li>Rebuild a complete immutable snapshot off-thread.</li>
+<li>Atomically swap the tenant’s snapshot pointer.</li>
+<li>Record propagation lag; fail closed for emergency revocations until every serving replica acknowledges the generation.</li>
+</ol>
+<p>Routine policy updates favor availability with bounded propagation. Emergency quarantine and credential revocation use a synchronous deny overlay or generation fence so stale positive cache entries cannot authorize.</p>
+<h2 id="sequence-diagram">Sequence Diagram<a class="headerlink" href="#sequence-diagram" title="Permanent link">&para;</a></h2>
+<p>The preceding request sequence is the primary latency-critical sequence. The next diagram shows overload behavior.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant C as Client
+    participant A as Admission Gate
+    participant DB as DB Pool
+    participant M as Metrics
+    C-&gt;&gt;A: authorize
+    alt Capacity available
+        A-&gt;&gt;DB: bounded work with deadline
+        DB--&gt;&gt;A: result
+        A--&gt;&gt;C: decision
+    else Concurrency budget exhausted
+        A-&gt;&gt;M: increment load_shed_total
+        A--&gt;&gt;C: 429/RESOURCE_EXHAUSTED + retry hint
+    else Deadline exhausted
+        A-&gt;&gt;M: record timeout stage
+        A--&gt;&gt;C: fail-closed error
+    end</code></pre>
+<p>Early rejection is intentional. It preserves useful latency for admitted requests and prevents a saturated database from becoming a system-wide queue.</p>
+<h2 id="state-diagram">State Diagram<a class="headerlink" href="#state-diagram" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>stateDiagram-v2
+    [*] --&gt; Received
+    Received --&gt; Rejected: invalid / overloaded
+    Received --&gt; Authenticated
+    Authenticated --&gt; Replay: same request_id
+    Authenticated --&gt; Evaluating
+    Replay --&gt; Responded
+    Evaluating --&gt; Denied
+    Evaluating --&gt; ApprovalPending
+    Evaluating --&gt; CommitRequired
+    Evaluating --&gt; AsyncEvidence: ordinary read-only
+    CommitRequired --&gt; Responded: transaction committed
+    CommitRequired --&gt; FailedClosed: commit/receipt failed
+    AsyncEvidence --&gt; Responded: bounded enqueue attempted
+    Denied --&gt; Responded
+    ApprovalPending --&gt; Responded: approval + receipt committed
+    Rejected --&gt; [*]
+    Responded --&gt; [*]
+    FailedClosed --&gt; [*]</code></pre>
+<p>No protected action reaches <code>Responded</code> before its required durable state is committed.</p>
+<h2 id="class-diagram">Class Diagram<a class="headerlink" href="#class-diagram" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>classDiagram
+    class ProtocolAdapter { +authorize(request) response }
+    class AuthorizationService { +authorize(ctx, request) Result }
+    class SnapshotManager { +load(tenant) Snapshot +publish(generation) }
+    class AuthorizationSnapshot { +generation +agents +tools +compiled_policy }
+    class PolicyEngine { +evaluate(facts) Decision }
+    class StorageBackend { &lt;&lt;interface&gt;&gt; +claim_nonce() +commit_protected_decision() }
+    class ReceiptService { +append() Receipt +verify_range() }
+    class EvidenceSink { &lt;&lt;interface&gt;&gt; +try_emit(event) EmitResult }
+    ProtocolAdapter --&gt; AuthorizationService
+    AuthorizationService --&gt; SnapshotManager
+    SnapshotManager --&gt; AuthorizationSnapshot
+    AuthorizationService --&gt; PolicyEngine
+    AuthorizationService --&gt; StorageBackend
+    AuthorizationService --&gt; ReceiptService
+    AuthorizationService --&gt; EvidenceSink</code></pre>
+<p>The class boundaries mirror crate ownership. Protocol types originate in protobuf; storage remains behind <code>StorageBackend</code>; policy remains a pure dependency.</p>
+<h2 id="deployment-architecture">Deployment Architecture<a class="headerlink" href="#deployment-architecture" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TB
+    LB[Layer 7 load balancer\nHTTP/2 + gRPC]
+    subgraph AZ1[Availability Zone A]
+        G1[Gateway replica]
+        S1[SOC consumer]
+    end
+    subgraph AZ2[Availability Zone B]
+        G2[Gateway replica]
+        S2[SOC consumer]
+    end
+    PG[(PostgreSQL primary)]
+    RR[(Read replica\nnon-authoritative queries only)]
+    BUS[(Optional event transport)]
+    OBJ[(Immutable evidence/archive)]
+    LB --&gt; G1
+    LB --&gt; G2
+    G1 --&gt; PG
+    G2 --&gt; PG
+    PG --&gt; RR
+    G1 --&gt; BUS
+    G2 --&gt; BUS
+    BUS --&gt; S1
+    BUS --&gt; S2
+    S1 --&gt; PG
+    S2 --&gt; PG
+    S1 --&gt; OBJ</code></pre>
+<p>Authorization never reads security-critical state from a lagging replica. Read replicas serve dashboards, searches, and reports only. An optional transport scales evidence consumption but is not required for the single-node path.</p>
+<h3 id="deployment-modes">Deployment modes<a class="headerlink" href="#deployment-modes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Storage</th>
+<th style="text-align: right;">Replicas</th>
+<th>Intended use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Local</td>
+<td>SQLite WAL</td>
+<td style="text-align: right;">1</td>
+<td>development and demos</td>
+</tr>
+<tr>
+<td>Small production</td>
+<td>PostgreSQL</td>
+<td style="text-align: right;">1–2</td>
+<td>controlled workload after backend qualification</td>
+</tr>
+<tr>
+<td>Enterprise</td>
+<td>HA PostgreSQL + optional event transport</td>
+<td style="text-align: right;">2+</td>
+<td>multi-AZ, benchmarked capacity, disaster recovery</td>
+</tr>
+</tbody>
+</table>
+<h3 id="availability-backup-and-disaster-recovery">Availability, backup, and disaster recovery<a class="headerlink" href="#availability-backup-and-disaster-recovery" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Run qualified gateway replicas across failure domains; readiness removes a replica when its database, snapshot generation, or protected writer is unsafe.</li>
+<li>Use PostgreSQL point-in-time recovery, encrypted backups, and regularly tested restores. Back up signing-key metadata and policy/configuration separately under the organization’s KMS process.</li>
+<li>Replicate immutable evidence archives according to retention policy. A database restore is not complete until receipt chains and checkpoints verify.</li>
+<li>Define and test recovery point and recovery time objectives per deployment tier. SQLite local mode uses a quiesced database/WAL backup and is not an HA topology.</li>
+<li>During regional failover, fence writes until the promoted primary is authoritative for replay claims, approval consumption, control generations, and receipt heads.</li>
+</ul>
+<h3 id="release-strategies">Release strategies<a class="headerlink" href="#release-strategies" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Rolling update:</strong> permitted only when protobuf/database changes are backward compatible and mixed-version contract tests pass.</li>
+<li><strong>Canary:</strong> send a small tenant-safe traffic slice; compare decisions in shadow mode where safe, then check p99, errors, receipt integrity, and snapshot lag.</li>
+<li><strong>Blue/green:</strong> preferred for storage or snapshot-engine changes; warm snapshots and verify readiness before switching traffic.</li>
+<li><strong>Rollback:</strong> stop admission to the new pool, return traffic to the previous compatible version, and use forward schema migrations. Never delete evidence to roll back.</li>
+</ul>
+<h3 id="interactive-3d-architecture-concept">Interactive 3D architecture concept<a class="headerlink" href="#interactive-3d-architecture-concept" title="Permanent link">&para;</a></h3>
+<p>A React Three Fiber view represents gateway replicas as illuminated nodes, PostgreSQL as the durable core, and tenant snapshots as translucent layers. The camera starts above the deployment, zooms into one authorization, and follows particles through the fast lane. Green particles stop at the snapshot and Cedar nodes; protected actions turn amber while crossing the transaction boundary; asynchronous blue particles fan into evidence consumers. Hover reveals live p50/p95/p99, queue occupancy, snapshot generation, DB pool utilization, and receipt commit latency. Selecting a tenant filters every connection without exposing another tenant’s identifiers. Motion is reduced when the browser requests reduced animation.</p>
+<h2 id="folder-structure">Folder Structure<a class="headerlink" href="#folder-structure" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>AegisAgent/
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── lib/common/               # errors, hashes, metrics; no internal dependencies
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── lib/api/proto/            # wire-contract source of truth
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├── lib/api/src/              # REST mirrors and records
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── lib/storage/              # StorageBackend + SQLite/Postgres implementations
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── lib/policy/               # deterministic Cedar and validation
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── lib/soc/                  # asynchronous detection/correlation/export
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>├── src/src/                  # thin binary composition and protocol adapters
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>├── bins/                     # sensor, cage, egress, LLM gateway
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>├── config/config.yaml        # defaults; environment overrides at startup
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>└── docs/                     # contracts, runbooks, HLD, and LLD
+</code></pre></div>
+<p>The dependency graph in <a href="../architecture/">Architecture Patterns</a> is mandatory. A target service extraction must preserve the downward-only crate DAG.</p>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>Performance settings must be explicit, typed, range-validated, and observable. Names below are target additions unless already present in <code>config/config.yaml</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">gateway</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">rest_port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">grpc_port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6334</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">authorize_deadline_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">75</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">max_concurrent_requests</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">max_body_bytes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">262144</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="nt">storage</span><span class="p">:</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">postgres</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span><span class="nt">max_connections</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span><span class="nt">min_connections</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="nt">acquire_timeout_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="nt">authorization</span><span class="p">:</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">  </span><span class="nt">snapshot_max_tenants</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10000</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">  </span><span class="nt">snapshot_idle_ttl_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">900</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">  </span><span class="nt">snapshot_refresh_timeout_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">  </span><span class="nt">emergency_revocation_fence</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="nt">evidence</span><span class="p">:</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">  </span><span class="nt">critical_queue_capacity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">  </span><span class="nt">telemetry_queue_capacity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65536</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">  </span><span class="nt">writer_shards</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">  </span><span class="nt">batch_max_events</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">250</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">  </span><span class="nt">batch_max_delay_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</code></pre></div>
+<p><code>authorize_deadline_ms</code> is the total server budget. <code>max_concurrent_requests</code> must be derived from load tests and DB pool capacity. Queue capacities are memory budgets, not throughput knobs. Increasing them hides saturation and increases recovery time.</p>
+<h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
+<p>This HLD does not replace the product installation guide. Use <a href="../installation/">Installation</a> for prerequisites and <a href="../deployment-guide/">Deployment Guide</a> for Docker, Helm, and production configuration. Both REST 8080 and gRPC 6334 must be exposed where the deployment model permits access.</p>
+<h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
+<p>For architecture verification, start the gateway, submit the same authorization through REST and gRPC, and confirm both return the same semantic decision, policy IDs, action hash behavior, and receipt class. Then run the benchmark harness at increasing concurrency until the first SLO or saturation threshold is crossed. That point defines the initial safe capacity envelope.</p>
+<h2 id="detailed-walkthrough">Detailed Walkthrough<a class="headerlink" href="#detailed-walkthrough" title="Permanent link">&para;</a></h2>
+<h3 id="snapshot-publication">Snapshot publication<a class="headerlink" href="#snapshot-publication" title="Permanent link">&para;</a></h3>
+<p>A snapshot contains a tenant generation, compiled Cedar policy, tool metadata, MCP trust metadata, environment restrictions, and revocation metadata. A builder validates the complete object before publication. Readers clone an atomic shared pointer in constant time. A failed build leaves the previous valid snapshot active and raises an alert.</p>
+<h3 id="write-isolation">Write isolation<a class="headerlink" href="#write-isolation" title="Permanent link">&para;</a></h3>
+<p>Evidence events are assigned to <code>hash(tenant_id) % writer_shards</code>. Each shard owns a bounded mailbox and batches compatible operations. Ordering-sensitive receipt appends stay in the synchronous transaction path or a tenant-serialized durable primitive; they never share a lossy telemetry queue.</p>
+<h3 id="backpressure">Backpressure<a class="headerlink" href="#backpressure" title="Permanent link">&para;</a></h3>
+<p>Every boundary declares capacity and overflow behavior:</p>
+<table>
+<thead>
+<tr>
+<th>Boundary</th>
+<th>Full behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Authorization admission</td>
+<td>Reject with HTTP 429 / gRPC <code>RESOURCE_EXHAUSTED</code></td>
+</tr>
+<tr>
+<td>DB pool</td>
+<td>Fail closed when the short acquire deadline expires</td>
+</tr>
+<tr>
+<td>Protected durability</td>
+<td>Fail closed; never drop</td>
+</tr>
+<tr>
+<td>Critical evidence</td>
+<td>Persist synchronously or fail according to decision class</td>
+</tr>
+<tr>
+<td>Ordinary evidence</td>
+<td>Count and surface loss; never block authorize indefinitely</td>
+</tr>
+<tr>
+<td>Runtime telemetry</td>
+<td>Producer spool/backpressure; drop only policy-approved low-priority events</td>
+</tr>
+</tbody>
+</table>
+<h2 id="code-explanation">Code Explanation<a class="headerlink" href="#code-explanation" title="Permanent link">&para;</a></h2>
+<p>The implementation blueprint and line-level pseudocode are in <a href="../AegisAgent_World_Class_LLD/">Performance-First LLD</a>. The critical rule is that REST and gRPC call one <code>AuthorizationService</code>; neither adapter reimplements hashing, policy, or storage behavior.</p>
+<h2 id="live-example">Live Example<a class="headerlink" href="#live-example" title="Permanent link">&para;</a></h2>
+<p>Suppose tenant <code>acme</code> authorizes <code>github.merge_pull_request</code>:</p>
+<ul>
+<li>Identity, quarantine state, and tool permission resolve within <code>acme</code>.</li>
+<li>The final JSON action is canonicalized and hashed.</li>
+<li>One snapshot generation supplies tool risk, provenance rules, and compiled policy.</li>
+<li>Cedar returns <code>require_approval</code>.</li>
+<li>A short transaction writes the decision, pending approval bound to <code>action_hash</code>, and protected receipt.</li>
+<li>The response includes the approval reference only after commit.</li>
+<li>SOC correlation runs later and cannot change this decision.</li>
+</ul>
+<p>Expected result: retries with the same idempotency key return the original decision; a changed action hash cannot consume the approval; a receipt failure produces a fail-closed error.</p>
+<h2 id="api">API<a class="headerlink" href="#api" title="Permanent link">&para;</a></h2>
+<p>The wire source of truth is <code>lib/api/proto/*.proto</code>. Every endpoint must exist on both protocols and call the same service method.</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>REST</th>
+<th>gRPC</th>
+<th>Inline class</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Authorize action</td>
+<td><code>POST /v1/authorize</code></td>
+<td><code>AegisService.Authorize</code></td>
+<td>Critical</td>
+</tr>
+<tr>
+<td>Approve/reject</td>
+<td>approval routes</td>
+<td><code>AegisService.Approve</code> and contract peers</td>
+<td>Critical</td>
+</tr>
+<tr>
+<td>Register agent</td>
+<td>agent routes</td>
+<td><code>AegisService.RegisterAgent</code></td>
+<td>Control</td>
+</tr>
+<tr>
+<td>SOC query</td>
+<td><code>POST /v1/soc/query</code></td>
+<td><code>SocService.Query</code></td>
+<td>Off-path</td>
+</tr>
+</tbody>
+</table>
+<p>Any missing dual-protocol operation is a contract gap, not permission to implement only one transport.</p>
+<h2 id="cli">CLI<a class="headerlink" href="#cli" title="Permanent link">&para;</a></h2>
+<p>Operational CLI commands must expose the same typed configuration, support a read-only <code>config validate</code>, and provide benchmark modes that report decision class, protocol, offered load, achieved throughput, latency histogram, error class, and queue utilization. Exact shipped setup and invocation commands remain documented in <a href="../installation/">Installation</a> and <a href="../deployment-guide/">Deployment Guide</a>.</p>
+<h2 id="configuration-reference">Configuration Reference<a class="headerlink" href="#configuration-reference" title="Permanent link">&para;</a></h2>
+<p>Production defaults are selected by measurement:</p>
+<ul>
+<li>Pool size: start near <code>2 × available DB cores</code>, then benchmark; more connections can reduce throughput through contention.</li>
+<li>Writer shards: power of two for cheap hashing; never exceed useful concurrent DB writers.</li>
+<li>Snapshot TTL: controls memory reclamation only, not policy freshness; invalidation controls freshness.</li>
+<li>Batch delay: 5–10 ms is a starting point for evidence, never for protected receipts.</li>
+<li>Queue memory: calculate <code>capacity × worst_case_event_bytes</code> and include allocator overhead.</li>
+</ul>
+<h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
+<p>The fast path preserves:</p>
+<ul>
+<li>tenant-scoped authentication and parameterized storage access;</li>
+<li>optional request signatures and mTLS identity;</li>
+<li>durable replay claims for multi-replica deployments;</li>
+<li>tighten-only provenance propagation;</li>
+<li>deterministic Cedar decisions;</li>
+<li>exact <code>aegis-jcs-1</code> action hashes;</li>
+<li>approval expiry, single consumption, and hash equality;</li>
+<li>atomic hash-chained protected receipts;</li>
+<li>no raw secrets in snapshots, logs, events, or receipts.</li>
+</ul>
+<h3 id="threat-model-for-optimization">Threat model for optimization<a class="headerlink" href="#threat-model-for-optimization" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Optimization</th>
+<th>Threat</th>
+<th>Required control</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Identity cache</td>
+<td>revoked agent remains active</td>
+<td>revocation generation/fence; bounded TTL; fail closed on ambiguity</td>
+</tr>
+<tr>
+<td>Snapshot cache</td>
+<td>stale allow policy</td>
+<td>transactional generation, invalidation ACK, emergency deny overlay</td>
+</tr>
+<tr>
+<td>Async writes</td>
+<td>missing protected evidence</td>
+<td>classify before enqueue; protected class commits synchronously</td>
+</tr>
+<tr>
+<td>Batching</td>
+<td>cross-tenant data mixing</td>
+<td>tenant key on every item and query; isolation tests</td>
+</tr>
+<tr>
+<td>Load shedding</td>
+<td>attacker starves tenants</td>
+<td>tenant-aware quotas and fair admission</td>
+</tr>
+</tbody>
+</table>
+<h2 id="performance">Performance<a class="headerlink" href="#performance" title="Permanent link">&para;</a></h2>
+<h3 id="slos-and-saturation-signals">SLOs and saturation signals<a class="headerlink" href="#slos-and-saturation-signals" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Design objective</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Authorize p95</td>
+<td>&lt;50 ms within declared capacity</td>
+</tr>
+<tr>
+<td>Authorize p99</td>
+<td>&lt;75 ms within declared capacity</td>
+</tr>
+<tr>
+<td>Policy evaluation p99</td>
+<td>&lt;8 ms</td>
+</tr>
+<tr>
+<td>Admission rejection latency p99</td>
+<td>&lt;10 ms</td>
+</tr>
+<tr>
+<td>Unbounded queues</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Protected receipt loss</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Snapshot mixed-generation decisions</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p>Benchmark REST and gRPC separately for allow, deny, require-approval, idempotent replay, cache miss, policy refresh, DB degradation, and receipt contention. Report latency histograms—not averages—and identify the load at which p99, errors, CPU, DB pool wait, or queue occupancy first violates threshold.</p>
+<h2 id="scaling">Scaling<a class="headerlink" href="#scaling" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Scale gateway replicas on CPU, admitted concurrency, and p95—not raw request count alone.</li>
+<li>Partition high-volume event tables by tenant/time only after query evidence justifies it.</li>
+<li>Keep authoritative security reads on the primary unless a consistency protocol proves freshness.</li>
+<li>Use tenant-aware admission so one noisy tenant cannot monopolize the DB pool.</li>
+<li>Move evidence to an external transport only when in-process bounded consumers are the measured limiter.</li>
+<li>Isolate very large tenants onto dedicated shards when their receipt or event volume dominates shared resources.</li>
+</ul>
+<h2 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h2>
+<p>Required dimensions are bounded enums or hashed tenant classes; raw tenant IDs and action values must not create unbounded metric cardinality.</p>
+<ul>
+<li>authorization duration by stage, decision class, and protocol;</li>
+<li>admitted, rejected, timed out, and fail-closed totals;</li>
+<li>DB pool active/idle/wait duration and transaction latency;</li>
+<li>snapshot generation, age, rebuild duration, and propagation lag;</li>
+<li>queue depth, enqueue failures, batch size, and oldest-item age;</li>
+<li>receipt append duration, conflicts, and verification failures;</li>
+<li>CPU, resident memory, allocator pressure, storage IOPS, and network bytes.</li>
+</ul>
+<h2 id="logging">Logging<a class="headerlink" href="#logging" title="Permanent link">&para;</a></h2>
+<p>Structured logs include <code>trace_id</code>, <code>decision_id</code>, hashed tenant/agent correlation keys, snapshot generation, decision class, stage, duration, and error code. They exclude tokens, secrets, raw prompts, and unrestricted parameters. Sampling may reduce successful low-risk logs; denies, approval transitions, integrity failures, and protected receipt failures are never sampled away.</p>
+<h2 id="alerting">Alerting<a class="headerlink" href="#alerting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Alert</th>
+<th>Trigger</th>
+<th>First action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Authorize p99 breach</td>
+<td>&gt;75 ms for 5 minutes within normal load</td>
+<td>inspect stage histogram and DB wait</td>
+</tr>
+<tr>
+<td>Admission shedding</td>
+<td>sustained &gt;1%</td>
+<td>reduce offered load or add qualified capacity</td>
+</tr>
+<tr>
+<td>Snapshot lag</td>
+<td>emergency generation not acknowledged within bound</td>
+<td>fence affected tenant and investigate replica</td>
+</tr>
+<tr>
+<td>Protected receipt failure</td>
+<td>any</td>
+<td>page security/SRE; protected actions already fail closed</td>
+</tr>
+<tr>
+<td>Evidence queue pressure</td>
+<td>&gt;80% or oldest age above bound</td>
+<td>scale/drain consumer; inspect DB writes</td>
+</tr>
+<tr>
+<td>Replay store unavailable</td>
+<td>any multi-replica request failure</td>
+<td>restore primary path; do not disable protection</td>
+</tr>
+</tbody>
+</table>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+<th>Verification</th>
+<th>Safe response</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Low CPU, high latency</td>
+<td>DB pool wait or lock contention</td>
+<td>stage histogram, pool wait, DB locks</td>
+<td>reduce concurrency; inspect slow queries</td>
+</tr>
+<tr>
+<td>High CPU, low DB wait</td>
+<td>canonicalization/policy or serialization</td>
+<td>CPU profile by decision class</td>
+<td>reduce payload, precompile snapshots, scale CPU</td>
+</tr>
+<tr>
+<td>p99 spikes on refresh</td>
+<td>snapshot rebuild on reader path</td>
+<td>rebuild spans overlap requests</td>
+<td>move build off-thread; atomic publish only</td>
+</tr>
+<tr>
+<td>Missing ordinary audit</td>
+<td>bounded queue overflow</td>
+<td>enqueue-failure metric</td>
+<td>scale writer; do not increase queue blindly</td>
+</tr>
+<tr>
+<td>Protected actions fail</td>
+<td>DB/receipt durability unavailable</td>
+<td>receipt/transaction errors</td>
+<td>restore durability; never bypass receipt</td>
+</tr>
+<tr>
+<td>One tenant affects all</td>
+<td>unfair admission or hot shard</td>
+<td>per-class quota/shard metrics</td>
+<td>isolate tenant or rebalance shards</td>
+</tr>
+</tbody>
+</table>
+<h2 id="common-mistakes">Common Mistakes<a class="headerlink" href="#common-mistakes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Caching final authorization decisions.</li>
+<li>Adding Redis, Kafka, webhooks, graph queries, or LLM calls to <code>/v1/authorize</code>.</li>
+<li>Increasing queues or DB connections without measuring memory and contention.</li>
+<li>Returning a protected allow before receipt commit.</li>
+<li>Reading authoritative revocation state from a lagging replica.</li>
+<li>Refreshing a mutable policy object in place while readers use it.</li>
+<li>Implementing REST and gRPC with different business logic.</li>
+<li>Using raw <code>SqlitePool</code> outside <code>aegis-storage</code>.</li>
+</ul>
+<h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Optimize the measured slowest stage, not the most visible component.</li>
+<li>Preserve one snapshot generation per decision.</li>
+<li>Make overload cheap, explicit, and observable.</li>
+<li>Keep transactions short and ordered consistently.</li>
+<li>Use idempotency keys on retried mutations.</li>
+<li>Benchmark security-heavy cases, not only cached allows.</li>
+<li>Maintain a rollback switch for each target optimization.</li>
+<li>Re-run tenant-isolation, canonicalization parity, approval, and receipt tests after every performance change.</li>
+</ul>
+<h2 id="faq">FAQ<a class="headerlink" href="#faq" title="Permanent link">&para;</a></h2>
+<h3 id="why-not-authorize-entirely-in-the-sdk">Why not authorize entirely in the SDK?<a class="headerlink" href="#why-not-authorize-entirely-in-the-sdk" title="Permanent link">&para;</a></h3>
+<p>It can reduce network latency but cannot reliably observe current quarantine, replay, approval consumption, or policy state. SDK-side logic may perform an early deny; it is not the authority.</p>
+<h3 id="why-not-make-every-write-asynchronous">Why not make every write asynchronous?<a class="headerlink" href="#why-not-make-every-write-asynchronous" title="Permanent link">&para;</a></h3>
+<p>Protected actions require durable approval and receipt evidence before acknowledgment. Asynchronous loss would violate the security contract.</p>
+<h3 id="is-redis-required">Is Redis required?<a class="headerlink" href="#is-redis-required" title="Permanent link">&para;</a></h3>
+<p>No. A remote cache adds a hop and failure mode. It is useful only when multi-replica invalidation or measured database pressure justifies it.</p>
+<h3 id="is-postgresql-always-faster-than-sqlite">Is PostgreSQL always faster than SQLite?<a class="headerlink" href="#is-postgresql-always-faster-than-sqlite" title="Permanent link">&para;</a></h3>
+<p>No. SQLite is excellent for local single-node operation. PostgreSQL is selected for concurrent writers, HA, and multi-replica coordination—not because every individual query is faster.</p>
+<h3 id="what-does-zero-bottleneck-mean-here">What does “zero bottleneck” mean here?<a class="headerlink" href="#what-does-zero-bottleneck-mean-here" title="Permanent link">&para;</a></h3>
+<p>No hidden or unbounded bottleneck: every scarce resource has a limit, metric, overflow policy, benchmark, and scaling action. A finite capacity limit still exists.</p>
+<h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../architecture/">Architecture Patterns</a> — mandatory crate and dual-protocol rules</li>
+<li><a href="../AegisAgent_World_Class_LLD/">Performance-First LLD</a> — concrete structures, algorithms, schemas, and API behavior</li>
+<li><a href="../Implementation_Status/">Implementation Status</a> — shipped versus partial versus planned</li>
+<li><a href="../performance-baseline/">Performance Baseline</a> — historical measurements and method</li>
+<li><a href="../runtime-authorization-api/">Runtime Authorization API</a> — authorization contract</li>
+<li><a href="../action-receipt-spec/">Action Receipt Specification</a> — canonical receipt chain</li>
+<li><a href="../security-model/">Security Model</a> and <a href="../fail-closed-behavior/">Fail-Closed Behavior</a></li>
+<li><a href="../database-schema/">Database Schema</a> and <a href="../event-schema/">Event Schema</a></li>
+</ul>
+<hr />
+<p><strong>Decision summary:</strong> adopt the Snapshot-Isolated Fast Lane, tenant-affine bounded writers, and asynchronous evidence processing. Keep protected durability synchronous. Prove the capacity envelope before production, and reject overload early rather than turning the gateway into a queue.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../AegisAgent_Control_Command_Protocol/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Control command protocol">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Control command protocol
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../AegisAgent_World_Class_LLD/" class="md-footer__link md-footer__link--next" aria-label="Next: World-class LLD">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                World-class LLD
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Open, self-hostable, framework-neutral.
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

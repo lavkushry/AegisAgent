@@ -1,0 +1,11 @@
+%% Receipt hash chain. Explained in: docs/flows/Receipt_Flow.md
+flowchart LR
+    G[genesis] --> R1[receipt 1<br/>hash H1]
+    R1 -->|prev = H1| R2[receipt 2<br/>hash H2]
+    R2 -->|prev = H2| R3[receipt 3<br/>hash H3]
+    R3 -->|prev = H3| HEAD[chain head]
+    subgraph body[each receipt hashes]
+        B[agent, tool, action, resource,<br/>source_trust, decision, approver,<br/>action_hash, prev_receipt_hash]
+    end
+    B -. aegis-jcs-1 + SHA-256 .-> R2
+    SIG[Ed25519 signature<br/>over receipt_hash - optional] -.-> R2

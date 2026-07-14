@@ -1,0 +1,22 @@
+%% Known agent action flow. Explained in: docs/flows/Known_Agent_Flow.md
+sequenceDiagram
+    autonumber
+    participant SDK
+    participant GW as Gateway
+    participant PE as Cedar
+    participant H as Approver
+    participant SOC
+    SDK->>SDK: canonicalize (aegis-jcs-1) → action_hash
+    SDK->>GW: POST /v1/authorize
+    GW->>PE: evaluate (trust, risk, registry)
+    alt allow
+        GW-->>SDK: allow → execute
+    else require approval
+        H->>GW: approve frozen action
+        SDK->>GW: consume (single-use)
+        SDK->>SDK: execute after hash re-check
+    else deny
+        GW-->>SDK: deny → refuse
+    end
+    GW->>GW: decision + receipt (chained)
+    GW-->>SOC: async event

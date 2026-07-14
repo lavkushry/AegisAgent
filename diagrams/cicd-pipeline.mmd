@@ -1,0 +1,10 @@
+%% CI/CD pipeline. Explained in: docs/Repo_Knowledge_Map.md §9
+flowchart LR
+    PR[Pull request] --> CI[ci.yml: fmt, clippy -D warnings,<br/>tests, coverage ≥70, SDK parity, cargo-deny]
+    PR --> SEC[sast.yml + secret-scan.yml]
+    PR --> FUZZ[canon-fuzz.yml]
+    PR --> MUT[mutation-testing.yml]
+    MERGE[merge to main] --> DOCS[docs.yml: export OpenAPI<br/>→ mkdocs gh-deploy]
+    MERGE --> RP[release-please.yml]
+    RP --> TAG[tag v*] --> PUB[release-publish.yml:<br/>image + cosign keyless + SLSA L3 + SBOMs]
+    PUB --> SCAN[container-scan.yml]

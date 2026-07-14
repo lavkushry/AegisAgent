@@ -1,0 +1,15 @@
+%% Tenant/auth flow. Explained in: docs/production-hardening.md
+flowchart TD
+    REQ[Request + Authorization: Bearer] --> JWT{valid JWT?<br/>rotatable secrets}
+    JWT -->|yes| TID[tenant_id from claims]
+    JWT -->|no| REQD{AEGIS_JWT_REQUIRED?}
+    REQD -->|true| R401[401]
+    REQD -->|false| HEUR{token starts with tenant_?}
+    HEUR -->|no| R401
+    HEUR -->|yes| TID
+    TID --> BLOOM{tenant bloom filter}
+    BLOOM -->|definitely absent| R404[404 - no DB query]
+    BLOOM -->|maybe| DB[(get_tenant_by_id)]
+    DB -->|found| OK[TenantId → handler<br/>every query binds tenant_id]
+    DB -->|missing| R404
+    MTLS[optional mTLS client cert] -.->|verified CN → agent| OK

@@ -1,0 +1,9 @@
+%% Containment ladder. Explained in: docs/flows/Ban_Quarantine_Flow.md
+flowchart TD
+    TRIG[Detection or analyst action] --> CHOICE{severity}
+    CHOICE -->|reversible| FREEZE[freeze: authorize denied]
+    CHOICE -->|isolate| QUAR[quarantine: auth refused 401]
+    CHOICE -->|credential kill| REV[revoke: token invalid]
+    CHOICE -->|durable| BAN[ban record: gates future runs*]
+    FREEZE & QUAR & REV & BAN --> EV[audit event + SOC event]
+    EV --> AUTHC[get_agent_by_token excludes<br/>quarantined + deleted → fail closed]

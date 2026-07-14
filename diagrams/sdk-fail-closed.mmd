@@ -1,0 +1,15 @@
+%% SDK fail-closed decision tree. Explained in: docs/fail-closed-behavior.md
+flowchart TD
+    CALL[wrapped tool call] --> CANON[canonicalize → action_hash]
+    CANON --> REACH{gateway reachable?}
+    REACH -->|no, mutating/high-risk| REFUSE1[refuse]
+    REACH -->|yes| DEC{decision}
+    DEC -->|allow| EXEC[execute]
+    DEC -->|deny| REFUSE2[raise, never execute]
+    DEC -->|require_approval| POLL[poll approval]
+    POLL --> ST{status}
+    ST -->|approved| CONSUME[consume single-use]
+    ST -->|rejected/expired| REFUSE3[refuse]
+    CONSUME --> MATCH{hash matches?}
+    MATCH -->|yes| EXEC
+    MATCH -->|no| REFUSE4[refuse - swap detected]
