@@ -47,11 +47,20 @@ pub struct MockRuntime {
     pub approval_bad_request: Option<String>,
     /// When true, `create_approval` returns an internal error.
     pub approval_fail: bool,
+    /// When true, `ensure_policies_loaded` fails.
+    pub policies_load_fail: bool,
+    /// When true, `evaluate_cedar` fails.
+    pub cedar_fail: bool,
+    /// When set, `maybe_escalate_risk_tier` returns this `(old, new)` pair.
+    pub escalate_to: Option<(String, String)>,
     pub action_hash: String,
     pub writes: Mutex<u32>,
     pub heartbeats: Mutex<u32>,
     pub receipts: Mutex<u32>,
     pub approvals: Mutex<u32>,
+    pub quarantines: Mutex<u32>,
+    pub escalations: Mutex<u32>,
+    pub provenance_denials: Mutex<u32>,
 }
 
 impl Default for MockRuntime {
@@ -83,11 +92,17 @@ impl Default for MockRuntime {
             receipt_fail: false,
             approval_bad_request: None,
             approval_fail: false,
+            policies_load_fail: false,
+            cedar_fail: false,
+            escalate_to: None,
             action_hash: "deadbeef".into(),
             writes: Mutex::new(0),
             heartbeats: Mutex::new(0),
             receipts: Mutex::new(0),
             approvals: Mutex::new(0),
+            quarantines: Mutex::new(0),
+            escalations: Mutex::new(0),
+            provenance_denials: Mutex::new(0),
         }
     }
 }
@@ -213,6 +228,9 @@ impl DecisionRuntime for MockRuntime {
     }
 
     async fn ensure_policies_loaded(&self, _: &str) -> Result<(), AegisError> {
+        if self.policies_load_fail {
+            return Err(AegisError::Internal("policy pack unavailable".into()));
+        }
         Ok(())
     }
 
@@ -224,10 +242,15 @@ impl DecisionRuntime for MockRuntime {
         _: bool,
         _: bool,
     ) -> Result<PolicyDecisionView, AegisError> {
+        if self.cedar_fail {
+            return Err(AegisError::Internal("cedar engine down".into()));
+        }
         Ok(self.cedar.clone())
     }
 
-    fn record_provenance_denial(&self) {}
+    fn record_provenance_denial(&self) {
+        *self.provenance_denials.lock().expect("lock") += 1;
+    }
 
     fn audit_stream_has_capacity(&self) -> bool {
         self.audit_capacity
@@ -268,6 +291,7 @@ impl DecisionRuntime for MockRuntime {
     }
 
     async fn quarantine_agent(&self, _: &str, _: &str) -> Result<(), AegisError> {
+        *self.quarantines.lock().expect("lock") += 1;
         Ok(())
     }
 
@@ -311,7 +335,7 @@ impl DecisionRuntime for MockRuntime {
         _: &str,
         _: &str,
     ) -> Result<Option<(String, String)>, AegisError> {
-        Ok(None)
+        Ok(self.escalate_to.clone())
     }
 
     async fn emit_risk_escalated(
@@ -326,6 +350,7 @@ impl DecisionRuntime for MockRuntime {
         _: &str,
         _: &[String],
     ) {
+        *self.escalations.lock().expect("lock") += 1;
     }
 
     fn notify_github_decision(
