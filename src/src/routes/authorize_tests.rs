@@ -41,7 +41,8 @@ async fn test_jwt_tenant_extraction() {
     let _guard = get_env_lock().lock().await;
     use jsonwebtoken::{encode, EncodingKey, Header};
 
-    let secret = "test_jwt_secret_1234567890";
+    // Hyphenated fixture (not key-shaped digits) — avoids gitleaks generic-api-key.
+    let secret = "test-jwt-secret-for-authorize";
     std::env::set_var("AEGIS_JWT_SECRET", secret);
     std::env::set_var("AEGIS_JWT_REQUIRED", "true");
 
