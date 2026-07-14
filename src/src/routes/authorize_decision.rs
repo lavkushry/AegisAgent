@@ -17,38 +17,10 @@ use crate::models::*;
 
 use super::normalize_tool_identifier;
 
-pub(crate) fn risk_score_for_level(risk_level: &str) -> i32 {
-    match risk_level {
-        "low" => 10,
-        "medium" => 40,
-        "high" => 75,
-        "critical" => 95,
-        _ => 10,
-    }
-}
-
-/// Inverse of [`risk_score_for_level`] — used to reconstruct `risk_level` for an
-/// idempotent replay (#0072), where only `risk_score` was persisted on the
-/// original [`DecisionRecord`]. Bucketed by threshold so it tolerates any score
-/// `risk_score_for_level` could have produced.
-pub(crate) fn risk_level_for_score(risk_score: i32) -> String {
-    match risk_score {
-        s if s >= 95 => "critical",
-        s if s >= 75 => "high",
-        s if s >= 40 => "medium",
-        _ => "low",
-    }
-    .to_string()
-}
-
-/// True if a write-decision/audit failure for this action must fail closed
-/// (deny) rather than degrade to allow-with-warning (#1299). Mutating
-/// actions and anything risk-level "medium"/"high"/"critical" are
-/// high-risk; only non-mutating, risk-level "low" actions may proceed
-/// without a persisted audit record.
-pub(crate) fn is_high_risk_for_audit(risk_level: &str, mutates_state: bool) -> bool {
-    mutates_state || risk_level != "low"
-}
+// Pure risk helpers live in `aegis-decision` (library-owned evaluation).
+pub(crate) use aegis_decision::{
+    is_high_risk_for_audit, risk_level_for_score, risk_score_for_level,
+};
 
 /// #1513: read `tenant_id`'s composite-risk-score weights through the TTL
 /// cache, falling through to `db::get_risk_weights` on a miss (absent or

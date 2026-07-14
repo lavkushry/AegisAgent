@@ -4,8 +4,10 @@
 adapters), §4 (target seams) · **Status:** Phases A–D complete; service and
 `authorize_action_impl` both return `AuthorizedOutcome` (no Response on the
 authorize evaluation path). gRPC uses `outcome_to_tonic`; REST uses
-`outcome_to_response` at the handler edge. Remaining: `aegis-decision` crate
-move and typed extraction of other gRPC RPCs.
+`outcome_to_response` at the handler edge. **`aegis-decision`** owns context,
+`AuthorizeService`, `DecisionRuntime` ports, `DecisionOutcome`, pure risk
+helpers, and the **admit** phase (`admit_authorize`). Remaining: move Cedar
+evaluation + persistence/receipts into the library via the same ports.
 
 ## 1. Architectural scope & impact
 

@@ -32,9 +32,13 @@ use crate::error::{ErrorReason, StatusError};
 use crate::models::{AuthorizeRequest, AuthorizeResponse};
 use crate::routes::AppState;
 
-// Protocol-neutral context types live in `aegis-decision` so library code can
-// depend on them without pulling the gateway binary.
-pub use aegis_decision::{AuthCredential, AuthorizeContext, AuthorizeService, Transport};
+// Protocol-neutral context / outcome / runtime types live in `aegis-decision`
+// so library code can depend on them without pulling the gateway binary.
+pub use aegis_decision::{
+    admit_authorize, AuthCredential, AuthorizeAgent, AuthorizeContext, AuthorizeService,
+    DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome, DecisionRuntime,
+    Transport,
+};
 
 /// Body carried by a completed authorization evaluation.
 ///
@@ -240,12 +244,9 @@ pub async fn axum_response_to_tonic_json(
     Err(http_error_to_tonic(status, &body))
 }
 
-/// Build the HeaderMap the current `authorize_action_impl` still reads for
-/// tenant, agent credential, optional mTLS CN, and request signature.
-///
-/// During extraction the service reuses the impl; adapters never forge these
-/// headers themselves. Once `authorize_core` takes typed inputs only, this
-/// helper is deleted with the header re-reads.
+/// Build the HeaderMap for residual gateway code that still reads transport
+/// headers after admit (OTel parent, etc.). Adapters prefer typed
+/// [`AuthorizeContext`]; admit no longer re-reads credentials from headers.
 #[allow(clippy::result_large_err)] // StatusError is the gateway-wide error type
 pub fn build_service_headers(ctx: &AuthorizeContext) -> Result<HeaderMap, StatusError> {
     let mut headers = HeaderMap::new();
@@ -278,6 +279,160 @@ pub fn build_service_headers(ctx: &AuthorizeContext) -> Result<HeaderMap, Status
     }
 
     Ok(headers)
+}
+
+/// Map a library [`DecisionOutcome`] to the gateway wire [`AuthorizedOutcome`].
+pub fn decision_outcome_to_authorized(outcome: DecisionOutcome) -> AuthorizedOutcome {
+    match outcome.body {
+        DecisionBody::Decision(resp) => AuthorizedOutcome {
+            status: StatusCode::from_u16(outcome.http_status).unwrap_or(StatusCode::OK),
+            body: AuthorizedBody::Decision(resp),
+        },
+        DecisionBody::Failure(f) => {
+            let mut err = decision_failure_to_status_error(f);
+            if err.code != outcome.http_status {
+                err.code = outcome.http_status;
+            }
+            AuthorizedOutcome::status_error(err)
+        }
+        DecisionBody::PartialDeny { reason } => AuthorizedOutcome {
+            status: StatusCode::FORBIDDEN,
+            body: AuthorizedBody::Json(serde_json::json!({
+                "decision": "deny",
+                "reason": reason
+            })),
+        },
+    }
+}
+
+fn decision_failure_to_status_error(f: DecisionFailure) -> StatusError {
+    let reason = match f.class {
+        DecisionFailureClass::BadRequest => ErrorReason::BadRequest,
+        DecisionFailureClass::Unauthorized => ErrorReason::Unauthorized,
+        DecisionFailureClass::Forbidden => ErrorReason::Forbidden,
+        DecisionFailureClass::NotFound => ErrorReason::NotFound,
+        DecisionFailureClass::Conflict => ErrorReason::Conflict,
+        DecisionFailureClass::AlreadyExists => ErrorReason::AlreadyExists,
+        DecisionFailureClass::Invalid => ErrorReason::Invalid,
+        DecisionFailureClass::Timeout => ErrorReason::Timeout,
+        DecisionFailureClass::TooManyRequests => ErrorReason::TooManyRequests,
+        DecisionFailureClass::NotImplemented => ErrorReason::NotImplemented,
+        DecisionFailureClass::UnsupportedMediaType => ErrorReason::UnsupportedMediaType,
+        DecisionFailureClass::Internal => ErrorReason::InternalError,
+        DecisionFailureClass::ServiceUnavailable => ErrorReason::ServiceUnavailable,
+        DecisionFailureClass::Unknown => ErrorReason::Unknown,
+    };
+    let mut err = StatusError::new(reason, f.message);
+    if let Some(details) = f.details {
+        err = err.with_details(details);
+    }
+    err
+}
+
+/// Reconstruct [`AuthorizeContext`] from REST request headers (handler edge).
+#[allow(clippy::result_large_err)]
+pub fn authorize_context_from_headers(
+    headers: &HeaderMap,
+    client_addr: std::net::SocketAddr,
+) -> Result<AuthorizeContext, StatusError> {
+    let tenant_id = crate::routes::get_runtime_tenant_from_headers(headers).ok_or_else(|| {
+        StatusError::bad_request("Missing X-Aegis-Tenant-ID or X-Tenant-ID header")
+    })?;
+
+    let credential = if let Some(cn) = headers
+        .get(crate::mtls::MTLS_CN_HEADER)
+        .and_then(|h| h.to_str().ok())
+        .filter(|s| !s.is_empty())
+    {
+        AuthCredential::MtlsCn(cn.to_string())
+    } else {
+        let token = headers
+            .get("Authorization")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .unwrap_or("")
+            .to_string();
+        AuthCredential::BearerToken(token)
+    };
+
+    let sig = headers
+        .get("x-aegis-request-signature")
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_string);
+
+    Ok(
+        AuthorizeContext::new(tenant_id, client_addr, Transport::Rest, credential)
+            .with_request_signature(sig),
+    )
+}
+
+/// Gateway [`DecisionRuntime`] over [`AppState`] (storage + auth-failure lockout).
+pub struct GatewayDecisionRuntime {
+    state: Arc<AppState>,
+}
+
+impl GatewayDecisionRuntime {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+}
+
+fn agent_record_to_authorize_agent(a: crate::models::AgentRecord) -> AuthorizeAgent {
+    AuthorizeAgent {
+        id: a.id,
+        tenant_id: a.tenant_id,
+        agent_key: a.agent_key,
+        status: a.status,
+        risk_tier: a.risk_tier,
+        force_approval: a.force_approval,
+        signing_key: a.signing_key,
+        allowed_environments: a.allowed_environments,
+    }
+}
+
+#[async_trait::async_trait]
+impl DecisionRuntime for GatewayDecisionRuntime {
+    async fn get_agent_by_token(
+        &self,
+        tenant_id: &str,
+        token: &str,
+    ) -> Result<Option<AuthorizeAgent>, aegis_common::errors::AegisError> {
+        let agent = self
+            .state
+            .storage
+            .get_agent_by_token(tenant_id, token)
+            .await?;
+        Ok(agent.map(agent_record_to_authorize_agent))
+    }
+
+    async fn get_agent_by_mtls_cn(
+        &self,
+        tenant_id: &str,
+        cn: &str,
+    ) -> Result<Option<AuthorizeAgent>, aegis_common::errors::AegisError> {
+        let agent = self
+            .state
+            .storage
+            .get_agent_by_mtls_cn(tenant_id, cn)
+            .await?;
+        Ok(agent.map(agent_record_to_authorize_agent))
+    }
+
+    fn auth_failure_blocked(&self, client_addr: std::net::SocketAddr, tenant_id: &str) -> bool {
+        let key = crate::routes::auth_failure_tracker_key(&client_addr, tenant_id);
+        if self.state.auth_failure_tracker.is_blocked(&key) {
+            self.state.metrics.inc_auth_failure_lockout();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn record_auth_failure(&self, client_addr: std::net::SocketAddr, tenant_id: &str) {
+        let key = crate::routes::auth_failure_tracker_key(&client_addr, tenant_id);
+        self.state.auth_failure_tracker.record_failure(&key);
+        self.state.metrics.inc_auth_failure_attempt();
+    }
 }
 
 /// Protocol-neutral authorize entry used by REST (optional) and gRPC.
@@ -321,11 +476,11 @@ pub async fn authorize_raw(
 
 /// Gateway-owned implementor of [`AuthorizeService`].
 ///
-/// Holds shared [`AppState`] and runs evaluation through
-/// [`authorize`] / [`authorize_action_impl`]. Adapters that need full wire
-/// fidelity (StatusError envelopes, partial JSON denials) should call
-/// [`GatewayAuthorizeService::evaluate`]; the trait method
-/// [`AuthorizeService::authorize`] returns the narrower
+/// Holds shared [`AppState`]. Evaluation uses library admit
+/// (`aegis_decision::admit_authorize` via [`GatewayDecisionRuntime`]) then the
+/// remaining gateway pipeline in `authorize_action_impl`. Adapters that need
+/// full wire fidelity should call [`GatewayAuthorizeService::evaluate`]; the
+/// trait method [`AuthorizeService::authorize`] returns the narrower
 /// `Result<AuthorizeResponse, AegisError>` contract.
 #[derive(Clone)]
 pub struct GatewayAuthorizeService {

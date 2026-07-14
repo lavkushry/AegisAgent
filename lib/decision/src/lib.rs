@@ -10,24 +10,36 @@
 //!
 //! ## Status
 //!
-//! **Current (this crate):** transport-neutral request context types
-//! ([`Transport`], [`AuthCredential`], [`AuthorizeContext`]) that REST and
-//! gRPC adapters construct after authentication. The gateway binary still
-//! owns evaluation (`authorize_action_impl`) and wire mapping (`StatusError`,
-//! tonic codes, Axum responses).
+//! **Current (this crate):**
+//! - transport-neutral request context ([`Transport`], [`AuthCredential`],
+//!   [`AuthorizeContext`]);
+//! - [`AuthorizeService`] trait and protocol-neutral [`DecisionOutcome`];
+//! - [`DecisionRuntime`] ports + library-owned **admit** phase
+//!   ([`admit_authorize`]) — agent resolve, signature, environment;
+//! - pure risk helpers ([`risk_score_for_level`], …).
 //!
-//! **Target:** move evaluation into this crate behind [`AuthorizeService`]
-//! so the gateway only composes storage/policy handles and maps outcomes.
-//! That cutover requires a protocol-neutral outcome type that does not
-//! depend on Axum `Response` or gateway-only error types — tracked in
-//! `ROADMAP.md` Week 3 follow-on.
+//! Cedar evaluation, decision persistence, approvals, and receipts still run
+//! in the gateway binary after admit succeeds. Those stages move here behind
+//! the same runtime ports in follow-on commits.
 //!
-//! This crate has **no** dependency on Axum, tonic, or the gateway binary.
+//! This crate has **no** dependency on Axum, tonic, SQLx, or the gateway
+//! binary. It depends on `aegis-policy` for trust-chain propagation and
+//! environment validation (target DAG: Decision → Policy).
 
 #![forbid(unsafe_code)]
 
+mod admit;
+mod agent;
 mod context;
+mod outcome;
+mod risk;
+mod runtime;
 mod service;
 
+pub use admit::{admit_authorize, AdmittedAuthorize};
+pub use agent::AuthorizeAgent;
 pub use context::{AuthCredential, AuthorizeContext, Transport};
+pub use outcome::{DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome};
+pub use risk::{is_high_risk_for_audit, risk_level_for_score, risk_score_for_level};
+pub use runtime::DecisionRuntime;
 pub use service::AuthorizeService;

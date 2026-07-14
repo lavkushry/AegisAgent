@@ -77,9 +77,13 @@ approve/reject, register_agent, create_tenant, register/discover MCP,
 soc_query, and close_incident. Storage-direct SOC gRPC errors map via
 `aegis_error_to_tonic`. **`lib/decision` (`aegis-decision`)** holds context
 types + `AuthorizeService` trait; gateway **`GatewayAuthorizeService`**
-implements the trait and gRPC authorize calls `evaluate` through it. Evaluation
-code still lives in `authorize_action_impl`. Remaining: move evaluation body
-into `aegis-decision` as the trait implementor.
+implements the trait and gRPC authorize calls `evaluate` through it.
+**Admit phase** (parse, lockout, agent resolve, request signature, environment)
+now lives in `aegis-decision::admit_authorize` behind `DecisionRuntime` ports
+(`GatewayDecisionRuntime` on the gateway). Pure risk helpers and
+`DecisionOutcome` also live in the library. Remaining: move Cedar evaluation,
+decision persistence, approvals, and receipts into `aegis-decision` via the
+same runtime ports.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

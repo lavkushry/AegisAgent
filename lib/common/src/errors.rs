@@ -23,3 +23,13 @@ pub enum AegisError {
     #[error("Conflict: {0}")]
     Conflict(String),
 }
+
+impl AegisError {
+    /// True when the error is a connection-pool acquire timeout.
+    ///
+    /// Adapters map this to HTTP 503 / gRPC Unavailable without depending on
+    /// sqlx error variants outside the storage boundary.
+    pub fn is_pool_exhausted(&self) -> bool {
+        matches!(self, AegisError::Database(sqlx::Error::PoolTimedOut))
+    }
+}

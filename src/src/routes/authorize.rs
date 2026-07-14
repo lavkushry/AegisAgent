@@ -106,39 +106,9 @@ pub(crate) async fn idempotent_replay_response(
 }
 
 /// Composite tracker key for `/v1/authorize` auth-failure lockout (#1604).
+/// Used by [`crate::authorize_service::GatewayDecisionRuntime`].
 pub(crate) fn auth_failure_tracker_key(client_addr: &SocketAddr, tenant_id: &str) -> String {
     format!("{}|{}", client_addr.ip(), tenant_id)
-}
-
-/// Returns `Some(429)` when repeated invalid agent-token attempts from this
-/// source have exhausted the lockout budget (#1604).
-pub(crate) fn authorize_auth_failure_guard(
-    state: &Arc<AppState>,
-    client_addr: &SocketAddr,
-    tenant_id: &str,
-) -> Option<crate::authorize_service::AuthorizedOutcome> {
-    let key = auth_failure_tracker_key(client_addr, tenant_id);
-    if state.auth_failure_tracker.is_blocked(&key) {
-        state.metrics.inc_auth_failure_lockout();
-        return Some(crate::authorize_service::AuthorizedOutcome::status_error(
-            StatusError::too_many_requests(
-                "Too many failed authentication attempts. Try again later.",
-            )
-            .with_details(serde_json::json!({"reason": "rate_limited_auth_failures"})),
-        ));
-    }
-    None
-}
-
-/// Record one failed agent-token authentication attempt for lockout (#1604).
-pub(crate) fn record_authorize_auth_failure(
-    state: &Arc<AppState>,
-    client_addr: &SocketAddr,
-    tenant_id: &str,
-) {
-    let key = auth_failure_tracker_key(client_addr, tenant_id);
-    state.auth_failure_tracker.record_failure(&key);
-    state.metrics.inc_auth_failure_attempt();
 }
 
 // Authorize Action Handler
@@ -171,118 +141,31 @@ pub async fn authorize_action_impl(
     // for SOC/perf dashboards. Captured first so it covers agent resolution too.
     let started_at = std::time::Instant::now();
 
-    // Parse JSON from raw bytes — keeping bytes for HMAC signature verification (#1403).
-    let mut payload: AuthorizeRequest = match serde_json::from_slice(&body) {
-        Ok(p) => p,
-        Err(_) => {
-            return crate::authorize_service::AuthorizedOutcome::status_error(
-                StatusError::bad_request("Invalid JSON body"),
-            )
-        }
-    };
-
-    // #1281: dry-run / simulation mode — evaluate but persist nothing. Read
-    // once up front so every branch below can gate its side effects on it.
-    let dry_run = payload.dry_run.unwrap_or(false);
-
-    // #1293: trust propagation across agent chains — the effective (tighten-only)
-    // trust level for this hop, combining any inherited `trace.root_trust_level`
-    // with this hop's own declared `context.source_trust`. Computed once up front
-    // so every response path (including early-return denies before Cedar
-    // evaluation) reports the same value. `policy::PolicyEngine::authorize`
-    // independently derives the identical value (pure function of the same
-    // inputs) for Cedar's `context.trust_level`/`context.root_trust_level`.
-    let root_trust_level = crate::trust_chain::propagate(
-        payload
-            .trace
-            .as_ref()
-            .and_then(|t| t.root_trust_level.as_deref()),
-        &payload.context.source_trust,
-    );
-
-    let runtime_tenant_id = match get_runtime_tenant_from_headers(&headers) {
-        Some(tid) => tid,
-        None => {
-            return crate::authorize_service::AuthorizedOutcome::status_error(
-                StatusError::bad_request("Missing X-Aegis-Tenant-ID or X-Tenant-ID header"),
-            )
-        }
-    };
-
-    if let Some(resp) = authorize_auth_failure_guard(&state, &client_addr, &runtime_tenant_id) {
-        return resp;
-    }
-
-    // #1310: mTLS authentication. The TLS accept loop in `main.rs` sets this
-    // internal header to a client certificate's verified Subject CN only
-    // after a successful mTLS handshake against the configured CA, and
-    // strips any client-supplied value otherwise on every serving path — a
-    // client can never set it itself. Checked before bearer-token auth so a
-    // recognized mTLS identity never needs (or falls through to) a token.
-    let agent = if let Some(cn) = headers
-        .get(crate::mtls::MTLS_CN_HEADER)
-        .and_then(|h| h.to_str().ok())
-        .filter(|s| !s.is_empty())
-    {
-        match state
-            .storage
-            .get_agent_by_mtls_cn(&runtime_tenant_id, cn)
-            .instrument(tracing::info_span!(
-                "db_query",
-                db.operation = "get_agent_by_mtls_cn"
-            ))
-            .await
-        {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
-                return crate::authorize_service::AuthorizedOutcome::status_error(
-                    StatusError::unauthorized("Unrecognized mTLS client certificate"),
-                );
-            }
+    // Library-owned admit phase (`aegis-decision::admit_authorize`): parse,
+    // auth-failure lockout, agent resolve (mTLS/bearer), request signature,
+    // environment restriction. REST still arrives as HeaderMap; we build a
+    // typed AuthorizeContext once at this boundary.
+    let auth_ctx =
+        match crate::authorize_service::authorize_context_from_headers(&headers, client_addr) {
+            Ok(c) => c,
             Err(e) => {
-                error!("Database lookup error: {:?}", e);
-                return crate::authorize_service::AuthorizedOutcome::status_error(
-                    StatusError::from(e),
-                );
-            }
-        }
-    } else {
-        // Resolve agent from Bearer agent_token
-        let auth_header = match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
-            Some(h) if h.starts_with("Bearer ") => &h["Bearer ".len()..],
-            _ => {
-                record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
-                return crate::authorize_service::AuthorizedOutcome::status_error(
-                    StatusError::unauthorized("Missing agent token"),
-                );
+                return crate::authorize_service::AuthorizedOutcome::status_error(e);
             }
         };
-        match state
-            .storage
-            .get_agent_by_token(&runtime_tenant_id, auth_header)
-            .instrument(tracing::info_span!(
-                "db_query",
-                db.operation = "get_agent_by_token"
-            ))
-            .await
-        {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                record_authorize_auth_failure(&state, &client_addr, &runtime_tenant_id);
-                return crate::authorize_service::AuthorizedOutcome::status_error(
-                    StatusError::unauthorized("Invalid or quarantined agent token"),
-                );
-            }
-            Err(e) => {
-                error!("Database lookup error: {:?}", e);
-                return crate::authorize_service::AuthorizedOutcome::status_error(
-                    StatusError::from(e),
-                );
-            }
+    let runtime = crate::authorize_service::GatewayDecisionRuntime::new(state.clone());
+    let admitted = match crate::authorize_service::admit_authorize(&runtime, &auth_ctx, &body).await
+    {
+        Ok(a) => a,
+        Err(outcome) => {
+            return crate::authorize_service::decision_outcome_to_authorized(outcome);
         }
     };
 
+    let mut payload = admitted.request;
+    let dry_run = admitted.dry_run;
+    let root_trust_level = admitted.root_trust_level;
+    let agent = admitted.agent;
+    let is_mtls = admitted.used_mtls;
     let tenant_id = agent.tenant_id.clone();
     let agent_id = agent.id.clone();
 
@@ -294,56 +177,6 @@ pub async fn authorize_action_impl(
     // the "approval bound to the exact executable bytes" guarantee. `action_hash`
     // is not referenced between this point and the admission block, so deferring
     // its computation is safe.
-
-    // Request signing (#1403, opt-in): verify X-Aegis-Request-Signature header
-    // when the agent has a signing key registered. Missing or incorrect
-    // signature is a hard 401 — fail-closed so a forged body can't bypass
-    // policy. Agents without a signing key are unaffected (backwards compat).
-    if let Some(ref signing_key) = agent.signing_key {
-        let sig_header = match headers
-            .get("x-aegis-request-signature")
-            .and_then(|h| h.to_str().ok())
-        {
-            Some(s) => s.to_string(),
-            None => {
-                warn!(
-                    "Request signature missing for agent={} tenant={}",
-                    agent_id, tenant_id
-                );
-                return crate::authorize_service::AuthorizedOutcome::status_error(
-                    StatusError::unauthorized("missing_request_signature"),
-                );
-            }
-        };
-        if !aegis_common::hash::verify_request_signature(signing_key, &body, &sig_header) {
-            warn!(
-                "Request signature invalid for agent={} tenant={}",
-                agent_id, tenant_id
-            );
-            return crate::authorize_service::AuthorizedOutcome::status_error(
-                StatusError::unauthorized("invalid_request_signature"),
-            );
-        }
-    }
-
-    // Environment restriction (#1391): deny if the agent is not permitted
-    // to operate in the environment the caller declares. NULL = unrestricted.
-    if let Err(reason) = aegis_policy::validation::validate_environment(
-        agent.allowed_environments.as_deref(),
-        &payload.agent.environment,
-    ) {
-        warn!(
-            "Environment restriction: agent={} tenant={} env={} error={}",
-            agent_id, tenant_id, payload.agent.environment, reason
-        );
-        return crate::authorize_service::AuthorizedOutcome {
-            status: StatusCode::FORBIDDEN,
-            body: crate::authorize_service::AuthorizedBody::Json(json!({
-                "decision": "deny",
-                "reason": reason
-            })),
-        };
-    }
 
     // #1510: the agent-to-tool permission check and the idempotency lookup
     // below are independent reads — neither depends on the other's result —
@@ -780,11 +613,7 @@ pub async fn authorize_action_impl(
     let mut action_approval_required = false;
     let mut action_default_decision = "policy".to_string();
     let mut is_tool_known = true;
-    let is_mtls = headers
-        .get(crate::mtls::MTLS_CN_HEADER)
-        .and_then(|h| h.to_str().ok())
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
+    // `is_mtls` comes from library admit (`admitted.used_mtls`).
 
     // Read-through cache (#899): registered-action metadata is static between
     // registrations, so serve it from the LRU and fall back to the DB on a miss.

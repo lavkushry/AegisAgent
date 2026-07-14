@@ -82,11 +82,13 @@ version = "0.1.0"
 dependencies = [
  "aegis-api",
  "aegis-common",
+ "aegis-policy",
  "async-trait",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
