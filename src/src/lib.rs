@@ -51,6 +51,7 @@ pub use aegis_common::metrics;
 pub mod admission;
 pub mod airgap;
 pub mod authorize_service;
+pub mod decision_runtime;
 pub mod error;
 pub mod gh_checks;
 pub mod gh_comment;

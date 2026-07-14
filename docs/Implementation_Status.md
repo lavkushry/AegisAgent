@@ -32,7 +32,7 @@ and is not production-authoritative.
 
 | Capability | Status | Current files | Missing pieces | Related issues | Test coverage | Prod-ready | Next PR |
 |---|---|---|---|---|---|---|---|
-| Gateway authorize | Implemented | `src/src/routes/authorize.rs`, `authorize_decision.rs`, `authorize_canon.rs` | — | #1305–#1313 | unit + integration + bench + fuzz (canon) | prod | perf follow-ups |
+| Gateway authorize | Implemented | Thin adapters: `routes/authorize.rs` + `authorize_service.rs` + `decision_runtime.rs`; evaluation in `lib/decision` (`run_authorize_pipeline`) | reactor snapshots / control-store cutover (later weeks) | #1305–#1313, Week-3 typed service | unit + equality corpus + bench + fuzz (canon) | prod | perf follow-ups |
 | Policy engine (Cedar) | Implemented | `lib/policy/src/cedar.rs`, `policies.cedar`, `src/src/policy_watcher.rs` | — | #883, #1280 | unit + policy eval | prod | — |
 | Trust provenance (6 levels, tighten-only) | Implemented | `lib/policy/src/trust_chain.rs`, ingest labeling | broader channel connectors | — | unit | prod | more ingest sources |
 | Approval lifecycle (create/approve/reject/TTL) | Implemented | `src/src/routes/approval.rs`, `lib/storage/src/db/approvals.rs` | — | #1307 | unit + integration | prod | — |
