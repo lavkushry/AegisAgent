@@ -44,11 +44,11 @@ When operating in this workflow, execute the relevant framework commands to veri
 ### Rust Gateway Tests
 - **Run all gateway tests:**
   ```bash
-  cargo test --manifest-path gateway/Cargo.toml
+  cargo test --workspace -- --test-threads=1
   ```
 - **Run a specific test module or test name:**
   ```bash
-  cargo test --manifest-path gateway/Cargo.toml -- <test_name_or_module>
+  cargo test --workspace -- --test-threads=1 <test_name_or_module>
   ```
 
 ### Python SDK Tests

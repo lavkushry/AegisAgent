@@ -27,7 +27,7 @@ To ensure the integrity, security, and quality of the AegisAgent codebase, the a
 - [ ] **Local Interface Binding:** Ensure all TCP listener configurations in tests or dev code bind strictly to `127.0.0.1`.
 
 ### Code Quality & Standards
-- [ ] **Rust gateway formatting:** Run `cargo fmt --manifest-path gateway/Cargo.toml -- --check` and verify it passes.
+- [ ] **Rust gateway formatting:** Run `cargo fmt --all -- --check` and verify it passes.
 - [ ] **Python SDK formatting:** Run `black --check sdk-python/` and verify it passes.
 - [ ] **Linter check:** Run `cargo clippy` and verify there are no compile-time warnings or clippy errors.
 

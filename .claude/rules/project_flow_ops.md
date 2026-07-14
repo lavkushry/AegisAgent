@@ -24,7 +24,7 @@ Before making changes, the agent must run the local development stack to establi
    ```
 2. **Launch Database & Server:** Initialize compile checks:
    ```bash
-   cargo check --manifest-path gateway/Cargo.toml
+   cargo check --workspace
    ```
 
 ---
@@ -36,7 +36,7 @@ Every modification must pass our automated verification suite.
 ### Steps:
 1. **Run Rust Gateway Tests:**
    ```bash
-   cargo test --manifest-path gateway/Cargo.toml
+   cargo test --workspace -- --test-threads=1
    ```
 2. **Run Python SDK Tests:**
    ```bash
@@ -63,12 +63,12 @@ Before files are staged or merged into the main branch, they must pass security 
    ```
 2. **Verify Formatting:**
    ```bash
-   cargo fmt --manifest-path gateway/Cargo.toml -- --check
+   cargo fmt --all -- --check
    black --check sdk-python/
    ```
 3. **Build the Production Release Artifact:**
    ```bash
-   cargo build --release --manifest-path gateway/Cargo.toml
+   cargo build --release -p gateway
    ```
 
 ---
@@ -79,5 +79,5 @@ When deploying releases using Helm or Docker:
 - Verify that the container configurations bind endpoints to loopbacks or private subnets unless exposing public entry points.
 - Ensure all Helm charts lint successfully:
   ```bash
-  helm lint helm/aegisagent
+  helm lint helm/aegis-gateway
   ```
