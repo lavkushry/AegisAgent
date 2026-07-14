@@ -87,11 +87,13 @@ Content-Type: application/json
 | `risk_score` / `risk_level` | Derived from the registered tool/action's configured risk (`low`→10, `medium`→40, `high`→75, `critical`→95), or MCP tool risk for MCP calls. |
 | `reason` | Human-readable explanation, safe to display to an operator. |
 | `matched_policies` | Cedar policy IDs (or synthetic markers like `agent_frozen`, `mcp_unknown_tool`, `critical_risk_requires_approval`) that produced the decision — useful for debugging policy precedence. |
+| `redacted_fields` | Present when `decision == "redact"`: parameter keys the SDK must mask before execution. Empty for other decisions. |
+| `receipt` | Optional receipt identity for durable evidence (protected/mutating paths). |
 | `approval` | Present only when `decision == "require_approval"`. `action_hash` is the value the SDK **must** match before executing (see below). |
 
 ## Decision types
 
-`/v1/authorize` returns exactly one of three values in `decision`:
+`/v1/authorize` returns a string `decision`. The common SDK-handled values are:
 
 - **`allow`** — execute immediately. No approval is created.
 - **`deny`** — never execute. The SDK raises `AegisAuthorizationDenied`
@@ -104,16 +106,21 @@ Content-Type: application/json
   expires). The response includes an `approval` object; the SDK polls
   `GET /v1/approvals/:id` until `status` is `approved`, `rejected`, or
   `EXPIRED`.
+- **`redact`** — execute with selected parameter fields replaced by
+  `[REDACTED]` (Python SDK). Produced by Cedar `@decision("redact")` plus
+  `@redact_fields(...)`. `redacted_fields` is populated only for this
+  decision; other decisions clear it.
+- **`quarantine`** — produced by Cedar `@decision("quarantine")` on a
+  permit. The evaluate stage sets the agent status to quarantined (host
+  port) and returns `decision: "quarantine"`. SDKs that do not special-case
+  this string should treat unknown decisions as fail-closed (do not execute).
 
-**"Quarantine" and "redact" are not `decision` values.** Quarantine is
-enforced as a *state* on an agent (`frozen`/`revoked` via
-`POST /v1/agents/:id/freeze|revoke`) or an MCP server
-(`POST /v1/mcp/servers/:server_key/quarantine`) — once quarantined, every
-subsequent `/v1/authorize` call for that principal/server returns `deny`
-with a `matched_policies` marker (`agent_frozen`, `agent_revoked`,
-`mcp_server_quarantined`) rather than a distinct decision string. Redaction
-of sensitive fields happens at the logging/receipt layer (`context.
-contains_sensitive_data`), not as an authorize decision.
+**Agent/MCP lifecycle quarantine is separate from the `quarantine` decision
+string.** Freezing/revoking an agent (`POST /v1/agents/:id/freeze|revoke`)
+or quarantining an MCP server (`POST /v1/mcp/servers/:server_key/quarantine`)
+is a *state* change. Subsequent authorize calls for that principal/server
+return **`deny`** with markers such as `agent_frozen`, `agent_revoked`, or
+`mcp_server_quarantined` — not necessarily `decision: "quarantine"`.
 
 ## Policy evaluation flow
 
