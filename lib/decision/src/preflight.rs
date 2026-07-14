@@ -285,6 +285,33 @@ mod tests {
         ) -> Result<crate::runtime::EnforcementStatus, AegisError> {
             Ok(crate::runtime::EnforcementStatus::Clear)
         }
+        async fn skill_action_meta(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<crate::runtime::RegisteredActionMeta>, AegisError> {
+            Ok(None)
+        }
+        async fn agent_mcp_server_permitted(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<bool, AegisError> {
+            Ok(true)
+        }
+        async fn mcp_server_status(&self, _: &str, _: &str) -> Result<Option<String>, AegisError> {
+            Ok(None)
+        }
+        async fn mcp_tool_meta(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<crate::runtime::McpToolMeta>, AegisError> {
+            Ok(None)
+        }
     }
 
     fn admitted(nonce: Option<&str>, request_id: Option<&str>) -> AdmittedAuthorize {

@@ -35,10 +35,11 @@ use crate::routes::AppState;
 // Protocol-neutral context / outcome / runtime types live in `aegis-decision`
 // so library code can depend on them without pulling the gateway binary.
 pub use aegis_decision::{
-    admit_authorize, guard_authorize, preflight_authorize, AdmissionEffect, AuthCredential,
-    AuthorizeAgent, AuthorizeContext, AuthorizeService, DecisionAuditWrite, DecisionBody,
-    DecisionFailure, DecisionFailureClass, DecisionOutcome, DecisionRuntime, EnforcementStatus,
-    GuardedAuthorize, PreflightTerminal, PreflightedAuthorize, Transport,
+    admit_authorize, guard_authorize, metadata_authorize, preflight_authorize, AdmissionEffect,
+    AuthCredential, AuthorizeAgent, AuthorizeContext, AuthorizeService, DecisionAuditWrite,
+    DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome, DecisionRuntime,
+    EnforcementStatus, GuardedAuthorize, McpToolMeta, MetadataAuthorize, PreflightTerminal,
+    PreflightedAuthorize, RegisteredActionMeta, Transport,
 };
 
 /// Body carried by a completed authorization evaluation.
@@ -575,6 +576,123 @@ impl DecisionRuntime for GatewayDecisionRuntime {
             (_, Ok(true), _) => Ok(EnforcementStatus::ToolBanned),
             (_, _, Ok(true)) => Ok(EnforcementStatus::AgentQuarantined),
             (Ok(false), Ok(false), Ok(false)) => Ok(EnforcementStatus::Clear),
+        }
+    }
+
+    async fn skill_action_meta(
+        &self,
+        tenant_id: &str,
+        normalized_tool: &str,
+        normalized_action: &str,
+    ) -> Result<Option<RegisteredActionMeta>, aegis_common::errors::AegisError> {
+        let skill_cache_key = crate::routes::SkillActionCache::cache_key(
+            tenant_id,
+            normalized_tool,
+            normalized_action,
+        );
+        if let Some(meta) = self.state.skill_cache.get(&skill_cache_key).await {
+            return Ok(Some(RegisteredActionMeta {
+                risk: meta.0,
+                mutates_state: meta.1,
+                approval_required: meta.2,
+                default_decision: meta.3,
+            }));
+        }
+        match self
+            .state
+            .storage
+            .get_skill_action(tenant_id, normalized_tool, normalized_action)
+            .await?
+        {
+            Some(record) => {
+                let meta = (
+                    record.risk.clone(),
+                    record.mutates_state,
+                    record.approval_required,
+                    record.default_decision.clone(),
+                );
+                self.state
+                    .skill_cache
+                    .insert(skill_cache_key, meta.clone())
+                    .await;
+                Ok(Some(RegisteredActionMeta {
+                    risk: meta.0,
+                    mutates_state: meta.1,
+                    approval_required: meta.2,
+                    default_decision: meta.3,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn agent_mcp_server_permitted(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<bool, aegis_common::errors::AegisError> {
+        self.state
+            .storage
+            .agent_mcp_server_permission_status(tenant_id, agent_id, server_key)
+            .await
+    }
+
+    async fn mcp_server_status(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+    ) -> Result<Option<String>, aegis_common::errors::AegisError> {
+        let cache_key = crate::routes::McpServerCache::cache_key(tenant_id, server_key);
+        if let Some(server) = self.state.mcp_server_cache.get(&cache_key) {
+            return Ok(Some(server.status));
+        }
+        match self
+            .state
+            .storage
+            .get_mcp_server_by_key(tenant_id, server_key)
+            .await?
+        {
+            Some(server) => {
+                let status = server.status.clone();
+                self.state.mcp_server_cache.insert(cache_key, server);
+                Ok(Some(status))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn mcp_tool_meta(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        normalized_action: &str,
+    ) -> Result<Option<McpToolMeta>, aegis_common::errors::AegisError> {
+        let cache_key =
+            crate::routes::McpToolCache::cache_key(tenant_id, server_key, normalized_action);
+        if let Some(tool) = self.state.mcp_tool_cache.get(&cache_key) {
+            return Ok(Some(McpToolMeta {
+                risk: tool.risk,
+                approval_required: tool.approval_required,
+                status: tool.status,
+            }));
+        }
+        match self
+            .state
+            .storage
+            .get_mcp_tool_by_key(tenant_id, server_key, normalized_action)
+            .await?
+        {
+            Some(tool) => {
+                let meta = McpToolMeta {
+                    risk: tool.risk.clone(),
+                    approval_required: tool.approval_required,
+                    status: tool.status.clone(),
+                };
+                self.state.mcp_tool_cache.insert(cache_key, tool);
+                Ok(Some(meta))
+            }
+            None => Ok(None),
         }
     }
 }

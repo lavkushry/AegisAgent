@@ -36,6 +36,23 @@ pub enum EnforcementStatus {
     AgentQuarantined,
 }
 
+/// Registered skill-action metadata used for risk scoring / defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredActionMeta {
+    pub risk: String,
+    pub mutates_state: bool,
+    pub approval_required: bool,
+    pub default_decision: String,
+}
+
+/// MCP tool row fields needed on the authorize path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpToolMeta {
+    pub risk: String,
+    pub approval_required: bool,
+    pub status: String,
+}
+
 /// Side-effect ports used by admit/preflight/guard/evaluate.
 ///
 /// The gateway implements this over `AppState` / `StorageBackend`. Future
@@ -127,4 +144,36 @@ pub trait DecisionRuntime: Send + Sync {
         agent_id: &str,
         normalized_tool: &str,
     ) -> Result<EnforcementStatus, AegisError>;
+
+    /// Registered skill-action metadata (risk / approval defaults), if any.
+    /// Host owns cache read-through.
+    async fn skill_action_meta(
+        &self,
+        tenant_id: &str,
+        normalized_tool: &str,
+        normalized_action: &str,
+    ) -> Result<Option<RegisteredActionMeta>, AegisError>;
+
+    /// Agent-to-MCP-server permission (#1766). `true` = allowed / unrestricted.
+    async fn agent_mcp_server_permitted(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        server_key: &str,
+    ) -> Result<bool, AegisError>;
+
+    /// MCP server lifecycle status (`active`, `quarantined`, …), if registered.
+    async fn mcp_server_status(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+    ) -> Result<Option<String>, AegisError>;
+
+    /// MCP tool metadata for the action key, if registered. Host owns cache.
+    async fn mcp_tool_meta(
+        &self,
+        tenant_id: &str,
+        server_key: &str,
+        normalized_action: &str,
+    ) -> Result<Option<McpToolMeta>, AegisError>;
 }
