@@ -84,9 +84,9 @@ pub(crate) async fn emit_action_receipt(
 /// read path off the WAL write lock matters more there.
 ///
 /// Protected: any mutating action; any `high`/`critical` risk; and any decision
-/// that is itself security-relevant — `deny`, `require_approval`, `quarantine`,
-/// `redact`, `log_only`'s siblings — i.e. everything except a plain low/medium
-/// read-only `allow`.
+/// that is not a plain low/medium read-only `allow` (e.g. `deny`,
+/// `require_approval`, `quarantine`, `redact`) — see
+/// [`aegis_decision::decision_requires_durable_receipt`].
 pub(crate) use aegis_decision::decision_requires_durable_receipt;
 
 /// Synchronously append the decision's receipt to the hash chain and return the

@@ -118,7 +118,7 @@ Full catalogue with failure modes: [fail-closed-behavior.md](fail-closed-behavio
 
 - **Canonical action** — `aegis-jcs-1` JSON (Unicode-sorted keys, compact separators, raw UTF-8, non-finite floats rejected); `src/canon/`; parity locked by `tests/canonical_action_vectors.json`.
 - **`action_hash`** — SHA-256 of the canonical action; the identity every approval and receipt binds to.
-- **Decision** — allow / deny / require_approval + reason + risk + trust context (`decisions` table).
+- **Decision** — authorize outcome (`allow` / `deny` / `require_approval` / `redact` / `quarantine`) + reason + risk + trust context (`decisions` table); evaluation in `lib/decision`.
 - **Approval** — frozen action + `action_hash` + TTL + single-use consumption (`approvals` table).
 - **Action receipt** — canonical body + `prev_receipt_hash` chain link + optional Ed25519 signature (`action_receipts` table); spec: [action-receipt-spec.md](action-receipt-spec.md).
 - **SOC event / alert / incident** — async pipeline records with `EventEvidence` linkage.

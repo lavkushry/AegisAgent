@@ -38,9 +38,7 @@
 
 ```bash
 cargo test -p aegis-decision --lib -- --test-threads=1
-# 87+ tests: stage units + pipeline e2e (auth/mTLS/signatures, policy overrides,
-# MCP unknown→critical approval, ban/quarantine, dry-run, durable vs best-effort
-# receipts, idempotent-replay host failure fail-closed)
+# 87 lib tests (cargo test -p aegis-decision --lib -- --list)
 cargo test -p gateway --lib authorize_service -- --test-threads=1
 cargo test -p gateway --lib equality_ -- --test-threads=1
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
@@ -51,10 +49,11 @@ cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
 - [x] Evaluation fully library-owned (`run_authorize_pipeline`)
 - [x] REST + gRPC thin adapters; no gRPC→Axum JSON bridge
 - [x] Equality corpus (`equality_*`) for HeaderMap vs typed context
-- [x] Stage + pipeline e2e with shared `MockRuntime` (87+ decision tests)
+- [x] Stage + pipeline e2e with shared `MockRuntime` (**87** decision lib tests)
 - [x] Wire-map unit tests (`authorize_service_tests`)
 - [x] Docs: architecture transitional DAG, ROADMAP Week 3, Gateway.md, LLD §7,
-      Implementation_Status, CLAUDE.md, code_tour / skills onboarding
+      Implementation_Status, CLAUDE.md, code_tour / skills onboarding,
+      runtime-authorization-api decision vocabulary
 - [ ] Push branch + open PR (when requested)
 
 ## Follow-ons (not this branch)
