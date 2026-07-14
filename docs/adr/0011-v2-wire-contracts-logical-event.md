@@ -40,9 +40,14 @@ lands with its own round-trip/malformed gate rather than in one drop:
    (`aegis.wire.v2.SecurityEvent`, `file_identifier "AEF2"`), with generated
    verification, bounded length/depth limits, and defined verifier error codes,
    introducing the `flatbuffers` build/runtime dependency under this ADR.
-3. **Arrow logical schema (follow-on).** Define the LLD §9.2 event schema, its
-   schema fingerprint, and the `AAS2` browser envelope, introducing the
-   `arrow` dependencies under this ADR.
+3. **Arrow logical schema (this increment).** Define the LLD §9.2 event schema
+   in hand-written Rust in a new unwired `aegis-wire` crate (`lib/wire`, the
+   target `lib/wire/` slot), against `arrow-schema` logical types only — no
+   compute kernels and, crucially, no external codegen binary (`flatc`/planus
+   are absent here and from CI). Pin a **version-independent schema
+   fingerprint** (SHA-256 over a canonical field rendering, not `arrow-schema`
+   `Debug`) so browser-stream resume (LLD §24) stays stable across crate
+   upgrades. The `AAS2` browser envelope remains follow-on.
 4. **Logical-event conversion corpus (follow-on, spans 1–3).** A single neutral
    logical event with converters to/from REST model, protobuf v2, FlatBuffer,
    and Arrow, gated on round-trip/differential equality plus malformed
@@ -64,9 +69,16 @@ approval consumption and is itself reserved forward.
 - Carrying v1 and v2 side by side widens the generated surface of `aegis-api`
   and adds a second `configure()` call to maintain. This is the cost of a
   non-breaking migration; v1 remains the only wired contract.
-- `flatbuffers` and `arrow` are heavy new dependencies. They are deferred to
-  their own increments so each can be audited (`cargo deny`/`cargo audit`) at
-  introduction rather than bundled here.
+- `flatbuffers` and `arrow` are heavy new dependencies. They are introduced one
+  increment at a time so each can be audited (`cargo deny`/`cargo audit`) at
+  introduction rather than bundled. The Arrow increment takes only
+  `arrow-schema` with `default-features = false` (zero active runtime
+  dependencies); FlatBuffer's compiler path is still open (see below).
+- Arrow was sequenced **before** FlatBuffer because the FlatBuffer contract
+  needs a `.fbs`→Rust codegen step and neither `flatc` nor a build-usable planus
+  library is available here or in CI, whereas the Arrow schema is defined
+  directly in Rust. FlatBuffer will land with a deliberate codegen decision
+  (checked-in generated code vs. a CI codegen binary), not by default.
 
 ## Alternatives considered
 
@@ -107,10 +119,14 @@ stream context) and require security review before shadow wiring.
 - `cargo test -p aegis-api --lib wire_v2` — round-trip equality for
   `AuthorizeRequest`/`AuthorizeResponse`, `Bytes`-typed opaque payloads,
   malformed length/varint rejection, and fail-closed enum defaults.
-- `cargo check -p aegis-api` — v2 generation compiles beside v1 with no change
-  to v1 output.
-- Follow-on phases add FlatBuffer verifier fuzz seeds, Arrow schema fingerprint
-  stability, and the four-way conversion-corpus differential as their gates.
+- `cargo test -p aegis-wire` — the Arrow logical event schema carries the full
+  §9.2 field set in spec order, only the four spec-nullable fields are nullable,
+  ID/hash widths match, `payload_ref` is the spec struct, and the schema
+  fingerprint is pinned (golden) and 64 hex chars.
+- `cargo check --workspace` — v2 protobuf generation compiles beside v1 with no
+  change to v1 output; `aegis-wire` builds as a new workspace member.
+- Follow-on phases add FlatBuffer verifier fuzz seeds, the `AAS2` browser
+  envelope, and the four-way conversion-corpus differential as their gates.
 
 ## References
 

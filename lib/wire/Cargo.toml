@@ -1,0 +1,10 @@
+[package]
+name = "aegis-wire"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Unwired v2 wire-contract schemas (ADR-0011): Arrow logical event schema and fingerprint. No production traffic."
+
+[dependencies]
+arrow-schema = { workspace = true }
+sha2 = { workspace = true }
