@@ -1,8 +1,8 @@
 //! Bounded event-transfer primitives for the target AegisAgent data plane.
 //!
-//! This crate contains unwired prototypes governed by Proposed ADR-0006,
-//! ADR-0007, ADR-0008, and ADR-0009. It does not carry production telemetry or
-//! protected evidence.
+//! This crate contains unwired prototypes governed by Proposed ADR-0006
+//! through ADR-0010. It does not carry production telemetry or protected
+//! evidence.
 //!
 //! The optional `loom` feature is model-checking infrastructure, not a runtime
 //! configuration. Loom-backed primitives must execute only inside
@@ -14,6 +14,7 @@ mod admission;
 mod descriptor;
 mod published_slab;
 mod ring;
+mod rotating;
 mod slab;
 
 pub use admission::{
@@ -28,6 +29,10 @@ pub use published_slab::{
 pub use ring::{
     Consumer, OccupiedSlot, Producer, RingConfigError, RingInvariantError, RingLayout, SpscRing,
     TryClaimError, TryPopError, TryPushError, TryReserveError, VacantSlot, CACHE_LINE_BYTES,
+};
+pub use rotating::{
+    RotatingAdmissionChannel, RotatingAdmittedEvent, RotatingConfigError, RotatingConsumer,
+    RotatingFinishError, RotatingProducer, TryRotatingAdmitError, TryRotatingConsumeError,
 };
 pub use slab::{
     SealedSlabPage, SlabAppendError, SlabConfigError, SlabPageBuilder, SlabPageConfig,

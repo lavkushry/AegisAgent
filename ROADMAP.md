@@ -70,8 +70,11 @@ oracle, append-only published-prefix, and failure-atomic single-page admission
 prototypes under Proposed ADR-0006 through ADR-0009, and a design-only
 Proposed ADR-0010 specifying bounded page rotation with generation-tagged
 reuse (fixed pool of P slots, epoch-addressed, single released-epoch
-reclamation edge, typed PageQuotaExhausted backpressure) — no rotation
-code exists yet. The volatile composite
+reclamation edge, typed PageQuotaExhausted backpressure) with an unwired
+`RotatingAdmissionChannel` prototype (rotation seams, quota refusal,
+seam-shortfall/generation-skip terminal fixtures, caught-unwind rotation
+fault, Loom seam model, cross-thread rotation stress; prototype rebind
+allocates one bounded page per rotation — in-place reuse precedes shadow). The volatile composite
 validates before reservation, Release-publishes the page before the ring,
 withholds capacity until a must-use validated frame lease commits, and reports
 clean, faulted, and orphaned-prefix terminal states. Test sources include safe

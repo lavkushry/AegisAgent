@@ -37,6 +37,7 @@ lib/api/                   protobuf and shared current models
 lib/storage/               StorageBackend, SQLite/PostgreSQL, migrations
 lib/policy/                Cedar and trust provenance
 lib/soc/                   detection, correlation, response, Qdrant adapter
+lib/event/                 unwired ADR-0006..0010 event-fabric prototypes (target crate; no production traffic)
 lib/tool-broker-*          canonical actions, credentials, connectors
 bins/aegis-node-sensor/    polling sensor, durable spool, signed commands
 bins/aegis-cage-runner/    sandbox execution
@@ -47,7 +48,7 @@ ui-next/                   React SOC console
 sdk-{python,typescript,go}/ fail-closed SDKs
 ```
 
-Target modules are introduced only through accepted ADRs and the sequence in `ROADMAP.md`.
+Target modules are introduced only through the ADR process (a Proposed ADR permits only unwired prototypes; production wiring requires acceptance) and the sequence in `ROADMAP.md`.
 
 ## Coding rules
 

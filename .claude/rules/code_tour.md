@@ -22,15 +22,12 @@ AegisAgent/
 │   └── ...
 ├── config/
 │   └── config.yaml       # YAML config (Qdrant pattern, rest_port + grpc_port)
-├── src/                  # Binary crate (THIN — route wiring ONLY)
-│   ├── main.rs           # CLI (clap), dual-server startup (REST + gRPC)
-│   ├── settings.rs       # YAML config deserialization
-│   ├── axum_app.rs       # REST Router wiring (port 8080)
-│   ├── tonic_app.rs      # gRPC Server wiring (port 6334)
-│   ├── handlers/         # REST handlers (parse → service → respond)
-│   ├── grpc/             # gRPC service impls (tonic::Request → service → tonic::Response)
-│   ├── middleware.rs      # ETag, compression, TLS
-│   └── startup.rs        # graceful shutdown (both servers)
+├── src/src/              # Gateway binary crate (adapters stay THIN)
+│   ├── main.rs           # startup, config/env resolution, dual-server spawn (REST 8080 + gRPC 6334)
+│   ├── routes/           # REST handlers (parse → typed service → respond)
+│   ├── grpc.rs           # gRPC service impls (tonic::Request → typed service → tonic::Response)
+│   ├── sign.rs, mtls.rs, oidc.rs, policy_watcher.rs, …   # focused gateway modules
+│   └── bin/              # auxiliary binaries
 ├── lib/
 │   ├── common/           # aegis-common: errors, crypto, metrics (NO domain logic)
 │   ├── api/              # aegis-api: proto/ definitions + generated code + REST models
@@ -75,11 +72,11 @@ When exploring the codebase, study modules in this order:
    How Cedar evaluates trust level, action classification, and policy decisions.
    Deterministic — scores never gate.
 
-5. **Binary Startup (`src/main.rs`):**
+5. **Binary Startup (`src/src/main.rs`):**
    How config is loaded, both servers (REST + gRPC) are spawned on separate Tokio tasks,
    and `AppState` (shared between both) is constructed.
 
-6. **REST Handlers (`src/handlers/`) + gRPC Impls (`src/grpc/`):**
+6. **REST Handlers (`src/src/routes/`) + gRPC Impls (`src/src/grpc.rs`):**
    Both are THIN — parse → service call → respond. They call the same `lib/` methods.
    Every endpoint exists on both protocols.
 
