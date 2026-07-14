@@ -117,6 +117,10 @@ contains_sensitive_data`), not as an authorize decision.
 
 ## Policy evaluation flow
 
+Thin adapters build `AuthorizeContext` and call
+`aegis-decision::run_authorize_pipeline` (host `DecisionRuntime` ports).
+Stages:
+
 ```
 SDK                                Gateway (/v1/authorize)
 ───                                ───────────────────────
@@ -124,45 +128,48 @@ compute expected_action_hash
   (aegis-jcs-1 over tool_call)
         │
         ▼
-POST /v1/authorize ───────────────▶ 1. Resolve agent via Bearer token
-                                       (tenant-scoped) → 401 if invalid
-                                    2. Replay/nonce + idempotency
-                                       (request_id) checks
-                                    3. Rate limit / quota checks
-                                    4. agent.status frozen/revoked?
-                                       → deny, matched_policies=[agent_<status>]
-                                    5. Look up registered action
-                                       (risk_level, risk_score,
-                                       approval_required, default_decision)
-                                    6. MCP path only: server quarantined?
-                                       tool unknown/unapproved?
-                                       → deny, mcp_* markers
-                                    7. Cedar policy_engine.authorize(
-                                         principal=Agent::<id>,
-                                         action=Action::"tool_call",
-                                         resource=ToolAction::<tool>_<action>,
-                                         context={trust_level, mutates_state,
-                                                   contains_sensitive_data,
-                                                   resource_base_branch})
-                                       → allow | deny | (allow + @decision(
-                                         "require_approval") annotation)
-                                    8. Post-processing overrides:
-                                       - risk_level == "critical" and
-                                         decision == "allow"
-                                         → require_approval
-                                       - agent.force_approval (post-incident)
-                                         → require_approval
-                                    9. Audit-writer preflight: SOC event
-                                       channel full + high-risk/mutating?
-                                       → deny, audit_writer_unavailable
-                                   10. write_decision_and_audit():
-                                       persist DecisionRecord, emit ASE event
-                                       (async SOC pipeline)
-                                   11. require_approval only: create Approval
-                                       row bound to action_hash, expires_at,
-                                       optional callback
+POST /v1/authorize ───────────────▶ REST: authorize_context_from_headers
+                                       + run_authorize_pipeline
+                                    gRPC: same typed context + evaluate
+
+                                    admit
+                                      1. Resolve agent via Bearer / mTLS
+                                         (tenant-scoped) → 401 if invalid
+                                      2. Optional HMAC request signature
+                                      3. Environment allow-list
+
+                                    preflight
+                                      4. Tool permission
+                                      5. Replay/nonce + idempotency
+                                         (request_id)
+                                      6. Rate limit / quota + heartbeat
+
+                                    guard
+                                      7. agent.status frozen/revoked?
+                                         → deny, matched_policies=[agent_<status>]
+                                      8. Optional admission webhook
+                                      9. Action hash (post-mutation)
+                                     10. Ban / quarantine-record checks
+
+                                    metadata
+                                     11. Registered action risk / defaults
+                                     12. MCP path: server quarantined?
+                                         tool unknown/unapproved?
+                                         → deny, mcp_* markers
+
+                                    evaluate
+                                     13. Cedar policy_engine.authorize(...)
+                                         → allow | deny | require_approval
+                                     14. Decision overrides (critical risk,
+                                         force_approval, action defaults)
+                                     15. Audit-writer preflight (high-risk
+                                         + SOC stream full → deny)
+                                     16. write_decision_and_audit + receipts
+                                     17. require_approval → create Approval
+                                         bound to action_hash
+
         ◀────────────────── AuthorizeResponse {decision, risk_*, reason,
-                              matched_policies, approval?}
+                              matched_policies, approval?, receipt?}
         │
   decision == allow
         │──▶ execute tool
@@ -175,6 +182,9 @@ POST /v1/authorize ───────────────▶ 1. Resolve a
         │       mismatch → FAIL CLOSED (PermissionError), never executes
         │       match → POST /v1/approvals/:id/consume (single-use) → execute
 ```
+
+Implementation: `lib/decision/`, thin `src/src/routes/authorize.rs`,
+`authorize_service.rs`, `decision_runtime.rs`.
 
 ## Trust-provenance integration
 

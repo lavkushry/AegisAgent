@@ -43,7 +43,7 @@ The security claim is scoped and honest: **Aegis controls what passes through Ae
 | # | Choke point | What passes through | Status | Enforced by |
 |---|---|---|---|---|
 | 1 | Prompt / model call | prompts, completions, tool proposals | 📐 planned (Phase 7) — untrusted-content ingest exists today (`POST /v1/ingest`) | [components/Prompt_Model_Capture.md](components/Prompt_Model_Capture.md) |
-| 2 | Tool call | every SDK-wrapped tool invocation | ✅ | SDK `@protect_tool` → `POST /v1/authorize` |
+| 2 | Tool call | every SDK-wrapped tool invocation | ✅ | SDK `@protect_tool` → `POST /v1/authorize` → `lib/decision` pipeline |
 | 3 | API call | generic registered skills/actions | ✅ | same authorize path, action registry |
 | 4 | MCP call | MCP server/tool invocations | ✅ | `src/src/routes/mcp.rs` — manifest pinning + drift |
 | 5 | Network egress | caged workload traffic | 📐 planned (Phase 5) | [components/Egress_Proxy.md](components/Egress_Proxy.md) |

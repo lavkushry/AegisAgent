@@ -301,14 +301,17 @@ lib/storage/src/traits.rs             # transaction-oriented trait additions
 lib/storage/src/sqlite/               # SQLite implementation details
 lib/storage/src/postgres/             # PostgreSQL implementation details
 lib/policy/src/                       # pure compiled policy and validation
-src/src/services/authorization.rs     # target orchestration service
+lib/decision/                         # current: run_authorize_pipeline + DecisionRuntime ports
+src/src/decision_runtime.rs           # current: gateway host-port implementor
+src/src/authorize_service.rs          # current: wire map + GatewayAuthorizeService
 src/src/routes/authorize.rs           # thin REST adapter
 src/src/grpc.rs                       # thin gRPC adapter
-src/src/background/evidence_writer.rs # bounded consumers
+src/src/background/evidence_writer.rs # target: bounded consumers
+src/src/services/authorization.rs     # target: reactor-owned orchestration (later)
 benches/authorize_benchmark.rs         # decision-class benchmark matrix
 ```
 
-If the service must be reusable outside the binary, introduce a downward-compatible library crate through an ADR; do not make an existing lower crate depend upward on `src/`.
+The authorize service is already a downward-compatible library crate (`aegis-decision`). Further reactor/ControlStore cutover still goes through the ADR process; do not make an existing lower crate depend upward on `src/`.
 
 ## Configuration
 
