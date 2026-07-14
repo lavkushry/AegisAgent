@@ -52,6 +52,35 @@ Deliverables:
 
 Gate: round-trip/differential corpus equality; malformed length/depth/version fuzz seeds rejected without allocation spikes.
 
+Progress (2026-07-14): **protobuf v2 control skeleton landed** as an unwired
+prototype under Proposed ADR-0011. `lib/api/proto/aegis_v2.proto` (package
+`aegis.v2`, from LLD §22) is generated beside the wired v1 protos through a
+separate `tonic_build::configure()` call — v1 output unchanged — and exposed at
+`aegis_api::grpc::aegis_v2`; nothing serves or dials it. Field numbers are
+reserved permanently on every message, and `IngestFrame.flatbuffer_frame` /
+`ArrowChunk.ipc_message` map to `bytes::Bytes` (no `Vec<u8>` clone). The Week-2
+gate is met for this format: `cargo test -p aegis-api --lib wire_v2`
+covers `AuthorizeRequest`/`AuthorizeResponse` round-trip equality, the
+`Bytes`-typed payload proof, malformed length/varint rejection without
+allocating the advertised size, and fail-closed proto3 zero-value enum defaults.
+
+**Arrow logical event schema landed** in the same increment as an unwired
+prototype in the new `aegis-wire` crate (`lib/wire`, the target `lib/wire/`
+slot). `arrow::event_schema::event_schema()` builds the LLD §9.2 schema (19
+leaf fields, exact logical types, only the four spec-nullable fields nullable)
+in hand-written Rust against `arrow-schema` (`default-features = false`, zero
+active runtime deps — no external codegen binary). A version-independent
+`schema_fingerprint` (SHA-256 over a canonical field rendering, not
+`arrow-schema` `Debug`) is pinned as a golden constant. `cargo test -p
+aegis-wire` gates field set/order, nullability, ID/hash widths, the
+`payload_ref` struct, and fingerprint stability.
+
+**Still open** (follow-on increments under ADR-0011): FlatBuffer telemetry v2
+(§23, introduces `flatbuffers` — needs a codegen decision since no `flatc`/
+planus is available here or in CI), the `AAS2` browser envelope (§24), and the
+full four-way logical-event conversion corpus across REST/protobuf/FlatBuffer/
+Arrow. No production or `shadow` wiring, no performance claim.
+
 ### Week 3 — Extract typed authorization service
 
 Deliverables:

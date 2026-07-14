@@ -177,6 +177,7 @@ nav:
           - "ADR-0008: Append-only published-prefix slab pages": adr/0008-append-only-published-prefix-slab-pages.md
           - "ADR-0009: Failure-atomic slab/ring admission": adr/0009-failure-atomic-slab-ring-admission.md
           - "ADR-0010: Bounded page rotation": adr/0010-bounded-page-rotation-generation-reuse.md
+          - "ADR-0011: v2 wire contracts": adr/0011-v2-wire-contracts-logical-event.md
   - Reference:
       - API reference (OpenAPI/Redoc): api-reference.md
       - Runtime authorization API: runtime-authorization-api.md

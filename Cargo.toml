@@ -6,6 +6,7 @@ members = [
     "lib/common",
     "lib/api",
     "lib/event",
+    "lib/wire",
     "lib/decision",
     "lib/storage",
     "lib/policy",
@@ -40,3 +41,6 @@ axum = { version = "0.7.5", features = ["macros", "ws"] }
 cedar-policy = "3.2.1"
 utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
 crc32c = "=0.6.8"
+# Arrow logical schema types only (no compute/array kernels) for the unwired
+# v2 wire contracts (ADR-0011). Pure Rust; no external codegen binary.
+arrow-schema = { version = "59", default-features = false }
