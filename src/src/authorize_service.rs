@@ -2,31 +2,32 @@
 //!
 //! Repository law (`docs/architecture.md` §5) requires REST and gRPC adapters
 //! to `authenticate/parse -> typed service call -> typed error/response
-//! mapping`. gRPC `authorize` (Phase D) always uses this module: real peer
-//! address, [`AuthorizeContext`] credentials, and
-//! [`http_error_to_tonic`] / [`error_reason_to_tonic_code`] instead of the
-//! deleted JSON bridge that forged `127.0.0.1:0` and collapsed every error to
-//! `Status::internal`.
+//! mapping`. gRPC `authorize` always uses this module: real peer address,
+//! [`AuthorizeContext`] credentials, and [`AuthorizedOutcome`] → tonic mapping
+//! — no forged `127.0.0.1:0`, no HeaderMap JSON bridge, no `Status::internal`
+//! collapse.
 //!
-//! This module is the extraction boundary:
-//! - [`Transport`] / [`AuthorizeContext`] / [`AuthCredential`] — transport-
-//!   neutral, already-authenticated inputs an adapter resolves before calling
-//!   the service;
-//! - [`error_reason_to_tonic_code`] / [`status_error_to_tonic`] — faithful
-//!   `ErrorReason -> tonic::Status` mapping;
-//! - [`authorize`] / [`authorize_raw`] — protocol-neutral entry both adapters
-//!   call. Still drives `authorize_action_impl` so REST response shapes stay
-//!   byte-identical while the 1.4k-line body is split into Result-typed
-//!   `authorize_core` (no Axum `Response` at the service boundary).
+//! Service surface:
+//! - [`Transport`] / [`AuthorizeContext`] / [`AuthCredential`] — adapter inputs
+//! - [`authorize`] / [`authorize_raw`] → [`AuthorizedOutcome`] (typed; adapters
+//!   never see an Axum `Response`)
+//! - [`outcome_to_tonic`] / [`outcome_to_response`] — wire mapping helpers
+//! - [`error_reason_to_tonic_code`] / [`status_error_to_tonic`]
+//!
+//! Internally the evaluation still runs through `authorize_action_impl` and
+//! is decoded once into [`AuthorizedOutcome`]. Full in-place Result returns
+//! from the 1.4k-line body (no Response at all) is the next mechanical split.
 
 use std::sync::Arc;
 
-use axum::body::Bytes;
-use axum::http::{HeaderMap, HeaderValue};
-use axum::response::IntoResponse;
+use axum::body::{to_bytes, Bytes};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde_json::Value;
 
 use crate::error::{ErrorReason, StatusError};
-use crate::models::AuthorizeRequest;
+use crate::models::{AuthorizeRequest, AuthorizeResponse};
 use crate::routes::AppState;
 
 /// Which protocol admitted this authorization request. The service treats the
@@ -97,24 +98,45 @@ impl AuthorizeContext {
     }
 }
 
-/// Success body for a completed authorization evaluation.
+/// Body carried by a completed authorization evaluation.
 ///
-/// Transitional: decision denies that still emit partial JSON
-/// (`{"decision":"deny",...}`) travel as [`AuthorizedBody::Json`] so REST
-/// response shapes stay byte-stable during extraction. Typed gRPC maps
-/// full [`crate::models::AuthorizeResponse`] values and StatusError failures;
-/// partial JSON denials become `PermissionDenied` with the raw body message.
+/// - [`AuthorizedBody::Decision`] — full success / decision payload (HTTP 200)
+/// - [`AuthorizedBody::Status`] — structured [`StatusError`] envelope
+/// - [`AuthorizedBody::Json`] — transitional partial decision-deny JSON
+///   (`{"decision":"deny",...}`) that is not a full `AuthorizeResponse`
 #[derive(Debug, Clone)]
 pub enum AuthorizedBody {
-    Decision(Box<crate::models::AuthorizeResponse>),
-    Json(serde_json::Value),
+    Decision(Box<AuthorizeResponse>),
+    Status(Box<StatusError>),
+    Json(Value),
 }
 
-/// Typed service outcome (status + body). Adapters map this to their wire form.
+/// Typed service outcome. Adapters map this to REST or gRPC; they never receive
+/// an Axum `Response` from [`authorize`] / [`authorize_raw`].
 #[derive(Debug, Clone)]
 pub struct AuthorizedOutcome {
-    pub status: axum::http::StatusCode,
+    pub status: StatusCode,
     pub body: AuthorizedBody,
+}
+
+impl AuthorizedOutcome {
+    pub fn decision(resp: AuthorizeResponse) -> Self {
+        Self {
+            status: StatusCode::OK,
+            body: AuthorizedBody::Decision(Box::new(resp)),
+        }
+    }
+
+    pub fn status_error(err: StatusError) -> Self {
+        Self {
+            status: err.reason.status_code(),
+            body: AuthorizedBody::Status(Box::new(err)),
+        }
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.status == StatusCode::OK || self.status == StatusCode::CREATED
+    }
 }
 
 /// The gRPC status code a `StatusError`'s reason maps to.
@@ -160,12 +182,8 @@ pub fn status_error_to_tonic(err: &StatusError) -> tonic::Status {
     tonic::Status::new(error_reason_to_tonic_code(err.reason), err.message.clone())
 }
 
-/// Map an HTTP error body (from the transitional Response path) to tonic Status.
-///
-/// Prefers a deserializable [`StatusError`] envelope so clients see the same
-/// failure class as REST. Falls back to coarse HTTP-status mapping when the
-/// body is a decision-deny JSON or plain text (legacy partial shapes).
-pub fn http_error_to_tonic(status: axum::http::StatusCode, body: &[u8]) -> tonic::Status {
+/// Map an HTTP error body to tonic Status (prefers [`StatusError`] envelope).
+pub fn http_error_to_tonic(status: StatusCode, body: &[u8]) -> tonic::Status {
     if let Ok(err) = serde_json::from_slice::<StatusError>(body) {
         return status_error_to_tonic(&err);
     }
@@ -184,6 +202,78 @@ pub fn http_error_to_tonic(status: axum::http::StatusCode, body: &[u8]) -> tonic
         _ => tonic::Code::Internal,
     };
     tonic::Status::new(code, msg)
+}
+
+/// Decode a transitional Axum `Response` from `authorize_action_impl` into a
+/// typed [`AuthorizedOutcome`]. Called only inside this module so adapters
+/// never buffer response bodies themselves.
+async fn response_to_outcome(response: Response) -> AuthorizedOutcome {
+    let status = response.status();
+    let body = match to_bytes(response.into_body(), usize::MAX).await {
+        Ok(b) => b,
+        Err(e) => {
+            return AuthorizedOutcome::status_error(StatusError::internal(format!(
+                "Failed to read authorize response body: {e}"
+            )));
+        }
+    };
+
+    if status == StatusCode::OK || status == StatusCode::CREATED {
+        if let Ok(resp) = serde_json::from_slice::<AuthorizeResponse>(&body) {
+            return AuthorizedOutcome {
+                status,
+                body: AuthorizedBody::Decision(Box::new(resp)),
+            };
+        }
+    }
+
+    if let Ok(err) = serde_json::from_slice::<StatusError>(&body) {
+        return AuthorizedOutcome {
+            status,
+            body: AuthorizedBody::Status(Box::new(err)),
+        };
+    }
+
+    if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+        return AuthorizedOutcome {
+            status,
+            body: AuthorizedBody::Json(v),
+        };
+    }
+
+    let msg = String::from_utf8_lossy(&body).into_owned();
+    AuthorizedOutcome {
+        status,
+        body: AuthorizedBody::Json(serde_json::json!({ "message": msg })),
+    }
+}
+
+/// Map a typed outcome back to an Axum `Response` (REST adapter / tests).
+pub fn outcome_to_response(outcome: AuthorizedOutcome) -> Response {
+    match outcome.body {
+        AuthorizedBody::Decision(resp) => (outcome.status, Json(*resp)).into_response(),
+        AuthorizedBody::Status(err) => (*err).into_response(),
+        AuthorizedBody::Json(v) => (outcome.status, Json(v)).into_response(),
+    }
+}
+
+/// Map a typed outcome to a gRPC success body or tonic `Status`.
+///
+/// This is the only mapping the gRPC adapter needs — no Axum body buffering.
+#[allow(clippy::result_large_err)] // tonic::Status is the gRPC wire error type
+pub fn outcome_to_tonic(outcome: AuthorizedOutcome) -> Result<AuthorizeResponse, tonic::Status> {
+    match outcome.body {
+        AuthorizedBody::Decision(resp) if outcome.is_success() => Ok(*resp),
+        AuthorizedBody::Decision(_) => Err(tonic::Status::internal(format!(
+            "authorize returned decision body with HTTP {}",
+            outcome.status
+        ))),
+        AuthorizedBody::Status(err) => Err(status_error_to_tonic(&err)),
+        AuthorizedBody::Json(v) => {
+            let bytes = serde_json::to_vec(&v).unwrap_or_default();
+            Err(http_error_to_tonic(outcome.status, &bytes))
+        }
+    }
 }
 
 /// Build the HeaderMap the current `authorize_action_impl` still reads for
@@ -226,26 +316,27 @@ pub fn build_service_headers(ctx: &AuthorizeContext) -> Result<HeaderMap, Status
     Ok(headers)
 }
 
-/// Protocol-neutral authorize entry used by REST (optional) and typed gRPC.
+/// Protocol-neutral authorize entry used by REST (optional) and gRPC.
 ///
-/// Serializes `payload` to the raw body bytes the existing HMAC-over-body
-/// check expects (identical to what the legacy gRPC bridge produced), builds
-/// service headers from [`AuthorizeContext`], and calls
-/// `authorize_action_impl` with the **real** client address.
+/// Serializes `payload` for the HMAC-over-body check still performed inside
+/// `authorize_action_impl`, builds service headers from [`AuthorizeContext`],
+/// evaluates with the **real** client address, and returns a typed
+/// [`AuthorizedOutcome`]. Adapters map the outcome to their wire format via
+/// [`outcome_to_response`] or [`outcome_to_tonic`].
 ///
-/// Callers that already hold raw REST body bytes (HMAC over the exact on-wire
-/// bytes) should prefer [`authorize_raw`] so signature verification stays
-/// bound to the bytes the client signed.
+/// Callers that already hold raw REST body bytes should prefer
+/// [`authorize_raw`] so signature verification stays bound to the signed bytes.
 pub async fn authorize(
     state: Arc<AppState>,
     ctx: AuthorizeContext,
     payload: &AuthorizeRequest,
-) -> axum::response::Response {
+) -> AuthorizedOutcome {
     let body_bytes = match serde_json::to_vec(payload) {
         Ok(b) => Bytes::from(b),
         Err(e) => {
-            return StatusError::bad_request(format!("Failed to serialize authorize payload: {e}"))
-                .into_response();
+            return AuthorizedOutcome::status_error(StatusError::bad_request(format!(
+                "Failed to serialize authorize payload: {e}"
+            )));
         }
     };
     authorize_raw(state, ctx, body_bytes).await
@@ -256,12 +347,14 @@ pub async fn authorize_raw(
     state: Arc<AppState>,
     ctx: AuthorizeContext,
     raw_body: Bytes,
-) -> axum::response::Response {
+) -> AuthorizedOutcome {
     let headers = match build_service_headers(&ctx) {
         Ok(h) => h,
-        Err(e) => return e.into_response(),
+        Err(e) => return AuthorizedOutcome::status_error(e),
     };
-    crate::routes::authorize_action_impl(state, headers, raw_body, ctx.client_addr).await
+    let response =
+        crate::routes::authorize_action_impl(state, headers, raw_body, ctx.client_addr).await;
+    response_to_outcome(response).await
 }
 
 #[cfg(test)]
@@ -372,6 +465,35 @@ mod tests {
     }
 
     #[test]
+    fn outcome_to_tonic_maps_status_error_without_axum_body() {
+        let outcome = AuthorizedOutcome::status_error(StatusError::forbidden("policy deny"));
+        let err = outcome_to_tonic(outcome).expect_err("must be error");
+        assert_eq!(err.code(), Code::PermissionDenied);
+        assert_eq!(err.message(), "policy deny");
+    }
+
+    #[test]
+    fn outcome_to_tonic_maps_json_deny_by_http_status() {
+        let outcome = AuthorizedOutcome {
+            status: StatusCode::FORBIDDEN,
+            body: AuthorizedBody::Json(serde_json::json!({
+                "decision": "deny",
+                "reason": "agent frozen"
+            })),
+        };
+        let err = outcome_to_tonic(outcome).expect_err("must be error");
+        assert_eq!(err.code(), Code::PermissionDenied);
+        assert!(err.message().contains("agent frozen"));
+    }
+
+    #[test]
+    fn outcome_to_response_round_trips_status_error() {
+        let outcome = AuthorizedOutcome::status_error(StatusError::unauthorized("bad token"));
+        let response = outcome_to_response(outcome);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
     fn http_error_to_tonic_parses_status_error_envelope() {
         let err = StatusError::forbidden("policy deny");
         let body = serde_json::to_vec(&err).expect("serialize");
@@ -450,7 +572,6 @@ mod tests {
         agent_headers, mcp_authorize_request, setup_state, test_conn_info,
     };
     use crate::routes::{register_tool, TenantId};
-    use axum::body::to_bytes;
     use axum::extract::State;
     use axum::Json;
     use std::sync::Arc;
@@ -474,48 +595,44 @@ mod tests {
         error_message: Option<String>,
     }
 
-    async fn fingerprint_response(response: axum::response::Response) -> DecisionFingerprint {
-        let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read body");
-        if status == StatusCode::OK || status == StatusCode::CREATED {
-            let res: crate::models::AuthorizeResponse =
-                serde_json::from_slice(&body).expect("AuthorizeResponse");
-            // Cedar match order / primary-reason selection can be non-deterministic
-            // when multiple annotations fire; sort policies and drop free-text
-            // reason so the corpus compares the security-relevant outcome.
-            let mut policies = res.matched_policies;
-            policies.sort();
-            let reason = if policies.len() > 1 {
-                None
-            } else {
-                Some(res.reason)
-            };
-            return DecisionFingerprint {
-                http_status: status.as_u16(),
-                body_kind: "ok",
-                decision: Some(res.decision),
-                risk_score: Some(res.risk_score),
-                risk_level: Some(res.risk_level),
-                reason,
-                matched_policies: Some(policies),
-                root_trust_level: Some(res.root_trust_level),
-                dry_run: Some(res.dry_run),
-                has_approval: res.approval.is_some(),
-                approver_group: res.approval.as_ref().and_then(|a| a.approver_group.clone()),
-                has_action_hash: res
-                    .approval
-                    .as_ref()
-                    .map(|a| !a.action_hash.is_empty())
-                    .unwrap_or(false),
-                error_reason: None,
-                error_message: None,
-            };
+    fn fingerprint_decision(res: &AuthorizeResponse, status: StatusCode) -> DecisionFingerprint {
+        // Cedar match order / primary-reason selection can be non-deterministic
+        // when multiple annotations fire; sort policies and drop free-text
+        // reason so the corpus compares the security-relevant outcome.
+        let mut policies = res.matched_policies.clone();
+        policies.sort();
+        let reason = if policies.len() > 1 {
+            None
+        } else {
+            Some(res.reason.clone())
+        };
+        DecisionFingerprint {
+            http_status: status.as_u16(),
+            body_kind: "ok",
+            decision: Some(res.decision.clone()),
+            risk_score: Some(res.risk_score),
+            risk_level: Some(res.risk_level.clone()),
+            reason,
+            matched_policies: Some(policies),
+            root_trust_level: Some(res.root_trust_level.clone()),
+            dry_run: Some(res.dry_run),
+            has_approval: res.approval.is_some(),
+            approver_group: res.approval.as_ref().and_then(|a| a.approver_group.clone()),
+            has_action_hash: res
+                .approval
+                .as_ref()
+                .map(|a| !a.action_hash.is_empty())
+                .unwrap_or(false),
+            error_reason: None,
+            error_message: None,
         }
-        if let Ok(err) = serde_json::from_slice::<StatusError>(&body) {
-            return DecisionFingerprint {
-                http_status: status.as_u16(),
+    }
+
+    fn fingerprint_outcome(outcome: &AuthorizedOutcome) -> DecisionFingerprint {
+        match &outcome.body {
+            AuthorizedBody::Decision(res) => fingerprint_decision(res, outcome.status),
+            AuthorizedBody::Status(err) => DecisionFingerprint {
+                http_status: outcome.status.as_u16(),
                 body_kind: "status_error",
                 decision: None,
                 risk_score: None,
@@ -528,35 +645,38 @@ mod tests {
                 approver_group: None,
                 has_action_hash: false,
                 error_reason: Some(format!("{:?}", err.reason)),
-                error_message: Some(err.message),
-            };
+                error_message: Some(err.message.clone()),
+            },
+            AuthorizedBody::Json(v) => DecisionFingerprint {
+                http_status: outcome.status.as_u16(),
+                body_kind: "other",
+                decision: v
+                    .get("decision")
+                    .and_then(|d| d.as_str())
+                    .map(str::to_string),
+                risk_score: v
+                    .get("risk_score")
+                    .and_then(|x| x.as_i64())
+                    .map(|x| x as i32),
+                risk_level: v
+                    .get("risk_level")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string),
+                reason: v.get("reason").and_then(|x| x.as_str()).map(str::to_string),
+                matched_policies: None,
+                root_trust_level: None,
+                dry_run: None,
+                has_approval: false,
+                approver_group: None,
+                has_action_hash: false,
+                error_reason: None,
+                error_message: None,
+            },
         }
-        let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
-        DecisionFingerprint {
-            http_status: status.as_u16(),
-            body_kind: "other",
-            decision: v
-                .get("decision")
-                .and_then(|d| d.as_str())
-                .map(str::to_string),
-            risk_score: v
-                .get("risk_score")
-                .and_then(|x| x.as_i64())
-                .map(|x| x as i32),
-            risk_level: v
-                .get("risk_level")
-                .and_then(|x| x.as_str())
-                .map(str::to_string),
-            reason: v.get("reason").and_then(|x| x.as_str()).map(str::to_string),
-            matched_policies: None,
-            root_trust_level: None,
-            dry_run: None,
-            has_approval: false,
-            approver_group: None,
-            has_action_hash: false,
-            error_reason: None,
-            error_message: None,
-        }
+    }
+
+    async fn fingerprint_response(response: axum::response::Response) -> DecisionFingerprint {
+        fingerprint_outcome(&response_to_outcome(response).await)
     }
 
     async fn run_legacy(
@@ -586,8 +706,8 @@ mod tests {
             Transport::Grpc,
             AuthCredential::BearerToken(agent_token.to_string()),
         );
-        let response = authorize(state, ctx, request).await;
-        fingerprint_response(response).await
+        let outcome = authorize(state, ctx, request).await;
+        fingerprint_outcome(&outcome)
     }
 
     async fn register_ship(state: &Arc<crate::routes::AppState>, tenant_id: &str) {
@@ -794,14 +914,14 @@ mod tests {
             Transport::Grpc,
             AuthCredential::BearerToken(token),
         );
-        let typed_resp = match build_service_headers(&ctx) {
+        let typed = match build_service_headers(&ctx) {
             Ok(h) => {
                 let body = Bytes::from(serde_json::to_vec(&request).unwrap());
-                crate::routes::authorize_action_impl(state, h, body, peer).await
+                let response = crate::routes::authorize_action_impl(state, h, body, peer).await;
+                fingerprint_response(response).await
             }
-            Err(e) => e.into_response(),
+            Err(e) => fingerprint_outcome(&AuthorizedOutcome::status_error(e)),
         };
-        let typed = fingerprint_response(typed_resp).await;
 
         assert!(
             (400..500).contains(&legacy.http_status),

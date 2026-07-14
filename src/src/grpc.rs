@@ -159,10 +159,9 @@ impl AegisService for AegisGrpcServiceImpl {
         request: Request<AuthorizeRequest>,
     ) -> Result<Response<AuthorizeResponse>, Status> {
         // architecture.md §5: parse/auth → typed service → map Status.
-        // No forged loopback peer, no HeaderMap JSON bridge, no Status::internal
-        // collapse (Phase D deleted the legacy round-trip).
+        // Service returns AuthorizedOutcome; adapter never buffers an Axum body.
         use crate::authorize_service::{
-            authorize, http_error_to_tonic, AuthCredential, AuthorizeContext, Transport,
+            authorize, outcome_to_tonic, AuthCredential, AuthorizeContext, Transport,
         };
 
         let client_addr = request
@@ -216,23 +215,8 @@ impl AegisService for AegisGrpcServiceImpl {
         .with_request_signature(request_signature);
 
         let rest_req = map_authorize_request(req);
-        let response = authorize(self._state.clone(), ctx, &rest_req).await;
-
-        // Transitional: service still returns Axum Response while authorize_core
-        // extraction is incomplete. Map StatusError envelopes to tonic codes;
-        // success bodies to the proto AuthorizeResponse.
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK && status != axum::http::StatusCode::CREATED {
-            return Err(http_error_to_tonic(status, &body_bytes));
-        }
-
-        let res: crate::models::AuthorizeResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse authorize response: {}", e)))?;
-
+        let outcome = authorize(self._state.clone(), ctx, &rest_req).await;
+        let res = outcome_to_tonic(outcome)?;
         Ok(Response::new(map_authorize_response(res)))
     }
 

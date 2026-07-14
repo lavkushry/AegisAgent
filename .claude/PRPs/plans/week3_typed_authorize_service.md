@@ -1,10 +1,10 @@
 # Blueprint: Week-3 typed AuthorizeService extraction
 
 **Roadmap:** Phase 1 Week 3 · **Law:** `docs/architecture.md` §5 (thin
-adapters), §4 (target seams) · **Status:** Phases A–D complete on
-`feat/typed-authorize-service`. gRPC `authorize` always uses the typed seam;
-JSON bridge and `AEGIS_TYPED_AUTHORIZE` flag deleted. Remaining follow-on:
-Result-typed `authorize_core` (no Axum Response buffer) and later
+adapters), §4 (target seams) · **Status:** Phases A–D complete; service now
+returns [`AuthorizedOutcome`] and gRPC maps via `outcome_to_tonic` (no Axum
+body in the adapter). Remaining: in-place Result returns inside
+`authorize_action_impl` (eliminate internal Response decode) and later
 `aegis-decision` crate move.
 
 ## 1. Architectural scope & impact

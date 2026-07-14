@@ -72,10 +72,12 @@ codes — the JSON-bridge round-trip and `AEGIS_TYPED_AUTHORIZE` flag are
 **deleted** (Phase D). Phase C equality corpus (`equality_*` tests) covers
 allow / deny / require_approval / dry-run / frozen agent / bad token / missing
 tenant / replay-nonce conflict, plus approval `action_hash` length parity.
-Remaining: full Result-typed `authorize_core` (no Axum `Response` at the
-service boundary; gRPC still buffers the transitional Response once) and
-extraction of the 1.4k-line `authorize_action_impl` body; later move toward
-`aegis-decision`.
+Follow-on progress: [`authorize`] / [`authorize_raw`] return
+[`AuthorizedOutcome`] (typed Decision / StatusError / partial Json). gRPC maps
+via [`outcome_to_tonic`] and never buffers an Axum body in the adapter.
+Internally evaluation still runs through `authorize_action_impl` once and is
+decoded to the outcome. Remaining: in-place Result returns inside the 1.4k-line
+body (no Response at all) and later move toward `aegis-decision`.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 
