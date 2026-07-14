@@ -12,7 +12,7 @@ This inventory makes the all-documentation improvement program measurable. Each 
 |---|---:|---:|---:|
 | authoring | 2 | 90% | 0 |
 | component | 15 | 96% | 0 |
-| decision | 11 | 95% | 0 |
+| decision | 12 | 94% | 0 |
 | flow | 11 | 95% | 0 |
 | guide | 53 | 67% | 38 |
 | landing | 10 | 93% | 0 |
@@ -21,7 +21,7 @@ This inventory makes the all-documentation improvement program measurable. Each 
 | reference | 11 | 85% | 0 |
 | runbook | 7 | 100% | 0 |
 
-**Total:** 127 active Markdown pages · **Migration backlog:** 38 pages below 75%.
+**Total:** 128 active Markdown pages · **Migration backlog:** 38 pages below 75%.
 
 ## Scoring signals
 
@@ -88,7 +88,8 @@ Pages are sorted by structural coverage, then path. Improve factual accuracy and
 | [adr/0007-sealed-generation-tagged-slab-pages.md](adr/0007-sealed-generation-tagged-slab-pages.md) | decision | 267 | A | 100% |
 | [adr/0008-append-only-published-prefix-slab-pages.md](adr/0008-append-only-published-prefix-slab-pages.md) | decision | 409 | A | 100% |
 | [adr/0009-failure-atomic-slab-ring-admission.md](adr/0009-failure-atomic-slab-ring-admission.md) | decision | 427 | A | 100% |
-| [adr/index.md](adr/index.md) | decision | 51 | B | 83% |
+| [adr/0010-bounded-page-rotation-generation-reuse.md](adr/0010-bounded-page-rotation-generation-reuse.md) | decision | 289 | B | 83% |
+| [adr/index.md](adr/index.md) | decision | 53 | B | 83% |
 | [adr/template.md](adr/template.md) | decision | 46 | A | 100% |
 | [AegisAgent_Agent_Cage.md](AegisAgent_Agent_Cage.md) | guide | 581 | B | 78% |
 | [AegisAgent_Agent_SOC_Design.md](AegisAgent_Agent_SOC_Design.md) | guide | 757 | D | 56% |

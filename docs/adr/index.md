@@ -2,8 +2,9 @@
 
 **Issue:** [#1197](https://github.com/lavkushry/AegisAgent/issues/1197)
 
-> **Status:** ADR-0001 through ADR-0005 are Accepted. ADR-0006 through ADR-0009
-> are Proposed and permit only unwired prototypes until accepted. A changed
+> **Status:** ADR-0001 through ADR-0005 are Accepted. ADR-0006 through ADR-0010
+> are Proposed and permit only unwired prototypes until accepted (ADR-0010 is
+> design-only: no prototype accompanies it yet). A changed
 > decision requires a new ADR and a supersedes link; do not silently rewrite
 > historical rationale.
 
@@ -32,6 +33,7 @@ a new ADR and mark the old one "Superseded by ADR-NNNN."
 | [0007](0007-sealed-generation-tagged-slab-pages.md) | Sealed generation-tagged slab-page ownership oracle (Proposed) |
 | [0008](0008-append-only-published-prefix-slab-pages.md) | Append-only published-prefix slab pages (Proposed) |
 | [0009](0009-failure-atomic-slab-ring-admission.md) | Failure-atomic single-page slab/ring admission (Proposed) |
+| [0010](0010-bounded-page-rotation-generation-reuse.md) | Bounded page rotation with generation-tagged reuse (Proposed, design-only) |
 
 ## Security and Review
 
