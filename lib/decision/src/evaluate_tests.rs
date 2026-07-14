@@ -2,7 +2,7 @@ use super::*;
 use crate::agent::AuthorizeAgent;
 use crate::guard::GuardedAuthorize;
 use crate::metadata::MetadataAuthorize;
-use crate::outcome::DecisionBody;
+use crate::outcome::{DecisionBody, DecisionFailureClass};
 use crate::runtime::PolicyDecisionView;
 use crate::test_runtime::MockRuntime;
 use std::time::Instant;
@@ -94,4 +94,131 @@ async fn evaluate_audit_capacity_fail_closed_high_risk() {
         _ => panic!("decision"),
     }
     assert_eq!(*rt.writes.lock().expect("l"), 0);
+}
+
+#[tokio::test]
+async fn evaluate_write_fail_high_risk_denies() {
+    let mut m = meta_allow();
+    m.risk_level = "high".into();
+    m.risk_score = 75;
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "allow".into(),
+            matched_policies: vec!["p1".into()],
+            approver_group: None,
+            reason: "ok".into(),
+            redacted_fields: vec![],
+        },
+        write_fail: true,
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "deny");
+            assert!(
+                resp.reason.contains("audit_writer_unavailable"),
+                "reason={}",
+                resp.reason
+            );
+        }
+        other => panic!("expected deny decision, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 0);
+}
+
+#[tokio::test]
+async fn evaluate_write_fail_low_risk_allows_without_audit() {
+    // Low-risk allow degrades open when the audit writer is down (historical
+    // contract): decision is still allow, but no durable write occurred.
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "allow".into(),
+            matched_policies: vec!["p1".into()],
+            approver_group: None,
+            reason: "ok".into(),
+            redacted_fields: vec![],
+        },
+        write_fail: true,
+        ..MockRuntime::default()
+    };
+    let out =
+        evaluate_authorize(&rt, meta_allow(), Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "allow");
+            assert!(resp.receipt.is_none());
+        }
+        other => panic!("expected allow without audit, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 0);
+}
+
+fn meta_require_approval() -> MetadataAuthorize {
+    let mut m = meta_allow();
+    m.guarded.request.tool_call.mutates_state = true;
+    m.risk_level = "medium".into();
+    m.risk_score = 40;
+    m
+}
+
+#[tokio::test]
+async fn evaluate_require_approval_create_bad_request_preserves_class() {
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "require_approval".into(),
+            matched_policies: vec!["needs_human".into()],
+            approver_group: Some("sec".into()),
+            reason: "human gate".into(),
+            redacted_fields: vec![],
+        },
+        approval_bad_request: Some("callback URL rejected (SSRF policy)".into()),
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(
+        &rt,
+        meta_require_approval(),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    assert_eq!(out.http_status, 400);
+    match out.body {
+        DecisionBody::Failure(f) => {
+            assert_eq!(f.class, DecisionFailureClass::BadRequest);
+            assert!(f.message.contains("callback URL rejected"));
+        }
+        other => panic!("expected BadRequest Failure, got {other:?}"),
+    }
+    assert_eq!(*rt.approvals.lock().expect("l"), 0);
+}
+
+#[tokio::test]
+async fn evaluate_require_approval_create_internal_fail_closed() {
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "require_approval".into(),
+            matched_policies: vec!["needs_human".into()],
+            approver_group: None,
+            reason: "human gate".into(),
+            redacted_fields: vec![],
+        },
+        approval_fail: true,
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(
+        &rt,
+        meta_require_approval(),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    assert_eq!(out.http_status, 500);
+    match out.body {
+        DecisionBody::Failure(f) => {
+            assert_eq!(f.class, DecisionFailureClass::Internal);
+        }
+        other => panic!("expected Internal Failure, got {other:?}"),
+    }
+    assert_eq!(*rt.approvals.lock().expect("l"), 0);
 }

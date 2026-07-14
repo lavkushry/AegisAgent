@@ -43,6 +43,10 @@ pub struct MockRuntime {
     pub write_fail: bool,
     /// When true, `emit_receipt_durable` fails (protected-path fail-closed).
     pub receipt_fail: bool,
+    /// When set, `create_approval` returns `BadRequest` (e.g. invalid callback).
+    pub approval_bad_request: Option<String>,
+    /// When true, `create_approval` returns an internal error.
+    pub approval_fail: bool,
     pub action_hash: String,
     pub writes: Mutex<u32>,
     pub heartbeats: Mutex<u32>,
@@ -77,6 +81,8 @@ impl Default for MockRuntime {
             audit_capacity: true,
             write_fail: false,
             receipt_fail: false,
+            approval_bad_request: None,
+            approval_fail: false,
             action_hash: "deadbeef".into(),
             writes: Mutex::new(0),
             heartbeats: Mutex::new(0),
@@ -283,6 +289,12 @@ impl DecisionRuntime for MockRuntime {
         _: &AuthorizeRequest,
         params: ApprovalCreateParams,
     ) -> Result<ApprovalResponseInfo, AegisError> {
+        if let Some(msg) = &self.approval_bad_request {
+            return Err(AegisError::BadRequest(msg.clone()));
+        }
+        if self.approval_fail {
+            return Err(AegisError::Internal("approval store unavailable".into()));
+        }
         *self.approvals.lock().expect("lock") += 1;
         Ok(ApprovalResponseInfo {
             approval_id: Uuid::nil(),

@@ -711,6 +711,33 @@ async fn pipeline_durable_receipt_failure_fail_closed() {
 }
 
 #[tokio::test]
+async fn pipeline_require_approval_create_failure_fail_closed() {
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "require_approval".into(),
+            matched_policies: vec!["needs_human".into()],
+            approver_group: Some("sec".into()),
+            reason: "human gate".into(),
+            redacted_fields: vec![],
+        },
+        approval_fail: true,
+        ..MockRuntime::default()
+    };
+    let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+    body["tool_call"]["mutates_state"] = serde_json::json!(true);
+    let raw = serde_json::to_vec(&body).expect("ser");
+    let out =
+        run_authorize_pipeline(&rt, &ctx(), &raw, Instant::now(), EvaluateConfig::default()).await;
+    assert_eq!(out.http_status, 500);
+    match out.body {
+        DecisionBody::Failure(_) => {}
+        other => panic!("expected Failure when approval create fails, got {other:?}"),
+    }
+    // Decision may have been written before approval create; no approval row.
+    assert_eq!(*rt.approvals.lock().expect("l"), 0);
+}
+
+#[tokio::test]
 async fn pipeline_dry_run_require_approval_creates_no_approval_row() {
     let rt = MockRuntime {
         cedar: PolicyDecisionView {
