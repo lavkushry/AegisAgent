@@ -72,13 +72,13 @@ codes — the JSON-bridge round-trip and `AEGIS_TYPED_AUTHORIZE` flag are
 **deleted** (Phase D). Phase C equality corpus (`equality_*` tests) covers
 allow / deny / require_approval / dry-run / frozen agent / bad token / missing
 tenant / replay-nonce conflict, plus approval `action_hash` length parity.
-Follow-on progress: typed `AuthorizedOutcome` seam now covers **authorize**,
-**approve/reject**, **register_agent**, **create_tenant**, and
-**register_mcp_server** (REST thin adapters + gRPC `outcome_to_tonic` /
-`outcome_to_tonic_json`, no Axum body buffer on those RPCs). Remaining gRPC
-RPCs (MCP discover, SOC, …) still REST-bridge via `axum_response_to_tonic_json`
-or raw body parse. Remaining: full typed extraction of residual RPCs; later
-`aegis-decision` crate move.
+Follow-on progress: typed `AuthorizedOutcome` seam covers **authorize**,
+**approve/reject**, **register_agent**, **create_tenant**,
+**register_mcp_server**, and **discover_mcp_tools** (REST thin adapters + gRPC
+`outcome_to_tonic` / `outcome_to_tonic_json`, no Axum body buffer). Remaining
+SOC gRPC RPCs still REST-bridge; `soc_query` / `close_incident` use
+`axum_response_to_tonic_json` for StatusError→tonic codes. Remaining: typed
+SOC extraction; later `aegis-decision` crate move.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

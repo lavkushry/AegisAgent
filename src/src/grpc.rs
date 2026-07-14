@@ -415,7 +415,15 @@ impl AdminService for AdminGrpcServiceImpl {
         &self,
         request: Request<DiscoverMcpToolsRequest>,
     ) -> Result<Response<DiscoverMcpToolsResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
+        }
+        if req.server_key.is_empty() {
+            return Err(Status::invalid_argument("Missing server_key"));
+        }
         let payload = crate::models::DiscoverMcpToolsRequest {
             tools: req
                 .tools
@@ -447,27 +455,14 @@ impl AdminService for AdminGrpcServiceImpl {
             manifest_signature: None,
         };
 
-        let response = crate::routes::discover_mcp_tools(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::extract::Path(req.server_key),
-            axum::Json(payload),
+        let outcome = crate::routes::discover_mcp_tools_inner(
+            self._state.clone(),
+            req.tenant_id,
+            req.server_key,
+            payload,
         )
-        .await
-        .into_response();
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let json_val: serde_json::Value = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        .await;
+        let json_val = outcome_to_tonic_json(outcome)?;
 
         let tools_array = json_val["tools"]
             .as_array()
@@ -554,22 +549,11 @@ impl SocService for SocGrpcServiceImpl {
         )
         .await
         .into_response();
-        let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|error| Status::internal(error.to_string()))?;
-
-        if !status.is_success() {
-            let message = String::from_utf8_lossy(&body).into_owned();
-            return if status == axum::http::StatusCode::BAD_REQUEST {
-                Err(Status::invalid_argument(message))
-            } else {
-                Err(Status::internal(message))
-            };
-        }
-
-        let result_json = String::from_utf8(body.to_vec())
-            .map_err(|_| Status::internal("SOC query returned non-UTF-8 JSON"))?;
+        // Transitional: faithful StatusError→tonic mapping; full typed SOC
+        // service extraction is follow-on work.
+        let (_status, value) =
+            crate::authorize_service::axum_response_to_tonic_json(response).await?;
+        let result_json = value.to_string();
         Ok(Response::new(SocQueryResponse { result_json }))
     }
 
@@ -687,6 +671,12 @@ impl SocService for SocGrpcServiceImpl {
         request: Request<CloseIncidentRequest>,
     ) -> Result<Response<CloseIncidentResponse>, Status> {
         let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
+        }
+        if req.incident_id.is_empty() {
+            return Err(Status::invalid_argument("Missing incident_id"));
+        }
 
         let response = crate::routes::close_incident(
             axum::extract::State(self._state.clone()),
@@ -696,15 +686,8 @@ impl SocService for SocGrpcServiceImpl {
         .await
         .into_response();
 
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
+        // Transitional bridge with StatusError→tonic mapping.
+        let _value = crate::authorize_service::axum_response_to_tonic_json(response).await?;
 
         Ok(Response::new(CloseIncidentResponse {
             status: "closed".to_string(),
