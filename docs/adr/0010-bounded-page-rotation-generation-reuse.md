@@ -4,11 +4,11 @@
 **Date:** 2026-07-14
 **Issue/PR:** pending
 
-> **Design-first ADR.** No implementation accompanies this document. Per
-> [architecture.md](../architecture.md) §14 and the ADR index rule, a Proposed
-> ADR permits only unwired prototypes, and this one intentionally lands before
-> any prototype so the rotation state machine is reviewed as a design, not as
-> a diff. ADR-0009 §"Revisit when" required exactly this stop.
+> **Design-first ADR.** The design above landed before any code (ADR-0009
+> §"Revisit when" required that stop); an **unwired prototype**
+> (`lib/event/src/rotating.rs`) accompanies it in the same review with the
+> deviations disclosed in §Prototype notes. Proposed status still permits
+> only unwired prototypes.
 
 ## Context
 
@@ -145,6 +145,27 @@ last frame commit for epoch e, ring-tail Release [C]
   A descriptor whose generation fails slot equality is the ADR-0009 terminal
   identity mismatch — never a skip, never a fallback read.
 
+### Prototype notes (disclosed deviations)
+
+The `current` prototype (`RotatingAdmissionChannel<N, P>`) deviates from the
+target in three bounded, disclosed ways:
+
+1. **Rebind allocates.** Rebinding constructs a fresh page (one bounded
+   allocation per rotation, zero per event) instead of reusing the slot
+   allocation in place. In-place reuse — which requires a mutable-generation
+   page state with its own ordering proof — is required before any `shadow`
+   wiring and stays inside this ADR's design envelope.
+2. **Reader handoff ring.** The successor epoch's reader travels
+   producer→consumer over a second bounded SPSC ring of capacity `P`. Its
+   publication Release-store precedes the data ring's `[R]` for the epoch's
+   first descriptor, so a consumer observing that descriptor observes the
+   handoff; an absent handoff at a seam is terminal, never transient. The
+   quota check `[A]` still governs reclamation — the handoff ring observing
+   `Full` despite quota is a terminal invariant violation.
+3. **`P` is a power of two** (the handoff ring shares the SPSC capacity
+   rule) and the construction rejects `P < 2` and a nonzero
+   `arena_generation` (epochs own the tag, starting at zero).
+
 ### Terminal-state extension
 
 The composite terminal word and its `OPEN/CLEAN/FAULTED` values are unchanged.
@@ -259,10 +280,12 @@ The implementing PR must provide, mirroring ADR-0009's evidence classes:
 
 ## Migration and rollback
 
-While Proposed, nothing ships. The implementing PR lands
-`RotatingAdmissionChannel` as isolated, unwired prototype code beside the
-single-page composite, which remains the reviewed baseline and differential
-reference. Rollback deletes the rotating module and this ADR's index row;
+While Proposed, the implementation is `current` only as isolated, unwired
+prototype code (`lib/event/src/rotating.rs`) beside the single-page
+composite, which remains the reviewed baseline and differential reference.
+It receives no production or `shadow` traffic, cannot carry protected
+evidence, and has no performance claim. Rollback deletes the rotating module
+and this ADR's index row;
 ADR-0006..0009 artifacts are untouched. Production wiring still additionally
 requires WAL durability/replay, authenticated registry lookup, NUMA-owner
 reclamation policy, priority lanes, shadow equality, qualification, and

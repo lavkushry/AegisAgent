@@ -186,6 +186,10 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -p aegis-event \
             --test admission
+          cargo test -Zbuild-std \
+            --target x86_64-unknown-linux-gnu \
+            -p aegis-event \
+            --test rotating
 
   # ── #1194 (Postgres GA): live Postgres integration smoke test ────────────
   # Closes the biggest concrete gap named in

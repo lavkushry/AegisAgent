@@ -686,7 +686,7 @@ pub struct AdmittedSequence {
 }
 
 impl AdmittedSequence {
-    const fn from_descriptor(descriptor: TelemetryDescriptor) -> Self {
+    pub(crate) const fn from_descriptor(descriptor: TelemetryDescriptor) -> Self {
         Self {
             arena_id: descriptor.arena_id,
             arena_generation: descriptor.arena_generation,
