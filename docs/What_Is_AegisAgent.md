@@ -43,7 +43,7 @@ One honest rule: **Aegis can only control what passes through Aegis control poin
 
 ## Related code
 
-`sdk-python/aegisagent/decorator.py` (the interception) · `src/src/routes/authorize.rs` (the decision) · `src/src/routes/approval.rs` (the approval) · `src/src/routes/receipts.rs` (the proof) · `lib/soc/src/` (the watcher)
+`sdk-python/aegisagent/decorator.py` (the interception) · `lib/decision/` + thin `routes/authorize.rs` (the decision) · `src/src/routes/approval.rs` (the approval) · `src/src/routes/receipts.rs` (the proof) · `lib/soc/src/` (the watcher)
 
 ## Current status
 

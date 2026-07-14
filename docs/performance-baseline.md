@@ -16,9 +16,8 @@ against a real (tempfile) SQLite pool with all migrations applied — no mocks.
 
 To make this possible, the gateway crate was split into a thin `src/lib.rs`
 (re-exporting `routes`, `db`, `policy`, etc. as `pub mod`s) with `src/main.rs`
-as a binary that depends on it. A new `pub mod benchutil` in
-`src/src/routes/authorize.rs` (outside `#[cfg(test)]`, so it's available to
-`cargo bench`) provides:
+as a binary that depends on it. A new `pub mod benchutil` in `src/src/routes/mod.rs` (outside `#[cfg(test)]`,
+so it's available to `cargo bench`) provides:
 
 - `setup_bench_state(db_path)` — builds an `AppState` against a fresh SQLite
   file, registers a tenant + one "bench agent" (the one that authenticates

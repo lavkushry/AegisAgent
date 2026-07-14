@@ -89,7 +89,7 @@ action references that action's `action_hash` and `receipt_hash` as immutable ev
 
 | Wazuh component | Purpose | Agent SOC equivalent | Status in repo |
 |---|---|---|---|
-| Wazuh Agent | Collect endpoint telemetry | `@protect_tool` SDK + Gateway interceptor | ✅ `sdk-python/`, `src/src/routes/authorize.rs` |
+| Wazuh Agent | Collect endpoint telemetry | `@protect_tool` SDK + Gateway interceptor | ✅ `sdk-python/`, `lib/decision` + thin authorize adapters |
 | Wazuh Server/Manager | Decode → rules → alerts | **Aegis Analysis Engine** (async daemon) | ✅ `lib/soc/src/{events,detect,correlate}.rs` |
 | Decoders | Normalise raw logs → fields | **Event Normalizer** (tool call → ASE, §7) | ✅ `events.rs` ASE + `canon.py` hashing |
 | Rules | Detect + correlate | **Detection Rule Engine** (atomic + correlation, §9) | ✅ `detect.rs`, `correlate.rs` |
@@ -683,7 +683,7 @@ Incident timeline (each row carries its `receipt_hash`, so the timeline is prova
 
 | Phase | Deliverable | Touches | Unlocks |
 |---|---|---|---|
-| **0** | **Event emitter** in `/v1/authorize` (non-blocking `tokio::mpsc` → background drain) | `src/src/routes/authorize.rs`, `lib/soc/src/events.rs` | the entire async plane (keystone) |
+| **0** | **Event emitter** in `/v1/authorize` (non-blocking `tokio::mpsc` → background drain) | authorize path host ports + `lib/soc/src/events.rs` | the entire async plane (keystone) |
 | **1** | Deterministic **playbook/rule engine** (atomic rules → match) | new module | confused-deputy, drift detections |
 | **2** | **Notify sink** — Slack/webhook on deny + approval | 1 consumer | L1 automation, instant visibility |
 | **3** | **Correlation engine** (freq + sequence + window) | stateful module | deny-storm, exfil, runaway |
@@ -692,13 +692,13 @@ Incident timeline (each row carries its `receipt_hash`, so the timeline is prova
 | **6** | **RCA narrator** (sandboxed LLM, post-incident only) | new service | L4 explainability |
 | **7** | Agentless ingestion · behavioural baselining | collector, analytics | breadth + unknowns |
 
-**Phase 0 is the keystone:** after the decision in the authorize handler, `tx.send(ase_event)` to an mpsc
-channel drained by a background task (same async pattern as the audit-write in
+**Phase 0 is the keystone:** after the decision in the authorize pipeline, host ports emit ASE events
+via `tx.send` to an mpsc channel drained by a background task (same async pattern as the audit-write in
 `.claude/rules/database_migration.md` §5). Non-blocking ⇒ the <75 ms budget is untouched ⇒ every later
 phase is a *consumer* of that one stream and never touches the hot path again.
 
-Two new gateway pieces this needs (plan the Rust):
-1. **Event emitter** — `src/src/routes/authorize.rs` emits the ASE after deciding.
+Two gateway pieces this needs:
+1. **Event emitter** — authorize path host ports (`decision_runtime` / SOC sinks) emit the ASE after deciding.
 2. **Control endpoints** — `POST /v1/agents/:id/freeze|revoke`, `POST /v1/mcp/servers/:server_key/quarantine`;
    tenant-scoped, parameterized, fail-closed (freezing an unknown agent = deny by default); they flip
    `agents.status` / `mcp_servers.status`, which the authorize path already honours.

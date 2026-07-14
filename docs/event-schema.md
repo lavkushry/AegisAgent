@@ -75,7 +75,7 @@ correlators) branch on this value.
 
 | Kind | Emitter | When emitted |
 | ---- | ------- | ------------ |
-| `authorize_decision` | `src/src/routes/authorize.rs` — `authorize_action` | Every `POST /v1/authorize` that completes an inline decision (allow, deny, require_approval). This is by far the most frequent event. |
+| `authorize_decision` | authorize path (`lib/decision` + host ports via `decision_runtime`) | Every `POST /v1/authorize` that completes an inline decision (allow, deny, require_approval). This is by far the most frequent event. |
 | `replay_attempt` | `src/src/routes/authorize_receipts.rs` — `emit_replay_event` | When `POST /v1/authorize` detects a replay-nonce reuse (`replay_nonce_reused`) or a `POST /v1/approvals/:id/consume` re-consumes an already-consumed single-use approval. |
 | `mcp_manifest_drift` | `src/src/routes/mcp.rs` — `discover_mcp_tools` | When an MCP server's live manifest hash diverges from the pinned hash. Carries `risk_score` that reflects drift severity. |
 | `external_event:github_webhook` | `lib/soc/src/ingest.rs` | Normalized from a `POST /v1/ingest` payload with `source: "github_webhook"`. Always `decision = "allow"`, `risk_score = 0`. |

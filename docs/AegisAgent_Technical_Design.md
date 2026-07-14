@@ -58,7 +58,7 @@ ASYNC SOC PLANE (out-of-band — the monitoring/response plane)
 
 Decision and enforcement are separated (Cedar model). Two crucial structural facts:
 1. **The SDK is inside the trust boundary** and performs the final fail-closed check, so a compromised agent process cannot execute an unapproved action even if it reaches the gateway's approval.
-2. **The SOC is a strictly asynchronous consumer.** The authorize handler emits an event after deciding; emission is fire-and-forget. The SOC can be slow, restart, or fail entirely — the action path is unaffected (Design Law 3).
+2. **The SOC is a strictly asynchronous consumer.** The authorize pipeline emits an event after deciding (via host ports); emission is fire-and-forget. The SOC can be slow, restart, or fail entirely — the action path is unaffected (Design Law 3).
 
 ---
 
