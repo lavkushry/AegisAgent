@@ -38,17 +38,16 @@
 
 ```bash
 cargo test -p aegis-decision --lib -- --test-threads=1
-# pipeline e2e mocks: allow, 401, idempotent, require_approval, frozen/revoked,
-# dry_run, cedar deny, webhook reject, ban, tool permission, MCP permission /
-# quarantine / unapproved / approved allow
+# 72+ tests: stage units + pipeline e2e (allow/deny/approval/dry-run/MCP/ban/
+# frozen/revoked/rate/quota/audit/receipt/approval-fail, evaluate overrides)
+cargo test -p gateway --lib authorize_service -- --test-threads=1
 cargo test -p gateway --lib equality_ -- --test-threads=1
-cargo test -p gateway --lib -- --test-threads=1 authorize_
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings
 ```
 
 ## Follow-ons (not this branch)
 
 - Reactor-owned snapshots / generation binding (target AuthorizeService LLD shape)
-- Move `authorize_tests` to workspace integration crate
+- Move large `authorize_tests.rs` to workspace integration crate
 - Further typed SOC gRPC RPCs still on storage-direct paths
 - Push branch + open PR when requested

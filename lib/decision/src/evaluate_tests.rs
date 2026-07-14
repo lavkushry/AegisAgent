@@ -332,6 +332,147 @@ async fn evaluate_untrusted_mutating_deny_records_provenance() {
 }
 
 #[tokio::test]
+async fn evaluate_force_approval_overrides_cedar_allow() {
+    let mut m = meta_allow();
+    m.guarded.agent.force_approval = true;
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "allow".into(),
+            matched_policies: vec!["base_allow".into()],
+            approver_group: None,
+            reason: "ok".into(),
+            redacted_fields: vec![],
+        },
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "require_approval");
+            assert!(
+                resp.matched_policies
+                    .iter()
+                    .any(|p| p == "soc_response_force_approval"),
+                "policies={:?}",
+                resp.matched_policies
+            );
+            assert!(resp.approval.is_some());
+        }
+        other => panic!("expected force_approval require_approval, got {other:?}"),
+    }
+    assert_eq!(*rt.approvals.lock().expect("l"), 1);
+}
+
+#[tokio::test]
+async fn evaluate_action_approval_required_overrides_allow() {
+    let mut m = meta_allow();
+    m.action_approval_required = true;
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "allow".into(),
+            matched_policies: vec!["base_allow".into()],
+            approver_group: None,
+            reason: "ok".into(),
+            redacted_fields: vec![],
+        },
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "require_approval");
+            assert!(resp
+                .matched_policies
+                .iter()
+                .any(|p| p == "registered_action_approval_required"));
+        }
+        other => panic!("expected action approval override, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn evaluate_action_default_deny_overrides_allow() {
+    let mut m = meta_allow();
+    m.action_default_decision = "deny".into();
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "allow".into(),
+            matched_policies: vec!["base_allow".into()],
+            approver_group: None,
+            reason: "ok".into(),
+            redacted_fields: vec![],
+        },
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "deny");
+            assert!(resp
+                .matched_policies
+                .iter()
+                .any(|p| p == "registered_action_default_deny"));
+        }
+        other => panic!("expected default deny override, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn evaluate_critical_risk_allow_requires_approval() {
+    let mut m = meta_allow();
+    m.risk_level = "critical".into();
+    m.risk_score = 95;
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "allow".into(),
+            matched_policies: vec!["base_allow".into()],
+            approver_group: None,
+            reason: "ok".into(),
+            redacted_fields: vec![],
+        },
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "require_approval");
+            assert!(resp
+                .matched_policies
+                .iter()
+                .any(|p| p == "critical_risk_requires_approval"));
+        }
+        other => panic!("expected critical risk approval, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn evaluate_dry_run_quarantine_does_not_quarantine_agent() {
+    let mut m = meta_allow();
+    m.guarded.dry_run = true;
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "quarantine".into(),
+            matched_policies: vec!["q1".into()],
+            approver_group: None,
+            reason: "suspicious".into(),
+            redacted_fields: vec![],
+        },
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "quarantine");
+            assert!(resp.dry_run);
+            assert!(resp.receipt.is_none());
+        }
+        other => panic!("expected dry-run quarantine, got {other:?}"),
+    }
+    assert_eq!(*rt.quarantines.lock().expect("l"), 0);
+    assert_eq!(*rt.heartbeats.lock().expect("l"), 0);
+}
+
+#[tokio::test]
 async fn evaluate_redact_keeps_redacted_fields_others_clear() {
     let rt_redact = MockRuntime {
         cedar: PolicyDecisionView {

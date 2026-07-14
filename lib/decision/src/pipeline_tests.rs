@@ -404,6 +404,31 @@ async fn pipeline_admission_webhook_reject_denies() {
 }
 
 #[tokio::test]
+async fn pipeline_tool_banned_denies() {
+    let rt = MockRuntime {
+        enforcement: EnforcementStatus::ToolBanned,
+        ..MockRuntime::default()
+    };
+    let out = run_authorize_pipeline(
+        &rt,
+        &ctx(),
+        &body_json(),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "deny");
+            assert!(resp.reason.contains("banned") || resp.reason.contains("tool"));
+            assert_eq!(resp.matched_policies, vec!["tool_banned".to_string()]);
+        }
+        other => panic!("expected tool ban deny, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 1);
+}
+
+#[tokio::test]
 async fn pipeline_agent_banned_denies() {
     let rt = MockRuntime {
         enforcement: EnforcementStatus::AgentBanned,
