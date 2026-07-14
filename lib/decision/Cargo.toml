@@ -3,7 +3,7 @@ name = "aegis-decision"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Protocol-neutral authorization decision seam for AegisAgent (Week-3 typed service target)"
+description = "Protocol-neutral authorize pipeline (admit→evaluate) for AegisAgent; DecisionRuntime ports, no Axum/SQLx"
 publish = false
 
 [dependencies]

@@ -10,7 +10,9 @@
    - Pipeline: `run_authorize_pipeline` = admit → preflight → guard → metadata → evaluate
    - Ports: `DecisionRuntime` (storage, Cedar, caches, SOC, GitHub side effects)
    - Outcomes: `DecisionOutcome` / `DecisionBody` (no Axum/tonic)
-   - Tests: stage unit tests + `pipeline_tests.rs` e2e mock; `error_map` class mapping
+   - Tests: stage units in `admit_tests`/`preflight_tests`/`guard_tests`/
+     `metadata_tests`/`evaluate_tests`; pipeline e2e in `pipeline_tests.rs`;
+     `error_map` class mapping
 
 2. **Gateway adapters**
    - `decision_runtime.rs` — `GatewayDecisionRuntime`
