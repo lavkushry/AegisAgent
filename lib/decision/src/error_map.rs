@@ -36,3 +36,66 @@ pub(crate) fn aegis_err_to_outcome(e: AegisError) -> DecisionOutcome {
     };
     DecisionOutcome::failure(failure)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outcome::DecisionBody;
+
+    // Pool-exhausted → 503 is gated on `AegisError::is_pool_exhausted()` (sqlx
+    // PoolTimedOut). That path is covered by gateway storage/pool tests; this
+    // crate deliberately does not depend on sqlx, so we only assert non-DB
+    // class mappings and internal/CWE-209 message hygiene here.
+
+    #[test]
+    fn unauthorized_maps_to_401() {
+        let out = aegis_err_to_outcome(AegisError::Unauthorized("bad token".into()));
+        assert_eq!(out.http_status, 401);
+        match out.body {
+            DecisionBody::Failure(f) => {
+                assert_eq!(f.class, DecisionFailureClass::Unauthorized);
+                assert_eq!(f.message, "bad token");
+            }
+            other => panic!("expected Failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conflict_maps_to_409() {
+        let out = aegis_err_to_outcome(AegisError::Conflict("replay".into()));
+        assert_eq!(out.http_status, 409);
+        match out.body {
+            DecisionBody::Failure(f) => assert_eq!(f.class, DecisionFailureClass::Conflict),
+            other => panic!("expected Failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn internal_maps_to_500_without_extra_detail() {
+        let out = aegis_err_to_outcome(AegisError::Internal("secret stack".into()));
+        assert_eq!(out.http_status, 500);
+        match out.body {
+            DecisionBody::Failure(f) => {
+                assert_eq!(f.class, DecisionFailureClass::Internal);
+                assert_eq!(f.message, "secret stack");
+            }
+            other => panic!("expected Failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bad_request_and_not_found_preserve_class() {
+        let br = aegis_err_to_outcome(AegisError::BadRequest("nope".into()));
+        assert_eq!(br.http_status, 400);
+        match br.body {
+            DecisionBody::Failure(f) => assert_eq!(f.class, DecisionFailureClass::BadRequest),
+            other => panic!("expected Failure, got {other:?}"),
+        }
+        let nf = aegis_err_to_outcome(AegisError::NotFound("gone".into()));
+        assert_eq!(nf.http_status, 404);
+        match nf.body {
+            DecisionBody::Failure(f) => assert_eq!(f.class, DecisionFailureClass::NotFound),
+            other => panic!("expected Failure, got {other:?}"),
+        }
+    }
+}
