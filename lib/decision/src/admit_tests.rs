@@ -119,6 +119,112 @@ async fn admit_success_bearer() {
 }
 
 #[tokio::test]
+async fn admit_success_mtls() {
+    let rt = MockRuntime {
+        agent: Some(AuthorizeAgent::new("agent-1", "tenant-1", "low")),
+        ..MockRuntime::default()
+    };
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        addr(),
+        Transport::Rest,
+        AuthCredential::MtlsCn("agent.cn".into()),
+    );
+    let admitted = admit_authorize(&rt, &ctx, &minimal_body("dev"))
+        .await
+        .expect("mtls ok");
+    assert!(admitted.used_mtls);
+    assert_eq!(admitted.agent.id, "agent-1");
+}
+
+#[tokio::test]
+async fn admit_unrecognized_mtls_cn_unauthorized() {
+    let rt = MockRuntime {
+        agent: None,
+        ..MockRuntime::default()
+    };
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        addr(),
+        Transport::Rest,
+        AuthCredential::MtlsCn("unknown.cn".into()),
+    );
+    let err = admit_authorize(&rt, &ctx, &minimal_body("dev"))
+        .await
+        .expect_err("mtls");
+    assert_eq!(err.http_status, 401);
+    match err.body {
+        DecisionBody::Failure(f) => {
+            assert!(f.message.contains("mTLS") || f.message.contains("certificate"));
+        }
+        other => panic!("expected Failure, got {other:?}"),
+    }
+    assert_eq!(*rt.auth_failures.lock().expect("l"), 1);
+}
+
+#[tokio::test]
+async fn admit_requires_signature_when_agent_has_signing_key() {
+    let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
+    agent.signing_key = Some("unit-test-key".into());
+    let rt = MockRuntime {
+        agent: Some(agent),
+        ..MockRuntime::default()
+    };
+    let body = minimal_body("dev");
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        addr(),
+        Transport::Rest,
+        AuthCredential::BearerToken("tok".into()),
+    );
+    let err = admit_authorize(&rt, &ctx, &body)
+        .await
+        .expect_err("missing sig");
+    assert_eq!(err.http_status, 401);
+    match err.body {
+        DecisionBody::Failure(f) => assert!(f.message.contains("missing_request_signature")),
+        other => panic!("expected Failure, got {other:?}"),
+    }
+
+    let sig = aegis_common::hash::request_signature_header("unit-test-key", &body).expect("sign");
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        addr(),
+        Transport::Rest,
+        AuthCredential::BearerToken("tok".into()),
+    )
+    .with_request_signature(Some(sig));
+    let admitted = admit_authorize(&rt, &ctx, &body).await.expect("signed ok");
+    assert_eq!(admitted.agent.id, "agent-1");
+}
+
+#[tokio::test]
+async fn admit_rejects_invalid_request_signature() {
+    let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
+    agent.signing_key = Some("unit-test-key".into());
+    let rt = MockRuntime {
+        agent: Some(agent),
+        ..MockRuntime::default()
+    };
+    let body = minimal_body("dev");
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        addr(),
+        Transport::Rest,
+        AuthCredential::BearerToken("tok".into()),
+    )
+    .with_request_signature(Some("sha256=deadbeef".into()));
+    let err = admit_authorize(&rt, &ctx, &body)
+        .await
+        .expect_err("bad sig");
+    assert_eq!(err.http_status, 401);
+    match err.body {
+        DecisionBody::Failure(f) => assert!(f.message.contains("invalid_request_signature")),
+        other => panic!("expected Failure, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn admit_environment_restriction_partial_deny() {
     let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
     agent.allowed_environments = Some(r#"["staging"]"#.into());

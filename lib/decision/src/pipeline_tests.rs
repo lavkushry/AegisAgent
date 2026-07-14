@@ -43,6 +43,98 @@ fn mcp_body_json(server: &str, action: &str) -> Vec<u8> {
     .expect("json")
 }
 
+#[tokio::test]
+async fn pipeline_invalid_json_is_bad_request() {
+    let rt = MockRuntime::default();
+    let out = run_authorize_pipeline(
+        &rt,
+        &ctx(),
+        b"not-json",
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    assert_eq!(out.http_status, 400);
+    match out.body {
+        DecisionBody::Failure(_) => {}
+        other => panic!("expected Failure for invalid JSON, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 0);
+}
+
+#[tokio::test]
+async fn pipeline_mtls_allow() {
+    let rt = MockRuntime::default();
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        SocketAddr::from(([10, 0, 0, 1], 4443)),
+        Transport::Rest,
+        AuthCredential::MtlsCn("agent.cn".into()),
+    );
+    let out = run_authorize_pipeline(
+        &rt,
+        &ctx,
+        &body_json(),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    match out.body {
+        DecisionBody::Decision(resp) => assert_eq!(resp.decision, "allow"),
+        other => panic!("expected allow via mtls, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pipeline_agent_quarantine_record_denies() {
+    let rt = MockRuntime {
+        enforcement: EnforcementStatus::AgentQuarantined,
+        ..MockRuntime::default()
+    };
+    let out = run_authorize_pipeline(
+        &rt,
+        &ctx(),
+        &body_json(),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "deny");
+            assert_eq!(
+                resp.matched_policies,
+                vec!["agent_quarantine_record".to_string()]
+            );
+        }
+        other => panic!("expected quarantine-record deny, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 1);
+}
+
+#[tokio::test]
+async fn pipeline_missing_signature_when_required_unauthorized() {
+    let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
+    agent.signing_key = Some("pipeline-key".into());
+    let rt = MockRuntime {
+        agent: Some(agent),
+        ..MockRuntime::default()
+    };
+    let out = run_authorize_pipeline(
+        &rt,
+        &ctx(),
+        &body_json(),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    assert_eq!(out.http_status, 401);
+    match out.body {
+        DecisionBody::Failure(f) => assert!(f.message.contains("missing_request_signature")),
+        other => panic!("expected Failure, got {other:?}"),
+    }
+}
+
 fn ctx() -> AuthorizeContext {
     AuthorizeContext::new(
         "tenant-1",

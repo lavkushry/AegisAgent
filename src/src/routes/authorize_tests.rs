@@ -2821,11 +2821,8 @@ async fn authorize_allows_different_nonces() {
 
 /// Compute `X-Aegis-Request-Signature: sha256=<hex>` for test helpers.
 fn signing_header(key: &str, body: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-    let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes()).unwrap();
-    mac.update(body);
-    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    aegis_common::hash::request_signature_header(key, body)
+        .expect("HMAC key for test signing header")
 }
 
 /// Register an agent with a signing key and return (state, tenant_id, agent_token).
