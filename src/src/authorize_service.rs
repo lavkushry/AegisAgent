@@ -23,14 +23,19 @@ use crate::routes::AppState;
 
 // Protocol-neutral context / outcome / runtime types live in `aegis-decision`
 // so library code can depend on them without pulling the gateway binary.
+// Adapter-facing library surface. Stage functions (admit/preflight/…) stay
+// crate-private to `aegis-decision`; callers use the unified pipeline.
 pub use aegis_decision::{
-    admit_authorize, authorize_response_from_decision_record, evaluate_authorize, guard_authorize,
-    metadata_authorize, preflight_authorize, run_authorize_pipeline, AdmissionEffect,
-    ApprovalCreateParams, AuthCredential, AuthorizeAgent, AuthorizeContext, AuthorizeService,
-    DecisionAuditWrite, DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome,
-    DecisionRuntime, EnforcementStatus, EvaluateConfig, GuardedAuthorize, McpToolMeta,
-    MetadataAuthorize, PolicyDecisionView, PreflightTerminal, PreflightedAuthorize,
-    RegisteredActionMeta, Transport,
+    authorize_response_from_decision_record, run_authorize_pipeline, AuthCredential,
+    AuthorizeContext, AuthorizeService, DecisionBody, DecisionFailure, DecisionFailureClass,
+    DecisionOutcome, DecisionRuntime, EvaluateConfig, Transport,
+};
+
+// Re-export runtime port types used by `decision_runtime` and advanced callers.
+pub use aegis_decision::{
+    AdmissionEffect, ApprovalCreateParams, AuthorizeAgent, DecisionAuditWrite, EnforcementStatus,
+    GuardedAuthorize, McpToolMeta, MetadataAuthorize, PolicyDecisionView, PreflightTerminal,
+    PreflightedAuthorize, RegisteredActionMeta,
 };
 
 /// Body carried by a completed authorization evaluation.

@@ -1,9 +1,8 @@
-//! Target service trait for authorization evaluation.
+//! Protocol-neutral [`AuthorizeService`] trait.
 //!
-//! Gateway implements this trait via `GatewayAuthorizeService` (see the
-//! gateway `authorize_service` module). Evaluation still runs in the gateway
-//! binary; this trait is the stable library boundary for adapters and future
-//! extraction of `authorize_action_impl` into this crate.
+//! Evaluation is implemented by [`crate::run_authorize_pipeline`] behind
+//! [`crate::DecisionRuntime`] ports. Gateway adapters implement this trait
+//! (see `GatewayAuthorizeService`) so REST/gRPC share one typed entry.
 
 use aegis_api::models::AuthorizeRequest;
 use aegis_common::errors::AegisError;
@@ -23,9 +22,9 @@ use crate::AuthorizeContext;
 ///
 /// # Implementors
 ///
-/// - Gateway: `GatewayAuthorizeService` — full evaluation today; richer wire
-///   outcomes (`AuthorizedOutcome`) are available on that type's `evaluate`
-///   method for REST/gRPC adapters that need StatusError/partial-JSON fidelity.
+/// - Gateway: `GatewayAuthorizeService` — calls [`crate::run_authorize_pipeline`]
+///   via `GatewayDecisionRuntime`. Prefer that type's `evaluate` method when
+///   adapters need StatusError / partial-JSON fidelity (`AuthorizedOutcome`).
 #[async_trait::async_trait]
 pub trait AuthorizeService: Send + Sync {
     /// Evaluate one authorization request.
