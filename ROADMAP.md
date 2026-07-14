@@ -128,10 +128,13 @@ Deliverables:
 - add safe differential oracles, Loom models, Miri tests and native stress benchmark;
 - instrument allocations, copied bytes, cache misses and cycles/op
   (diagnostic criterion benches for ring/slab/admission/rotating compile in CI;
-  no qualification numbers published).
+  thread-local zero-alloc checks for published-prefix, single-page admission,
+  and rotating rebind paths; no qualification numbers / cache-miss counters
+  published).
 
 Gate: zero lost/duplicated/reordered descriptors; validation before tail
-acknowledgement; zero steady-state allocations; safety suite and hosted
+acknowledgement; zero steady-state allocations (native thread-local counters
+for admit/claim/commit and rotation/rebind); safety suite and hosted
 sanitizer evidence green; no false sharing in layout/perf evidence. These gates
 do not make the volatile prototype durable or authorize protected evidence.
 
