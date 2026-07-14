@@ -136,7 +136,7 @@ jobs:
           test "$(cargo tree -p aegis-event --edges normal --depth 1 --prefix none | tail -n +2)" = "crc32c v0.6.8"
           test "$(cargo tree -p aegis-event --edges normal --depth 1 --prefix none --all-features | tail -n +2)" = "$(printf 'crc32c v0.6.8\nloom v0.7.2')"
       - name: Compile diagnostic event benchmarks
-        run: cargo bench -p aegis-event --bench spsc_ring --bench published_slab --bench admission --no-run
+        run: cargo bench -p aegis-event --bench spsc_ring --bench published_slab --bench admission --bench rotating --no-run
 
   event-miri:
     name: Event primitives Miri

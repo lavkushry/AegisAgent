@@ -29,3 +29,7 @@ harness = false
 [[bench]]
 name = "admission"
 harness = false
+
+[[bench]]
+name = "rotating"
+harness = false
