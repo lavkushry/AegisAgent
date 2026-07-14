@@ -71,7 +71,7 @@ The map groups terms by the job they perform: identify the actor, preserve exact
 | **Confused deputy** | An agent tricked into using its authority for an attacker; countered by trust provenance. |
 | **Consume** | The atomic, single-use act of redeeming an approval before execution. |
 | **Control command** | Signed, tenant/target-bound, expiring, replay-protected instruction to a node sensor (kill/pause/quarantine…). 🟡 store / 📐 protocol. [Control Command Protocol](AegisAgent_Control_Command_Protocol.md) |
-| **Decision** | The gateway's answer to an authorize call: `allow` / `deny` / `require_approval`, with reason and context. |
+| **Decision** | The gateway's answer to an authorize call: commonly `allow` / `deny` / `require_approval`, plus Cedar-driven `redact` and `quarantine`, with reason and context. |
 | **Deny-storm** | Burst of denials for one agent — a canonical detection. [runbook](runbooks/deny-storm.md) |
 | **Egress proxy** | Partial network choke point for caged workloads; transparent forced integration remains unfinished. 🟡 [doc](components/Egress_Proxy.md) |
 | **Evidence graph** | Linked structure connecting content → decisions → approvals → receipts → alerts → incidents. [evidence-graph.md](evidence-graph.md) |

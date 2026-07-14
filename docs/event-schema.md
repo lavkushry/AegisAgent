@@ -21,7 +21,7 @@ so the inline `/v1/authorize` decision is never delayed by downstream processing
   "tenant_id":       "<string>",
   "kind":            "<event kind — see table below>",
   "agent_id":        "<uuid-v4 | 'unknown'>",
-  "decision":        "allow | deny | require_approval",
+  "decision":        "allow | deny | require_approval | redact | quarantine | …",
   "tool":            "<skill_key | source system>",
   "action":          "<action_key | verb>",
   "resource":        "<string | null>",
@@ -51,7 +51,7 @@ so the inline `/v1/authorize` decision is never delayed by downstream processing
 | `tenant_id` | string | **yes** | Owning tenant. Every SOC consumer filters and scopes by this field. Never cross-tenant data flows through a single `AseEvent`. |
 | `kind` | string | **yes** | Event class. See [Event kinds](#event-kinds) below. |
 | `agent_id` | string (UUID v4) | **yes** | UUID of the registered agent that triggered the event. For ingested external events where an agent UUID is unavailable, the value is `"unknown"`. |
-| `decision` | string | **yes** | The authorization outcome: `allow`, `deny`, or `require_approval`. Ingested external events always carry `"allow"` (they are observations, not authorizations). |
+| `decision` | string | **yes** | The authorization outcome: typically `allow`, `deny`, or `require_approval`; Cedar may also emit `redact` or `quarantine`. Ingested external events always carry `"allow"` (they are observations, not authorizations). |
 | `tool` | string | **yes** | The `skill_key` (e.g. `"github"`, `"filesystem"`) for authorize events; the source system (e.g. `"github"`, `"openai"`) for ingested events. |
 | `action` | string | **yes** | The `action_key` (e.g. `"merge_pull_request"`) for authorize events; the verb from the external payload for ingested events. |
 | `resource` | string or null | no | Specific resource operated on (e.g. `"org/repo"`, `"/etc/passwd"`). Null when not provided by the caller. |
@@ -75,7 +75,7 @@ correlators) branch on this value.
 
 | Kind | Emitter | When emitted |
 | ---- | ------- | ------------ |
-| `authorize_decision` | authorize path (`lib/decision` + host ports via `decision_runtime`) | Every `POST /v1/authorize` that completes an inline decision (allow, deny, require_approval). This is by far the most frequent event. |
+| `authorize_decision` | authorize path (`lib/decision` + host ports via `decision_runtime`) | Every `POST /v1/authorize` that completes an inline decision (allow, deny, require_approval, redact, quarantine, …). This is by far the most frequent event. |
 | `replay_attempt` | `src/src/routes/authorize_receipts.rs` — `emit_replay_event` | When `POST /v1/authorize` detects a replay-nonce reuse (`replay_nonce_reused`) or a `POST /v1/approvals/:id/consume` re-consumes an already-consumed single-use approval. |
 | `mcp_manifest_drift` | `src/src/routes/mcp.rs` — `discover_mcp_tools` | When an MCP server's live manifest hash diverges from the pinned hash. Carries `risk_score` that reflects drift severity. |
 | `external_event:github_webhook` | `lib/soc/src/ingest.rs` | Normalized from a `POST /v1/ingest` payload with `source: "github_webhook"`. Always `decision = "allow"`, `risk_score = 0`. |

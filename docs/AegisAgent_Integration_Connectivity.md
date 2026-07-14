@@ -100,7 +100,7 @@ Secrets are never stored — only **hashes** of inputs/outputs (redaction invari
 
 ## 6. How rules are applied
 
-- **Inline (the gate):** **Cedar** evaluates every `/v1/authorize` call deterministically — `allow` / `deny` / `require_approval` — *before* the action runs. Rules live in `policies.cedar` (provenance gates, approval gates, per-action risk). Decisions are **deterministic**, never a text score.
+- **Inline (the gate):** **Cedar** (via `lib/decision::run_authorize_pipeline`) evaluates every `/v1/authorize` call deterministically — `allow` / `deny` / `require_approval` (and Cedar annotations such as `redact` / `quarantine`) — *before* the action runs. Rules live in `policies.cedar` (provenance gates, approval gates, per-action risk). Decisions are **deterministic**, never a text score.
 - **Async (the SOC):** detection + correlation rules run **off** the event stream (deny-storms, read→exfil sequences, MCP drift) — these **detect and respond** (alert, freeze, quarantine), they are not the inline gate. See [SOC design](AegisAgent_Agent_SOC_Design.md) §9.
 
 So "applying rules" happens twice, by design: **synchronously to decide an action**, and **asynchronously to detect patterns across actions**.

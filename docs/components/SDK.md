@@ -20,8 +20,9 @@ flowchart LR
     WRAP --> CANON[Canonical action + hash]
     CANON --> GW[Authorize]
     GW -->|allow| EXEC[Execute exact call]
+    GW -->|redact| MASK[Mask redacted_fields] --> EXEC
     GW -->|approval| CONSUME[Poll + atomic consume + recheck] --> EXEC
-    GW -->|deny / invalid / protected failure| STOP[Typed refusal]
+    GW -->|deny / quarantine / unknown / failure| STOP[Typed refusal]
 ```
 
 Quick start per persona: [onboarding/For_SDK_Developer.md](../onboarding/For_SDK_Developer.md). Feature matrix across the three SDKs: [sdk-parity-status.md](../sdk-parity-status.md).
