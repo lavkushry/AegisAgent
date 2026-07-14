@@ -62,7 +62,7 @@ jobs:
         run: bash scripts/sensor-soak.sh
       - name: Upload soak artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sensor-soak-${{ github.run_id }}
           path: target/sensor-soak/
