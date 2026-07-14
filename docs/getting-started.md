@@ -31,8 +31,8 @@ run — and guarantees what competitors only decide:
 
 | Component | Role |
 |---|---|
-| **Gateway** (Rust + Axum) | The runtime: authorizes every action with Cedar, manages approvals, writes receipts, emits SOC events. Binds `127.0.0.1:8080` in dev. |
-| **Policy engine** (Cedar) | Deterministic `allow` / `deny` / `require_approval` decisions; provenance + approval gates live here (`policies.cedar`). |
+| **Gateway** (Rust + Axum) | The runtime: thin adapters call `lib/decision` to authorize every action with Cedar, manage approvals, write receipts, emit SOC events. Binds `127.0.0.1:8080` in dev. |
+| **Policy engine** (Cedar) | Deterministic authorize outcomes (`allow` / `deny` / `require_approval`, plus annotations such as `redact` / `quarantine`); provenance + approval gates live in `policies.cedar`. |
 | **SDKs** | In-agent interception. Python and TypeScript integrity paths are production-ready; Go is beta with documented capture-parity gaps. |
 | **Approval integrity engine** | Freeze → hash → bind → single-use consume → fail-closed. |
 | **Trust-provenance gate** | The 6 deterministic source-trust levels. |

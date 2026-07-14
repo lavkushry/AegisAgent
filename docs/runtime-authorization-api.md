@@ -83,7 +83,7 @@ Content-Type: application/json
 | Field | Notes |
 |---|---|
 | `decision_id` | UUID for this evaluation; appears in `/v1/decisions/:id` and `/v1/audit/events`. |
-| `decision` | `"allow"`, `"deny"`, or `"require_approval"` — see [Decision types](#decision-types). |
+| `decision` | `"allow"`, `"deny"`, `"require_approval"`, `"redact"`, `"quarantine"`, … — see [Decision types](#decision-types). |
 | `risk_score` / `risk_level` | Derived from the registered tool/action's configured risk (`low`→10, `medium`→40, `high`→75, `critical`→95), or MCP tool risk for MCP calls. |
 | `reason` | Human-readable explanation, safe to display to an operator. |
 | `matched_policies` | Cedar policy IDs (or synthetic markers like `agent_frozen`, `mcp_unknown_tool`, `critical_risk_requires_approval`) that produced the decision — useful for debugging policy precedence. |
@@ -167,6 +167,7 @@ POST /v1/authorize ───────────────▶ REST: author
                                     evaluate
                                      13. Cedar policy_engine.authorize(...)
                                          → allow | deny | require_approval
+                                           (+ annotations: redact, quarantine)
                                      14. Decision overrides (critical risk,
                                          force_approval, action defaults)
                                      15. Audit-writer preflight (high-risk
@@ -174,14 +175,18 @@ POST /v1/authorize ───────────────▶ REST: author
                                      16. write_decision_and_audit + receipts
                                      17. require_approval → create Approval
                                          bound to action_hash
+                                     18. quarantine decision → quarantine_agent
 
         ◀────────────────── AuthorizeResponse {decision, risk_*, reason,
-                              matched_policies, approval?, receipt?}
+                              matched_policies, approval?, receipt?,
+                              redacted_fields?}
         │
   decision == allow
         │──▶ execute tool
-  decision == deny
-        │──▶ raise AegisAuthorizationDenied — never executes
+  decision == redact
+        │──▶ execute with redacted_fields masked (Python SDK)
+  decision == deny | quarantine | unknown
+        │──▶ raise / fail closed — never executes
   decision == require_approval
         │──▶ poll GET /v1/approvals/:id until approved
         │──▶ recompute action_hash for the about-to-run action
