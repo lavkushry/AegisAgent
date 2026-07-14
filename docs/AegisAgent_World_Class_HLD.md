@@ -206,7 +206,8 @@ Arrows mean “depends on.” `aegis-policy` never depends on storage. The binar
 4. The final post-admission action is normalized and canonicalized with `aegis-jcs-1`.
 5. Replay state is atomically claimed when the durable replay store is enabled.
 6. The authorization service reads one immutable snapshot generation.
-7. Cedar evaluates deterministic facts and returns `allow`, `deny`, or `require_approval`.
+7. Cedar evaluates deterministic facts and returns `allow`, `deny`, or
+   `require_approval` (annotations may escalate to `redact` or `quarantine`).
 8. The durability classifier chooses the commit protocol:
    - protected/mutating/approval/control action: synchronous transaction and receipt;
    - low-risk read-only action: decision response plus bounded asynchronous evidence, according to policy.
@@ -236,7 +237,7 @@ sequenceDiagram
     S->>C: Load one immutable generation
     S->>S: Normalize + canonicalize + hash
     S->>P: Evaluate facts from same generation
-    P-->>S: allow / deny / require_approval
+    P-->>S: allow / deny / require_approval / redact / quarantine
     alt Protected action
         S->>D: Atomic decision + approval? + receipt append
         D-->>S: Committed receipt

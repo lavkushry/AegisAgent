@@ -110,7 +110,7 @@ The detection / correlation / response pipeline is strictly asynchronous (`tokio
 
 | Law | Statement |
 |-----|-----------|
-| **Law 1** | Advisory scores (`composite_risk_score`, graph data, incident metadata) are display/audit metadata only — they **never** gate the `allow / deny / require_approval` decision. Cedar and trust-provenance decide. |
+| **Law 1** | Advisory scores (`composite_risk_score`, graph data, incident metadata) are display/audit metadata only — they **never** gate the authorize decision (`allow` / `deny` / `require_approval` / `redact` / `quarantine`). Cedar and trust-provenance decide. |
 | **Law 2** | Only one LLM exists in the system: the post-incident RCA narrator. It is sandboxed, has no tools or enforcement authority, and receives evidence as inert structured data only. All triage, correlation, and response are deterministic code. |
 | **Law 3** | SOC processing is always out-of-band. An SOC outage degrades monitoring; it can never make the action path fail-open. |
 | **Law 4** | Every agent containment action (freeze / revoke / quarantine) is tenant-scoped, authenticated, audited, and reversible. |

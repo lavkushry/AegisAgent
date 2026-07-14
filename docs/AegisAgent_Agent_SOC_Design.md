@@ -113,7 +113,7 @@ a real SOC Console UI, and Phase 7 agentless ingestion + baselining (#1187, #119
 
 ```
 INLINE  PLANE  (synchronous, <75 ms, ALREADY BUILT)
-  SDK @protect_tool ─► POST /v1/authorize ─► Cedar ─► allow | deny | require_approval | quarantine | log_only
+  SDK @protect_tool ─► POST /v1/authorize ─► run_authorize_pipeline ─► allow | deny | require_approval | redact | quarantine
         │  freezes action_hash · binds approval · consumes single-use · emits receipt
         ▼
   ── emit Agent Security Event (fire-and-forget, tokio::mpsc) ──┐
@@ -275,7 +275,7 @@ into a stream event and **enriches** the new signals (`data_access`, `destinatio
 ```
 user task → agent run → @protect_tool emits tool_call_proposed → Collector (auth + tenant + validate)
 → Analysis Engine enriches (identity, tool meta, MCP trust, provenance, sensitivity)
-→ Cedar decides allow|deny|require_approval|quarantine|log_only
+→ pipeline/Cedar decides allow|deny|require_approval|redact|quarantine
 → Response Engine acts if needed → ASE + decision indexed + receipt chained → Console timeline
 ```
 
@@ -414,7 +414,8 @@ This is the single biggest thing Wazuh has no equivalent of — lean on it.
 ## 13. Policy & decision model
 
 **Engine:** Cedar, in-process, fail-closed (no matching permit ⇒ deny). Decision space (already in
-`AuthorizeResponse.decision`): `allow · deny · require_approval · quarantine · log_only`.
+`AuthorizeResponse.decision`): `allow · deny · require_approval · redact · quarantine`
+(plus synthetic deny markers such as `agent_frozen` via `matched_policies`).
 
 ```
 ASE → normalize → enrich → Cedar evaluate (deterministic)
