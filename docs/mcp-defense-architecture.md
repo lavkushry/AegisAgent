@@ -3,7 +3,7 @@
 **Issue:** [#1338](https://github.com/lavkushry/AegisAgent/issues/1338)
 **Read first (general trust boundaries):** [`security-model.md`](security-model.md), specifically boundary **B5** (Gateway → External Tool / MCP Server).
 
-This document describes how AegisAgent treats the Model Context Protocol (MCP) as an untrusted-supply-chain surface: every MCP server is registered, every tool it advertises is pinned to a hashed manifest, drift is detected and auto-contained, and unknown or unapproved tools fail closed. There is no separate "MCP proxy" process — MCP defense is built directly into the gateway's `/v1/authorize` hot path and the `mcp_servers`/`mcp_tools` tables (`lib/storage/src/db/mcp.rs`, `src/src/routes/mcp.rs`, `src/src/routes/authorize.rs`).
+This document describes how AegisAgent treats the Model Context Protocol (MCP) as an untrusted-supply-chain surface: every MCP server is registered, every tool it advertises is pinned to a hashed manifest, drift is detected and auto-contained, and unknown or unapproved tools fail closed. There is no separate "MCP proxy" process — MCP defense is built into the authorize pipeline (`lib/decision` metadata/evaluate stages + host ports) and the `mcp_servers`/`mcp_tools` tables (`lib/storage/src/db/mcp.rs`, `src/src/routes/mcp.rs`).
 
 ---
 

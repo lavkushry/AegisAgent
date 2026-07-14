@@ -58,7 +58,7 @@ ASYNC SOC PLANE (out-of-band — the monitoring/response plane)
 
 Decision and enforcement are separated (Cedar model). Two crucial structural facts:
 1. **The SDK is inside the trust boundary** and performs the final fail-closed check, so a compromised agent process cannot execute an unapproved action even if it reaches the gateway's approval.
-2. **The SOC is a strictly asynchronous consumer.** The authorize handler emits an event after deciding; emission is fire-and-forget. The SOC can be slow, restart, or fail entirely — the action path is unaffected (Design Law 3).
+2. **The SOC is a strictly asynchronous consumer.** The authorize pipeline emits an event after deciding (via host ports); emission is fire-and-forget. The SOC can be slow, restart, or fail entirely — the action path is unaffected (Design Law 3).
 
 ---
 
@@ -102,7 +102,7 @@ Authenticates SDK requests; resolves tenant/agent/user/session; normalizes the t
 
 **Canonical action.** `{tool, action, resource, mutates_state, parameters}` serialized with a deterministic scheme so the Go, TS, and Python SDKs and the Rust gateway produce identical bytes (now verified byte-identical via the shared corpus). `action_hash = SHA-256(canonical_action)`.
 
-> **Implemented (scheme `aegis-jcs-1`):** keys sorted by Unicode code point, compact separators, **raw UTF-8 (no `\uXXXX`)**, `null` for absent resource, reject non-finite floats. Locked by [`tests/canonical_action_vectors.json`](https://github.com/lavkushry/AegisAgent/blob/main/tests/canonical_action_vectors.json), asserted by Python, Go, TypeScript, and Rust tests (`src/src/routes/authorize.rs::canonical_action_matches_shared_corpus`) — byte-equality across languages guaranteed transitively.
+> **Implemented (scheme `aegis-jcs-1`):** keys sorted by Unicode code point, compact separators, **raw UTF-8 (no `\uXXXX`)**, `null` for absent resource, reject non-finite floats. Locked by [`tests/canonical_action_vectors.json`](https://github.com/lavkushry/AegisAgent/blob/main/tests/canonical_action_vectors.json), asserted by Python, Go, TypeScript, and Rust tests (`src/src/routes/authorize_tests.rs::canonical_action_matches_shared_corpus`) — byte-equality across languages guaranteed transitively.
 
 **Binding.** On `require_approval`, the gateway persists an approval row bound to `action_hash`, the canonical action, approver group, and expiry. The Slack/dashboard card renders the canonical action so the human approves *that*.
 

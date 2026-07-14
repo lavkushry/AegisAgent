@@ -456,6 +456,13 @@ A request reads exactly one generation. Mixing agent facts from generation `g` w
 
 ## 7. Typed authorization service
 
+**Current (transitional):** `aegis-decision::run_authorize_pipeline` implements
+the fixed sequence below behind `DecisionRuntime` ports. Gateway adapters
+(`authorize_service`, `decision_runtime`, thin REST/gRPC) only authenticate,
+call the pipeline, and map `DecisionOutcome`. The trait shape below is the
+**target** hot-path API (reactor-owned, generation-bound, binary hashes); the
+current crate still uses async storage ports and string hashes during v1.
+
 ```rust
 pub trait AuthorizeService {
     fn authorize(

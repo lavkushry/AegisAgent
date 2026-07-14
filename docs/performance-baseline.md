@@ -16,9 +16,8 @@ against a real (tempfile) SQLite pool with all migrations applied — no mocks.
 
 To make this possible, the gateway crate was split into a thin `src/lib.rs`
 (re-exporting `routes`, `db`, `policy`, etc. as `pub mod`s) with `src/main.rs`
-as a binary that depends on it. A new `pub mod benchutil` in
-`src/src/routes/authorize.rs` (outside `#[cfg(test)]`, so it's available to
-`cargo bench`) provides:
+as a binary that depends on it. A new `pub mod benchutil` in `src/src/routes/mod.rs` (outside `#[cfg(test)]`,
+so it's available to `cargo bench`) provides:
 
 - `setup_bench_state(db_path)` — builds an `AppState` against a fresh SQLite
   file, registers a tenant + one "bench agent" (the one that authenticates
@@ -181,8 +180,16 @@ real regressions — this PR establishes the mechanism and a starting point.
 `cargo-flamegraph` / `perf` require kernel capabilities (`perf_event_open`)
 not available in this sandbox, and there's no `sudo` to install them. Per the
 issue's guidance, this section is a **code-reading analysis** of the hot path
-as a substitute, with `src/src/routes/authorize.rs` line references for
-`authorize_action` (starts at line 1682):
+as a substitute. The live path is:
+
+```text
+authorize_action (thin REST)
+  → AuthorizeContext
+  → GatewayDecisionRuntime (host ports)
+  → aegis_decision::run_authorize_pipeline
+       admit → preflight → guard → metadata → evaluate
+  → DecisionOutcome → wire map
+```
 
 To generate a real flame graph later, run on a machine with `perf`:
 ```bash
@@ -192,54 +199,36 @@ cargo flamegraph --bench authorize_benchmark -p gateway
 
 ### Hot path breakdown (allow, non-mutating, no approval)
 
-1. **Agent token lookup** — `db::get_agent_by_token` (`authorize.rs`). One
-   SQLite read (`SELECT ... FROM agents WHERE tenant_id = ? AND agent_token =
-   ?`), hashing the bearer token with SHA-256 first (`db::hash_token`).
-   Expected to be the first significant cost: SHA-256 over a short token is
-   cheap (microseconds); the indexed SQLite lookup is the dominant cost here.
-2. **Idempotency check** — `db::get_decision_by_request_id` (`routes.rs:1746`)
-   — only runs if the caller supplied `request_id`; **skipped** in the
-   benchmarked request (no `request_id`).
-3. **Heartbeat write** — `db::touch_agent_last_seen` (`routes.rs:1764`) — a
-   best-effort `UPDATE agents SET last_seen_at = ?`, errors ignored
-   (`let _ =`). One SQLite write on every call.
-4. **Rate limit / quota checks** — `state.rate_limiter.check_rate_limit`
-   (`routes.rs:1767`) and `state.quota_manager.check_quota` (`routes.rs:1776`)
-   — in-memory token-bucket checks (`RateLimiter`/`QuotaManager` in
-   `routes.rs`), no I/O. Negligible cost.
-5. **Agent status check** — in-memory string comparison against the
-   already-fetched `agent` record (`routes.rs:1785`). Negligible.
-6. **Skill/tool resolution** — `db::get_skill_action` (`routes.rs:1853`, via
-   `state.skill_cache` — `SkillActionCache`, a read-through cache) or, for MCP
-   tools, `db::get_mcp_server_by_key` / `db::get_mcp_tool_by_key`
-   (`routes.rs:1896`, `1957`). For the benchmarked non-MCP `filesystem` tool,
-   this is a cached lookup (cache hit after the first iteration) or a single
-   indexed SQLite read on a cache miss.
-7. **Cedar policy evaluation** — `state.policy_engine.authorize`
-   (`routes.rs:2081`), via `cedar-policy`'s in-process evaluator over
-   `policies.cedar`. Pure CPU, no I/O; expected to be on the order of tens of
-   microseconds for this small policy set (per the
-   `cedar_policy_authoring.md` skill's <75ms evaluation budget — we're far
-   under that).
-8. **Decision + audit write** — `write_decision_and_audit` (`routes.rs:2166`,
-   defined at `routes.rs:859`) — one `INSERT INTO decisions` + one
-   `INSERT INTO audit_events`. This is almost certainly the single largest
-   contributor to the ~6.7ms mean: two synchronous SQLite writes (WAL mode,
-   but still fsync-bound per the `database_migration.md` skill's
-   `SqliteSynchronous::Normal` setting).
-9. **Receipt emission** — `emit_action_receipt` (`routes.rs:2234`, defined at
-   `routes.rs:674`) — one more `INSERT INTO action_receipts` (hash-chained),
-   another synchronous SQLite write.
-10. **SOC event emission** — `state.events.emit(...)` (`events.rs:87`) — explicitly
-    **non-blocking**: a broadcast `send` (lock-free, drops if no subscribers)
-    plus `mpsc::try_send` (never blocks; drops + logs a warning if the channel
-    is full, per `events.rs:91-99`). Per Agent SOC design law 3 (async,
-    non-blocking event emission), this is **not** on the critical path's
-    latency budget.
+1. **Admit — agent token lookup** — `DecisionRuntime::get_agent_by_token`
+   (storage). One indexed SQLite read after hashing the bearer token
+   (`hash_token`). SHA-256 over a short token is cheap; the DB lookup dominates.
+2. **Preflight — idempotency** — `get_decision_by_request_id` only if
+   `request_id` is present; **skipped** in the benchmarked request.
+3. **Preflight — heartbeat** — `touch_heartbeat` / `touch_agent_last_seen` —
+   best-effort `UPDATE agents SET last_seen_at = ?`. One SQLite write on
+   non-dry-run calls.
+4. **Preflight — rate limit / quota** — in-memory token-bucket checks
+   (`RateLimiter` / `QuotaManager`). No I/O; negligible.
+5. **Guard — agent status / bans** — frozen/revoked/ban/quarantine ports after
+   action-hash binding. Negligible for a healthy agent.
+6. **Metadata — skill/tool resolution** — `skill_action_meta` (read-through
+   skill cache) or MCP server/tool ports. For the benchmarked non-MCP
+   `filesystem` tool, cache hit after warm-up or one indexed SQLite read.
+7. **Evaluate — Cedar** — `evaluate_cedar` via `PolicyEngine` over
+   `policies.cedar`. Pure CPU; tens of microseconds for the default pack.
+8. **Evaluate — decision + audit write** — `write_decision_and_audit` —
+   `INSERT INTO decisions` + audit path. Usually the largest cost: synchronous
+   SQLite writes (WAL, `SqliteSynchronous::Normal`).
+9. **Evaluate — receipt emission** — low-risk non-mutating allow uses
+   **best-effort** receipt emission; protected/mutating paths use **durable**
+   receipt insert (fail-closed on error).
+10. **SOC event emission** — host ports → `EventSink` — explicitly
+    **non-blocking** (`try_send` / broadcast). Per Agent SOC design law 3,
+    this is **not** on the critical path's latency budget.
 
 ### Expected dominant cost
 
-Steps 8 and 9 (two-to-three synchronous SQLite `INSERT`s on the
+Steps 8 and 9 (one-to-three synchronous SQLite writes on the
 decision/audit/receipt tables) are expected to dominate the ~6.7ms mean —
 Cedar evaluation (step 7) and the in-memory checks (steps 4-5) are
 sub-millisecond, and the agent lookup (step 1) and skill-cache lookup (step 6)

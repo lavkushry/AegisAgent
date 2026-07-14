@@ -73,7 +73,7 @@ Authorization compute and protected commit are measured separately. A warm deter
 
 | Capability | Current | Target migration |
 |---|---|---|
-| Authorization | Axum/Tokio + Cedar + SQLx | typed service on pinned decision reactors |
+| Authorization | Thin REST/gRPC → `aegis-decision` pipeline (`DecisionRuntime` ports) + Cedar + SQLx | typed service on pinned decision reactors |
 | APIs | REST JSON plus partial tonic/protobuf | protobuf-first parity; binary fast path; REST compatibility off benchmark path |
 | Control storage | SQLite/PostgreSQL via `StorageBackend` | split transactional `ControlStore`/`ReceiptLog` |
 | Telemetry storage | row tables and JSON/TEXT fields | WAL + Arrow-compatible HCMT SSTables |

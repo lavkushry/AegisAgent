@@ -35,6 +35,17 @@ pub async fn register_agent(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterAgentRequest>,
 ) -> impl IntoResponse {
+    crate::authorize_service::outcome_to_response(
+        register_agent_inner(state, tenant_id, payload).await,
+    )
+}
+
+/// Protocol-neutral agent registration (REST + gRPC).
+pub(crate) async fn register_agent_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    payload: RegisterAgentRequest,
+) -> crate::authorize_service::AuthorizedOutcome {
     // Check if agent already exists
     match state
         .storage
@@ -50,7 +61,9 @@ pub async fn register_agent(
                 Ok(id) => id,
                 Err(e) => {
                     error!("Stored agent id is not a valid UUID: {:?}", e);
-                    return StatusError::internal("Database error").into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::internal("Database error"),
+                    );
                 }
             };
 
@@ -64,22 +77,28 @@ pub async fn register_agent(
                 .await
             {
                 error!("Failed to rotate agent token: {:?}", e);
-                return StatusError::internal("Database error").into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::internal("Database error"),
+                );
             }
 
-            return (
-                StatusCode::OK,
-                Json(RegisterAgentResponse {
-                    id,
-                    agent_key: agent.agent_key,
-                    agent_token: new_token,
-                }),
-            )
-                .into_response();
+            let body = RegisterAgentResponse {
+                id,
+                agent_key: agent.agent_key,
+                agent_token: new_token,
+            };
+            return match serde_json::to_value(&body) {
+                Ok(v) => crate::authorize_service::AuthorizedOutcome::json_ok(v),
+                Err(e) => crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::internal(format!("serialize register response: {e}")),
+                ),
+            };
         }
         Err(e) => {
             error!("Database lookup error: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
         _ => {}
     }
@@ -124,7 +143,9 @@ pub async fn register_agent(
 
     if let Err(e) = state.storage.insert_agent(&agent_record).await {
         error!("Failed to insert agent: {:?}", e);
-        return StatusError::internal("Database insert failed").into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(StatusError::internal(
+            "Database insert failed",
+        ));
     }
 
     // Log audit event
@@ -150,15 +171,17 @@ pub async fn register_agent(
     };
     let _ = state.storage.insert_audit_event(&audit_record).await;
 
-    (
-        StatusCode::CREATED,
-        Json(RegisterAgentResponse {
-            id: agent_id,
-            agent_key: agent_record.agent_key,
-            agent_token,
-        }),
-    )
-        .into_response()
+    let body = RegisterAgentResponse {
+        id: agent_id,
+        agent_key: agent_record.agent_key,
+        agent_token,
+    };
+    match serde_json::to_value(&body) {
+        Ok(v) => crate::authorize_service::AuthorizedOutcome::json_created(v),
+        Err(e) => crate::authorize_service::AuthorizedOutcome::status_error(StatusError::internal(
+            format!("serialize register response: {e}"),
+        )),
+    }
 }
 
 /// GET /v1/agents — list agents for the authenticated tenant.
@@ -1836,7 +1859,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_before.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp_before.status, StatusCode::UNAUTHORIZED);
 
         // Restore the agent.
         let restore_resp = restore_agent(
@@ -1863,7 +1886,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_after.status(), StatusCode::OK);
+        assert_eq!(resp_after.status, StatusCode::OK);
     }
 
     // ── #1295: Auto-Rotate Leaked Agent Token ───────────────────────────────
@@ -1904,7 +1927,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_old.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp_old.status, StatusCode::UNAUTHORIZED);
 
         // New token works.
         let req2 = mcp_authorize_request("filesystem", "read_file");
@@ -1915,7 +1938,7 @@ mod tests {
             test_conn_info(),
         )
         .await;
-        assert_eq!(resp_new.status(), StatusCode::OK);
+        assert_eq!(resp_new.status, StatusCode::OK);
 
         // Audit event recorded.
         let events = state

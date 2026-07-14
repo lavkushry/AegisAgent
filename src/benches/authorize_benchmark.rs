@@ -1,7 +1,9 @@
 //! TASK-1313: end-to-end criterion benchmark for `POST /v1/authorize`.
 //!
-//! This benchmarks the real `gateway::routes::authorize_action` handler
-//! in-process against a real (tempfile) SQLite pool with migrations applied,
+//! This benchmarks the real thin REST adapter (`authorize_action` →
+//! `AuthorizeContext` → `aegis_decision::run_authorize_pipeline` via
+//! `GatewayDecisionRuntime`) in-process against a real (tempfile) SQLite pool
+//! with migrations applied,
 //! seeded with:
 //!   - 1 primary "bench agent" (the one authenticating each request),
 //!   - 100 additional registered agents (TASK-1313 implementation note: "100
@@ -108,18 +110,16 @@ fn authorize_allow_benchmark(c: &mut Criterion) {
             let request = benchutil::allow_authorize_request();
             async move {
                 let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
-                let response = routes::authorize_action_impl(
+                let outcome = routes::authorize_action_impl(
                     state,
                     headers,
                     body,
                     std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
                 )
                 .await;
-                // Force evaluation of the response (criterion's async iter
-                // already awaits it, but `into_response()` mirrors what Axum
-                // does on the wire and avoids the compiler optimizing away
-                // unused work).
-                let _ = axum::response::IntoResponse::into_response(response);
+                // Force evaluation of the wire mapping (criterion's async iter
+                // already awaits the outcome; mapping mirrors the REST adapter).
+                let _ = gateway::authorize_service::outcome_to_response(outcome);
             }
         });
     });
@@ -263,14 +263,14 @@ fn authorize_mcp_allow_benchmark(c: &mut Criterion) {
             let request = warm_request.clone();
             async move {
                 let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
-                let response = routes::authorize_action_impl(
+                let outcome = routes::authorize_action_impl(
                     state,
                     headers,
                     body,
                     std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
                 )
                 .await;
-                let _ = axum::response::IntoResponse::into_response(response);
+                let _ = gateway::authorize_service::outcome_to_response(outcome);
             }
         });
     });
@@ -288,14 +288,14 @@ fn authorize_mcp_allow_benchmark(c: &mut Criterion) {
                 state.mcp_server_cache.invalidate(&server_cache_key);
                 state.mcp_tool_cache.invalidate(&tool_cache_key);
                 let body = axum::body::Bytes::from(serde_json::to_vec(&request).unwrap());
-                let response = routes::authorize_action_impl(
+                let outcome = routes::authorize_action_impl(
                     state,
                     headers,
                     body,
                     std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
                 )
                 .await;
-                let _ = axum::response::IntoResponse::into_response(response);
+                let _ = gateway::authorize_service::outcome_to_response(outcome);
             }
         });
     });

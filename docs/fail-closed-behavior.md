@@ -86,7 +86,8 @@ Each row above is backed by tests in `src/src/routes/` (Rust gateway,
   `sdk-python/tests/test_async_protect_tool.py::test_deny_raises_permission_error`,
   `test_deny_not_executed`.
 - **Approval expiry** —
-  `src/src/routes/authorize.rs::approval_is_expired_detects_past_window`,
+  `src/src/routes/authorize_tests.rs` (and approval route tests):
+  `approval_is_expired_detects_past_window`,
   `consume_approval_rejects_expired_approval`,
   `approve_approval_expired_response_includes_reason_field`,
   `reject_approval_rejects_expired_approval`,
@@ -94,25 +95,28 @@ Each row above is backed by tests in `src/src/routes/` (Rust gateway,
   `expired_approval_is_reported_and_cannot_be_approved`;
   `sdk-python/tests/test_approval_expiry.py::test_approved_but_expired_fails_closed`.
 - **Approval hash mismatch (approve-then-swap)** —
-  `src/src/routes/authorize.rs::hash_mismatch_on_consume_increments_counter`,
+  `src/src/routes/authorize_tests.rs::hash_mismatch_on_consume_increments_counter`,
   `replay_consume_emits_tamper_receipt`, `approve_expired_emits_tamper_receipt`;
   `sdk-python/tests/test_sdk.py::test_approval_hash_mismatch_fails_closed`,
   `sdk-python/tests/test_async_protect_tool.py::test_approval_hash_mismatch_fails_closed`.
 - **Single-use / replay** —
-  `src/src/routes/authorize.rs::consume_is_single_use`,
+  `src/src/routes/authorize_tests.rs::consume_is_single_use`,
   `consume_approval_concurrent_race_only_one_succeeds`,
   `consume_approval_returns_bound_action_hash`,
   `edit_approval_rejects_if_already_consumed`,
   `replay_consume_emits_replay_attempt_security_event`.
 - **Unknown MCP tool / server** —
-  `src/src/routes/authorize.rs::authorize_denies_unknown_mcp_tools_by_default`,
-  `authorize_denies_unknown_mcp_tool_with_encoded_or_cased_identifier`.
+  `src/src/routes/authorize_tests.rs::authorize_denies_unknown_mcp_tools_by_default`,
+  `authorize_denies_unknown_mcp_tool_with_encoded_or_cased_identifier`;
+  also `lib/decision` pipeline/metadata e2e for MCP fail-closed defaults.
 - **Frozen / revoked agent** —
-  `src/src/routes/authorize.rs::authorize_action_denies_frozen_and_revoked_agent`,
-  `revoke_agent_sets_status_to_revoked`.
+  `src/src/routes/authorize_tests.rs::authorize_action_denies_frozen_and_revoked_agent`,
+  `revoke_agent_sets_status_to_revoked`;
+  also `lib/decision` pipeline/guard tests for frozen/revoked.
 - **Trust-provenance gating** —
-  Cedar policy tests in `src/src/routes/authorize.rs` (untrusted/malicious →
-  `forbid`; semi-trusted/unknown → `require_approval` for mutating actions).
+  Cedar/policy tests and `lib/decision` evaluate provenance metrics
+  (untrusted/malicious → `forbid`; semi-trusted/unknown → `require_approval` for
+  mutating actions).
 - **Slack callback signature / replay / tamper** —
   `src/src/routes/approval.rs::slack_callback_rejects_stale_timestamp_with_401`,
   `slack_callback_rejects_invalid_signature_with_401`,

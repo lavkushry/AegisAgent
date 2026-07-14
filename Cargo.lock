@@ -77,6 +77,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-decision"
+version = "0.1.0"
+dependencies = [
+ "aegis-api",
+ "aegis-common",
+ "aegis-policy",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "aegis-egress"
 version = "0.1.0"
 dependencies = [
@@ -2464,12 +2481,14 @@ dependencies = [
  "aegis-api",
  "aegis-canon",
  "aegis-common",
+ "aegis-decision",
  "aegis-egress",
  "aegis-policy",
  "aegis-soc",
  "aegis-storage",
  "aegis-tool-broker-connectors",
  "aegis-tool-broker-core",
+ "async-trait",
  "aws-config",
  "aws-sdk-kms",
  "axum",

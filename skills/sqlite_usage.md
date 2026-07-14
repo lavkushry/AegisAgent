@@ -1,8 +1,8 @@
 ---
 globs:
-  - "gateway/src/db.rs"
   - "lib/storage/**/*.rs"
-  - "gateway/migrations/**/*"
+  - "lib/storage/**/*.rs"
+  - "lib/storage/migrations/**/*"
 ---
 
 # AI Skill: SQLite Database Usage & SQLx (`skills/sqlite_usage.md`)

@@ -253,7 +253,9 @@ pub struct ApprovalResponseInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizeResponse {
     pub decision_id: Uuid,
-    pub decision: String, // allow, deny, require_approval, quarantine, redact, log_only
+    /// Common values: `allow`, `deny`, `require_approval`, `redact`, `quarantine`.
+    /// Unknown strings: SDKs fail closed (do not execute).
+    pub decision: String,
     pub risk_score: i32,
     pub risk_level: String,
     /// Advisory composite risk score (#1289), `0..=100`. Display metadata

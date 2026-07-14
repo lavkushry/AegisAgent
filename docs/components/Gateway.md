@@ -33,7 +33,7 @@ The same Rust process serves REST through Axum on port `8080` and gRPC through t
 | ELI5 | The gateway is a safety guard that checks an agent before the agent presses a real button. |
 | Beginner | It authenticates the caller, checks policy, returns allow/deny/approval, and records evidence. |
 | Intermediate | It canonicalizes the tool call, propagates source trust, evaluates Cedar, persists tenant-scoped records, and emits asynchronous SOC events. |
-| Advanced | Protocol adapters share a trait-backed storage and policy service path; deterministic gates decide while advisory scores never gate. |
+| Advanced | Thin REST/gRPC adapters build `AuthorizeContext`, call `aegis-decision::run_authorize_pipeline` (host `DecisionRuntime` ports), and map `DecisionOutcome`; deterministic gates decide while advisory scores never gate. |
 | Production | Probes, metrics, tracing, bounded queues, load shedding, TLS/mTLS, graceful draining, and durable protected-action receipts make the control point operable. |
 
 ## Why This Exists
@@ -490,30 +490,36 @@ The adapter returns JSON or protobuf. The cooperating SDK interprets deny and ap
 The following abridged Rust shape illustrates the required handler boundary. It is explanatory pseudocode; use the current source links in [References](#references) for the implementation.
 
 ```rust
-pub async fn authorize(
+pub async fn authorize_action_impl(
     state: Arc<AppState>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<AuthorizeResponse, AegisError> {
-    let request = parse_authorize_request(&body)?;
-    let identity = authenticate_and_bind_tenant(&state, &headers).await?;
-    let decision = authorize_service(&state, &identity, request).await?;
-    Ok(decision)
+    client_addr: SocketAddr,
+) -> AuthorizedOutcome {
+    let ctx = authorize_context_from_headers(&headers, client_addr)?;
+    let runtime = GatewayDecisionRuntime::new(state.clone());
+    let outcome = run_authorize_pipeline(
+        &runtime,
+        &ctx,
+        &body,
+        Instant::now(),
+        EvaluateConfig { approval_ttl_secs: state.approval_ttl_secs },
+    )
+    .await;
+    decision_outcome_to_authorized(outcome)
 }
 ```
 
 Line by line:
 
-1. `state: Arc<AppState>` shares immutable handles to storage, policy, events, and metrics across concurrent requests.
-2. `headers` carries authentication and tenant context; it is not treated as valid until server-side verification succeeds.
-3. `body: Bytes` permits body-limit middleware and explicit parsing before domain work.
-4. `Result<..., AegisError>` preserves one shared error vocabulary; REST and gRPC convert it at the boundary.
-5. `parse_authorize_request` validates the wire payload.
-6. `authenticate_and_bind_tenant` establishes the tenant before any tenant-owned lookup.
-7. `authorize_service` owns the deterministic business path; the adapter does not contain SQL or Cedar rules.
-8. `Ok(decision)` returns the shared response model for protocol serialization.
+1. `state: Arc<AppState>` shares storage, policy, events, and metrics across concurrent requests.
+2. `headers` plus `client_addr` become a typed `AuthorizeContext` (tenant + credential) at the edge.
+3. `body: Bytes` is the signed REST payload; body-limit middleware applies before domain work.
+4. `GatewayDecisionRuntime` implements host ports (storage, Cedar, SOC, receipts) for `aegis-decision`.
+5. `run_authorize_pipeline` owns admit → preflight → guard → metadata → evaluate (no SQL/Cedar in the handler).
+6. `decision_outcome_to_authorized` maps the library outcome to REST/gRPC wire forms only.
 
-The real gRPC adapter maps generated protobuf types to the same REST/internal request model and invokes the shared authorization implementation. New API fields begin in `lib/api/proto/*.proto`, then receive a REST mirror where necessary.
+The gRPC adapter builds the same `AuthorizeContext` from metadata/`remote_addr`, calls `GatewayAuthorizeService::evaluate`, and maps via `outcome_to_tonic`. New API fields begin in `lib/api/proto/*.proto`, then receive a REST mirror where necessary.
 
 ## Live Example
 

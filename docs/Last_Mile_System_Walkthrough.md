@@ -54,7 +54,7 @@ That decorator (`sdk-python/aegisagent/decorator.py`) is the whole integration. 
 action_hash = SHA-256(canonical_bytes)
 ```
 
-**8. The SDK asks permission:** `POST /v1/authorize` (`src/src/routes/authorize.rs`) with the frozen action, its hash, and context. The gateway authenticates the tenant, checks the agent isn't frozen/quarantined/revoked, normalizes the tool identifier (so `Merge_PR` and `merge%5Fpr` can't dodge the registry), and evaluates Cedar with the trust context.
+**8. The SDK asks permission:** `POST /v1/authorize` (thin `routes/authorize.rs` → `aegis-decision::run_authorize_pipeline`) with the frozen action, its hash, and context. The pipeline authenticates the tenant, checks the agent isn't frozen/quarantined/revoked, normalizes the tool identifier (so `Merge_PR` and `merge%5Fpr` can't dodge the registry), and evaluates Cedar with the trust context.
 
 **9. Decision: the trigger was `untrusted_external` and the action mutates state → `deny`.** The SDK raises `AegisAuthorizationDenied`; `merge_pr` never executes. A decision row, an audit event, and a hash-chained **receipt** are written; an async SOC event is emitted (`lib/soc/src/events.rs`). The attack is now *evidence*.
 

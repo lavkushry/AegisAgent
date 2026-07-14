@@ -49,7 +49,7 @@ sequenceDiagram
 
 ## Related code
 
-`sdk-python/aegisagent/decorator.py` · `src/src/routes/authorize.rs` · `lib/policy/src/cedar.rs` · `src/src/routes/approval.rs` · `src/src/routes/receipts.rs` · `lib/soc/src/detect.rs`
+`sdk-python/aegisagent/decorator.py` · `lib/decision/` · thin `routes/authorize.rs` · `lib/policy/src/cedar.rs` · `src/src/routes/approval.rs` · `src/src/routes/receipts.rs` · `lib/soc/src/detect.rs`
 
 ## Current status
 

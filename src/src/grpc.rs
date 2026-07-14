@@ -22,8 +22,6 @@ use aegis_api::grpc::aegis::{
     SilenceItem, SocDashboardItem, SocQueryRequest as GrpcSocQueryRequest, SocQueryResponse,
     UpdateSocDashboardRequest, UpdateSocDashboardResponse,
 };
-use axum::http::HeaderMap;
-use axum::response::IntoResponse;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -158,44 +156,67 @@ impl AegisService for AegisGrpcServiceImpl {
         &self,
         request: Request<AuthorizeRequest>,
     ) -> Result<Response<AuthorizeResponse>, Status> {
-        let mut headers = HeaderMap::new();
-        if let Some(auth_val) = request.metadata().get("authorization") {
-            if let Ok(val) = axum::http::HeaderValue::from_bytes(auth_val.as_bytes()) {
-                headers.insert(axum::http::header::AUTHORIZATION, val);
-            }
-        }
+        // architecture.md §5: parse/auth → typed service → map Status.
+        // GatewayAuthorizeService::evaluate returns AuthorizedOutcome; adapter
+        // never buffers an Axum body.
+        use crate::authorize_service::{
+            outcome_to_tonic, AuthCredential, AuthorizeContext, GatewayAuthorizeService, Transport,
+        };
+
+        let client_addr = request
+            .remote_addr()
+            .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
+
+        let metadata = request.metadata();
+        let bearer = metadata
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim())
+            .and_then(|s| {
+                s.strip_prefix("Bearer ")
+                    .or_else(|| s.strip_prefix("bearer "))
+                    .map(|t| t.to_string())
+            });
+        let mtls_cn = metadata
+            .get("x-aegis-mtls-cn")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let request_signature = metadata
+            .get("x-aegis-request-signature")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        let credential = if let Some(cn) = mtls_cn {
+            AuthCredential::MtlsCn(cn)
+        } else if let Some(token) = bearer {
+            AuthCredential::BearerToken(token)
+        } else {
+            return Err(Status::unauthenticated(
+                "Missing agent token (authorization metadata) or mTLS CN",
+            ));
+        };
 
         let req = request.into_inner();
-        if !req.tenant_id.is_empty() {
-            if let Ok(val) = axum::http::HeaderValue::from_str(&req.tenant_id) {
-                headers.insert("X-Aegis-Tenant-ID", val);
-            }
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "Missing tenant_id on AuthorizeRequest",
+            ));
         }
+
+        let ctx = AuthorizeContext::new(
+            req.tenant_id.clone(),
+            client_addr,
+            Transport::Grpc,
+            credential,
+        )
+        .with_request_signature(request_signature);
 
         let rest_req = map_authorize_request(req);
-        let body_bytes = serde_json::to_vec(&rest_req).unwrap_or_default();
-
-        let response = crate::routes::authorize_action_impl(
-            self._state.clone(),
-            headers,
-            axum::body::Bytes::from(body_bytes),
-            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
-        )
-        .await;
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK && status != axum::http::StatusCode::CREATED {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let res: crate::models::AuthorizeResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
-
+        let service = GatewayAuthorizeService::new(self._state.clone());
+        let outcome = service.evaluate(ctx, &rest_req).await;
+        let res = outcome_to_tonic(outcome)?;
         Ok(Response::new(map_authorize_response(res)))
     }
 
@@ -203,14 +224,12 @@ impl AegisService for AegisGrpcServiceImpl {
         &self,
         request: Request<RegisterAgentRequest>,
     ) -> Result<Response<RegisterAgentResponse>, Status> {
-        let mut headers = HeaderMap::new();
-        if let Some(auth_val) = request.metadata().get("authorization") {
-            if let Ok(val) = axum::http::HeaderValue::from_bytes(auth_val.as_bytes()) {
-                headers.insert(axum::http::header::AUTHORIZATION, val);
-            }
-        }
+        use crate::authorize_service::outcome_to_tonic_json;
 
         let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
+        }
         let rest_req = crate::models::RegisterAgentRequest {
             agent_key: req.agent_key,
             name: req.name,
@@ -249,26 +268,13 @@ impl AegisService for AegisGrpcServiceImpl {
             },
         };
 
-        let response = crate::routes::register_agent(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::Json(rest_req),
-        )
-        .await
-        .into_response();
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK && status != axum::http::StatusCode::CREATED {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let res: crate::models::RegisterAgentResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        let outcome =
+            crate::routes::register_agent_inner(self._state.clone(), req.tenant_id, rest_req).await;
+        let value = outcome_to_tonic_json(outcome)?;
+        let res: crate::models::RegisterAgentResponse =
+            serde_json::from_value(value).map_err(|e| {
+                Status::internal(format!("Failed to parse register_agent response: {e}"))
+            })?;
 
         Ok(Response::new(RegisterAgentResponse {
             id: res.id.to_string(),
@@ -280,6 +286,8 @@ impl AegisService for AegisGrpcServiceImpl {
         &self,
         request: Request<ApproveRequest>,
     ) -> Result<Response<ApproveResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
         let payload = crate::models::ApproveRequest {
             approver_user_id: req.approver_user_id,
@@ -295,7 +303,7 @@ impl AegisService for AegisGrpcServiceImpl {
             Err(_) => return Err(Status::invalid_argument("Invalid approval_id UUID")),
         };
 
-        let response = crate::routes::approve_approval_inner(
+        let outcome = crate::routes::approve_approval_inner(
             self._state.clone(),
             req.tenant_id,
             approval_uuid,
@@ -303,21 +311,12 @@ impl AegisService for AegisGrpcServiceImpl {
         )
         .await;
 
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let res: serde_json::Value = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
-
-        let status_str = res["status"].as_str().unwrap_or_default().to_string();
-        let approval_id_str = res["approval_id"].as_str().unwrap_or_default().to_string();
+        let value = outcome_to_tonic_json(outcome)?;
+        let status_str = value["status"].as_str().unwrap_or_default().to_string();
+        let approval_id_str = value["approval_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
 
         Ok(Response::new(ApproveResponse {
             status: status_str,
@@ -342,6 +341,8 @@ impl AdminService for AdminGrpcServiceImpl {
         &self,
         request: Request<CreateTenantRequest>,
     ) -> Result<Response<CreateTenantResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
         let payload = crate::models::CreateTenantRequest {
             id: req.id,
@@ -349,25 +350,11 @@ impl AdminService for AdminGrpcServiceImpl {
             plan: req.plan,
         };
 
-        let response = crate::routes::create_tenant(
-            axum::extract::State(self._state.clone()),
-            axum::Json(payload),
-        )
-        .await
-        .into_response();
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::CREATED {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let res: crate::models::TenantRecord = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        let outcome = crate::routes::create_tenant_inner(self._state.clone(), payload).await;
+        let value = outcome_to_tonic_json(outcome)?;
+        let res: crate::models::TenantRecord = serde_json::from_value(value).map_err(|e| {
+            Status::internal(format!("Failed to parse create_tenant response: {e}"))
+        })?;
 
         Ok(Response::new(CreateTenantResponse {
             id: res.id,
@@ -381,7 +368,12 @@ impl AdminService for AdminGrpcServiceImpl {
         &self,
         request: Request<RegisterMcpServerRequest>,
     ) -> Result<Response<RegisterMcpServerResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
+        }
         let payload = crate::models::RegisterMcpServerRequest {
             server_key: req.server_key,
             name: req.name,
@@ -406,26 +398,12 @@ impl AdminService for AdminGrpcServiceImpl {
             manifest_signing_public_key: None,
         };
 
-        let response = crate::routes::register_mcp_server(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::Json(payload),
-        )
-        .await
-        .into_response();
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::CREATED {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let res: crate::models::RegisterMcpServerResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        let outcome =
+            crate::routes::register_mcp_server_inner(self._state.clone(), req.tenant_id, payload)
+                .await;
+        let value = outcome_to_tonic_json(outcome)?;
+        let res: crate::models::RegisterMcpServerResponse = serde_json::from_value(value)
+            .map_err(|e| Status::internal(format!("Failed to parse register_mcp_server: {e}")))?;
 
         Ok(Response::new(RegisterMcpServerResponse {
             server_id: res.server_id,
@@ -438,7 +416,15 @@ impl AdminService for AdminGrpcServiceImpl {
         &self,
         request: Request<DiscoverMcpToolsRequest>,
     ) -> Result<Response<DiscoverMcpToolsResponse>, Status> {
+        use crate::authorize_service::outcome_to_tonic_json;
+
         let req = request.into_inner();
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
+        }
+        if req.server_key.is_empty() {
+            return Err(Status::invalid_argument("Missing server_key"));
+        }
         let payload = crate::models::DiscoverMcpToolsRequest {
             tools: req
                 .tools
@@ -470,27 +456,14 @@ impl AdminService for AdminGrpcServiceImpl {
             manifest_signature: None,
         };
 
-        let response = crate::routes::discover_mcp_tools(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::extract::Path(req.server_key),
-            axum::Json(payload),
+        let outcome = crate::routes::discover_mcp_tools_inner(
+            self._state.clone(),
+            req.tenant_id,
+            req.server_key,
+            payload,
         )
-        .await
-        .into_response();
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
-        }
-
-        let json_val: serde_json::Value = serde_json::from_slice(&body_bytes)
-            .map_err(|e| Status::internal(format!("Failed to parse response JSON: {}", e)))?;
+        .await;
+        let json_val = outcome_to_tonic_json(outcome)?;
 
         let tools_array = json_val["tools"]
             .as_array()
@@ -570,29 +543,10 @@ impl SocService for SocGrpcServiceImpl {
             cursor: req.cursor,
         };
 
-        let response = crate::routes::soc_query(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::Json(rest_request),
-        )
-        .await
-        .into_response();
-        let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|error| Status::internal(error.to_string()))?;
-
-        if !status.is_success() {
-            let message = String::from_utf8_lossy(&body).into_owned();
-            return if status == axum::http::StatusCode::BAD_REQUEST {
-                Err(Status::invalid_argument(message))
-            } else {
-                Err(Status::internal(message))
-            };
-        }
-
-        let result_json = String::from_utf8(body.to_vec())
-            .map_err(|_| Status::internal("SOC query returned non-UTF-8 JSON"))?;
+        let outcome =
+            crate::routes::soc_query_inner(self._state.clone(), req.tenant_id, rest_request).await;
+        let value = crate::authorize_service::outcome_to_tonic_json(outcome)?;
+        let result_json = value.to_string();
         Ok(Response::new(SocQueryResponse { result_json }))
     }
 
@@ -644,7 +598,7 @@ impl SocService for SocGrpcServiceImpl {
                     next_cursor: next_cursor.map(|c| c.to_string()).unwrap_or_default(),
                 }))
             }
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -701,7 +655,7 @@ impl SocService for SocGrpcServiceImpl {
                     next_cursor: next_cursor.map(|c| c.to_string()).unwrap_or_default(),
                 }))
             }
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -710,24 +664,20 @@ impl SocService for SocGrpcServiceImpl {
         request: Request<CloseIncidentRequest>,
     ) -> Result<Response<CloseIncidentResponse>, Status> {
         let req = request.into_inner();
-
-        let response = crate::routes::close_incident(
-            axum::extract::State(self._state.clone()),
-            crate::routes::TenantId(req.tenant_id),
-            axum::extract::Path(req.incident_id.clone()),
-        )
-        .await
-        .into_response();
-
-        let status = response.status();
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        if status != axum::http::StatusCode::OK {
-            let err_msg = String::from_utf8_lossy(&body_bytes).into_owned();
-            return Err(Status::internal(err_msg));
+        if req.tenant_id.is_empty() {
+            return Err(Status::invalid_argument("Missing tenant_id"));
         }
+        if req.incident_id.is_empty() {
+            return Err(Status::invalid_argument("Missing incident_id"));
+        }
+
+        let outcome = crate::routes::close_incident_inner(
+            self._state.clone(),
+            req.tenant_id,
+            req.incident_id.clone(),
+        )
+        .await;
+        let _value = crate::authorize_service::outcome_to_tonic_json(outcome)?;
 
         Ok(Response::new(CloseIncidentResponse {
             status: "closed".to_string(),
@@ -801,7 +751,7 @@ impl SocService for SocGrpcServiceImpl {
                     created_at: pb.created_at.to_rfc3339(),
                 }),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -833,7 +783,7 @@ impl SocService for SocGrpcServiceImpl {
                     .collect();
                 Ok(Response::new(ListPlaybooksResponse { items }))
             }
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -849,7 +799,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeletePlaybookResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -882,7 +832,11 @@ impl SocService for SocGrpcServiceImpl {
         let raw_results = exporter
             .search_similar_events(&req.tenant_id, &req.query, limit)
             .await
-            .map_err(|e| Status::internal(format!("Semantic search error: {}", e)))?;
+            .map_err(|e| {
+                crate::authorize_service::status_error_to_tonic(
+                    &crate::error::StatusError::internal(format!("Semantic search error: {e}")),
+                )
+            })?;
 
         // Map untyped JSON results into typed proto messages.
         let results = raw_results
@@ -954,7 +908,7 @@ impl SocService for SocGrpcServiceImpl {
                 items: items.into_iter().map(contact_point_to_proto).collect(),
                 next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -996,7 +950,7 @@ impl SocService for SocGrpcServiceImpl {
                     "json",
                 )
                 .await
-                .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+                .map_err(crate::authorize_service::aegis_error_to_tonic)?;
             webhook_id = Some(sub.id);
         }
         let cp = self
@@ -1013,7 +967,7 @@ impl SocService for SocGrpcServiceImpl {
                 "unknown",
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateContactPointResponse {
             contact_point: Some(contact_point_to_proto(cp)),
             delivery_secret,
@@ -1046,7 +1000,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteContactPointResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1074,7 +1028,7 @@ impl SocService for SocGrpcServiceImpl {
                     .collect(),
                 next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1104,7 +1058,7 @@ impl SocService for SocGrpcServiceImpl {
                 },
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateNotificationPolicyResponse {
             policy: Some(notification_policy_to_proto(policy)),
         }))
@@ -1122,7 +1076,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteNotificationPolicyResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1147,7 +1101,7 @@ impl SocService for SocGrpcServiceImpl {
                 items: items.into_iter().map(silence_to_proto).collect(),
                 next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1198,7 +1152,7 @@ impl SocService for SocGrpcServiceImpl {
                 },
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateSilenceResponse {
             silence: Some(silence_to_proto(silence)),
         }))
@@ -1216,7 +1170,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteSilenceResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1235,7 +1189,7 @@ impl SocService for SocGrpcServiceImpl {
             Ok(items) => Ok(Response::new(ListSocDashboardsResponse {
                 items: items.into_iter().map(soc_dashboard_to_proto).collect(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1254,7 +1208,7 @@ impl SocService for SocGrpcServiceImpl {
                 dashboard: Some(soc_dashboard_to_proto(record)),
             })),
             Ok(None) => Err(Status::not_found("Dashboard not found")),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1277,8 +1231,9 @@ impl SocService for SocGrpcServiceImpl {
                 schema.uid
             )));
         }
-        let schema_json = serde_json::to_string(&schema)
-            .map_err(|e| Status::internal(format!("serialize dashboard: {e}")))?;
+        let schema_json = serde_json::to_string(&schema).map_err(|e| {
+            crate::authorize_service::serialize_error_to_tonic("serialize dashboard", e)
+        })?;
         let record = self
             ._state
             .storage
@@ -1290,7 +1245,7 @@ impl SocService for SocGrpcServiceImpl {
                 &schema_json,
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateSocDashboardResponse {
             dashboard: Some(soc_dashboard_to_proto(record)),
         }))
@@ -1309,8 +1264,9 @@ impl SocService for SocGrpcServiceImpl {
                 "uid in schema_json must match request uid",
             ));
         }
-        let schema_json = serde_json::to_string(&schema)
-            .map_err(|e| Status::internal(format!("serialize dashboard: {e}")))?;
+        let schema_json = serde_json::to_string(&schema).map_err(|e| {
+            crate::authorize_service::serialize_error_to_tonic("serialize dashboard", e)
+        })?;
         match self
             ._state
             .storage
@@ -1327,7 +1283,7 @@ impl SocService for SocGrpcServiceImpl {
                 dashboard: Some(soc_dashboard_to_proto(record)),
             })),
             Ok(None) => Err(Status::not_found("Dashboard not found")),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1343,7 +1299,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteSocDashboardResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 }

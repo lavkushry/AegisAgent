@@ -25,13 +25,14 @@ Aegis is a control plane, not an agent. Known agents pass every tool call throug
 | Order | File | Why |
 |---|---|---|
 | 1 | `src/src/main.rs` (router section) | Every route, every layer, startup gating |
-| 2 | `src/src/routes/authorize.rs` | The hot path — the product in one file |
-| 3 | `lib/policy/src/cedar.rs` + `policies.cedar` | How decisions are made |
-| 4 | `src/src/routes/approval.rs` | Differentiator #1 |
-| 5 | `src/src/routes/mod.rs` (`compute_receipt_hash`, caches, `TenantId`) | Cross-cutting machinery |
-| 6 | `lib/storage/src/traits.rs` | The storage contract everything calls through |
-| 7 | `lib/soc/src/detect.rs` → `respond.rs` | The async plane |
-| 8 | `sdk-python/aegisagent/decorator.py` | What integrators actually touch |
+| 2 | `lib/decision/` (`run_authorize_pipeline`) | The hot path — library-owned authorize evaluation |
+| 3 | `src/src/routes/authorize.rs` + `authorize_service.rs` + `decision_runtime.rs` | Thin REST/gRPC adapters + host ports |
+| 4 | `lib/policy/src/cedar.rs` + `policies.cedar` | How Cedar decisions are made |
+| 5 | `src/src/routes/approval.rs` | Differentiator #1 |
+| 6 | `src/src/routes/mod.rs` (`compute_receipt_hash`, caches, `TenantId`) | Cross-cutting machinery |
+| 7 | `lib/storage/src/traits.rs` | The storage contract everything calls through |
+| 8 | `lib/soc/src/detect.rs` → `respond.rs` | The async plane |
+| 9 | `sdk-python/aegisagent/decorator.py` | What integrators actually touch |
 
 ## 4. Local setup
 

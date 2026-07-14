@@ -24,7 +24,7 @@ flowchart LR
 | Label → downstream actions | `trust_chain::propagate` — most restrictive upstream label wins; tighten-only | ✅ `lib/policy/src/trust_chain.rs` |
 | Prompt → model call → tool proposal | first-class captured events with proposal hashes | 📐 Phase 7 |
 | Proposal → `action_hash` | SDK canonicalization at the tool boundary (today the lineage starts here for the action side) | ✅ SDK `canon` |
-| `action_hash` → decision | authorize path, decision row keyed to `run_id`/`trace_id` | ✅ `routes/authorize.rs` |
+| `action_hash` → decision | authorize path, decision row keyed to `run_id`/`trace_id` | ✅ `lib/decision` + thin `routes/authorize.rs` |
 | Decision → approval | approval bound to the same hash | ✅ `routes/approval.rs` |
 | Approval → execution | single-use consume + SDK hash re-check | ✅ |
 | Execution → receipt | chained receipt carrying `action_hash`, `source_trust`, `run_id`, `trace_id`, approver | ✅ `compute_receipt_hash` |

@@ -83,15 +83,17 @@ Content-Type: application/json
 | Field | Notes |
 |---|---|
 | `decision_id` | UUID for this evaluation; appears in `/v1/decisions/:id` and `/v1/audit/events`. |
-| `decision` | `"allow"`, `"deny"`, or `"require_approval"` — see [Decision types](#decision-types). |
+| `decision` | `"allow"`, `"deny"`, `"require_approval"`, `"redact"`, `"quarantine"`, … — see [Decision types](#decision-types). |
 | `risk_score` / `risk_level` | Derived from the registered tool/action's configured risk (`low`→10, `medium`→40, `high`→75, `critical`→95), or MCP tool risk for MCP calls. |
 | `reason` | Human-readable explanation, safe to display to an operator. |
 | `matched_policies` | Cedar policy IDs (or synthetic markers like `agent_frozen`, `mcp_unknown_tool`, `critical_risk_requires_approval`) that produced the decision — useful for debugging policy precedence. |
+| `redacted_fields` | Present when `decision == "redact"`: parameter keys the SDK must mask before execution. Empty for other decisions. |
+| `receipt` | Optional receipt identity for durable evidence (protected/mutating paths). |
 | `approval` | Present only when `decision == "require_approval"`. `action_hash` is the value the SDK **must** match before executing (see below). |
 
 ## Decision types
 
-`/v1/authorize` returns exactly one of three values in `decision`:
+`/v1/authorize` returns a string `decision`. The common SDK-handled values are:
 
 - **`allow`** — execute immediately. No approval is created.
 - **`deny`** — never execute. The SDK raises `AegisAuthorizationDenied`
@@ -104,18 +106,27 @@ Content-Type: application/json
   expires). The response includes an `approval` object; the SDK polls
   `GET /v1/approvals/:id` until `status` is `approved`, `rejected`, or
   `EXPIRED`.
+- **`redact`** — execute with selected parameter fields replaced by
+  `[REDACTED]` (Python SDK). Produced by Cedar `@decision("redact")` plus
+  `@redact_fields(...)`. `redacted_fields` is populated only for this
+  decision; other decisions clear it.
+- **`quarantine`** — produced by Cedar `@decision("quarantine")` on a
+  permit. The evaluate stage sets the agent status to quarantined (host
+  port) and returns `decision: "quarantine"`. SDKs that do not special-case
+  this string should treat unknown decisions as fail-closed (do not execute).
 
-**"Quarantine" and "redact" are not `decision` values.** Quarantine is
-enforced as a *state* on an agent (`frozen`/`revoked` via
-`POST /v1/agents/:id/freeze|revoke`) or an MCP server
-(`POST /v1/mcp/servers/:server_key/quarantine`) — once quarantined, every
-subsequent `/v1/authorize` call for that principal/server returns `deny`
-with a `matched_policies` marker (`agent_frozen`, `agent_revoked`,
-`mcp_server_quarantined`) rather than a distinct decision string. Redaction
-of sensitive fields happens at the logging/receipt layer (`context.
-contains_sensitive_data`), not as an authorize decision.
+**Agent/MCP lifecycle quarantine is separate from the `quarantine` decision
+string.** Freezing/revoking an agent (`POST /v1/agents/:id/freeze|revoke`)
+or quarantining an MCP server (`POST /v1/mcp/servers/:server_key/quarantine`)
+is a *state* change. Subsequent authorize calls for that principal/server
+return **`deny`** with markers such as `agent_frozen`, `agent_revoked`, or
+`mcp_server_quarantined` — not necessarily `decision: "quarantine"`.
 
 ## Policy evaluation flow
+
+Thin adapters build `AuthorizeContext` and call
+`aegis-decision::run_authorize_pipeline` (host `DecisionRuntime` ports).
+Stages:
 
 ```
 SDK                                Gateway (/v1/authorize)
@@ -124,50 +135,58 @@ compute expected_action_hash
   (aegis-jcs-1 over tool_call)
         │
         ▼
-POST /v1/authorize ───────────────▶ 1. Resolve agent via Bearer token
-                                       (tenant-scoped) → 401 if invalid
-                                    2. Replay/nonce + idempotency
-                                       (request_id) checks
-                                    3. Rate limit / quota checks
-                                    4. agent.status frozen/revoked?
-                                       → deny, matched_policies=[agent_<status>]
-                                    5. Look up registered action
-                                       (risk_level, risk_score,
-                                       approval_required, default_decision)
-                                    6. MCP path only: server quarantined?
-                                       tool unknown/unapproved?
-                                       → deny, mcp_* markers
-                                    7. Cedar policy_engine.authorize(
-                                         principal=Agent::<id>,
-                                         action=Action::"tool_call",
-                                         resource=ToolAction::<tool>_<action>,
-                                         context={trust_level, mutates_state,
-                                                   contains_sensitive_data,
-                                                   resource_base_branch})
-                                       → allow | deny | (allow + @decision(
-                                         "require_approval") annotation)
-                                    8. Post-processing overrides:
-                                       - risk_level == "critical" and
-                                         decision == "allow"
-                                         → require_approval
-                                       - agent.force_approval (post-incident)
-                                         → require_approval
-                                    9. Audit-writer preflight: SOC event
-                                       channel full + high-risk/mutating?
-                                       → deny, audit_writer_unavailable
-                                   10. write_decision_and_audit():
-                                       persist DecisionRecord, emit ASE event
-                                       (async SOC pipeline)
-                                   11. require_approval only: create Approval
-                                       row bound to action_hash, expires_at,
-                                       optional callback
+POST /v1/authorize ───────────────▶ REST: authorize_context_from_headers
+                                       + run_authorize_pipeline
+                                    gRPC: same typed context + evaluate
+
+                                    admit
+                                      1. Resolve agent via Bearer / mTLS
+                                         (tenant-scoped) → 401 if invalid
+                                      2. Optional HMAC request signature
+                                      3. Environment allow-list
+
+                                    preflight
+                                      4. Tool permission
+                                      5. Replay/nonce + idempotency
+                                         (request_id)
+                                      6. Rate limit / quota + heartbeat
+
+                                    guard
+                                      7. agent.status frozen/revoked?
+                                         → deny, matched_policies=[agent_<status>]
+                                      8. Optional admission webhook
+                                      9. Action hash (post-mutation)
+                                     10. Ban / quarantine-record checks
+
+                                    metadata
+                                     11. Registered action risk / defaults
+                                     12. MCP path: server quarantined?
+                                         tool unknown/unapproved?
+                                         → deny, mcp_* markers
+
+                                    evaluate
+                                     13. Cedar policy_engine.authorize(...)
+                                         → allow | deny | require_approval
+                                           (+ annotations: redact, quarantine)
+                                     14. Decision overrides (critical risk,
+                                         force_approval, action defaults)
+                                     15. Audit-writer preflight (high-risk
+                                         + SOC stream full → deny)
+                                     16. write_decision_and_audit + receipts
+                                     17. require_approval → create Approval
+                                         bound to action_hash
+                                     18. quarantine decision → quarantine_agent
+
         ◀────────────────── AuthorizeResponse {decision, risk_*, reason,
-                              matched_policies, approval?}
+                              matched_policies, approval?, receipt?,
+                              redacted_fields?}
         │
   decision == allow
         │──▶ execute tool
-  decision == deny
-        │──▶ raise AegisAuthorizationDenied — never executes
+  decision == redact
+        │──▶ execute with redacted_fields masked (Python SDK)
+  decision == deny | quarantine | unknown
+        │──▶ raise / fail closed — never executes
   decision == require_approval
         │──▶ poll GET /v1/approvals/:id until approved
         │──▶ recompute action_hash for the about-to-run action
@@ -175,6 +194,9 @@ POST /v1/authorize ───────────────▶ 1. Resolve a
         │       mismatch → FAIL CLOSED (PermissionError), never executes
         │       match → POST /v1/approvals/:id/consume (single-use) → execute
 ```
+
+Implementation: `lib/decision/`, thin `src/src/routes/authorize.rs`,
+`authorize_service.rs`, `decision_runtime.rs`.
 
 ## Trust-provenance integration
 

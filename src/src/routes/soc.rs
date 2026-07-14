@@ -265,20 +265,31 @@ pub async fn soc_query(
     TenantId(tenant_id): TenantId,
     Json(req): Json<SocQueryRequest>,
 ) -> impl IntoResponse {
+    crate::authorize_service::outcome_to_response(soc_query_inner(state, tenant_id, req).await)
+}
+
+/// Protocol-neutral SOC query (REST + gRPC).
+pub(crate) async fn soc_query_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    req: SocQueryRequest,
+) -> crate::authorize_service::AuthorizedOutcome {
     if req.version != 1 {
-        return StatusError::bad_request(format!(
-            "unsupported query version '{}' (supported: 1)",
-            req.version
-        ))
-        .into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::bad_request(format!(
+                "unsupported query version '{}' (supported: 1)",
+                req.version
+            )),
+        );
     }
     // Entity allowlist — fail closed on anything unknown.
     if !matches!(req.entity.as_str(), "decision" | "ase") {
-        return StatusError::bad_request(format!(
-            "unsupported entity '{}' (supported: decision, ase)",
-            req.entity
-        ))
-        .into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::bad_request(format!(
+                "unsupported entity '{}' (supported: decision, ase)",
+                req.entity
+            )),
+        );
     }
     if req.entity == "decision"
         && matches!(
@@ -286,14 +297,15 @@ pub async fn soc_query(
             (Some(tool), Some(skill)) if tool != skill
         )
     {
-        return StatusError::bad_request(
-            "tool and skill filters must match when both are provided",
-        )
-        .into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::bad_request("tool and skill filters must match when both are provided"),
+        );
     }
     let aggregate = req.aggregate.as_deref().unwrap_or("none");
     if req.group_by.is_some() && aggregate != "count_by" {
-        return StatusError::bad_request("group_by is only valid with count_by").into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::bad_request("group_by is only valid with count_by"),
+        );
     }
     if aggregate == "count_over_time"
         && !matches!(
@@ -301,15 +313,18 @@ pub async fn soc_query(
             "minute" | "hour" | "day"
         )
     {
-        return StatusError::bad_request("unsupported interval (supported: minute, hour, day)")
-            .into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::bad_request("unsupported interval (supported: minute, hour, day)"),
+        );
     }
 
     let from = match req.filters.from.as_deref() {
         Some(raw) => match to_db_timestamp(raw) {
             Some(value) => Some(value),
             None => {
-                return StatusError::bad_request("invalid filters.from timestamp").into_response()
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::bad_request("invalid filters.from timestamp"),
+                )
             }
         },
         None => None,
@@ -318,14 +333,17 @@ pub async fn soc_query(
         Some(raw) => match to_db_timestamp(raw) {
             Some(value) => Some(value),
             None => {
-                return StatusError::bad_request("invalid filters.to timestamp").into_response()
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::bad_request("invalid filters.to timestamp"),
+                )
             }
         },
         None => None,
     };
     if matches!((&from, &to), (Some(from), Some(to)) if from > to) {
-        return StatusError::bad_request("filters.from must be before or equal to filters.to")
-            .into_response();
+        return crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::bad_request("filters.from must be before or equal to filters.to"),
+        );
     }
     if req.entity == "ase" {
         return query_agent_security_events(state, tenant_id, req, from, to).await;
@@ -365,28 +383,31 @@ pub async fn soc_query(
                         Ok(receipts) => receipts,
                         Err(e) => {
                             error!("soc_query receipt enrichment failed: {:?}", e);
-                            return StatusError::internal("Database error").into_response();
+                            return crate::authorize_service::AuthorizedOutcome::status_error(
+                                StatusError::internal("Database error"),
+                            );
                         }
                     };
                     let safe_rows: Vec<_> = rows
                         .iter()
                         .map(|row| safe_soc_decision_row(row, receipts.get(&row.id)))
                         .collect();
-                    (
-                        StatusCode::OK,
-                        Json(json!({
+                    crate::authorize_service::AuthorizedOutcome {
+                        status: StatusCode::OK,
+                        body: crate::authorize_service::AuthorizedBody::Json(json!({
                             "version": 1,
                             "entity": "decision",
                             "rows": safe_rows,
                             "field_descriptors": soc_decision_field_descriptors(),
                             "meta": { "cursor": next_cursor.map(encode_cursor) },
                         })),
-                    )
-                        .into_response()
+                    }
                 }
                 Err(e) => {
                     error!("soc_query list failed: {:?}", e);
-                    StatusError::internal("Database error").into_response()
+                    crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::internal("Database error"),
+                    )
                 }
             }
         }
@@ -399,7 +420,9 @@ pub async fn soc_query(
                 Ok(groups) => groups,
                 Err(e) => {
                     error!("soc_query count failed: {:?}", e);
-                    return StatusError::internal("Database error").into_response();
+                    return crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::internal("Database error"),
+                    );
                 }
             };
             let mut total = 0;
@@ -416,9 +439,9 @@ pub async fn soc_query(
                 }
             }
 
-            (
-                StatusCode::OK,
-                Json(json!({
+            crate::authorize_service::AuthorizedOutcome {
+                status: StatusCode::OK,
+                body: crate::authorize_service::AuthorizedBody::Json(json!({
                     "version": 1,
                     "entity": "decision",
                     "aggregate": "count",
@@ -436,8 +459,7 @@ pub async fn soc_query(
                     ],
                     "meta": { "total": total },
                 })),
-            )
-                .into_response()
+            }
         }
         "count_over_time" => {
             let bucket = TimeBucket::parse(req.interval.as_deref().unwrap_or("hour"));
@@ -451,9 +473,9 @@ pub async fn soc_query(
                         .into_iter()
                         .map(|(bucket, count)| json!({ "bucket": bucket, "count": count }))
                         .collect();
-                    (
-                        StatusCode::OK,
-                        Json(json!({
+                    crate::authorize_service::AuthorizedOutcome {
+                        status: StatusCode::OK,
+                        body: crate::authorize_service::AuthorizedBody::Json(json!({
                             "version": 1,
                             "entity": "decision",
                             "aggregate": "count_over_time",
@@ -464,25 +486,27 @@ pub async fn soc_query(
                             ],
                             "meta": {},
                         })),
-                    )
-                        .into_response()
+                    }
                 }
                 Err(e) => {
                     error!("soc_query count_over_time failed: {:?}", e);
-                    StatusError::internal("Database error").into_response()
+                    crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::internal("Database error"),
+                    )
                 }
             }
         }
         "count_by" => {
             let Some(group_by) = req.group_by.as_deref() else {
-                return StatusError::bad_request("group_by is required for count_by")
-                    .into_response();
+                return crate::authorize_service::AuthorizedOutcome::status_error(
+                    StatusError::bad_request("group_by is required for count_by"),
+                );
             };
             let Some(field) = DecisionGroupField::parse(group_by) else {
-                return StatusError::bad_request(format!(
+                return crate::authorize_service::AuthorizedOutcome::status_error(StatusError::bad_request(format!(
                     "unsupported group_by '{group_by}' (supported: agent_id, decision, source_trust, tool, action)"
                 ))
-                .into_response();
+                );
             };
             match state
                 .storage
@@ -494,9 +518,9 @@ pub async fn soc_query(
                         .into_iter()
                         .map(|(value, count)| json!({ "value": value, "count": count }))
                         .collect();
-                    (
-                        StatusCode::OK,
-                        Json(json!({
+                    crate::authorize_service::AuthorizedOutcome {
+                        status: StatusCode::OK,
+                        body: crate::authorize_service::AuthorizedBody::Json(json!({
                             "version": 1,
                             "entity": "decision",
                             "aggregate": "count_by",
@@ -508,19 +532,21 @@ pub async fn soc_query(
                             ],
                             "meta": {},
                         })),
-                    )
-                        .into_response()
+                    }
                 }
                 Err(e) => {
                     error!("soc_query count_by failed: {:?}", e);
-                    StatusError::internal("Database error").into_response()
+                    crate::authorize_service::AuthorizedOutcome::status_error(
+                        StatusError::internal("Database error"),
+                    )
                 }
             }
         }
-        other => StatusError::bad_request(format!(
+        other => crate::authorize_service::AuthorizedOutcome::status_error(
+            StatusError::bad_request(format!(
             "unsupported aggregate '{other}' (supported: none, count, count_over_time, count_by)"
-        ))
-        .into_response(),
+        )),
+        ),
     }
 }
 
@@ -530,7 +556,7 @@ async fn query_agent_security_events(
     req: SocQueryRequest,
     from: Option<String>,
     to: Option<String>,
-) -> axum::response::Response {
+) -> crate::authorize_service::AuthorizedOutcome {
     use aegis_soc::query::RuntimeEventQueryResult;
 
     let result = aegis_soc::query::query_runtime_events(
@@ -544,34 +570,32 @@ async fn query_agent_security_events(
     match result {
         Ok(RuntimeEventQueryResult::Rows { rows, next_cursor }) => {
             let rows: Vec<_> = rows.iter().map(safe_soc_runtime_event_row).collect();
-            (
-                StatusCode::OK,
-                Json(json!({
+            crate::authorize_service::AuthorizedOutcome {
+                status: StatusCode::OK,
+                body: crate::authorize_service::AuthorizedBody::Json(json!({
                     "version": 1, "entity": "ase", "rows": rows,
                     "field_descriptors": soc_runtime_event_field_descriptors(),
                     "meta": { "cursor": next_cursor.map(encode_cursor) },
                 })),
-            )
-                .into_response()
+            }
         }
-        Ok(RuntimeEventQueryResult::Count(total)) => (
-            StatusCode::OK,
-            Json(json!({
+        Ok(RuntimeEventQueryResult::Count(total)) => crate::authorize_service::AuthorizedOutcome {
+            status: StatusCode::OK,
+            body: crate::authorize_service::AuthorizedBody::Json(json!({
                 "version": 1, "entity": "ase", "aggregate": "count",
                 "rows": [{ "total": total }],
                 "field_descriptors": [{ "name": "total", "type": "number", "facetable": false }],
                 "meta": { "total": total },
             })),
-        )
-            .into_response(),
+        },
         Ok(RuntimeEventQueryResult::CountOverTime(buckets)) => {
             let rows: Vec<_> = buckets
                 .into_iter()
                 .map(|(bucket, count)| json!({ "bucket": bucket, "count": count }))
                 .collect();
-            (
-                StatusCode::OK,
-                Json(json!({
+            crate::authorize_service::AuthorizedOutcome {
+                status: StatusCode::OK,
+                body: crate::authorize_service::AuthorizedBody::Json(json!({
                     "version": 1, "entity": "ase", "aggregate": "count_over_time",
                     "rows": rows,
                     "field_descriptors": [
@@ -579,17 +603,16 @@ async fn query_agent_security_events(
                         { "name": "count", "type": "number", "facetable": false }
                     ], "meta": {},
                 })),
-            )
-                .into_response()
+            }
         }
         Ok(RuntimeEventQueryResult::CountBy { group_by, rows }) => {
             let rows: Vec<_> = rows
                 .into_iter()
                 .map(|(value, count)| json!({ "value": value, "count": count }))
                 .collect();
-            (
-                StatusCode::OK,
-                Json(json!({
+            crate::authorize_service::AuthorizedOutcome {
+                status: StatusCode::OK,
+                body: crate::authorize_service::AuthorizedBody::Json(json!({
                     "version": 1, "entity": "ase", "aggregate": "count_by",
                     "group_by": group_by, "rows": rows,
                     "field_descriptors": [
@@ -597,13 +620,18 @@ async fn query_agent_security_events(
                         { "name": "count", "type": "number", "facetable": false }
                     ], "meta": {},
                 })),
-            )
-                .into_response()
+            }
         }
-        Err(AegisError::BadRequest(message)) => StatusError::bad_request(message).into_response(),
+        Err(AegisError::BadRequest(message)) => {
+            crate::authorize_service::AuthorizedOutcome::status_error(StatusError::bad_request(
+                message,
+            ))
+        }
         Err(error) => {
             error!(?error, "soc_query ASE failed");
-            StatusError::internal("Database error").into_response()
+            crate::authorize_service::AuthorizedOutcome::status_error(StatusError::internal(
+                "Database error",
+            ))
         }
     }
 }
@@ -1327,6 +1355,17 @@ pub async fn close_incident(
     TenantId(tenant_id): TenantId,
     Path(incident_id): Path<String>,
 ) -> impl IntoResponse {
+    crate::authorize_service::outcome_to_response(
+        close_incident_inner(state, tenant_id, incident_id).await,
+    )
+}
+
+/// Protocol-neutral incident close (REST + gRPC).
+pub(crate) async fn close_incident_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    incident_id: String,
+) -> crate::authorize_service::AuthorizedOutcome {
     // First verify the incident exists for this tenant (provides a meaningful 404
     // rather than a silent no-op when the id is simply wrong or belongs to another
     // tenant — CWE-284 isolation).
@@ -1337,26 +1376,29 @@ pub async fn close_incident(
     {
         Ok(Some(inc)) => inc,
         Ok(None) => {
-            return StatusError::not_found("Incident not found").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::not_found("Incident not found"),
+            );
         }
         Err(e) => {
             error!("Failed to fetch incident for close: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
     };
 
     // If already closed, return a clear idempotent response (200 with a flag).
     if incident.status == "closed" {
-        return (
-            StatusCode::OK,
-            Json(json!({
+        return crate::authorize_service::AuthorizedOutcome {
+            status: StatusCode::OK,
+            body: crate::authorize_service::AuthorizedBody::Json(json!({
                 "incident_id": incident.id,
                 "status": "closed",
                 "closed_at": incident.closed_at,
                 "already_closed": true,
             })),
-        )
-            .into_response();
+        };
     }
 
     // Atomically flip status → 'closed' and stamp closed_at.
@@ -1368,7 +1410,9 @@ pub async fn close_incident(
         Ok(b) => b,
         Err(e) => {
             error!("Failed to close incident {}: {:?}", incident_id, e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
     };
 
@@ -1380,17 +1424,18 @@ pub async fn close_incident(
             .get_incident_by_id(&tenant_id, &incident_id)
             .await
         {
-            Ok(Some(inc)) => (
-                StatusCode::OK,
-                Json(json!({
+            Ok(Some(inc)) => crate::authorize_service::AuthorizedOutcome {
+                status: StatusCode::OK,
+                body: crate::authorize_service::AuthorizedBody::Json(json!({
                     "incident_id": inc.id,
                     "status": "closed",
                     "closed_at": inc.closed_at,
                     "already_closed": true,
                 })),
-            )
-                .into_response(),
-            _ => StatusError::internal("Database error").into_response(),
+            },
+            _ => crate::authorize_service::AuthorizedOutcome::status_error(StatusError::internal(
+                "Database error",
+            )),
         };
     }
 
@@ -1453,16 +1498,15 @@ pub async fn close_incident(
 
     info!(incident_id = %incident_id, "SOC incident closed");
 
-    (
-        StatusCode::OK,
-        Json(json!({
+    crate::authorize_service::AuthorizedOutcome {
+        status: StatusCode::OK,
+        body: crate::authorize_service::AuthorizedBody::Json(json!({
             "incident_id": incident_id,
             "status": "closed",
             "closed_at": closed_at,
             "already_closed": false,
         })),
-    )
-        .into_response()
+    }
 }
 
 // ── SOC Phase 6: RCA Narrator ────────────────────────────────────────────────

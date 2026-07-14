@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Typed authorize service (`lib/decision`, Week 3)** — protocol-neutral
+  `run_authorize_pipeline` (admit → preflight → guard → metadata → evaluate)
+  behind `DecisionRuntime` ports. REST/gRPC adapters build `AuthorizeContext`,
+  call the pipeline via `GatewayDecisionRuntime`, and map `DecisionOutcome` /
+  `AuthorizedOutcome` only (no gRPC→REST JSON bridge). Equality corpus covers
+  REST HeaderMap vs typed-context parity. Pipeline mock e2e covers allow,
+  401, idempotent replay, require_approval, frozen/revoked, dry-run, Cedar
+  deny, admission-webhook reject, ban, tool permission deny, MCP
+  (server permission, quarantine, unapproved tool, approved allow),
+  rate-limit/quota 429, audit-stream fail-closed, durable receipt on
+  mutating allow, and dry-run require_approval (no approval row). Shared
+  `MockRuntime` for decision tests; gateway drops unused Axum→tonic body
+  bridge; shared `request_signature_header` for HMAC request signing; pipeline
+  e2e covers durable vs best-effort receipts, idempotent replay errors, MCP
+  unknown-tool critical gate, and dry-run side-effect free paths. See
+  `ROADMAP.md` Week 3.
+
+### Added
+
 - **SOC console panel suite complete (`ui-next/`)** — allowlisted panel types
   are all registered: pure-SVG `timeseries` / `heatmap` on `POST /v1/soc/query`
   (#1821–#1822); differentiators `approval-card`, `provable-timeline`,

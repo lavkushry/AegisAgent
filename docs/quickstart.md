@@ -132,7 +132,7 @@ curl -s http://127.0.0.1:8080/v1/audit/events \
 You should see a `tool_call_intercepted` event for `github.merge_pull_request` with
 `decision: "deny"`. The corresponding `/v1/decisions` entry also carries a
 `composite_risk_score` (0-100) — advisory display/audit metadata that never influences the
-`allow`/`deny`/`require_approval` decision itself.
+authorize decision itself (`allow` / `deny` / `require_approval` / …).
 
 ```bash
 curl -s "http://127.0.0.1:8080/v1/decisions?agent_id=<agent-id>" \

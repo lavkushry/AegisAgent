@@ -61,7 +61,33 @@ Deliverables:
 - remove the gRPC → REST handler → JSON body round trip for the first authorization method;
 - preserve current transactional storage and receipt behavior.
 
-Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus.
+Progress (2026-07-14): Week-3 Phases A–D complete for the first authorize
+method. `src/src/authorize_service.rs` holds the protocol-neutral seam
+(`AuthorizeContext`, `AuthCredential`, `AuthorizedOutcome`,
+`error_reason_to_tonic_code` / `http_error_to_tonic`, `authorize` /
+`authorize_raw`). gRPC `authorize` always resolves real `remote_addr`, tenant,
+and credential into `AuthorizeContext`, calls the shared service entry (no
+forged `127.0.0.1:0`), and maps `StatusError` / HTTP failures to faithful tonic
+codes — the JSON-bridge round-trip and `AEGIS_TYPED_AUTHORIZE` flag are
+**deleted** (Phase D). Phase C equality corpus (`equality_*` tests) covers
+allow / deny / require_approval / dry-run / frozen agent / bad token / missing
+tenant / replay-nonce conflict, plus approval `action_hash` length parity.
+Follow-on progress: typed `AuthorizedOutcome` seam covers authorize,
+approve/reject, register_agent, create_tenant, register/discover MCP,
+soc_query, and close_incident. Storage-direct SOC gRPC errors map via
+`aegis_error_to_tonic`. **`lib/decision` (`aegis-decision`)** holds context
+types + `AuthorizeService` trait; gateway **`GatewayAuthorizeService`**
+implements the trait and gRPC authorize calls `evaluate` through it.
+**Full authorize pipeline** lives in `aegis-decision::run_authorize_pipeline`
+(admit → preflight → guard → metadata → evaluate) behind `DecisionRuntime`
+ports, including idempotent-replay reconstruction. Gateway REST/gRPC adapters
+build `AuthorizeContext`, call the pipeline, and map `DecisionOutcome` /
+`AuthorizedOutcome` only — Week-3 evaluation extraction **complete**.
+Packaging: stage + pipeline tests use shared `MockRuntime`; gateway wire helpers
+live in `authorize_service(_tests).rs` (no Axum body bridge); route tests remain
+in `authorize_tests.rs`.
+
+Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 
 ### Week 4 — SPSC ring and slab prototype
 

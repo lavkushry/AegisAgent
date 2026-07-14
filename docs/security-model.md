@@ -110,7 +110,7 @@ The detection / correlation / response pipeline is strictly asynchronous (`tokio
 
 | Law | Statement |
 |-----|-----------|
-| **Law 1** | Advisory scores (`composite_risk_score`, graph data, incident metadata) are display/audit metadata only — they **never** gate the `allow / deny / require_approval` decision. Cedar and trust-provenance decide. |
+| **Law 1** | Advisory scores (`composite_risk_score`, graph data, incident metadata) are display/audit metadata only — they **never** gate the authorize decision (`allow` / `deny` / `require_approval` / `redact` / `quarantine`). Cedar and trust-provenance decide. |
 | **Law 2** | Only one LLM exists in the system: the post-incident RCA narrator. It is sandboxed, has no tools or enforcement authority, and receives evidence as inert structured data only. All triage, correlation, and response are deterministic code. |
 | **Law 3** | SOC processing is always out-of-band. An SOC outage degrades monitoring; it can never make the action path fail-open. |
 | **Law 4** | Every agent containment action (freeze / revoke / quarantine) is tenant-scoped, authenticated, audited, and reversible. |
@@ -192,7 +192,7 @@ The following table maps security properties to their implementation location fo
 | SOC out-of-band isolation | `lib/soc/src/events.rs` → `tokio::mpsc` channel; `drain` runs in dedicated Tokio task |
 | Deterministic detection (no LLM) | `lib/soc/src/detect.rs`; `lib/soc/src/rule_dsl.rs` |
 | RCA LLM sandboxing | `lib/soc/src/narrate.rs` — no tools, no authority, display-only output |
-| Advisory-only composite risk | `lib/policy/src/risk.rs`; `src/src/routes/authorize_decision.rs` — score written to `decisions` row and response; never read by Cedar |
+| Advisory-only composite risk | `lib/policy/src/risk.rs`; authorize evaluate path via `lib/decision` / `authorize_decision.rs` — score written to `decisions` row and response; never read by Cedar |
 | MCP manifest pinning | `src/src/routes/mcp.rs` → `discover_mcp_tools`; `mcp_servers.manifest_hash` column |
 | Redaction of secrets | `src/src/main.rs` → `redact_secrets`; hashes stored, not raw payloads |
 

@@ -1,6 +1,6 @@
 ---
 globs:
-  - "gateway/src/**/*.rs"
+  - "src/src/**/*.rs"
   - "src/**/*.rs"
   - "lib/storage/**/*.rs"
   - "lib/policy/**/*.rs"
@@ -84,9 +84,9 @@ To prevent unauthorized access to local services during testing.
 
 ### Runbook Steps:
 1. **Localhost Binding:** Verify that the gateway's server listener config binds strictly to the loopback interface (`127.0.0.1`) for testing and local development, avoiding wildcard bindings (`0.0.0.0`).
-2. **Verification Command:** Inspect `gateway/src/config.rs` and `gateway/src/main.rs`. Search for bind targets:
+2. **Verification Command:** Inspect `src/src/main.rs`. Search for bind targets:
    ```bash
-   grep -ri "0.0.0.0" gateway/
+   grep -ri "0.0.0.0" src/
    ```
    If any matches are found outside production deployment scripts (like Helm/Docker), flag them as policy violations.
 
@@ -101,7 +101,7 @@ Detect common software vulnerabilities in source code before merging.
 1. **Run the Scanner:** Proactively run the security scanner (such as `cargo-clippy`, `bandit` for Python, or integrated MCP scanners) on all modified files.
 2. **Scan Command Example:**
    ```bash
-   cargo clippy --manifest-path gateway/Cargo.toml -- -D warnings
+   cargo clippy -p gateway --all-targets -- -D warnings
    # And for python
    bandit -r sdk-python/
    ```

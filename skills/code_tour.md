@@ -6,43 +6,52 @@ globs:
 
 # AI Skill: Codebase Onboarding Tour (`skills/code_tour.md`)
 
-This skill provides AI developer agents with a step-by-step tour of the AegisAgent codebase structure, files, and design boundaries.
+This skill provides AI developer agents with a step-by-step tour of the AegisAgent codebase structure.
+
+> **READ `docs/architecture.md` FIRST** — it defines all mandatory patterns.
 
 ---
 
-## 1. Directory Tree Architecture
-
-The AegisAgent codebase is organized as follows:
+## 1. Directory Tree Architecture (Qdrant-Inspired Workspace)
 
 ```text
 AegisAgent/
-├── .claude/              # Runtime rules & project metadata (harness-generated)
-├── docs/                 # Product PRDs and operational design specs
-├── scripts/              # Workspace automation and plan scanning scripts
-├── skills/               # Reusable AI agent skill runbooks (Markdown guides)
-├── gateway/              # Rust Axum Gateway Proxy service
-│   ├── Cargo.toml
-│   ├── src/
-│   │   ├── main.rs       # Server entry point, DB pool connection, routes
-│   │   ├── config.rs     # Configuration manager (local bindings check)
-│   │   ├── db.rs         # Parameterized SQLite queries (Multi-Tenant bound)
-│   │   ├── policy.rs     # Cedar authorization evaluator & parser
-│   │   ├── handlers.rs   # API route handlers (register, authorize, approvals)
-│   │   └── models.rs     # Serialization data models
-│   └── policies.cedar    # AWS Cedar Policy rules bundle
-├── sdk-python/           # Python SDK package
-│   ├── aegisagent/
-│   │   ├── __init__.py
-│   │   ├── client.py     # Network connection handler
-│   │   └── decorator.py  # @protect_tool decorator and blocking-polling loop
-│   └── setup.py
-├── sdk-typescript/       # TypeScript SDK package (alpha)
-├── policy-templates/     # Base reusable Cedar policy configs
-├── mcp-gateway-lite/     # MCP proxy routing middleware
-├── examples/             # Client-side validation examples
-│   ├── demo_agent.py     # Simple protected tool runner
-│   └── mock_server.py    # Loopback approval integration harness
-└── helm/                 # Deployment charts
+├── .claude/              # Runtime rules & project metadata
+├── docs/
+│   ├── architecture.md   # *** MANDATORY — all patterns defined here ***
+│   └── ...
+├── config/
+│   └── config.yaml       # YAML config (Qdrant pattern, rest_port + grpc_port)
+├── src/src/              # Gateway binary crate (adapters stay THIN)
+│   ├── main.rs           # startup, config/env resolution, dual-server spawn (REST 8080 + gRPC 6334)
+│   ├── routes/           # REST handlers (parse → typed service → respond)
+│   ├── grpc.rs           # gRPC service impls (tonic::Request → typed service → tonic::Response)
+│   ├── authorize_service.rs  # wire map + GatewayAuthorizeService (Week 3)
+│   ├── decision_runtime.rs   # GatewayDecisionRuntime (DecisionRuntime ports)
+│   ├── sign.rs, mtls.rs, oidc.rs, policy_watcher.rs, …   # focused gateway modules
+│   └── bin/              # auxiliary binaries
+├── lib/
+│   ├── common/           # aegis-common: errors, crypto, metrics (NO domain logic)
+│   ├── api/              # aegis-api: proto/ definitions + generated code + REST models
+│   │   ├── proto/        # .proto files (SOURCE OF TRUTH for API types)
+│   │   │   ├── aegis.proto   # core: Authorize, Approve, Agents
+│   │   │   ├── soc.proto     # SOC: Alerts, Incidents, Rules
+│   │   │   └── admin.proto   # admin: Tenants, MCP, Config
+│   │   └── src/
+│   │       ├── grpc/     # tonic-generated code (via build.rs + prost)
+│   │       ├── models.rs # REST request/response types (mirror proto)
+│   │       └── records.rs # DB record types
+│   ├── storage/          # aegis-storage: StorageBackend trait + SQLite/PG impls
+│   ├── policy/           # aegis-policy: Cedar, trust chain, risk scoring
+│   ├── decision/         # aegis-decision: run_authorize_pipeline + DecisionRuntime ports
+│   ├── event/            # aegis-event: unwired ADR-0006..0010 prototypes (no production traffic)
+│   └── soc/              # aegis-soc: detection, correlation, response engine
+├── sdk-python/           # Python SDK (@protect_tool, approval polling)
+├── sdk-go/               # Go SDK
+├── sdk-typescript/       # TypeScript SDK (alpha)
+├── e2e/                  # E2E Playwright tests (REST) + gRPC integration tests
+├── policies.cedar        # Cedar policy rules (repo root)
+└── scripts/
 ```
 
 ---
@@ -51,13 +60,36 @@ AegisAgent/
 
 When exploring the codebase, study modules in this order:
 
-1. **Gateway Initialization (`gateway/src/main.rs`):**
-   Understand how database connection pools, local bindings (`127.0.0.1:8080`), and routing middlewares are established.
-2. **Database Layer (`gateway/src/db.rs`):**
-   Review query structures. Verify that all methods accept `tenant_id` and bind variables parameterized exclusively.
-3. **Authorization Engine (`gateway/src/policy.rs` & `gateway/policies.cedar`):**
-   Inspect how Cedar queries are composed. Examine how annotations (e.g. `@decision("require_approval")`) are parsed to trigger manual reviews.
-4. **Client Interceptor (`sdk-python/aegisagent/decorator.py`):**
-   Observe how the `@protect_tool` wrapper intercepts tool execution, sends authorization requests to the gateway, and polls the pending approvals queue.
-5. **Integration Loop (`examples/mock_server.py`):**
-   Observe the mock testing harness to understand how the proxy handles instant approvals or blocks.
+1. **Architecture Rules (`docs/architecture.md`):**
+   Read this FIRST. It defines the Qdrant-inspired workspace layout, dependency rules,
+   trait-based storage, dual-protocol (REST + gRPC) pattern, and handler conventions.
+
+2. **Protobuf Definitions (`lib/api/proto/*.proto`):**
+   These are the source of truth for all API types. Understand the service definitions
+   and message types before looking at Rust code.
+
+3. **Storage Trait (`lib/storage/src/traits.rs`):**
+   The `StorageBackend` trait defines ALL database operations. Both REST handlers and
+   gRPC impls call these methods through `Arc<dyn StorageBackend>`.
+
+4. **Policy Engine (`lib/policy/src/cedar.rs`):**
+   How Cedar evaluates trust level, action classification, and policy decisions.
+   Deterministic — scores never gate. Policy pack lives at repo-root `policies.cedar`.
+
+5. **Authorize pipeline (`lib/decision/`):**
+   Protocol-neutral `run_authorize_pipeline` (admit → preflight → guard → metadata →
+   evaluate) behind `DecisionRuntime` ports. Gateway adapters stay thin.
+
+6. **Binary Startup (`src/src/main.rs`):**
+   How config is loaded, both servers (REST + gRPC) are spawned on separate Tokio tasks,
+   and `AppState` (shared between both) is constructed.
+
+7. **REST Handlers (`src/src/routes/`) + gRPC Impls (`src/src/grpc.rs`):**
+   Both are THIN — parse → service call → respond. They must call the same typed
+   service seam (`docs/architecture.md` §5). gRPC must not bridge through REST handlers.
+
+8. **SOC Pipeline (`lib/soc/`):**
+   Asynchronous detection, correlation, and response. NEVER in the inline authorize path.
+
+9. **Client SDK (`sdk-python/aegisagent/decorator.py`):**
+   The `@protect_tool` wrapper, authorization requests, and approval polling.

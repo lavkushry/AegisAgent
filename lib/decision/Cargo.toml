@@ -1,0 +1,24 @@
+[package]
+name = "aegis-decision"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Protocol-neutral authorize pipeline (admit→evaluate) for AegisAgent; DecisionRuntime ports, no Axum/SQLx"
+publish = false
+
+[dependencies]
+aegis-api = { path = "../api" }
+aegis-common = { path = "../common" }
+aegis-policy = { path = "../policy" }
+async-trait = "0.1.89"
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+# uuid already a main dep for tests that build DecisionRecord ids
+

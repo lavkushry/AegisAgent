@@ -91,7 +91,7 @@ Aegis controls what passes through Aegis choke points; anything outside them is 
 | # | Choke point | Status | Code |
 |---|---|---|---|
 | 1 | Prompt / model call | 📐 (Phase 7) + 🟡 untrusted-content ingest exists | `POST /v1/ingest` in `src/src/routes/mod.rs`; design in [components/Prompt_Model_Capture.md](components/Prompt_Model_Capture.md) |
-| 2 | Tool call | ✅ | SDKs (`sdk-python/aegisagent/decorator.py`, `sdk-go/aegis/protect.go`, `sdk-typescript/src/protect.ts`) → `src/src/routes/authorize.rs` |
+| 2 | Tool call | ✅ | SDKs (`sdk-python/aegisagent/decorator.py`, `sdk-go/aegis/protect.go`, `sdk-typescript/src/protect.ts`) → thin `routes/authorize.rs` → `lib/decision` (`run_authorize_pipeline`) |
 | 3 | API call (generic action) | ✅ | Same authorize path; action registry in `lib/storage/src/db/agents.rs` (skills/actions) |
 | 4 | MCP call | ✅ (gateway-side "MCP Gateway Lite") | `src/src/routes/mcp.rs`, `lib/soc/src/mcp_inspect.rs`, manifest hash + drift in `src/src/routes/mod.rs` |
 | 5 | Network egress | 📐 (Phase 5) | Design: [components/Egress_Proxy.md](components/Egress_Proxy.md) |
@@ -110,7 +110,7 @@ All routes are wired in `src/src/main.rs` (search `.route(`); handlers live in `
 
 | Domain | Routes (prefix `/v1`) | Handler file |
 |---|---|---|
-| Authorize | `POST /authorize` | `routes/authorize.rs` (+ `authorize_decision.rs`, `authorize_canon.rs`, `authorize_receipts.rs`) |
+| Authorize | `POST /authorize` | `routes/authorize.rs` (thin) + `authorize_service.rs` + `decision_runtime.rs` + `lib/decision/`; helpers in `authorize_decision.rs` / `authorize_canon.rs` / `authorize_receipts.rs` |
 | Agents | `POST /agents/register`, `GET /agents`, `GET/PATCH /agents/:id`, `POST /agents/:id/{freeze,unfreeze,revoke,restore,rotate-token,quarantine…}`, tool-permissions | `routes/agents.rs` |
 | Tools/skills | `POST /tools`, action registration | `routes/agents.rs` / `routes/mod.rs` |
 | Approvals | `GET /approvals`, `GET /approvals/:id`, `POST /approvals/:id/{approve,reject,edit,consume}`, `POST /callbacks/slack` | `routes/approval.rs` |

@@ -35,6 +35,17 @@ pub async fn register_mcp_server(
     TenantId(tenant_id): TenantId,
     Json(payload): Json<RegisterMcpServerRequest>,
 ) -> impl IntoResponse {
+    crate::authorize_service::outcome_to_response(
+        register_mcp_server_inner(state, tenant_id, payload).await,
+    )
+}
+
+/// Protocol-neutral MCP server registration (REST + gRPC admin).
+pub(crate) async fn register_mcp_server_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    payload: RegisterMcpServerRequest,
+) -> crate::authorize_service::AuthorizedOutcome {
     let server_id = Uuid::new_v4().to_string();
     let record = McpServerRecord {
         id: server_id.clone(),
@@ -59,7 +70,9 @@ pub async fn register_mcp_server(
         Ok(_) => {}
         Err(e) => {
             error!("Failed to register MCP server: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
     };
 
@@ -76,15 +89,17 @@ pub async fn register_mcp_server(
         .mcp_server_cache
         .invalidate(&McpServerCache::cache_key(&tenant_id, &payload.server_key));
 
-    (
-        StatusCode::CREATED,
-        Json(RegisterMcpServerResponse {
-            server_id: final_server.id,
-            server_key: payload.server_key,
-            status: "active".to_string(),
-        }),
-    )
-        .into_response()
+    let body = RegisterMcpServerResponse {
+        server_id: final_server.id,
+        server_key: payload.server_key,
+        status: "active".to_string(),
+    };
+    match serde_json::to_value(&body) {
+        Ok(v) => crate::authorize_service::AuthorizedOutcome::json_created(v),
+        Err(e) => crate::authorize_service::AuthorizedOutcome::status_error(StatusError::internal(
+            format!("serialize mcp register response: {e}"),
+        )),
+    }
 }
 
 pub async fn discover_mcp_tools(
@@ -93,16 +108,34 @@ pub async fn discover_mcp_tools(
     Path(server_key): Path<String>,
     Json(payload): Json<DiscoverMcpToolsRequest>,
 ) -> impl IntoResponse {
+    crate::authorize_service::outcome_to_response(
+        discover_mcp_tools_inner(state, tenant_id, server_key, payload).await,
+    )
+}
+
+/// Protocol-neutral MCP tool discovery (REST + gRPC admin).
+pub(crate) async fn discover_mcp_tools_inner(
+    state: Arc<AppState>,
+    tenant_id: String,
+    server_key: String,
+    payload: DiscoverMcpToolsRequest,
+) -> crate::authorize_service::AuthorizedOutcome {
     let server = match state
         .storage
         .get_mcp_server_by_key(&tenant_id, &server_key)
         .await
     {
         Ok(Some(server)) => server,
-        Ok(None) => return StatusError::not_found("MCP server not found").into_response(),
+        Ok(None) => {
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::not_found("MCP server not found"),
+            )
+        }
         Err(e) => {
             error!("Failed to look up MCP server: {:?}", e);
-            return StatusError::internal("Database error").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Database error"),
+            );
         }
     };
 
@@ -122,10 +155,10 @@ pub async fn discover_mcp_tools(
             .map(|sig| sign::verify_signature(pubkey, &signed_hash, sig))
             .unwrap_or(false);
         if !sig_valid {
-            return StatusError::forbidden(
+            return crate::authorize_service::AuthorizedOutcome::status_error(StatusError::forbidden(
                 "Invalid or missing MCP manifest signature for a server with a pinned signing key",
             )
-            .into_response();
+            );
         }
     }
 
@@ -139,7 +172,9 @@ pub async fn discover_mcp_tools(
         Ok(t) => t,
         Err(e) => {
             error!("Failed to discover MCP tools: {:?}", e);
-            return StatusError::internal("Failed to register MCP tools").into_response();
+            return crate::authorize_service::AuthorizedOutcome::status_error(
+                StatusError::internal("Failed to register MCP tools"),
+            );
         }
     };
 
@@ -341,16 +376,12 @@ pub async fn discover_mcp_tools(
         .mcp_tool_cache
         .invalidate_server(&tenant_id, &server_key);
 
-    (
-        StatusCode::OK,
-        Json(json!({
-            "status": "success",
-            "server_key": server_key,
-            "tools_registered": registered,
-            "tools": tools,
-        })),
-    )
-        .into_response()
+    crate::authorize_service::AuthorizedOutcome::json_ok(json!({
+        "status": "success",
+        "server_key": server_key,
+        "tools_registered": registered,
+        "tools": tools,
+    }))
 }
 
 pub async fn get_mcp_tool_manifest(

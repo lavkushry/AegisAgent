@@ -1,6 +1,6 @@
 ---
 globs:
-  - "lib/storage/**/*"
+  - "lib/storage/**/*.rs"
   - "lib/storage/**/*.rs"
   - "lib/storage/migrations/**/*"
 ---

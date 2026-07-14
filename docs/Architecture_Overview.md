@@ -43,7 +43,7 @@ The security claim is scoped and honest: **Aegis controls what passes through Ae
 | # | Choke point | What passes through | Status | Enforced by |
 |---|---|---|---|---|
 | 1 | Prompt / model call | prompts, completions, tool proposals | 📐 planned (Phase 7) — untrusted-content ingest exists today (`POST /v1/ingest`) | [components/Prompt_Model_Capture.md](components/Prompt_Model_Capture.md) |
-| 2 | Tool call | every SDK-wrapped tool invocation | ✅ | SDK `@protect_tool` → `POST /v1/authorize` |
+| 2 | Tool call | every SDK-wrapped tool invocation | ✅ | SDK `@protect_tool` → `POST /v1/authorize` → `lib/decision` pipeline |
 | 3 | API call | generic registered skills/actions | ✅ | same authorize path, action registry |
 | 4 | MCP call | MCP server/tool invocations | ✅ | `src/src/routes/mcp.rs` — manifest pinning + drift |
 | 5 | Network egress | caged workload traffic | 📐 planned (Phase 5) | [components/Egress_Proxy.md](components/Egress_Proxy.md) |
@@ -118,7 +118,7 @@ Full catalogue with failure modes: [fail-closed-behavior.md](fail-closed-behavio
 
 - **Canonical action** — `aegis-jcs-1` JSON (Unicode-sorted keys, compact separators, raw UTF-8, non-finite floats rejected); `src/canon/`; parity locked by `tests/canonical_action_vectors.json`.
 - **`action_hash`** — SHA-256 of the canonical action; the identity every approval and receipt binds to.
-- **Decision** — allow / deny / require_approval + reason + risk + trust context (`decisions` table).
+- **Decision** — authorize outcome (`allow` / `deny` / `require_approval` / `redact` / `quarantine`) + reason + risk + trust context (`decisions` table); evaluation in `lib/decision`.
 - **Approval** — frozen action + `action_hash` + TTL + single-use consumption (`approvals` table).
 - **Action receipt** — canonical body + `prev_receipt_hash` chain link + optional Ed25519 signature (`action_receipts` table); spec: [action-receipt-spec.md](action-receipt-spec.md).
 - **SOC event / alert / incident** — async pipeline records with `EventEvidence` linkage.

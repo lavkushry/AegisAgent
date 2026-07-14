@@ -1515,13 +1515,8 @@ pub(crate) fn mcp_server_key_from_tool(tool: &str) -> Option<&str> {
 /// original, un-normalized strings from `payload.tool_call` — only
 /// authorization lookups use the normalized form.
 pub(crate) fn normalize_tool_identifier(value: &str) -> String {
-    let decoded = percent_encoding::percent_decode_str(value)
-        .decode_utf8()
-        .map(|s| s.into_owned())
-        .unwrap_or_else(|_| value.to_string());
-    // Trim surrounding whitespace BEFORE lowercasing so any Unicode
-    // whitespace-lookalike at boundaries is removed regardless of case.
-    decoded.nfc().collect::<String>().trim().to_lowercase()
+    // Shared with Cedar + aegis-decision preflight (aegis_policy::validation).
+    aegis_policy::validation::normalize_tool_identifier(value)
 }
 
 /// Order-independent, subset-extracted canonical value shared by
@@ -3033,17 +3028,23 @@ pub(crate) mod test_helpers {
         agent_token: &str,
         request: AuthorizeRequest,
     ) -> AuthorizeResponse {
-        let response = authorize_action_impl(
+        let outcome = authorize_action_impl(
             state,
             agent_headers(agent_token, tenant_id),
             Bytes::from(serde_json::to_vec(&request).unwrap()),
             test_conn_info(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        serde_json::from_slice(&body).unwrap()
+        assert!(
+            outcome.is_success(),
+            "call_authorize expected success, got status={} body={:?}",
+            outcome.status,
+            outcome.body
+        );
+        match outcome.body {
+            crate::authorize_service::AuthorizedBody::Decision(resp) => *resp,
+            other => panic!("call_authorize expected Decision body, got {other:?}"),
+        }
     }
 
     pub(crate) fn make_test_approval(
