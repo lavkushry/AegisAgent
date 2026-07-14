@@ -2,11 +2,10 @@
 //!
 //! Repository law (`docs/architecture.md` §5) requires REST and gRPC adapters
 //! to `authenticate/parse -> typed service call -> typed error/response
-//! mapping` and forbids gRPC from buffering an Axum response body or parsing
-//! response JSON. The legacy gRPC `authorize` does exactly the forbidden
-//! thing: it serializes the request to JSON, forges HTTP headers and a
-//! `127.0.0.1:0` peer address, calls the REST impl, buffers the Axum body,
-//! re-parses the response JSON, and collapses every structured error into
+//! mapping`. gRPC `authorize` (Phase D) always uses this module: real peer
+//! address, [`AuthorizeContext`] credentials, and
+//! [`http_error_to_tonic`] / [`error_reason_to_tonic_code`] instead of the
+//! deleted JSON bridge that forged `127.0.0.1:0` and collapsed every error to
 //! `Status::internal`.
 //!
 //! This module is the extraction boundary:
@@ -14,20 +13,11 @@
 //!   neutral, already-authenticated inputs an adapter resolves before calling
 //!   the service;
 //! - [`error_reason_to_tonic_code`] / [`status_error_to_tonic`] — faithful
-//!   `ErrorReason -> tonic::Status` mapping that replaces the
-//!   `Status::internal` collapse;
-//! - [`typed_authorize_enabled`] — feature flag `AEGIS_TYPED_AUTHORIZE`
-//!   (default off) gating the gRPC direct path until the equality corpus
-//!   passes (plan Phase C);
-//! - [`authorize`] — protocol-neutral entry that both adapters call. During
-//!   the extraction it still drives `authorize_action_impl` so behavior stays
-//!   byte-identical to REST; the adapters no longer forge loopback peers or
-//!   invent headers themselves.
-//!
-//! Full `authorize_core` Result-typed extraction (no Axum `Response` at the
-//! service boundary) lands in the next phase that splits the 1.4k-line
-//! `authorize_action_impl` body; the types and gRPC path here make that split
-//! mechanical.
+//!   `ErrorReason -> tonic::Status` mapping;
+//! - [`authorize`] / [`authorize_raw`] — protocol-neutral entry both adapters
+//!   call. Still drives `authorize_action_impl` so REST response shapes stay
+//!   byte-identical while the 1.4k-line body is split into Result-typed
+//!   `authorize_core` (no Axum `Response` at the service boundary).
 
 use std::sync::Arc;
 
@@ -127,30 +117,12 @@ pub struct AuthorizedOutcome {
     pub body: AuthorizedBody,
 }
 
-/// Feature flag for the typed gRPC authorize path (`AEGIS_TYPED_AUTHORIZE`).
-///
-/// Default **off** until Phase C equality corpus is green. Accepted truthy
-/// values: `1`, `true`, `yes`, `on` (case-insensitive). Any other value,
-/// including unset, keeps the legacy JSON-bridge path.
-pub fn typed_authorize_enabled() -> bool {
-    match std::env::var("AEGIS_TYPED_AUTHORIZE") {
-        Ok(v) => {
-            let v = v.trim();
-            v.eq_ignore_ascii_case("1")
-                || v.eq_ignore_ascii_case("true")
-                || v.eq_ignore_ascii_case("yes")
-                || v.eq_ignore_ascii_case("on")
-        }
-        Err(_) => false,
-    }
-}
-
 /// The gRPC status code a `StatusError`'s reason maps to.
 ///
-/// This is the mapping the current gRPC adapter throws away by collapsing
-/// everything to `Status::internal`. Each arm mirrors the HTTP status the
-/// same reason already produces on REST (`ErrorReason::status_code`), so the
-/// two protocols report the same failure class:
+/// Replaces the pre-Phase-D collapse of every failure to `Status::internal`.
+/// Each arm mirrors the HTTP status the same reason already produces on REST
+/// (`ErrorReason::status_code`), so the two protocols report the same failure
+/// class:
 ///
 /// | reason | HTTP | gRPC |
 /// |---|---|---|
@@ -465,32 +437,6 @@ mod tests {
             Some("agent.example")
         );
         assert!(headers.get(axum::http::header::AUTHORIZATION).is_none());
-    }
-
-    #[test]
-    fn typed_authorize_flag_defaults_off_and_accepts_truthy() {
-        // Isolate from the ambient process env for this test.
-        let prev = std::env::var("AEGIS_TYPED_AUTHORIZE").ok();
-        std::env::remove_var("AEGIS_TYPED_AUTHORIZE");
-        assert!(!typed_authorize_enabled());
-
-        std::env::set_var("AEGIS_TYPED_AUTHORIZE", "true");
-        assert!(typed_authorize_enabled());
-        std::env::set_var("AEGIS_TYPED_AUTHORIZE", "1");
-        assert!(typed_authorize_enabled());
-        std::env::set_var("AEGIS_TYPED_AUTHORIZE", "yes");
-        assert!(typed_authorize_enabled());
-        std::env::set_var("AEGIS_TYPED_AUTHORIZE", "on");
-        assert!(typed_authorize_enabled());
-        std::env::set_var("AEGIS_TYPED_AUTHORIZE", "false");
-        assert!(!typed_authorize_enabled());
-        std::env::set_var("AEGIS_TYPED_AUTHORIZE", "0");
-        assert!(!typed_authorize_enabled());
-
-        match prev {
-            Some(v) => std::env::set_var("AEGIS_TYPED_AUTHORIZE", v),
-            None => std::env::remove_var("AEGIS_TYPED_AUTHORIZE"),
-        }
     }
 
     // ── Phase C: equality corpus ─────────────────────────────────────────

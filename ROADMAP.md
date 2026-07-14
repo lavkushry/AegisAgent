@@ -61,23 +61,23 @@ Deliverables:
 - remove the gRPC → REST handler → JSON body round trip for the first authorization method;
 - preserve current transactional storage and receipt behavior.
 
-Progress (2026-07-14): `src/src/authorize_service.rs` holds the protocol-neutral
-seam (`AuthorizeContext`, `AuthCredential`, `AuthorizedOutcome`,
+Progress (2026-07-14): Week-3 Phases A–D complete for the first authorize
+method. `src/src/authorize_service.rs` holds the protocol-neutral seam
+(`AuthorizeContext`, `AuthCredential`, `AuthorizedOutcome`,
 `error_reason_to_tonic_code` / `http_error_to_tonic`, `authorize` /
-`authorize_raw`). gRPC `authorize` dual-paths behind `AEGIS_TYPED_AUTHORIZE`
-(default **off**): when on, it resolves real `remote_addr`, tenant, and
-credential into `AuthorizeContext`, calls the shared service entry (no forged
-`127.0.0.1:0`), and maps `StatusError` / HTTP failures to faithful tonic codes
-instead of collapsing everything to `Status::internal`. Phase C equality corpus
-is in-module (`equality_*` tests): legacy header/body path vs typed service
-entry for allow / deny / require_approval / dry-run / frozen agent / bad token /
-missing tenant / replay-nonce conflict, plus approval `action_hash` length
-parity. The service still drives `authorize_action_impl` during extraction so
-REST response shapes stay stable; full Result-typed `authorize_core` (no Axum
-`Response` at the service boundary) and default-on + legacy-bridge delete
-(Phase D) remain.
+`authorize_raw`). gRPC `authorize` always resolves real `remote_addr`, tenant,
+and credential into `AuthorizeContext`, calls the shared service entry (no
+forged `127.0.0.1:0`), and maps `StatusError` / HTTP failures to faithful tonic
+codes — the JSON-bridge round-trip and `AEGIS_TYPED_AUTHORIZE` flag are
+**deleted** (Phase D). Phase C equality corpus (`equality_*` tests) covers
+allow / deny / require_approval / dry-run / frozen agent / bad token / missing
+tenant / replay-nonce conflict, plus approval `action_hash` length parity.
+Remaining: full Result-typed `authorize_core` (no Axum `Response` at the
+service boundary; gRPC still buffers the transitional Response once) and
+extraction of the 1.4k-line `authorize_action_impl` body; later move toward
+`aegis-decision`.
 
-Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus.
+Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 
 ### Week 4 — SPSC ring and slab prototype
 

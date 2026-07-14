@@ -1,10 +1,11 @@
 # Blueprint: Week-3 typed AuthorizeService extraction
 
 **Roadmap:** Phase 1 Week 3 · **Law:** `docs/architecture.md` §5 (thin
-adapters), §4 (target seams) · **Status:** Phase A types + Phase B flag path +
-Phase C equality corpus landed on `feat/typed-authorize-service`
-(`authorize_service.rs` unit + `equality_*` tests, gRPC dual path). Phase D
-default-on cleanup remains.
+adapters), §4 (target seams) · **Status:** Phases A–D complete on
+`feat/typed-authorize-service`. gRPC `authorize` always uses the typed seam;
+JSON bridge and `AEGIS_TYPED_AUTHORIZE` flag deleted. Remaining follow-on:
+Result-typed `authorize_core` (no Axum Response buffer) and later
+`aegis-decision` crate move.
 
 ## 1. Architectural scope & impact
 
@@ -80,4 +81,7 @@ must not regress >25%).
       constructs an AuthorizeContext (missing bearer/mTLS → Unauthenticated)
 - [x] no behavior change to Cedar, approvals, receipts, replay, bans
       (Phase C equality corpus)
-- [ ] security-review sign-off before Phase D flips the default
+- [x] Phase D: typed path is the only gRPC authorize path; legacy bridge
+      deleted after Phase C equality corpus green
+- [ ] security-review of Result-typed `authorize_core` before further
+      response-shape refactors

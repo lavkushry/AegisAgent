@@ -31,7 +31,7 @@ Performance targets are `<1 ms p99` warm deterministic authorization compute, `>
 
 ```text
 src/                       gateway binary/library, REST/gRPC adapters
-src/src/authorize_service.rs  Week-3 typed authorize seam (flag: AEGIS_TYPED_AUTHORIZE)
+src/src/authorize_service.rs  Week-3 typed authorize seam (gRPC authorize always uses it)
 src/canon/                 current aegis-jcs-1 crate
 lib/common/                errors, crypto helpers, metrics
 lib/api/                   protobuf and shared current models
