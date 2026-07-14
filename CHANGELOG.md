@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Typed authorize service (`lib/decision`, Week 3)** — protocol-neutral
+  `run_authorize_pipeline` (admit → preflight → guard → metadata → evaluate)
+  behind `DecisionRuntime` ports. REST/gRPC adapters build `AuthorizeContext`,
+  call the pipeline via `GatewayDecisionRuntime`, and map `DecisionOutcome` /
+  `AuthorizedOutcome` only (no gRPC→REST JSON bridge). Equality corpus covers
+  REST HeaderMap vs typed-context parity. See `ROADMAP.md` Week 3.
+
+### Added
+
 - **SOC console panel suite complete (`ui-next/`)** — allowlisted panel types
   are all registered: pure-SVG `timeseries` / `heatmap` on `POST /v1/soc/query`
   (#1821–#1822); differentiators `approval-card`, `provable-timeline`,

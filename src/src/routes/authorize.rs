@@ -1,47 +1,33 @@
-#![allow(unused_imports)]
-use crate::error::StatusError;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+//! REST adapter for `POST /v1/authorize`.
+//!
+//! Thin path: OTel parent → [`AuthorizeContext`] from headers →
+//! [`aegis_decision::run_authorize_pipeline`] → wire map. Evaluation lives in
+//! `lib/decision`; host I/O is [`crate::decision_runtime::GatewayDecisionRuntime`].
+
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{ConnectInfo, State},
+    http::HeaderMap,
     response::IntoResponse,
-    Json,
 };
-use chrono::{DateTime, Duration, Utc};
-use hmac::{Hmac, Mac};
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
-use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{error, info, warn, Instrument};
-use unicode_normalization::UnicodeNormalization;
-use uuid::Uuid;
-
-use crate::db;
-use crate::events::{AseEvent, EventSink};
-use crate::mcp_inspect;
-use crate::metrics::{is_untrusted_provenance, SecurityMetrics};
-use crate::models::*;
-use crate::policy::PolicyEngine;
-use crate::sign;
-use aegis_storage::traits::DecisionListFilters;
 
 use super::*;
 
-// Re-export helpers from sub-modules so existing call sites are unaffected.
+// Re-export helpers from sub-modules so existing call sites keep a flat
+// `routes::` namespace (`hash_tool_call`, receipts, decision writes, …).
 pub(crate) use super::authorize_canon::*;
 pub(crate) use super::authorize_decision::*;
 pub(crate) use super::authorize_receipts::*;
 
 /// Composite tracker key for `/v1/authorize` auth-failure lockout (#1604).
-/// Used by [`crate::authorize_service::GatewayDecisionRuntime`].
+/// Used by [`crate::decision_runtime::GatewayDecisionRuntime`].
 pub(crate) fn auth_failure_tracker_key(client_addr: &SocketAddr, tenant_id: &str) -> String {
     format!("{}|{}", client_addr.ip(), tenant_id)
 }
 
-// Authorize Action Handler
+/// REST handler: parse ConnectInfo + headers + body, map outcome to response.
 #[tracing::instrument(name = "authorize", skip_all)]
 pub async fn authorize_action(
     State(state): State<Arc<AppState>>,
