@@ -1,7 +1,7 @@
 # Walkthrough: Week-3 typed AuthorizeService extraction
 
 **Branch:** `feat/typed-authorize-service`  
-**Status:** complete for evaluation extraction + adapter packaging
+**Status:** complete — evaluation extraction, adapter packaging, and fail-closed e2e coverage
 
 ## What shipped
 
@@ -38,8 +38,8 @@
 
 ```bash
 cargo test -p aegis-decision --lib -- --test-threads=1
-# 72+ tests: stage units + pipeline e2e (allow/deny/approval/dry-run/MCP/ban/
-# frozen/revoked/rate/quota/audit/receipt/approval-fail, evaluate overrides)
+# 84+ tests: stage units + pipeline e2e (auth/mTLS/signatures, policy overrides,
+# MCP/ban/quarantine, dry-run side-effect free, audit/receipt/approval fail-closed)
 cargo test -p gateway --lib authorize_service -- --test-threads=1
 cargo test -p gateway --lib equality_ -- --test-threads=1
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings

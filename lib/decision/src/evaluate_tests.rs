@@ -286,6 +286,32 @@ async fn evaluate_quarantine_decision_quarantines_agent() {
 }
 
 #[tokio::test]
+async fn evaluate_dry_run_deny_does_not_escalate() {
+    let mut m = meta_allow();
+    m.guarded.dry_run = true;
+    let rt = MockRuntime {
+        cedar: PolicyDecisionView {
+            decision: "deny".into(),
+            matched_policies: vec!["forbid".into()],
+            approver_group: None,
+            reason: "denied".into(),
+            redacted_fields: vec![],
+        },
+        escalate_to: Some(("low".into(), "high".into())),
+        ..MockRuntime::default()
+    };
+    let out = evaluate_authorize(&rt, m, Instant::now(), EvaluateConfig::default()).await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "deny");
+            assert!(resp.dry_run);
+        }
+        other => panic!("expected dry-run deny, got {other:?}"),
+    }
+    assert_eq!(*rt.escalations.lock().expect("l"), 0);
+}
+
+#[tokio::test]
 async fn evaluate_deny_may_escalate_risk_tier() {
     let mut m = meta_allow();
     m.guarded.request.tool_call.mutates_state = false;

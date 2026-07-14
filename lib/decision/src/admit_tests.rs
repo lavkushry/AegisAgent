@@ -96,6 +96,45 @@ async fn admit_lockout_returns_429() {
 }
 
 #[tokio::test]
+async fn admit_empty_tenant_is_bad_request() {
+    let rt = MockRuntime::default();
+    let ctx = AuthorizeContext::new(
+        "   ",
+        addr(),
+        Transport::Rest,
+        AuthCredential::BearerToken("tok".into()),
+    );
+    let err = admit_authorize(&rt, &ctx, &minimal_body("dev"))
+        .await
+        .expect_err("empty tenant");
+    assert_eq!(err.http_status, 400);
+    match err.body {
+        DecisionBody::Failure(f) => assert!(f.message.contains("tenant")),
+        other => panic!("expected Failure, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn admit_empty_bearer_token_unauthorized() {
+    let rt = MockRuntime::default();
+    let ctx = AuthorizeContext::new(
+        "tenant-1",
+        addr(),
+        Transport::Rest,
+        AuthCredential::BearerToken("".into()),
+    );
+    let err = admit_authorize(&rt, &ctx, &minimal_body("dev"))
+        .await
+        .expect_err("empty token");
+    assert_eq!(err.http_status, 401);
+    match err.body {
+        DecisionBody::Failure(f) => assert!(f.message.contains("Missing agent token")),
+        other => panic!("expected Failure, got {other:?}"),
+    }
+    assert_eq!(*rt.auth_failures.lock().expect("l"), 1);
+}
+
+#[tokio::test]
 async fn admit_success_bearer() {
     let mut agent = AuthorizeAgent::new("agent-1", "tenant-1", "low");
     agent.allowed_environments = None;

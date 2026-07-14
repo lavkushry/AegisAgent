@@ -468,6 +468,29 @@ async fn pipeline_revoked_agent_denies() {
 }
 
 #[tokio::test]
+async fn pipeline_admission_webhook_mutate_continues_to_allow() {
+    let rt = MockRuntime {
+        admission: AdmissionEffect::Mutate(serde_json::json!({"rewritten": true})),
+        ..MockRuntime::default()
+    };
+    let out = run_authorize_pipeline(
+        &rt,
+        &ctx(),
+        &body_json(),
+        Instant::now(),
+        EvaluateConfig::default(),
+    )
+    .await;
+    match out.body {
+        DecisionBody::Decision(resp) => {
+            assert_eq!(resp.decision, "allow");
+        }
+        other => panic!("expected allow after webhook mutate, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 1);
+}
+
+#[tokio::test]
 async fn pipeline_admission_webhook_reject_denies() {
     let rt = MockRuntime {
         admission: AdmissionEffect::Reject("webhook blocked".into()),
