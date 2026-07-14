@@ -59,6 +59,7 @@ Implements services, storage, protocols, SDKs, UI and tests in their owning crat
 - **Primary paths:** `lib/`, `src/`, `bins/`, SDKs, `ui-next/`, future `ui-wasm/`, examples and scripts.
 - Existing SQL implementation belongs in `lib/storage/`; new code moves toward focused control/event traits without expanding the god trait unnecessarily.
 - Cedar and trust logic belong in `lib/policy/`; no storage/network dependency.
+- Authorize evaluation belongs in `lib/decision` (`run_authorize_pipeline` + `DecisionRuntime` ports); gateway REST/gRPC adapters stay thin (parse → pipeline → map outcome).
 - Wire/domain types belong in API/wire crates, never handlers.
 - REST and gRPC call the same typed service directly.
 - Bind authenticated `tenant_id` in every storage/index/cache operation.
