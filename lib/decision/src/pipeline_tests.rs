@@ -355,6 +355,50 @@ async fn pipeline_dry_run_allow_skips_receipt_and_side_effects() {
     // durable side effects (heartbeat, receipts, approvals) stay off.
     assert_eq!(*rt.writes.lock().expect("l"), 1);
     assert_eq!(*rt.heartbeats.lock().expect("l"), 0);
+    assert_eq!(*rt.receipts.lock().expect("l"), 0);
+    assert_eq!(*rt.best_effort_receipts.lock().expect("l"), 0);
+}
+
+#[tokio::test]
+async fn pipeline_idempotent_replay_host_error_fail_closed() {
+    let record = DecisionRecord {
+        id: Uuid::nil().to_string(),
+        tenant_id: "tenant-1".into(),
+        agent_id: "agent-1".into(),
+        user_id: None,
+        run_id: None,
+        trace_id: None,
+        skill: "echo".into(),
+        action: "run".into(),
+        resource: None,
+        input_json: "{}".into(),
+        decision: "allow".into(),
+        risk_score: Some(10),
+        reason: Some("cached".into()),
+        matched_policy_ids: None,
+        request_id: Some("req-fail".into()),
+        latency_ms: None,
+        composite_risk_score: Some(10),
+        root_trust_level: Some("trusted_internal_unsigned".into()),
+        parent_run_id: None,
+        created_at: Utc::now(),
+    };
+    let rt = MockRuntime {
+        idempotent: Some(record),
+        idempotent_replay_fail: true,
+        ..MockRuntime::default()
+    };
+    let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+    body["request_id"] = serde_json::json!("req-fail");
+    let raw = serde_json::to_vec(&body).expect("ser");
+    let out =
+        run_authorize_pipeline(&rt, &ctx(), &raw, Instant::now(), EvaluateConfig::default()).await;
+    assert_eq!(out.http_status, 500);
+    match out.body {
+        DecisionBody::Failure(_) => {}
+        other => panic!("expected Failure when idempotent rebuild fails, got {other:?}"),
+    }
+    assert_eq!(*rt.writes.lock().expect("l"), 0);
 }
 
 #[tokio::test]

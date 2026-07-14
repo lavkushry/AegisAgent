@@ -38,8 +38,9 @@
 
 ```bash
 cargo test -p aegis-decision --lib -- --test-threads=1
-# 86+ tests: stage units + pipeline e2e (auth/mTLS/signatures, policy overrides,
-# MCP unknown→critical approval, ban/quarantine, dry-run, durable vs best-effort receipts)
+# 87+ tests: stage units + pipeline e2e (auth/mTLS/signatures, policy overrides,
+# MCP unknown→critical approval, ban/quarantine, dry-run, durable vs best-effort
+# receipts, idempotent-replay host failure fail-closed)
 cargo test -p gateway --lib authorize_service -- --test-threads=1
 cargo test -p gateway --lib equality_ -- --test-threads=1
 cargo clippy -p aegis-decision -p gateway --all-targets -- -D warnings

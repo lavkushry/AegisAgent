@@ -51,6 +51,8 @@ pub struct MockRuntime {
     pub policies_load_fail: bool,
     /// When true, `evaluate_cedar` fails.
     pub cedar_fail: bool,
+    /// When true, `idempotent_replay` fails (host rebuild error).
+    pub idempotent_replay_fail: bool,
     /// When set, `maybe_escalate_risk_tier` returns this `(old, new)` pair.
     pub escalate_to: Option<(String, String)>,
     pub action_hash: String,
@@ -95,6 +97,7 @@ impl Default for MockRuntime {
             approval_fail: false,
             policies_load_fail: false,
             cedar_fail: false,
+            idempotent_replay_fail: false,
             escalate_to: None,
             action_hash: "deadbeef".into(),
             writes: Mutex::new(0),
@@ -371,6 +374,9 @@ impl DecisionRuntime for MockRuntime {
         &self,
         record: DecisionRecord,
     ) -> Result<AuthorizeResponse, AegisError> {
+        if self.idempotent_replay_fail {
+            return Err(AegisError::Internal("idempotent rebuild failed".into()));
+        }
         Ok(authorize_response_from_decision_record(record, None))
     }
 }
