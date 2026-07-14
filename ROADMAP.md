@@ -91,28 +91,30 @@ Gate: legacy versus typed authorization decisions, hashes, approvals, receipts a
 
 ### Week 4 — SPSC ring and slab prototype
 
-Progress (2026-07-13): the `current` checkout has unwired ring, safe sealed-page
+Progress (2026-07-14): the `current` checkout has unwired ring, safe sealed-page
 oracle, append-only published-prefix, and failure-atomic single-page admission
-prototypes under Proposed ADR-0006 through ADR-0009, and a design-only
-Proposed ADR-0010 specifying bounded page rotation with generation-tagged
-reuse (fixed pool of P slots, epoch-addressed, single released-epoch
-reclamation edge, typed PageQuotaExhausted backpressure) with an unwired
-`RotatingAdmissionChannel` prototype (rotation seams, quota refusal,
-seam-shortfall/generation-skip terminal fixtures, caught-unwind rotation
-fault, Loom seam model, cross-thread rotation stress; prototype rebind
-allocates one bounded page per rotation — in-place reuse precedes shadow). The volatile composite
-validates before reservation, Release-publishes the page before the ring,
-withholds capacity until a must-use validated frame lease commits, and reports
-clean, faulted, and orphaned-prefix terminal states. Test sources include safe
-differential oracles, native tiny-ring stress, shipping-algorithm Loom,
-Miri-oriented borrow/drop cases, defined ASan/TSan CI lanes, and zero-allocation
-admission/claim checks. It carries no production or `shadow` traffic, cannot
-carry protected evidence, is not `qualified`, and has no performance result.
-The production fabric remains `target`. Formal ADR acceptance/security review,
-green hosted sanitizer artifacts, real UBSan support, authenticated registry,
-bounded page rotation/outstanding pages, WAL durability/replay, generation
-reuse/epochs, NUMA-owner reclamation, priority lanes, production shadow wiring,
-release-artifact rollback, and qualification remain blockers.
+prototypes under Proposed ADR-0006 through ADR-0009, and Proposed ADR-0010
+bounded page rotation with generation-tagged reuse (fixed pool of P slots,
+epoch-addressed, single released-epoch reclamation edge, typed
+PageQuotaExhausted backpressure) with an unwired `RotatingAdmissionChannel`
+prototype (rotation seams, quota refusal, seam-shortfall/generation-skip
+terminal fixtures, caught-unwind rotation fault, Loom seam model, cross-thread
+rotation stress). **In-place pool rebind landed:** construction preallocates
+`P` pages; rotation uses exclusive `PublishedSlabPage::rebind` (zero allocation
+after `new`). Native rotating stress is `cfg(not(feature = "loom"))` so
+all-features CI does not run std-thread stress on Loom atomics. The volatile
+composite validates before reservation, Release-publishes the page before the
+ring, withholds capacity until a must-use validated frame lease commits, and
+reports clean, faulted, and orphaned-prefix terminal states. Test sources
+include safe differential oracles, native tiny-ring stress, shipping-algorithm
+Loom, Miri-oriented borrow/drop cases, defined ASan/TSan CI lanes, and
+zero-allocation admission/claim checks. It carries no production or `shadow`
+traffic, cannot carry protected evidence, is not `qualified`, and has no
+performance result. The production fabric remains `target`. Formal ADR
+acceptance/security review, green hosted sanitizer artifacts, real UBSan
+support, authenticated registry, WAL durability/replay, NUMA-owner
+reclamation, priority lanes, production shadow wiring, release-artifact
+rollback, and qualification remain blockers.
 
 Deliverables:
 

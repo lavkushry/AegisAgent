@@ -148,23 +148,24 @@ last frame commit for epoch e, ring-tail Release [C]
 ### Prototype notes (disclosed deviations)
 
 The `current` prototype (`RotatingAdmissionChannel<N, P>`) deviates from the
-target in three bounded, disclosed ways:
+target in two bounded, disclosed ways (in-place pool rebind landed; see
+`PublishedSlabPage::rebind` / fixed `[PublishedSlabPage; P]` pool):
 
-1. **Rebind allocates.** Rebinding constructs a fresh page (one bounded
-   allocation per rotation, zero per event) instead of reusing the slot
-   allocation in place. In-place reuse — which requires a mutable-generation
-   page state with its own ordering proof — is required before any `shadow`
-   wiring and stays inside this ADR's design envelope.
-2. **Reader handoff ring.** The successor epoch's reader travels
+1. **Reader handoff ring.** The successor epoch's reader travels
    producer→consumer over a second bounded SPSC ring of capacity `P`. Its
    publication Release-store precedes the data ring's `[R]` for the epoch's
    first descriptor, so a consumer observing that descriptor observes the
    handoff; an absent handoff at a seam is terminal, never transient. The
    quota check `[A]` still governs reclamation — the handoff ring observing
    `Full` despite quota is a terminal invariant violation.
-3. **`P` is a power of two** (the handoff ring shares the SPSC capacity
+2. **`P` is a power of two** (the handoff ring shares the SPSC capacity
    rule) and the construction rejects `P < 2` and a nonzero
    `arena_generation` (epochs own the tag, starting at zero).
+
+Construction preallocates all `P` page slots; rotation exclusively rebinds a
+freed slot (generation + first_sequence reset, publication state cleared) with
+zero allocation after `new`. Shadow wiring still requires formal ADR
+acceptance and the remaining blockers listed in the Decision section.
 
 ### Terminal-state extension
 

@@ -7,9 +7,10 @@
 //! provides no durability, registry, NUMA, priority-lane, or qualification
 //! claim.
 //!
-//! Prototype deviation, disclosed per the ADR's allocation ledger: rebinding
-//! a slot constructs a fresh page (one bounded allocation per rotation, zero
-//! per event). In-place slot reuse is required before any shadow wiring.
+//! Construction preallocates a fixed pool of `P` pages. Rotation rebinds a
+//! freed slot in place (exclusive `PublishedSlabPage::rebind`) — zero
+//! allocation after `new`, zero per event. Shadow wiring still requires
+//! formal ADR acceptance and the other ADR-0010 blockers.
 //!
 //! The new epoch's reader travels producer→consumer over a second bounded
 //! SPSC ring. Its publication Release-store happens before the data ring's
@@ -36,7 +37,7 @@ use crate::{
     slab::validate_config,
     Consumer, Producer, PublishedPayload, PublishedSlabPage, PublishedSlabReadError,
     PublishedSlabReader, PublishedSlabWriter, RingConfigError, SlabAppendError, SlabConfigError,
-    SlabPageConfig, SpscRing, TelemetryDescriptor, TryPopError,
+    SlabPageConfig, SlabRebindError, SpscRing, TelemetryDescriptor, TryPopError,
 };
 
 const TERMINAL_OPEN: u8 = 0;
@@ -69,7 +70,8 @@ enum ConsumerState {
 /// Setup handle binding one descriptor ring to a bounded series of page
 /// epochs (`P` maximum live pages).
 pub struct RotatingAdmissionChannel<const N: usize, const P: usize> {
-    first_page: PublishedSlabPage,
+    /// Fixed pool of page slots; slot `e mod P` serves epoch `e` after rebind.
+    pool: [PublishedSlabPage; P],
     template: SlabPageConfig,
     ring: SpscRing<TelemetryDescriptor, N>,
     handoff: SpscRing<PublishedSlabReader, P>,
@@ -95,13 +97,13 @@ impl<const N: usize, const P: usize> RotatingAdmissionChannel<N, P> {
         }
         validate_config(config).map_err(RotatingConfigError::Slab)?;
 
-        let first_page = PublishedSlabPage::new(config).map_err(RotatingConfigError::Slab)?;
+        let pool = build_page_pool::<P>(config)?;
         let ring = SpscRing::new_with_sequence(config.first_sequence)
             .map_err(RotatingConfigError::Ring)?;
         let handoff = SpscRing::new().map_err(RotatingConfigError::Handoff)?;
 
         Ok(Self {
-            first_page,
+            pool,
             template: config,
             ring,
             handoff,
@@ -120,14 +122,15 @@ impl<const N: usize, const P: usize> RotatingAdmissionChannel<N, P> {
 
     pub fn split(self) -> (RotatingProducer<N, P>, RotatingConsumer<N, P>) {
         let Self {
-            first_page,
-            template,
+            pool,
+            template: _,
             ring,
             handoff,
             released,
             terminal,
         } = self;
-        let (slab, reader) = first_page.split();
+        // Epoch 0 opens pool slot 0 without rebind (constructed with gen 0).
+        let (slab, reader) = pool[0].open();
         let (ring_producer, ring_consumer) = ring.split();
         let (handoff_producer, handoff_consumer) = handoff.split();
         let expected_sequence = slab.next_sequence();
@@ -135,11 +138,11 @@ impl<const N: usize, const P: usize> RotatingAdmissionChannel<N, P> {
         (
             RotatingProducer {
                 slab,
+                pool,
                 ring: ring_producer,
                 handoff: handoff_producer,
                 released: Arc::clone(&released),
                 terminal: Arc::clone(&terminal),
-                template,
                 epoch: 0,
                 state: ProducerState::Open,
                 #[cfg(all(test, not(feature = "loom")))]
@@ -161,6 +164,22 @@ impl<const N: usize, const P: usize> RotatingAdmissionChannel<N, P> {
             },
         )
     }
+}
+
+fn build_page_pool<const P: usize>(
+    template: SlabPageConfig,
+) -> Result<[PublishedSlabPage; P], RotatingConfigError> {
+    // Preallocate every slot at construction; rotation only rebinds.
+    let mut pages = Vec::with_capacity(P);
+    for slot in 0..P {
+        let mut cfg = template;
+        // Placeholder generation until rebind (epoch 0 keeps gen 0).
+        cfg.arena_generation = slot as u32;
+        pages.push(PublishedSlabPage::new(cfg).map_err(RotatingConfigError::Slab)?);
+    }
+    pages
+        .try_into()
+        .map_err(|_| RotatingConfigError::PoolBuildLength)
 }
 
 impl<const N: usize, const P: usize> fmt::Debug for RotatingAdmissionChannel<N, P> {
@@ -185,11 +204,12 @@ pub struct RotatingProducer<const N: usize, const P: usize> {
     // Declaration order preserves active-page-before-rings closure during
     // automatic field destruction, matching `close_faulted`.
     slab: PublishedSlabWriter,
+    /// Fixed ADR-0010 page pool; slots rebind in place after release.
+    pool: [PublishedSlabPage; P],
     ring: Producer<TelemetryDescriptor, N>,
     handoff: Producer<PublishedSlabReader, P>,
     released: Arc<PaddedReleasedEpochs>,
     terminal: Arc<PaddedTerminal>,
-    template: SlabPageConfig,
     epoch: u64,
     state: ProducerState,
     #[cfg(all(test, not(feature = "loom")))]
@@ -301,23 +321,17 @@ impl<const N: usize, const P: usize> RotatingProducer<N, P> {
             panic!("injected rotation fault after seal");
         }
 
-        let config = SlabPageConfig {
-            arena_id: self.template.arena_id,
-            arena_generation: next_epoch as u32,
-            byte_capacity: self.template.byte_capacity,
-            descriptor_capacity: self.template.descriptor_capacity,
-            first_sequence: self.slab.next_sequence(),
-        };
-        // Prototype rebind: one bounded page construction per rotation
-        // (disclosed in ADR-0010's ledger; in-place reuse precedes shadow).
-        let page = match PublishedSlabPage::new(config) {
-            Ok(page) => page,
-            Err(error) => {
-                self.close_faulted();
-                return Err(TryRotatingAdmitError::RotationConfig(error));
-            }
-        };
-        let (writer, reader) = page.split();
+        let first_sequence = self.slab.next_sequence();
+        let slot = (next_epoch as usize) % P;
+        // In-place reuse: exclusive rebind of the freed pool slot (ADR-0010).
+        // Quota `[A]` proved the prior occupant of this slot was released, so
+        // no writer/reader should hold the page Arc — outstanding endpoints
+        // are a terminal invariant fault, not a retryable error.
+        if let Err(error) = self.pool[slot].rebind(next_epoch as u32, first_sequence) {
+            self.close_faulted();
+            return Err(TryRotatingAdmitError::Rebind(error));
+        }
+        let (writer, reader) = self.pool[slot].open();
         // Reader publication Release happens-before the data ring's `[R]`
         // for this epoch's first descriptor (program order + both Release),
         // so a consumer observing that descriptor observes this handoff.
@@ -831,6 +845,8 @@ pub enum RotatingConfigError {
     Slab(SlabConfigError),
     PoolTooSmall { pool: usize },
     GenerationNotZero { arena_generation: u32 },
+    /// Internal: fixed pool length did not match `P` after construction.
+    PoolBuildLength,
 }
 
 impl fmt::Display for RotatingConfigError {
@@ -846,6 +862,9 @@ impl fmt::Display for RotatingConfigError {
                 f,
                 "rotating channels own the generation tag; expected 0, got {arena_generation}"
             ),
+            Self::PoolBuildLength => {
+                write!(f, "rotating page pool construction length mismatch")
+            }
         }
     }
 }
@@ -869,7 +888,8 @@ pub enum TryRotatingAdmitError {
         live_epochs: usize,
         pool: usize,
     },
-    RotationConfig(SlabConfigError),
+    /// Exclusive pool-slot rebind failed (outstanding endpoints).
+    Rebind(SlabRebindError),
     HandoffInvariant,
 }
 
@@ -899,11 +919,8 @@ impl fmt::Display for TryRotatingAdmitError {
                 f,
                 "all {pool} page slots hold live epochs ({live_epochs}); consumer is lagging"
             ),
-            Self::RotationConfig(error) => {
-                write!(
-                    f,
-                    "rotation could not construct the successor page: {error}"
-                )
+            Self::Rebind(error) => {
+                write!(f, "rotation could not rebind freed pool slot: {error}")
             }
             Self::HandoffInvariant => {
                 write!(
@@ -1121,6 +1138,73 @@ mod native_tests {
         drain_one(&mut consumer, &[1u8; 6]);
         drain_one(&mut consumer, &[2u8; 6]);
         assert_eq!(consumer.epoch(), 1);
+    }
+
+    /// ADR-0010 in-place reuse: more rotations than pool capacity rebind
+    /// released slots without constructing new pages.
+    #[test]
+    fn rotation_reuses_pool_slots_beyond_capacity() {
+        let mut cfg = config();
+        cfg.descriptor_capacity = 1;
+        cfg.byte_capacity = 64;
+        let channel = RotatingAdmissionChannel::<16, 2>::new(cfg).expect("channel");
+        let (mut producer, mut consumer) = channel.split();
+
+        // P=2, capacity 1: every admit after the first rotates. Produce 6
+        // epochs so slots 0 and 1 are rebound multiple times (epochs 0..5).
+        let mut seen = Vec::new();
+        for i in 0u8..6 {
+            let payload = [i];
+            loop {
+                match producer.try_admit(&payload, 1, 0) {
+                    Ok(_) => break,
+                    Err(TryRotatingAdmitError::PageQuotaExhausted { .. }) => {
+                        let frame = consumer.try_next().expect("drain lagging consumer");
+                        seen.push(frame.payload()[0]);
+                        frame.commit();
+                    }
+                    Err(error) => panic!("unexpected admit error at {i}: {error}"),
+                }
+            }
+        }
+        producer.finish().expect("clean finish");
+        loop {
+            match consumer.try_next() {
+                Ok(frame) => {
+                    seen.push(frame.payload()[0]);
+                    frame.commit();
+                }
+                Err(TryRotatingConsumeError::CleanEnd) => break,
+                Err(TryRotatingConsumeError::Empty) => continue,
+                Err(error) => panic!("unexpected end drain: {error}"),
+            }
+        }
+        assert_eq!(seen, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(consumer.total_committed(), 6);
+    }
+
+    #[test]
+    fn page_rebind_rejects_outstanding_endpoints() {
+        let page = PublishedSlabPage::new(config()).expect("page");
+        let (_w, _r) = page.open();
+        let mut page = page;
+        let err = page
+            .rebind(1, 99)
+            .expect_err("open endpoints block rebind");
+        assert_eq!(err, crate::SlabRebindError::OutstandingEndpoints);
+    }
+
+    #[test]
+    fn page_rebind_succeeds_after_endpoints_drop() {
+        let mut page = PublishedSlabPage::new(config()).expect("page");
+        {
+            let (_w, _r) = page.open();
+        }
+        page.rebind(3, 42).expect("exclusive rebind");
+        assert_eq!(page.arena_generation(), 3);
+        let (w, _r) = page.open();
+        assert_eq!(w.next_sequence(), 42);
+        assert_eq!(w.arena_generation(), 3);
     }
 
     #[test]
