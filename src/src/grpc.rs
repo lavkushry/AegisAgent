@@ -596,7 +596,7 @@ impl SocService for SocGrpcServiceImpl {
                     next_cursor: next_cursor.map(|c| c.to_string()).unwrap_or_default(),
                 }))
             }
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -653,7 +653,7 @@ impl SocService for SocGrpcServiceImpl {
                     next_cursor: next_cursor.map(|c| c.to_string()).unwrap_or_default(),
                 }))
             }
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -749,7 +749,7 @@ impl SocService for SocGrpcServiceImpl {
                     created_at: pb.created_at.to_rfc3339(),
                 }),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -781,7 +781,7 @@ impl SocService for SocGrpcServiceImpl {
                     .collect();
                 Ok(Response::new(ListPlaybooksResponse { items }))
             }
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -797,7 +797,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeletePlaybookResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -830,7 +830,11 @@ impl SocService for SocGrpcServiceImpl {
         let raw_results = exporter
             .search_similar_events(&req.tenant_id, &req.query, limit)
             .await
-            .map_err(|e| Status::internal(format!("Semantic search error: {}", e)))?;
+            .map_err(|e| {
+                crate::authorize_service::status_error_to_tonic(
+                    &crate::error::StatusError::internal(format!("Semantic search error: {e}")),
+                )
+            })?;
 
         // Map untyped JSON results into typed proto messages.
         let results = raw_results
@@ -902,7 +906,7 @@ impl SocService for SocGrpcServiceImpl {
                 items: items.into_iter().map(contact_point_to_proto).collect(),
                 next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -944,7 +948,7 @@ impl SocService for SocGrpcServiceImpl {
                     "json",
                 )
                 .await
-                .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+                .map_err(crate::authorize_service::aegis_error_to_tonic)?;
             webhook_id = Some(sub.id);
         }
         let cp = self
@@ -961,7 +965,7 @@ impl SocService for SocGrpcServiceImpl {
                 "unknown",
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateContactPointResponse {
             contact_point: Some(contact_point_to_proto(cp)),
             delivery_secret,
@@ -994,7 +998,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteContactPointResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1022,7 +1026,7 @@ impl SocService for SocGrpcServiceImpl {
                     .collect(),
                 next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1052,7 +1056,7 @@ impl SocService for SocGrpcServiceImpl {
                 },
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateNotificationPolicyResponse {
             policy: Some(notification_policy_to_proto(policy)),
         }))
@@ -1070,7 +1074,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteNotificationPolicyResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1095,7 +1099,7 @@ impl SocService for SocGrpcServiceImpl {
                 items: items.into_iter().map(silence_to_proto).collect(),
                 next_cursor: next.map(|c| c.to_string()).unwrap_or_default(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1146,7 +1150,7 @@ impl SocService for SocGrpcServiceImpl {
                 },
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateSilenceResponse {
             silence: Some(silence_to_proto(silence)),
         }))
@@ -1164,7 +1168,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteSilenceResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1183,7 +1187,7 @@ impl SocService for SocGrpcServiceImpl {
             Ok(items) => Ok(Response::new(ListSocDashboardsResponse {
                 items: items.into_iter().map(soc_dashboard_to_proto).collect(),
             })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1202,7 +1206,7 @@ impl SocService for SocGrpcServiceImpl {
                 dashboard: Some(soc_dashboard_to_proto(record)),
             })),
             Ok(None) => Err(Status::not_found("Dashboard not found")),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1225,8 +1229,9 @@ impl SocService for SocGrpcServiceImpl {
                 schema.uid
             )));
         }
-        let schema_json = serde_json::to_string(&schema)
-            .map_err(|e| Status::internal(format!("serialize dashboard: {e}")))?;
+        let schema_json = serde_json::to_string(&schema).map_err(|e| {
+            crate::authorize_service::serialize_error_to_tonic("serialize dashboard", e)
+        })?;
         let record = self
             ._state
             .storage
@@ -1238,7 +1243,7 @@ impl SocService for SocGrpcServiceImpl {
                 &schema_json,
             )
             .await
-            .map_err(|e| Status::internal(format!("Database error: {:?}", e)))?;
+            .map_err(crate::authorize_service::aegis_error_to_tonic)?;
         Ok(Response::new(CreateSocDashboardResponse {
             dashboard: Some(soc_dashboard_to_proto(record)),
         }))
@@ -1257,8 +1262,9 @@ impl SocService for SocGrpcServiceImpl {
                 "uid in schema_json must match request uid",
             ));
         }
-        let schema_json = serde_json::to_string(&schema)
-            .map_err(|e| Status::internal(format!("serialize dashboard: {e}")))?;
+        let schema_json = serde_json::to_string(&schema).map_err(|e| {
+            crate::authorize_service::serialize_error_to_tonic("serialize dashboard", e)
+        })?;
         match self
             ._state
             .storage
@@ -1275,7 +1281,7 @@ impl SocService for SocGrpcServiceImpl {
                 dashboard: Some(soc_dashboard_to_proto(record)),
             })),
             Ok(None) => Err(Status::not_found("Dashboard not found")),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 
@@ -1291,7 +1297,7 @@ impl SocService for SocGrpcServiceImpl {
             .await
         {
             Ok(success) => Ok(Response::new(DeleteSocDashboardResponse { success })),
-            Err(e) => Err(Status::internal(format!("Database error: {:?}", e))),
+            Err(e) => Err(crate::authorize_service::aegis_error_to_tonic(e)),
         }
     }
 }

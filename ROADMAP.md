@@ -75,11 +75,10 @@ tenant / replay-nonce conflict, plus approval `action_hash` length parity.
 Follow-on progress: typed `AuthorizedOutcome` seam covers **authorize**,
 **approve/reject**, **register_agent**, **create_tenant**,
 **register_mcp_server**, **discover_mcp_tools**, **soc_query**, and
-**close_incident** (REST thin adapters + gRPC `outcome_to_tonic` /
-`outcome_to_tonic_json`, no Axum body buffer). Remaining SOC gRPC methods
-(playbooks, contact points, dashboards, …) already call storage directly.
-Remaining: later `aegis-decision` crate move; optional typed wrappers for
-storage-direct SOC RPCs.
+**close_incident**. Storage-direct SOC gRPC methods (playbooks, contact
+points, dashboards, lists, …) map `AegisError` via `aegis_error_to_tonic`
+(NotFound/Conflict/pool exhaustion → proper tonic codes; no
+`Status::internal` collapse). Remaining: later `aegis-decision` crate move.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

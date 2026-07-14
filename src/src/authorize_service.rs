@@ -198,6 +198,20 @@ pub fn status_error_to_tonic(err: &StatusError) -> tonic::Status {
     tonic::Status::new(error_reason_to_tonic_code(err.reason), err.message.clone())
 }
 
+/// Map a storage/domain [`AegisError`] through [`StatusError`] to tonic.
+///
+/// Storage-direct gRPC methods (playbooks, contact points, dashboards, …)
+/// use this so `NotFound` / `Conflict` / pool exhaustion become
+/// `NotFound` / `Aborted` / `Unavailable` instead of collapsed `Internal`.
+pub fn aegis_error_to_tonic(err: aegis_common::errors::AegisError) -> tonic::Status {
+    status_error_to_tonic(&StatusError::from(err))
+}
+
+/// Map a serialization failure (e.g. dashboard JSON) to tonic InvalidArgument.
+pub fn serialize_error_to_tonic(context: &str, err: impl std::fmt::Display) -> tonic::Status {
+    status_error_to_tonic(&StatusError::bad_request(format!("{context}: {err}")))
+}
+
 /// Map an HTTP error body to tonic Status (prefers [`StatusError`] envelope).
 pub fn http_error_to_tonic(status: StatusCode, body: &[u8]) -> tonic::Status {
     if let Ok(err) = serde_json::from_slice::<StatusError>(body) {
@@ -472,6 +486,28 @@ mod tests {
         let status = status_error_to_tonic(&err);
         assert_eq!(status.code(), Code::Unauthenticated);
         assert_eq!(status.message(), "Invalid or quarantined agent token");
+    }
+
+    #[test]
+    fn aegis_error_to_tonic_maps_not_found_and_conflict() {
+        let s = aegis_error_to_tonic(aegis_common::errors::AegisError::NotFound(
+            "Incident not found".into(),
+        ));
+        assert_eq!(s.code(), Code::NotFound);
+        assert_eq!(s.message(), "Incident not found");
+
+        let s = aegis_error_to_tonic(aegis_common::errors::AegisError::Conflict(
+            "Tenant already exists".into(),
+        ));
+        assert_eq!(s.code(), Code::Aborted);
+        assert_eq!(s.message(), "Tenant already exists");
+    }
+
+    #[test]
+    fn serialize_error_to_tonic_is_invalid_argument() {
+        let s = serialize_error_to_tonic("serialize dashboard", "boom");
+        assert_eq!(s.code(), Code::InvalidArgument);
+        assert!(s.message().contains("serialize dashboard"));
     }
 
     #[test]
