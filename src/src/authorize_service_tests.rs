@@ -3,6 +3,23 @@ use crate::error::StatusError;
 use axum::http::{HeaderMap, StatusCode};
 use tonic::Code;
 
+fn sample_allow_response() -> AuthorizeResponse {
+    AuthorizeResponse {
+        decision_id: uuid::Uuid::nil(),
+        decision: "allow".into(),
+        risk_score: 10,
+        risk_level: "low".into(),
+        composite_risk_score: 10,
+        reason: "ok".into(),
+        matched_policies: vec!["p1".into()],
+        approval: None,
+        redacted_fields: vec![],
+        root_trust_level: "trusted_internal_unsigned".into(),
+        dry_run: false,
+        receipt: None,
+    }
+}
+
 #[test]
 fn auth_and_policy_failures_are_not_collapsed_to_internal() {
     // The exact defect this replaces: a policy deny (403) and a bad token
@@ -39,21 +56,8 @@ fn outcome_to_authorize_result_maps_status_error_to_aegis_error() {
 
 #[test]
 fn outcome_to_authorize_result_passes_through_decision() {
-    let resp = AuthorizeResponse {
-        decision_id: uuid::Uuid::nil(),
-        decision: "allow".into(),
-        risk_score: 0,
-        risk_level: "low".into(),
-        composite_risk_score: 0,
-        reason: "ok".into(),
-        matched_policies: vec![],
-        approval: None,
-        redacted_fields: vec![],
-        root_trust_level: "trusted_internal_unsigned".into(),
-        dry_run: false,
-        receipt: None,
-    };
-    let outcome = AuthorizedOutcome::decision(resp.clone());
+    let resp = sample_allow_response();
+    let outcome = AuthorizedOutcome::decision(resp);
     let got = outcome_to_authorize_result(outcome).expect("ok");
     assert_eq!(got.decision, "allow");
     assert_eq!(got.reason, "ok");
@@ -176,10 +180,70 @@ fn outcome_to_tonic_maps_json_deny_by_http_status() {
 }
 
 #[test]
+fn outcome_to_tonic_passes_through_successful_decision() {
+    let resp = sample_allow_response();
+    let outcome = AuthorizedOutcome::decision(resp.clone());
+    let got = outcome_to_tonic(outcome).expect("ok");
+    assert_eq!(got.decision, "allow");
+    assert_eq!(got.reason, "ok");
+    assert_eq!(got.decision_id, resp.decision_id);
+}
+
+#[test]
+fn outcome_to_tonic_rejects_decision_body_with_error_http_status() {
+    let outcome = AuthorizedOutcome {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        body: AuthorizedBody::Decision(Box::new(sample_allow_response())),
+    };
+    let err = outcome_to_tonic(outcome).expect_err("must err");
+    assert_eq!(err.code(), Code::Internal);
+    assert!(err.message().contains("HTTP 500"));
+}
+
+#[test]
 fn outcome_to_response_round_trips_status_error() {
     let outcome = AuthorizedOutcome::status_error(StatusError::unauthorized("bad token"));
     let response = outcome_to_response(outcome);
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn outcome_to_response_maps_decision_and_json_bodies() {
+    let decision = AuthorizedOutcome::decision(sample_allow_response());
+    let response = outcome_to_response(decision);
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = AuthorizedOutcome {
+        status: StatusCode::FORBIDDEN,
+        body: AuthorizedBody::Json(serde_json::json!({
+            "decision": "deny",
+            "reason": "not permitted"
+        })),
+    };
+    let response = outcome_to_response(json);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn outcome_to_tonic_json_passes_through_success_json_and_decision() {
+    let json_ok = AuthorizedOutcome {
+        status: StatusCode::OK,
+        body: AuthorizedBody::Json(serde_json::json!({"status": "approved"})),
+    };
+    let v = outcome_to_tonic_json(json_ok).expect("json ok");
+    assert_eq!(v.get("status").and_then(|x| x.as_str()), Some("approved"));
+
+    let decision_ok = AuthorizedOutcome::decision(sample_allow_response());
+    let v = outcome_to_tonic_json(decision_ok).expect("decision as json");
+    assert_eq!(v.get("decision").and_then(|x| x.as_str()), Some("allow"));
+}
+
+#[test]
+fn outcome_to_tonic_json_maps_status_error() {
+    let outcome = AuthorizedOutcome::status_error(StatusError::not_found("missing approval"));
+    let err = outcome_to_tonic_json(outcome).expect_err("must err");
+    assert_eq!(err.code(), Code::NotFound);
+    assert_eq!(err.message(), "missing approval");
 }
 
 #[test]
@@ -252,20 +316,7 @@ fn build_service_headers_sets_mtls_cn_without_bearer() {
 
 #[test]
 fn decision_outcome_to_authorized_maps_decision_body() {
-    let resp = AuthorizeResponse {
-        decision_id: uuid::Uuid::nil(),
-        decision: "allow".into(),
-        risk_score: 10,
-        risk_level: "low".into(),
-        composite_risk_score: 10,
-        reason: "ok".into(),
-        matched_policies: vec!["p1".into()],
-        approval: None,
-        redacted_fields: vec![],
-        root_trust_level: "trusted_internal_unsigned".into(),
-        dry_run: false,
-        receipt: None,
-    };
+    let resp = sample_allow_response();
     let outcome = DecisionOutcome {
         http_status: 200,
         body: DecisionBody::Decision(Box::new(resp.clone())),

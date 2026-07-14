@@ -83,6 +83,9 @@ implements the trait and gRPC authorize calls `evaluate` through it.
 ports, including idempotent-replay reconstruction. Gateway REST/gRPC adapters
 build `AuthorizeContext`, call the pipeline, and map `DecisionOutcome` /
 `AuthorizedOutcome` only — Week-3 evaluation extraction **complete**.
+Packaging: stage + pipeline tests use shared `MockRuntime`; gateway wire helpers
+live in `authorize_service(_tests).rs` (no Axum body bridge); route tests remain
+in `authorize_tests.rs`.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 
