@@ -1,8 +1,9 @@
 //! Append-only slab pages with an atomically published immutable prefix.
 //!
-//! This is a current, unwired prototype under Proposed ADR-0008. It has no
-//! registry, reset/reuse, epoch reclamation, NUMA allocation, protected-evidence
-//! authority, or production integration.
+//! This is a current, unwired prototype under Proposed ADR-0008 / ADR-0010.
+//! Exclusive `rebind` reuses fixed byte/descriptor allocations with a new
+//! generation and first sequence (ADR-0010 slot reuse). It has no registry,
+//! NUMA allocation, protected-evidence authority, or production integration.
 //!
 //! # Safety invariants
 //!
@@ -113,6 +114,17 @@ impl ByteCell {
         Self(UnsafeCell::new(MaybeUninit::uninit()))
     }
 
+    /// Exclusive rebind: clear a cell so a new epoch may initialize it once.
+    #[cfg(not(feature = "loom"))]
+    fn clear_for_rebind(&mut self) {
+        *self = Self::uninit();
+    }
+
+    #[cfg(feature = "loom")]
+    fn clear_for_rebind(&mut self) {
+        *self = Self::uninit();
+    }
+
     #[cfg(feature = "loom")]
     fn write(&self, value: u8) {
         self.0.with_mut(|cell| {
@@ -153,6 +165,16 @@ struct DescriptorCell(UnsafeCell<MaybeUninit<TelemetryDescriptor>>);
 impl DescriptorCell {
     fn uninit() -> Self {
         Self(UnsafeCell::new(MaybeUninit::uninit()))
+    }
+
+    #[cfg(not(feature = "loom"))]
+    fn clear_for_rebind(&mut self) {
+        *self = Self::uninit();
+    }
+
+    #[cfg(feature = "loom")]
+    fn clear_for_rebind(&mut self) {
+        *self = Self::uninit();
     }
 
     #[cfg(not(feature = "loom"))]
@@ -319,13 +341,18 @@ impl PublishedSlabPage {
     }
 
     pub fn split(self) -> (PublishedSlabWriter, PublishedSlabReader) {
-        let Self { inner } = self;
-        let reader_inner = Arc::clone(&inner);
-        let first_sequence = inner.first_sequence;
+        // Consuming split for single-page channels: pool-backed rotation uses
+        // `open` so the slot's Arc remains owned by the fixed page pool.
+        self.open()
+    }
 
+    /// Clone writer/reader endpoints while this page continues to own the
+    /// allocation (ADR-0010 fixed pool). Endpoints must drop before `rebind`.
+    pub(crate) fn open(&self) -> (PublishedSlabWriter, PublishedSlabReader) {
+        let first_sequence = self.inner.first_sequence;
         (
             PublishedSlabWriter {
-                inner,
+                inner: Arc::clone(&self.inner),
                 used_bytes: 0,
                 descriptor_count: 0,
                 next_sequence: first_sequence,
@@ -333,10 +360,31 @@ impl PublishedSlabPage {
                 _not_sync: PhantomData,
             },
             PublishedSlabReader {
-                inner: reader_inner,
+                inner: Arc::clone(&self.inner),
                 _not_sync: PhantomData,
             },
         )
+    }
+
+    /// ADR-0010 exclusive slot rebind: reuse the same byte/descriptor
+    /// allocations with a new generation and sequence base. Requires no live
+    /// writer/reader endpoints (`Arc` unique).
+    pub(crate) fn rebind(
+        &mut self,
+        arena_generation: u32,
+        first_sequence: u64,
+    ) -> Result<(), SlabRebindError> {
+        let inner = Arc::get_mut(&mut self.inner).ok_or(SlabRebindError::OutstandingEndpoints)?;
+        inner.arena_generation = arena_generation;
+        inner.first_sequence = first_sequence;
+        inner.publication.0.store(0, Ordering::Relaxed);
+        for cell in &mut inner.bytes {
+            cell.clear_for_rebind();
+        }
+        for cell in &mut inner.descriptors {
+            cell.clear_for_rebind();
+        }
+        Ok(())
     }
 
     pub fn layout(&self) -> PublishedSlabLayout {
@@ -849,6 +897,28 @@ pub struct PublishedSlabStatus {
     pub published_bytes: usize,
     pub writer_closed: bool,
 }
+
+/// Exclusive page rebind failed (ADR-0010 pool slot reuse).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlabRebindError {
+    /// Writer and/or reader endpoints still hold the page Arc.
+    OutstandingEndpoints,
+}
+
+impl fmt::Display for SlabRebindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutstandingEndpoints => {
+                write!(
+                    f,
+                    "cannot rebind page while writer/reader endpoints are live"
+                )
+            }
+        }
+    }
+}
+
+impl Error for SlabRebindError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublishedSlabReadError {

@@ -2,6 +2,12 @@
 //! page rotations under concurrent produce/consume, exercised natively and
 //! under the ASan/TSan CI lanes. Asserts no loss, duplication, reordering,
 //! or payload mismatch across epoch seams, quota backpressure included.
+//!
+//! Disabled under `--features loom`: pool pages use Loom atomics that must
+//! only run inside `loom::model` (unit `loom_tests`). Same gate as
+//! `admission.rs` / `published_slab.rs` / `spsc.rs`.
+
+#![cfg(not(feature = "loom"))]
 
 use std::thread;
 

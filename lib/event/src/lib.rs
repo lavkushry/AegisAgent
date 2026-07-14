@@ -24,7 +24,7 @@ pub use admission::{
 pub use descriptor::{DescriptorError, TelemetryDescriptor, MAX_FRAME_BYTES};
 pub use published_slab::{
     PublishedPayload, PublishedSlabLayout, PublishedSlabPage, PublishedSlabReadError,
-    PublishedSlabReader, PublishedSlabStatus, PublishedSlabWriter,
+    PublishedSlabReader, PublishedSlabStatus, PublishedSlabWriter, SlabRebindError,
 };
 pub use ring::{
     Consumer, OccupiedSlot, Producer, RingConfigError, RingInvariantError, RingLayout, SpscRing,
