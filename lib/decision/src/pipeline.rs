@@ -125,8 +125,13 @@ mod tests {
         mcp_server_permitted: bool,
         mcp_server_status: Option<String>,
         mcp_tool: Option<McpToolMeta>,
+        rate_ok: bool,
+        quota_ok: bool,
+        audit_capacity: bool,
         writes: Mutex<u32>,
         heartbeats: Mutex<u32>,
+        receipts: Mutex<u32>,
+        approvals: Mutex<u32>,
     }
 
     impl Default for PipelineRt {
@@ -147,8 +152,13 @@ mod tests {
                 mcp_server_permitted: true,
                 mcp_server_status: None,
                 mcp_tool: None,
+                rate_ok: true,
+                quota_ok: true,
+                audit_capacity: true,
                 writes: Mutex::new(0),
                 heartbeats: Mutex::new(0),
+                receipts: Mutex::new(0),
+                approvals: Mutex::new(0),
             }
         }
     }
@@ -199,10 +209,10 @@ mod tests {
             Ok(false)
         }
         async fn check_rate_limit(&self, _: &str) -> bool {
-            true
+            self.rate_ok
         }
         fn check_quota(&self, _: &str) -> bool {
-            true
+            self.quota_ok
         }
         fn touch_heartbeat(&self, _: &str, _: &str) {
             *self.heartbeats.lock().expect("l") += 1;
@@ -282,7 +292,7 @@ mod tests {
         }
         fn record_provenance_denial(&self) {}
         fn audit_stream_has_capacity(&self) -> bool {
-            true
+            self.audit_capacity
         }
         fn set_audit_writer_healthy(&self, _: bool) {}
         async fn emit_receipt_durable(
@@ -294,6 +304,7 @@ mod tests {
             _: &str,
             _: &str,
         ) -> Result<ReceiptIdentity, AegisError> {
+            *self.receipts.lock().expect("l") += 1;
             Ok(ReceiptIdentity {
                 receipt_id: "r1".into(),
                 receipt_hash: "rh".into(),
@@ -331,10 +342,11 @@ mod tests {
             _: &AuthorizeRequest,
             params: ApprovalCreateParams,
         ) -> Result<ApprovalResponseInfo, AegisError> {
+            *self.approvals.lock().expect("l") += 1;
             Ok(ApprovalResponseInfo {
                 approval_id: Uuid::nil(),
                 status: "created".into(),
-                approver_group: None,
+                approver_group: params.approver_group,
                 expires_at: Utc::now(),
                 action_hash: params.action_hash,
             })
@@ -577,6 +589,9 @@ mod tests {
             other => panic!("expected approval decision, got {other:?}"),
         }
         assert_eq!(*rt.writes.lock().expect("l"), 1);
+        assert_eq!(*rt.approvals.lock().expect("l"), 1);
+        // Mutating require_approval requires a durable receipt.
+        assert_eq!(*rt.receipts.lock().expect("l"), 1);
     }
 
     #[tokio::test]
@@ -974,5 +989,169 @@ mod tests {
         }
         assert_eq!(*rt.writes.lock().expect("l"), 1);
         assert_eq!(*rt.heartbeats.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_rate_limit_returns_429() {
+        let rt = PipelineRt {
+            rate_ok: false,
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        assert_eq!(out.http_status, 429);
+        match out.body {
+            DecisionBody::Failure(f) => {
+                assert!(
+                    f.message.contains("Rate limit"),
+                    "message={}",
+                    f.message
+                );
+            }
+            other => panic!("expected rate-limit Failure, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 0);
+    }
+
+    #[tokio::test]
+    async fn pipeline_quota_exceeded_returns_429() {
+        let rt = PipelineRt {
+            quota_ok: false,
+            ..PipelineRt::default()
+        };
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &body_json(),
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        assert_eq!(out.http_status, 429);
+        match out.body {
+            DecisionBody::Failure(f) => {
+                assert!(
+                    f.message.contains("quota"),
+                    "message={}",
+                    f.message
+                );
+            }
+            other => panic!("expected quota Failure, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 0);
+    }
+
+    #[tokio::test]
+    async fn pipeline_audit_stream_full_fail_closed_for_mutating() {
+        let rt = PipelineRt {
+            audit_capacity: false,
+            ..PipelineRt::default()
+        };
+        let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+        body["tool_call"]["mutates_state"] = serde_json::json!(true);
+        let raw = serde_json::to_vec(&body).expect("ser");
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &raw,
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "deny");
+                assert!(
+                    resp.reason.contains("audit_writer_unavailable")
+                        || resp.reason.contains("Audit writer unavailable"),
+                    "reason={}",
+                    resp.reason
+                );
+                assert_eq!(
+                    resp.matched_policies,
+                    vec!["audit_writer_unavailable".to_string()]
+                );
+            }
+            other => panic!("expected audit fail-closed deny, got {other:?}"),
+        }
+        // Fail-closed before durable write when the SOC stream is full.
+        assert_eq!(*rt.writes.lock().expect("l"), 0);
+        assert_eq!(*rt.receipts.lock().expect("l"), 0);
+    }
+
+    #[tokio::test]
+    async fn pipeline_mutating_allow_emits_durable_receipt() {
+        let rt = PipelineRt::default();
+        let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+        body["tool_call"]["mutates_state"] = serde_json::json!(true);
+        let raw = serde_json::to_vec(&body).expect("ser");
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &raw,
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "allow");
+                assert!(
+                    resp.receipt.is_some(),
+                    "mutating allow must carry receipt identity"
+                );
+            }
+            other => panic!("expected mutating allow, got {other:?}"),
+        }
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
+        assert_eq!(*rt.receipts.lock().expect("l"), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_dry_run_require_approval_creates_no_approval_row() {
+        let rt = PipelineRt {
+            cedar: PolicyDecisionView {
+                decision: "require_approval".into(),
+                matched_policies: vec!["needs_human".into()],
+                approver_group: Some("sec".into()),
+                reason: "human gate".into(),
+                redacted_fields: vec![],
+            },
+            ..PipelineRt::default()
+        };
+        let mut body: serde_json::Value = serde_json::from_slice(&body_json()).expect("v");
+        body["dry_run"] = serde_json::json!(true);
+        body["tool_call"]["mutates_state"] = serde_json::json!(true);
+        let raw = serde_json::to_vec(&body).expect("ser");
+        let out = run_authorize_pipeline(
+            &rt,
+            &ctx(),
+            &raw,
+            Instant::now(),
+            EvaluateConfig::default(),
+        )
+        .await;
+        match out.body {
+            DecisionBody::Decision(resp) => {
+                assert_eq!(resp.decision, "require_approval");
+                assert!(resp.dry_run);
+                assert!(
+                    resp.approval.is_none(),
+                    "dry-run must not create approval info"
+                );
+                assert!(resp.receipt.is_none());
+            }
+            other => panic!("expected dry-run require_approval, got {other:?}"),
+        }
+        assert_eq!(*rt.approvals.lock().expect("l"), 0);
+        assert_eq!(*rt.receipts.lock().expect("l"), 0);
+        // Score-only host write still invoked.
+        assert_eq!(*rt.writes.lock().expect("l"), 1);
     }
 }

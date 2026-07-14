@@ -15,8 +15,10 @@ All notable changes to this project are documented here. The format is based on
   `AuthorizedOutcome` only (no gRPC→REST JSON bridge). Equality corpus covers
   REST HeaderMap vs typed-context parity. Pipeline mock e2e covers allow,
   401, idempotent replay, require_approval, frozen/revoked, dry-run, Cedar
-  deny, admission-webhook reject, ban, tool permission deny, and MCP
-  (server permission, quarantine, unapproved tool, approved allow). See
+  deny, admission-webhook reject, ban, tool permission deny, MCP
+  (server permission, quarantine, unapproved tool, approved allow),
+  rate-limit/quota 429, audit-stream fail-closed, durable receipt on
+  mutating allow, and dry-run require_approval (no approval row). See
   `ROADMAP.md` Week 3.
 
 ### Added
