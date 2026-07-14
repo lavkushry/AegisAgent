@@ -35,9 +35,10 @@ use crate::routes::AppState;
 // Protocol-neutral context / outcome / runtime types live in `aegis-decision`
 // so library code can depend on them without pulling the gateway binary.
 pub use aegis_decision::{
-    admit_authorize, preflight_authorize, AuthCredential, AuthorizeAgent, AuthorizeContext,
-    AuthorizeService, DecisionBody, DecisionFailure, DecisionFailureClass, DecisionOutcome,
-    DecisionRuntime, PreflightTerminal, PreflightedAuthorize, Transport,
+    admit_authorize, guard_authorize, preflight_authorize, AdmissionEffect, AuthCredential,
+    AuthorizeAgent, AuthorizeContext, AuthorizeService, DecisionAuditWrite, DecisionBody,
+    DecisionFailure, DecisionFailureClass, DecisionOutcome, DecisionRuntime, EnforcementStatus,
+    GuardedAuthorize, PreflightTerminal, PreflightedAuthorize, Transport,
 };
 
 /// Body carried by a completed authorization evaluation.
@@ -493,6 +494,88 @@ impl DecisionRuntime for GatewayDecisionRuntime {
 
     fn touch_heartbeat(&self, tenant_id: &str, agent_id: &str) {
         self.state.heartbeat_debouncer.touch(tenant_id, agent_id);
+    }
+
+    async fn write_decision_and_audit(
+        &self,
+        write: DecisionAuditWrite<'_>,
+    ) -> Result<i32, aegis_common::errors::AegisError> {
+        crate::routes::write_decision_and_audit(
+            &self.state.storage,
+            &self.state.deferred_write_tracker,
+            &self.state.events,
+            &self.state.metrics,
+            &self.state.audit_batch,
+            &self.state.risk_weight_cache,
+            write.tenant_id,
+            write.agent_id,
+            write.request,
+            write.decision_id,
+            write.decision,
+            write.risk_score,
+            write.reason,
+            write.matched_policies,
+            write.audit_event_type,
+            write.started_at,
+            write.dry_run,
+            write.action_hash,
+            write.root_trust_level,
+        )
+        .await
+    }
+
+    async fn call_admission_webhook(
+        &self,
+        request: &AuthorizeRequest,
+    ) -> Result<AdmissionEffect, aegis_common::errors::AegisError> {
+        match self.state.admission_webhook.as_ref() {
+            None => Ok(AdmissionEffect::Disabled),
+            Some(webhook) => match webhook.call(request).await {
+                crate::admission::AdmissionOutcome::Pass => Ok(AdmissionEffect::Pass),
+                crate::admission::AdmissionOutcome::Mutate(params) => {
+                    Ok(AdmissionEffect::Mutate(params))
+                }
+                crate::admission::AdmissionOutcome::Reject(reason) => {
+                    Ok(AdmissionEffect::Reject(reason))
+                }
+            },
+        }
+    }
+
+    fn compute_action_hash(
+        &self,
+        tenant_id: &str,
+        request_id: Option<&str>,
+        tool_call: &crate::models::AuthorizeToolCall,
+    ) -> String {
+        crate::routes::hash_tool_call_cached(self.state.as_ref(), tenant_id, request_id, tool_call)
+    }
+
+    async fn enforcement_status(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        normalized_tool: &str,
+    ) -> Result<EnforcementStatus, aegis_common::errors::AegisError> {
+        let ban_now = chrono::Utc::now();
+        let (agent_banned, tool_banned, agent_quarantined) = tokio::join!(
+            self.state
+                .storage
+                .is_banned(tenant_id, "agent", agent_id, ban_now),
+            self.state
+                .storage
+                .is_banned(tenant_id, "tool", normalized_tool, ban_now),
+            self.state
+                .storage
+                .is_quarantined(tenant_id, "agent", agent_id),
+        );
+        match (agent_banned, tool_banned, agent_quarantined) {
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
+            (Ok(true), _, _) => Ok(EnforcementStatus::AgentBanned),
+            (_, Ok(true), _) => Ok(EnforcementStatus::ToolBanned),
+            (_, _, Ok(true)) => Ok(EnforcementStatus::AgentQuarantined),
+            (Ok(false), Ok(false), Ok(false)) => Ok(EnforcementStatus::Clear),
+        }
     }
 }
 

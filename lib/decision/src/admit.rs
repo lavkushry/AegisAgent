@@ -248,6 +248,38 @@ mod tests {
         }
 
         fn touch_heartbeat(&self, _: &str, _: &str) {}
+
+        async fn write_decision_and_audit(
+            &self,
+            _: crate::write::DecisionAuditWrite<'_>,
+        ) -> Result<i32, AegisError> {
+            Ok(0)
+        }
+
+        async fn call_admission_webhook(
+            &self,
+            _: &aegis_api::models::AuthorizeRequest,
+        ) -> Result<crate::runtime::AdmissionEffect, AegisError> {
+            Ok(crate::runtime::AdmissionEffect::Disabled)
+        }
+
+        fn compute_action_hash(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: &aegis_api::models::AuthorizeToolCall,
+        ) -> String {
+            String::new()
+        }
+
+        async fn enforcement_status(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::runtime::EnforcementStatus, AegisError> {
+            Ok(crate::runtime::EnforcementStatus::Clear)
+        }
     }
 
     fn addr() -> SocketAddr {

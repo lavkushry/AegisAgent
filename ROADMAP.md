@@ -78,13 +78,12 @@ soc_query, and close_incident. Storage-direct SOC gRPC errors map via
 `aegis_error_to_tonic`. **`lib/decision` (`aegis-decision`)** holds context
 types + `AuthorizeService` trait; gateway **`GatewayAuthorizeService`**
 implements the trait and gRPC authorize calls `evaluate` through it.
-**Admit + preflight** now live in `aegis-decision` behind `DecisionRuntime`
-ports (`GatewayDecisionRuntime` on the gateway): admit covers parse/lockout/
-agent resolve/signature/environment; preflight covers tool permission, replay
-nonce, idempotency lookup, heartbeat, rate limit, and quota. Pure risk helpers
-and `DecisionOutcome` also live in the library. Remaining: move frozen/ban/
-admission-webhook, Cedar evaluation, decision persistence, approvals, and
-receipts into `aegis-decision` via the same runtime ports.
+**Admit + preflight + guard** now live in `aegis-decision` behind
+`DecisionRuntime` ports (`GatewayDecisionRuntime`): admit (parse/auth),
+preflight (permission/replay/idempotency/rate/quota), guard (frozen, admission
+webhook, action hash, ban/quarantine with durable early denials via
+`write_decision_and_audit`). Remaining: skill/MCP metadata, Cedar evaluation,
+approvals, and receipts.
 
 Gate: legacy versus typed authorization decisions, hashes, approvals, receipts and errors match over replay corpus — **met** by `equality_*` tests.
 

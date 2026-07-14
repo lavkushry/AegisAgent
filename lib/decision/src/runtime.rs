@@ -5,14 +5,38 @@
 //! Axum, SQLx, or the gateway binary. Target DAG: Decision → Policy/Canon;
 //! storage remains a binary-composed dependency of the runtime implementor.
 
-use aegis_api::models::DecisionRecord;
+use aegis_api::models::{AuthorizeRequest, AuthorizeToolCall, DecisionRecord};
 use aegis_common::errors::AegisError;
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use std::net::SocketAddr;
 
 use crate::agent::AuthorizeAgent;
+use crate::write::DecisionAuditWrite;
 
-/// Side-effect ports used by admit/preflight/evaluate.
+/// Result of the optional admission webhook (#1143).
+#[derive(Debug, Clone)]
+pub enum AdmissionEffect {
+    /// Webhook not configured — no network call.
+    Disabled,
+    /// Allow the request unchanged.
+    Pass,
+    /// Replace `tool_call.parameters` before hashing / Cedar.
+    Mutate(Value),
+    /// Deny with this reason (persisted as a decision).
+    Reject(String),
+}
+
+/// Ban / quarantine-record enforcement outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnforcementStatus {
+    Clear,
+    AgentBanned,
+    ToolBanned,
+    AgentQuarantined,
+}
+
+/// Side-effect ports used by admit/preflight/guard/evaluate.
 ///
 /// The gateway implements this over `AppState` / `StorageBackend`. Future
 /// control-store cutover reimplements the same ports without changing
@@ -75,4 +99,32 @@ pub trait DecisionRuntime: Send + Sync {
 
     /// Debounced last-seen heartbeat for the agent (no durable write required).
     fn touch_heartbeat(&self, tenant_id: &str, agent_id: &str);
+
+    /// Persist a decision + audit (or dry-run score-only). Returns composite risk score.
+    async fn write_decision_and_audit(
+        &self,
+        write: DecisionAuditWrite<'_>,
+    ) -> Result<i32, AegisError>;
+
+    /// Optional admission webhook. Return [`AdmissionEffect::Disabled`] when unset.
+    async fn call_admission_webhook(
+        &self,
+        request: &AuthorizeRequest,
+    ) -> Result<AdmissionEffect, AegisError>;
+
+    /// Canonical action hash for the (post-mutation) tool call.
+    fn compute_action_hash(
+        &self,
+        tenant_id: &str,
+        request_id: Option<&str>,
+        tool_call: &AuthorizeToolCall,
+    ) -> String;
+
+    /// Active ban / quarantine-record check for agent and tool.
+    async fn enforcement_status(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        normalized_tool: &str,
+    ) -> Result<EnforcementStatus, AegisError>;
 }
