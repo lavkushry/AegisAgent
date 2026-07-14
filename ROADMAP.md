@@ -102,16 +102,19 @@ terminal fixtures, caught-unwind rotation fault, Loom seam model, cross-thread
 rotation stress). **In-place pool rebind landed:** construction preallocates
 `P` pages; rotation uses exclusive `PublishedSlabPage::rebind` (zero allocation
 after `new`). Native rotating stress is `cfg(not(feature = "loom"))` so
-all-features CI does not run std-thread stress on Loom atomics. The volatile
-composite validates before reservation, Release-publishes the page before the
-ring, withholds capacity until a must-use validated frame lease commits, and
-reports clean, faulted, and orphaned-prefix terminal states. Test sources
-include safe differential oracles, native tiny-ring stress, shipping-algorithm
-Loom, Miri-oriented borrow/drop cases, defined ASan/TSan CI lanes, and
+all-features CI does not run std-thread stress on Loom atomics. **Diagnostic
+criterion bench** `lib/event/benches/rotating.rs` (compile-checked in CI with
+the other event benches) covers rotation claim/commit, quota refusal, and
+multi-epoch pool rebind — not a qualification result. The volatile composite
+validates before reservation, Release-publishes the page before the ring,
+withholds capacity until a must-use validated frame lease commits, and reports
+clean, faulted, and orphaned-prefix terminal states. Test sources include safe
+differential oracles, native tiny-ring stress, shipping-algorithm Loom,
+Miri-oriented borrow/drop cases, defined ASan/TSan CI lanes, and
 zero-allocation admission/claim checks. It carries no production or `shadow`
 traffic, cannot carry protected evidence, is not `qualified`, and has no
-performance result. The production fabric remains `target`. Formal ADR
-acceptance/security review, green hosted sanitizer artifacts, real UBSan
+published performance result. The production fabric remains `target`. Formal
+ADR acceptance/security review, green hosted sanitizer artifacts, real UBSan
 support, authenticated registry, WAL durability/replay, NUMA-owner
 reclamation, priority lanes, production shadow wiring, release-artifact
 rollback, and qualification remain blockers.
