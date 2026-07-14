@@ -122,9 +122,13 @@ rollback, and qualification remain blockers.
 Deliverables:
 
 - implement cache-padded SPSC ring, 32-byte descriptor, bounded slab, and single-page volatile admission prototype;
-- document linearization, memory ordering, shutdown, wrap, drop and epoch rules;
+- document linearization, memory ordering, shutdown, wrap, drop and epoch rules
+  (**in progress / partial:** ADR-0006..0010 narrative + LLD §5 rotating
+  admission linearization `[A]/`[S]`/`[R]`/`[E]`, wrap/drop/terminal notes);
 - add safe differential oracles, Loom models, Miri tests and native stress benchmark;
-- instrument allocations, copied bytes, cache misses and cycles/op.
+- instrument allocations, copied bytes, cache misses and cycles/op
+  (diagnostic criterion benches for ring/slab/admission/rotating compile in CI;
+  no qualification numbers published).
 
 Gate: zero lost/duplicated/reordered descriptors; validation before tail
 acknowledgement; zero steady-state allocations; safety suite and hosted
