@@ -11,7 +11,7 @@ COPY ui-next ./
 # Production static export with base /dashboard/ (vite.config.ts).
 RUN bun run build
 
-FROM rust:1.97-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 WORKDIR /build
 
 # Network resilience for the crate fetch: crates.io downloads intermittently
