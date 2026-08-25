@@ -3,7 +3,7 @@
 # under AEGIS_UI_BUNDLE=next|legacy and AEGIS_UI_DIST overrides.
 #
 # See docs/components/Console_UI_Bun_Contracts.md §6 (Phase E cutover).
-FROM oven/bun:1.3-debian AS ui-builder
+FROM oven/bun:1.4-debian AS ui-builder
 WORKDIR /build/ui-next
 COPY ui-next/package.json ui-next/bun.lock ./
 RUN bun install --frozen-lockfile
